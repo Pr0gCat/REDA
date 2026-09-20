@@ -133,7 +133,12 @@ pub enum PartitionError {
     /// a gate's inputs while the world -- built by `compile` straight from
     /// `Netlist`, entirely independent of the graph -- still has exactly
     /// what the netlist declared.
-    GateInputArityDisagreement { gate: String, netlist_arity: usize, graph_arity: usize, world_arity: usize },
+    GateInputArityDisagreement {
+        gate: String,
+        netlist_arity: usize,
+        graph_arity: usize,
+        world_arity: usize,
+    },
     /// Two different graph nodes resolved to the same world position -- the
     /// graph cannot be a lossless account of the world if two of its own
     /// primitives collide.
@@ -215,24 +220,34 @@ pub fn partition_world(
                             continue;
                         }
                         let above = compiled.world.get(x, y + 1, z);
-                        if matches!(above.kind, BlockKind::RedstoneWire | BlockKind::Repeater | BlockKind::Lever) {
+                        if matches!(
+                            above.kind,
+                            BlockKind::RedstoneWire | BlockKind::Repeater | BlockKind::Lever
+                        ) {
                             partition.routing_fill_support += 1;
                         } else {
-                            partition.unexplained.push(UnexplainedBlock { position: (x, y, z), kind: state.kind });
+                            partition.unexplained.push(UnexplainedBlock {
+                                position: (x, y, z),
+                                kind: state.kind,
+                            });
                         }
                     }
-                    other => partition.unexplained.push(UnexplainedBlock { position: (x, y, z), kind: other }),
+                    other => partition.unexplained.push(UnexplainedBlock {
+                        position: (x, y, z),
+                        kind: other,
+                    }),
                 }
             }
         }
     }
 
     if found.len() != explained.len() {
-        let missing = *explained
-            .iter()
-            .find(|p| !found.contains(p))
-            .expect("found is a subset of explained with a smaller length, so a missing element exists");
-        return Err(PartitionError::ExplainedPositionIsAir { position: (missing.x, missing.y, missing.z) });
+        let missing = *explained.iter().find(|p| !found.contains(p)).expect(
+            "found is a subset of explained with a smaller length, so a missing element exists",
+        );
+        return Err(PartitionError::ExplainedPositionIsAir {
+            position: (missing.x, missing.y, missing.z),
+        });
     }
 
     Ok(partition)
@@ -289,18 +304,35 @@ fn check_gate_input_arity_agrees(
     for (g, gate) in netlist.gates.iter().enumerate() {
         let arity = gate.inputs.len();
 
-        let own: HashSet<NodeId> = graph.gate_nodes.get(g).cloned().unwrap_or_default().into_iter().collect();
-        let graph_edges = graph.edges.iter().filter(|e| own.contains(&e.to) && !own.contains(&e.from)).count();
+        let own: HashSet<NodeId> = graph
+            .gate_nodes
+            .get(g)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let graph_edges = graph
+            .edges
+            .iter()
+            .filter(|e| own.contains(&e.to) && !own.contains(&e.from))
+            .count();
 
-        let &(jx, jy, jz) = compiled.gate_output_positions.get(&gate.output).ok_or_else(|| {
-            PartitionError::CannotResolveNodePosition { detail: format!("gate `{}` has no recorded torch position", gate.output) }
-        })?;
+        let &(jx, jy, jz) = compiled
+            .gate_output_positions
+            .get(&gate.output)
+            .ok_or_else(|| PartitionError::CannotResolveNodePosition {
+                detail: format!("gate `{}` has no recorded torch position", gate.output),
+            })?;
         let junction = Position::new(jx, jy, jz);
 
         if gate.is_merge() {
-            let expected_edges: usize =
-                (0..arity).filter(|index| !resolution.is_bare[&(g, *index)]).map(|index| resolution.contributors_of_input[&(g, index)].len()).sum();
-            let expected_sockets = (0..arity).filter(|index| !resolution.is_bare[&(g, *index)]).count();
+            let expected_edges: usize = (0..arity)
+                .filter(|index| !resolution.is_bare[&(g, *index)])
+                .map(|index| resolution.contributors_of_input[&(g, index)].len())
+                .sum();
+            let expected_sockets = (0..arity)
+                .filter(|index| !resolution.is_bare[&(g, *index)])
+                .count();
 
             // A merge's own junction is dust, not a torch -- its input
             // sockets sit directly off the junction itself, at the same
@@ -312,7 +344,8 @@ fn check_gate_input_arity_agrees(
                 .filter(|&&direction| {
                     let socket = junction.offset(direction);
                     let socket_state = compiled.world.get(socket.x, socket.y, socket.z);
-                    socket_state.kind == BlockKind::Repeater && socket_state.facing == Some(direction)
+                    socket_state.kind == BlockKind::Repeater
+                        && socket_state.facing == Some(direction)
                 })
                 .count();
 
@@ -325,7 +358,9 @@ fn check_gate_input_arity_agrees(
                 });
             }
         } else {
-            let expected_edges: usize = (0..arity).map(|index| resolution.contributors_of_input[&(g, index)].len()).sum();
+            let expected_edges: usize = (0..arity)
+                .map(|index| resolution.contributors_of_input[&(g, index)].len())
+                .sum();
 
             let torch_state = compiled.world.get(jx, jy, jz);
             let world_sockets = match torch_support_position(torch_state, junction) {
@@ -368,7 +403,9 @@ fn explained_positions(
     for node in &graph.nodes {
         let pos = resolve_node_position(netlist, compiled, &node.provenance)?;
         if !explained.insert(pos) {
-            return Err(PartitionError::DuplicateExplainedPosition { position: (pos.x, pos.y, pos.z) });
+            return Err(PartitionError::DuplicateExplainedPosition {
+                position: (pos.x, pos.y, pos.z),
+            });
         }
     }
     Ok(explained)
@@ -460,25 +497,37 @@ fn resolve_node_position(
 /// its own origin, never a support block (see `GateKind::Or`'s doc
 /// comment: an OR realises to no primitive of its own) -- so it is skipped
 /// here entirely, not merely absent from the result by coincidence.
-fn known_support_positions(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<HashSet<Position>, PartitionError> {
+fn known_support_positions(
+    netlist: &Netlist,
+    compiled: &CompiledCircuit,
+) -> Result<HashSet<Position>, PartitionError> {
     let mut supports = HashSet::with_capacity(netlist.gates.len());
     for gate in &netlist.gates {
         if gate.is_merge() {
             continue;
         }
-        let &(tx, ty, tz) = compiled.gate_output_positions.get(&gate.output).ok_or_else(|| {
-            PartitionError::CannotResolveNodePosition { detail: format!("gate `{}` has no recorded torch position", gate.output) }
-        })?;
+        let &(tx, ty, tz) = compiled
+            .gate_output_positions
+            .get(&gate.output)
+            .ok_or_else(|| PartitionError::CannotResolveNodePosition {
+                detail: format!("gate `{}` has no recorded torch position", gate.output),
+            })?;
         let torch_pos = Position::new(tx, ty, tz);
         supports.insert(resolve_support(compiled, &gate.output, torch_pos)?);
     }
     Ok(supports)
 }
 
-fn resolve_support(compiled: &CompiledCircuit, gate_name: &str, torch_pos: Position) -> Result<Position, PartitionError> {
+fn resolve_support(
+    compiled: &CompiledCircuit,
+    gate_name: &str,
+    torch_pos: Position,
+) -> Result<Position, PartitionError> {
     let torch_state = compiled.world.get(torch_pos.x, torch_pos.y, torch_pos.z);
-    torch_support_position(torch_state, torch_pos).ok_or_else(|| PartitionError::CannotResolveNodePosition {
-        detail: format!("gate `{gate_name}`'s torch has no resolvable support"),
+    torch_support_position(torch_state, torch_pos).ok_or_else(|| {
+        PartitionError::CannotResolveNodePosition {
+            detail: format!("gate `{gate_name}`'s torch has no resolvable support"),
+        }
     })
 }
 
@@ -487,7 +536,9 @@ mod tests {
     use super::*;
     use crate::circuits::and4::build_and4_netlist;
     use crate::circuits::full_adder::build_full_adder_netlist;
-    use crate::circuits::seven_segment::{build_seven_segment_netlist, build_single_segment_netlist};
+    use crate::circuits::seven_segment::{
+        build_seven_segment_netlist, build_single_segment_netlist,
+    };
     use crate::compile::compile;
     use crate::compile::primitive_graph::expand;
     use crate::compile::topology::Library;
@@ -495,7 +546,8 @@ mod tests {
     fn check(label: &str, netlist: &Netlist) -> WorldPartition {
         let compiled = compile(netlist).expect("reference circuits compile");
         let library = Library::default_library();
-        let graph = expand(netlist, &library).expect("reference circuits only use NOR gates of fan-in 1..=3");
+        let graph = expand(netlist, &library)
+            .expect("reference circuits only use NOR gates of fan-in 1..=3");
         let partition = partition_world(netlist, &graph, &compiled)
             .unwrap_or_else(|e| panic!("{label}: could not partition the world: {e}"));
 
@@ -586,13 +638,25 @@ mod tests {
             .position(|n| matches!(&n.provenance, Provenance::PrimaryInput { name } if name == "b"))
             .expect("lever \"b\" exists");
         let before = graph.edges.len();
-        graph.edges.retain(|e| !(e.from == lever_b && e.to == torch));
-        assert_eq!(graph.edges.len(), before - 1, "sabotage must remove exactly one edge");
+        graph
+            .edges
+            .retain(|e| !(e.from == lever_b && e.to == torch));
+        assert_eq!(
+            graph.edges.len(),
+            before - 1,
+            "sabotage must remove exactly one edge"
+        );
 
-        let err = partition_world(&netlist, &graph, &compiled).expect_err("the dropped input must be reported");
+        let err = partition_world(&netlist, &graph, &compiled)
+            .expect_err("the dropped input must be reported");
         assert_eq!(
             err,
-            PartitionError::GateInputArityDisagreement { gate: "g0".to_string(), netlist_arity: 2, graph_arity: 1, world_arity: 2 }
+            PartitionError::GateInputArityDisagreement {
+                gate: "g0".to_string(),
+                netlist_arity: 2,
+                graph_arity: 1,
+                world_arity: 2
+            }
         );
     }
 }

@@ -60,7 +60,10 @@ struct GateNet {
 
 impl GateNet {
     fn new() -> Self {
-        GateNet { gates: Vec::new(), counter: 0 }
+        GateNet {
+            gates: Vec::new(),
+            counter: 0,
+        }
     }
 
     fn fresh(&mut self) -> String {
@@ -72,7 +75,11 @@ impl GateNet {
     /// A NOR gate with 1..=3 inputs -- `place_nor_gate`'s own hardware
     /// ceiling, the same one `NetlistBuilder::nor` enforces.
     fn nor(&mut self, inputs: &[&str]) -> String {
-        assert!(!inputs.is_empty() && inputs.len() <= 3, "NOR fan-in must be 1..=3, got {}", inputs.len());
+        assert!(
+            !inputs.is_empty() && inputs.len() <= 3,
+            "NOR fan-in must be 1..=3, got {}",
+            inputs.len()
+        );
         let output = self.fresh();
         self.gates.push(Gate {
             name: output.clone(),
@@ -106,7 +113,15 @@ impl GateNet {
 fn build_not() -> (Netlist, String, Vec<&'static str>) {
     let mut net = GateNet::new();
     let y = net.not("a");
-    (Netlist { inputs: vec!["a".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a"])
+    (
+        Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
+        y,
+        vec!["a"],
+    )
 }
 
 /// `BUF`: two chained NOR1 torches, `NOT(NOT(x)) == x` -- the same
@@ -116,13 +131,29 @@ fn build_buf() -> (Netlist, String, Vec<&'static str>) {
     let mut net = GateNet::new();
     let n1 = net.not("a");
     let y = net.not(&n1);
-    (Netlist { inputs: vec!["a".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a"])
+    (
+        Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
+        y,
+        vec!["a"],
+    )
 }
 
 fn build_nor2() -> (Netlist, String, Vec<&'static str>) {
     let mut net = GateNet::new();
     let y = net.nor(&["a", "b"]);
-    (Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a", "b"])
+    (
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
+        y,
+        vec!["a", "b"],
+    )
 }
 
 /// A single NOR3 gate wired directly to three primary-input levers, nothing
@@ -135,7 +166,11 @@ fn build_nor3() -> (Netlist, String, Vec<&'static str>) {
     let mut net = GateNet::new();
     let y = net.nor(&["a", "b", "c"]);
     (
-        Netlist { inputs: vec!["a".to_string(), "b".to_string(), "c".to_string()], outputs: vec![y.clone()], gates: net.gates },
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
         y,
         vec!["a", "b", "c"],
     )
@@ -157,7 +192,11 @@ fn build_nor3_measurable() -> (Netlist, String, Vec<&'static str>) {
     let c2 = net.not(&c1);
     let y = net.nor(&["a", "b", &c2]);
     (
-        Netlist { inputs: vec!["a".to_string(), "b".to_string(), "c".to_string()], outputs: vec![y.clone()], gates: net.gates },
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
         y,
         vec!["a", "b", "c"],
     )
@@ -171,7 +210,15 @@ fn build_and2() -> (Netlist, String, Vec<&'static str>) {
     let na = net.not("a");
     let nb = net.not("b");
     let y = net.nor(&[&na, &nb]);
-    (Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a", "b"])
+    (
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
+        y,
+        vec!["a", "b"],
+    )
 }
 
 /// `OR(a,b) = NOT(NOR(a,b))` -- 2 gates: no input needs negating (both enter
@@ -180,7 +227,15 @@ fn build_or2() -> (Netlist, String, Vec<&'static str>) {
     let mut net = GateNet::new();
     let n = net.nor(&["a", "b"]);
     let y = net.not(&n);
-    (Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a", "b"])
+    (
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
+        y,
+        vec!["a", "b"],
+    )
 }
 
 /// `NAND(a,b) = NOT(AND(a,b))` -- `build_and2`'s 3 gates plus one more
@@ -195,7 +250,15 @@ fn build_nand2() -> (Netlist, String, Vec<&'static str>) {
     let nb = net.not("b");
     let and = net.nor(&[&na, &nb]);
     let y = net.not(&and);
-    (Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a", "b"])
+    (
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
+        y,
+        vec!["a", "b"],
+    )
 }
 
 /// `ANDNOT(a,b) = a & !b = NOR(NOT a, b)`.
@@ -209,7 +272,15 @@ fn build_andnot2() -> (Netlist, String, Vec<&'static str>) {
     let mut net = GateNet::new();
     let na = net.not("a");
     let y = net.nor(&[&na, "b"]);
-    (Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a", "b"])
+    (
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
+        y,
+        vec!["a", "b"],
+    )
 }
 
 /// `ORNOT(a,b) = a | !b = NOT(NOR(a, NOT b))`.
@@ -225,7 +296,15 @@ fn build_ornot2() -> (Netlist, String, Vec<&'static str>) {
     let nb = net.not("b");
     let n = net.nor(&["a", &nb]);
     let y = net.not(&n);
-    (Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a", "b"])
+    (
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
+        y,
+        vec!["a", "b"],
+    )
 }
 
 /// `XNOR(a,b)`, the classic 4-NOR-gate construction (verified by truth table
@@ -238,7 +317,15 @@ fn build_xnor2() -> (Netlist, String, Vec<&'static str>) {
     let n2 = net.nor(&["a", &n1]);
     let n3 = net.nor(&["b", &n1]);
     let y = net.nor(&[&n2, &n3]);
-    (Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a", "b"])
+    (
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
+        y,
+        vec!["a", "b"],
+    )
 }
 
 /// `XOR(a,b) = NOT(XNOR(a,b))` -- one more gate than XNOR, 5 total. NOR
@@ -252,7 +339,15 @@ fn build_xor2() -> (Netlist, String, Vec<&'static str>) {
     let n3 = net.nor(&["b", &n1]);
     let xnor = net.nor(&[&n2, &n3]);
     let y = net.not(&xnor);
-    (Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a", "b"])
+    (
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
+        y,
+        vec!["a", "b"],
+    )
 }
 
 /// `MUX(s,a,b) = s ? b : a = OR(AND(!s,a), AND(s,b))`, sum-of-products the
@@ -277,7 +372,11 @@ fn build_mux() -> (Netlist, String, Vec<&'static str>) {
     let n = net.nor(&[&term1, &term2]);
     let y = net.not(&n);
     (
-        Netlist { inputs: vec!["s".to_string(), "a".to_string(), "b".to_string()], outputs: vec![y.clone()], gates: net.gates },
+        Netlist {
+            inputs: vec!["s".to_string(), "a".to_string(), "b".to_string()],
+            outputs: vec![y.clone()],
+            gates: net.gates,
+        },
         y,
         vec!["s", "a", "b"],
     )
@@ -305,10 +404,17 @@ fn count_non_air(world: &World) -> usize {
 
 fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) -> u64 {
     let start = simulator.current_tick();
-    let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+    let mut state = simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .clone();
     state.lit = on;
-    simulator.world_mut().set(position.0, position.1, position.2, state);
-    simulator.run_until_stable(MAX_TICKS).expect("a NOR network must settle after any single input change");
+    simulator
+        .world_mut()
+        .set(position.0, position.1, position.2, state);
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("a NOR network must settle after any single input change");
     simulator.current_tick() - start
 }
 
@@ -334,11 +440,14 @@ fn measure_nor_network(
     truth: impl Fn(&[bool]) -> bool,
 ) -> CellCost {
     let gate_count = netlist.gates.len();
-    let compiled = compile(&netlist).unwrap_or_else(|err| panic!("{label} failed to compile: {err}"));
+    let compiled =
+        compile(&netlist).unwrap_or_else(|err| panic!("{label} failed to compile: {err}"));
     let blocks = count_non_air(&compiled.world);
 
-    let lever_positions: Vec<(i32, i32, i32)> =
-        inputs.iter().map(|name| compiled.input_positions[*name]).collect();
+    let lever_positions: Vec<(i32, i32, i32)> = inputs
+        .iter()
+        .map(|name| compiled.input_positions[*name])
+        .collect();
     let output_position = compiled.output_positions[output];
 
     let mut simulator = Simulator::new(compiled.world.clone());
@@ -354,7 +463,10 @@ fn measure_nor_network(
             let ticks = set_lever(&mut simulator, *position, bit);
             worst_settle = worst_settle.max(ticks);
         }
-        let actual = simulator.world().get(output_position.0, output_position.1, output_position.2).lit;
+        let actual = simulator
+            .world()
+            .get(output_position.0, output_position.1, output_position.2)
+            .lit;
         let expected = truth(&bits);
         assert_eq!(
             actual, expected,
@@ -362,7 +474,11 @@ fn measure_nor_network(
         );
     }
 
-    CellCost { gates: gate_count, blocks, settle_game_ticks: worst_settle }
+    CellCost {
+        gates: gate_count,
+        blocks,
+        settle_game_ticks: worst_settle,
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -514,7 +630,10 @@ fn cell_type_cost_table() {
         },
         {
             let (n, y, i) = build_nor2();
-            ("NOR2", measure_nor_network("NOR2", n, &y, &i, |b| !(b[0] || b[1])))
+            (
+                "NOR2",
+                measure_nor_network("NOR2", n, &y, &i, |b| !(b[0] || b[1])),
+            )
         },
         {
             // See `cost_of_nor3`: measured as NOR3 + one BUF, not NOR3 alone
@@ -523,11 +642,17 @@ fn cell_type_cost_table() {
             // matches_its_truth_table`; kept as its own row since it is
             // still a valid measurement).
             let (n, y, i) = build_nor3_measurable();
-            ("NOR3*", measure_nor_network("NOR3", n, &y, &i, |b| !(b[0] || b[1] || b[2])))
+            (
+                "NOR3*",
+                measure_nor_network("NOR3", n, &y, &i, |b| !(b[0] || b[1] || b[2])),
+            )
         },
         {
             let (n, y, i) = build_and2();
-            ("AND", measure_nor_network("AND", n, &y, &i, |b| b[0] && b[1]))
+            (
+                "AND",
+                measure_nor_network("AND", n, &y, &i, |b| b[0] && b[1]),
+            )
         },
         {
             let (n, y, i) = build_or2();
@@ -535,32 +660,53 @@ fn cell_type_cost_table() {
         },
         {
             let (n, y, i) = build_nand2();
-            ("NAND", measure_nor_network("NAND", n, &y, &i, |b| !(b[0] && b[1])))
+            (
+                "NAND",
+                measure_nor_network("NAND", n, &y, &i, |b| !(b[0] && b[1])),
+            )
         },
         {
             let (n, y, i) = build_andnot2();
-            ("ANDNOT", measure_nor_network("ANDNOT", n, &y, &i, |b| b[0] && !b[1]))
+            (
+                "ANDNOT",
+                measure_nor_network("ANDNOT", n, &y, &i, |b| b[0] && !b[1]),
+            )
         },
         {
             let (n, y, i) = build_ornot2();
-            ("ORNOT", measure_nor_network("ORNOT", n, &y, &i, |b| b[0] || !b[1]))
+            (
+                "ORNOT",
+                measure_nor_network("ORNOT", n, &y, &i, |b| b[0] || !b[1]),
+            )
         },
         {
             let (n, y, i) = build_xor2();
-            ("XOR", measure_nor_network("XOR", n, &y, &i, |b| b[0] != b[1]))
+            (
+                "XOR",
+                measure_nor_network("XOR", n, &y, &i, |b| b[0] != b[1]),
+            )
         },
         {
             let (n, y, i) = build_xnor2();
-            ("XNOR", measure_nor_network("XNOR", n, &y, &i, |b| b[0] == b[1]))
+            (
+                "XNOR",
+                measure_nor_network("XNOR", n, &y, &i, |b| b[0] == b[1]),
+            )
         },
         {
             let (n, y, i) = build_mux();
-            ("MUX", measure_nor_network("MUX", n, &y, &i, |b| if b[0] { b[2] } else { b[1] }))
+            (
+                "MUX",
+                measure_nor_network("MUX", n, &y, &i, |b| if b[0] { b[2] } else { b[1] }),
+            )
         },
     ];
 
     eprintln!();
-    eprintln!("{:<8} {:>6} {:>8} {:>14} {:>12}", "cell", "gates", "blocks", "settle(ticks)", "blocks/gate");
+    eprintln!(
+        "{:<8} {:>6} {:>8} {:>14} {:>12}",
+        "cell", "gates", "blocks", "settle(ticks)", "blocks/gate"
+    );
     for (name, cost) in &rows {
         eprintln!(
             "{:<8} {:>6} {:>8} {:>14} {:>12.1}",
@@ -618,14 +764,20 @@ fn comparator_subtract(facing: Facing) -> BlockState {
     state.kind = BlockKind::Comparator;
     state.name = "minecraft:comparator".to_string();
     state.facing = Some(facing);
-    state.extra_properties.insert("mode".to_string(), "subtract".to_string());
+    state
+        .extra_properties
+        .insert("mode".to_string(), "subtract".to_string());
     state
 }
 
 fn set_raw_lever(simulator: &mut Simulator, pos: Position, on: bool) -> u64 {
     let start = simulator.current_tick();
-    simulator.world_mut().set(pos.x, pos.y, pos.z, raw_lever(on));
-    simulator.run_until_stable(MAX_TICKS).expect("hand-built probe circuit must settle");
+    simulator
+        .world_mut()
+        .set(pos.x, pos.y, pos.z, raw_lever(on));
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("hand-built probe circuit must settle");
     simulator.current_tick() - start
 }
 
@@ -668,7 +820,9 @@ fn or_is_a_free_wire_merge_when_nothing_else_shares_the_branch() {
     world.set(lever_b.x, lever_b.y, lever_b.z, raw_lever(false));
 
     let mut simulator = Simulator::new(world);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
 
     let blocks = count_non_air(&simulator.world().clone());
     let mut worst_ticks = 0u64;
@@ -724,8 +878,18 @@ fn or_merge_without_isolation_corrupts_a_branch_that_fans_out_elsewhere() {
     floor_under(&mut world, fork);
     world.set(fork.x, fork.y, fork.z, dust());
     floor_under(&mut world, repeater_pos);
-    world.set(repeater_pos.x, repeater_pos.y, repeater_pos.z, repeater(Facing::East));
-    world.set(consumer_support.x, consumer_support.y, consumer_support.z, stone());
+    world.set(
+        repeater_pos.x,
+        repeater_pos.y,
+        repeater_pos.z,
+        repeater(Facing::East),
+    );
+    world.set(
+        consumer_support.x,
+        consumer_support.y,
+        consumer_support.z,
+        stone(),
+    );
     world.set(consumer_torch.x, consumer_torch.y, consumer_torch.z, {
         let mut t = BlockState::air();
         t.kind = BlockKind::Torch;
@@ -740,7 +904,9 @@ fn or_merge_without_isolation_corrupts_a_branch_that_fans_out_elsewhere() {
     world.set(lever_b.x, lever_b.y, lever_b.z, raw_lever(false));
 
     let mut simulator = Simulator::new(world);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
 
     // A off, B on: the merge is correctly powered (it is still a correct OR),
     // but the unrelated consumer torch -- which should only ever answer
@@ -748,7 +914,10 @@ fn or_merge_without_isolation_corrupts_a_branch_that_fans_out_elsewhere() {
     // unisolated shared branch and reached the repeater's input.
     set_raw_lever(&mut simulator, lever_a, false);
     set_raw_lever(&mut simulator, lever_b, true);
-    let torch_lit = simulator.world().get(consumer_torch.x, consumer_torch.y, consumer_torch.z).lit;
+    let torch_lit = simulator
+        .world()
+        .get(consumer_torch.x, consumer_torch.y, consumer_torch.z)
+        .lit;
     assert!(
         !torch_lit,
         "backflow claim not reproduced: with A=0, B=1, the unisolated consumer torch should have been \
@@ -781,8 +950,18 @@ fn or_merge_with_isolation_protects_a_branch_that_fans_out_elsewhere() {
     floor_under(&mut world, fork);
     world.set(fork.x, fork.y, fork.z, dust());
     floor_under(&mut world, repeater_pos);
-    world.set(repeater_pos.x, repeater_pos.y, repeater_pos.z, repeater(Facing::East));
-    world.set(consumer_support.x, consumer_support.y, consumer_support.z, stone());
+    world.set(
+        repeater_pos.x,
+        repeater_pos.y,
+        repeater_pos.z,
+        repeater(Facing::East),
+    );
+    world.set(
+        consumer_support.x,
+        consumer_support.y,
+        consumer_support.z,
+        stone(),
+    );
     world.set(consumer_torch.x, consumer_torch.y, consumer_torch.z, {
         let mut t = BlockState::air();
         t.kind = BlockKind::Torch;
@@ -791,13 +970,20 @@ fn or_merge_with_isolation_protects_a_branch_that_fans_out_elsewhere() {
         t
     });
     floor_under(&mut world, isolating_repeater);
-    world.set(isolating_repeater.x, isolating_repeater.y, isolating_repeater.z, repeater(Facing::South));
+    world.set(
+        isolating_repeater.x,
+        isolating_repeater.y,
+        isolating_repeater.z,
+        repeater(Facing::South),
+    );
     floor_under(&mut world, merge);
     world.set(merge.x, merge.y, merge.z, dust());
     world.set(lever_b.x, lever_b.y, lever_b.z, raw_lever(false));
 
     let mut simulator = Simulator::new(world);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
 
     // A off, B on: the merge is still correctly powered (B's signal still
     // reaches it, forward through the isolating repeater), and this time the
@@ -806,15 +992,27 @@ fn or_merge_with_isolation_protects_a_branch_that_fans_out_elsewhere() {
     set_raw_lever(&mut simulator, lever_b, true);
 
     let merge_power = simulator.world().get(merge.x, merge.y, merge.z).power;
-    assert!(merge_power > 0, "the merge itself must still see B's signal through the isolating repeater");
+    assert!(
+        merge_power > 0,
+        "the merge itself must still see B's signal through the isolating repeater"
+    );
 
-    let torch_lit = simulator.world().get(consumer_torch.x, consumer_torch.y, consumer_torch.z).lit;
-    assert!(torch_lit, "isolation should have protected the consumer torch: NOT(A=0) = 1, but it reads dark");
+    let torch_lit = simulator
+        .world()
+        .get(consumer_torch.x, consumer_torch.y, consumer_torch.z)
+        .lit;
+    assert!(
+        torch_lit,
+        "isolation should have protected the consumer torch: NOT(A=0) = 1, but it reads dark"
+    );
 
     // And with A on, the torch correctly goes dark regardless of B.
     set_raw_lever(&mut simulator, lever_a, true);
     set_raw_lever(&mut simulator, lever_b, false);
-    let torch_lit = simulator.world().get(consumer_torch.x, consumer_torch.y, consumer_torch.z).lit;
+    let torch_lit = simulator
+        .world()
+        .get(consumer_torch.x, consumer_torch.y, consumer_torch.z)
+        .lit;
     assert!(!torch_lit, "NOT(A=1) should be 0");
 }
 
@@ -843,7 +1041,12 @@ fn andnot_is_one_comparator_in_subtract_mode() {
     let lever_b = Position::new(5, 2, 6); // standing on top of side_block: strong power
     let output_dust = Position::new(6, 1, 5); // east of the comparator: front/output
 
-    world.set(comparator_pos.x, comparator_pos.y, comparator_pos.z, comparator_subtract(Facing::West));
+    world.set(
+        comparator_pos.x,
+        comparator_pos.y,
+        comparator_pos.z,
+        comparator_subtract(Facing::West),
+    );
     floor_under(&mut world, comparator_pos);
 
     floor_under(&mut world, rear_dust);
@@ -857,7 +1060,9 @@ fn andnot_is_one_comparator_in_subtract_mode() {
     world.set(output_dust.x, output_dust.y, output_dust.z, dust());
 
     let mut simulator = Simulator::new(world);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
 
     let blocks = count_non_air(&simulator.world().clone());
     let mut worst_ticks = 0u64;
@@ -866,9 +1071,16 @@ fn andnot_is_one_comparator_in_subtract_mode() {
         let t1 = set_raw_lever(&mut simulator, lever_a, a);
         let t2 = set_raw_lever(&mut simulator, lever_b, b);
         worst_ticks = worst_ticks.max(t1).max(t2);
-        let output = simulator.world().get(output_dust.x, output_dust.y, output_dust.z).power > 0;
+        let output = simulator
+            .world()
+            .get(output_dust.x, output_dust.y, output_dust.z)
+            .power
+            > 0;
         let expected = a && !b;
-        assert_eq!(output, expected, "ANDNOT({a}, {b}): expected {expected}, comparator circuit gave {output}");
+        assert_eq!(
+            output, expected,
+            "ANDNOT({a}, {b}): expected {expected}, comparator circuit gave {output}"
+        );
     }
 
     eprintln!(

@@ -61,8 +61,14 @@ struct PinsFile {
 /// `mc_dump`'s format note). Every refusal names what was wrong and where,
 /// because a pins file is written by hand and read exactly once.
 fn parse_pins_file(text: &str) -> Result<PinsFile, String> {
-    let mut cursor = Cursor { bytes: text.as_bytes(), pos: 0 };
-    let mut pins = PinsFile { inputs: Vec::new(), outputs: Vec::new() };
+    let mut cursor = Cursor {
+        bytes: text.as_bytes(),
+        pos: 0,
+    };
+    let mut pins = PinsFile {
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+    };
     let (mut saw_inputs, mut saw_outputs) = (false, false);
 
     cursor.expect(b'{')?;
@@ -73,9 +79,7 @@ fn parse_pins_file(text: &str) -> Result<PinsFile, String> {
             match section.as_str() {
                 "inputs" => {
                     if saw_inputs {
-                        return Err(
-                            "section `inputs` contains duplicate key `inputs`".to_string()
-                        );
+                        return Err("section `inputs` contains duplicate key `inputs`".to_string());
                     }
                     saw_inputs = true;
                     parse_port_map(&mut cursor, "inputs", &mut pins.inputs)?;
@@ -191,7 +195,9 @@ fn parse_pin(cursor: &mut Cursor) -> Result<PortPin, String> {
                 });
             }
             other => {
-                return Err(format!("unknown key \"{other}\": a pin has \"at\" and \"toward\""))
+                return Err(format!(
+                    "unknown key \"{other}\": a pin has \"at\" and \"toward\""
+                ))
             }
         }
         if !cursor.take(b',') {
@@ -249,7 +255,10 @@ impl Cursor<'_> {
                 "expected '{}' at byte {}, found '{}'",
                 wanted as char, self.pos, byte as char
             )),
-            None => Err(format!("expected '{}' at byte {}, found end of file", wanted as char, self.pos)),
+            None => Err(format!(
+                "expected '{}' at byte {}, found end of file",
+                wanted as char, self.pos
+            )),
         }
     }
 
@@ -420,7 +429,9 @@ fn select(args: &[String], circuits: &[CircuitInfo]) -> Result<SelectedCircuit, 
         });
     }
 
-    let requested = args.first().expect("select is only called with at least one argument");
+    let requested = args
+        .first()
+        .expect("select is only called with at least one argument");
 
     if let Some(circuit) = verilog::find(requested) {
         let (netlist, output_labels) = circuit
@@ -491,24 +502,27 @@ fn print_pinout(
     output_labels: &[(String, String)],
     placements: &PortPlacements,
 ) {
-    let annotate = |port: &str, at: (i32, i32, i32), pin: Option<PortPin>, role: PortRole| {
-        match pin {
-            Some(pin) => {
-                let handover = handover_in_the_world(&compiled.world, port, at, pin, role)
-                    .unwrap_or_else(|why| panic!("the pinout would describe a world that did not ship: {why}"));
-                format!(
-                    "   yours (ships empty), signal {}, handover ({}, {}, {})",
-                    facing_name(pin.toward),
-                    handover.x,
-                    handover.y,
-                    handover.z
-                )
-            }
-            None => String::new(),
+    let annotate = |port: &str, at: (i32, i32, i32), pin: Option<PortPin>, role: PortRole| match pin
+    {
+        Some(pin) => {
+            let handover = handover_in_the_world(&compiled.world, port, at, pin, role)
+                .unwrap_or_else(|why| {
+                    panic!("the pinout would describe a world that did not ship: {why}")
+                });
+            format!(
+                "   yours (ships empty), signal {}, handover ({}, {}, {})",
+                facing_name(pin.toward),
+                handover.x,
+                handover.y,
+                handover.z
+            )
         }
+        None => String::new(),
     };
     println!();
-    println!("pinout (schematic-local coordinates: x,y,z from the corner the .litematic is pasted at)");
+    println!(
+        "pinout (schematic-local coordinates: x,y,z from the corner the .litematic is pasted at)"
+    );
     println!("  inputs (lever, unless pinned):");
     for (name, &(x, y, z)) in &compiled.input_positions {
         println!(
@@ -620,8 +634,8 @@ fn list_circuits(circuits: &[CircuitInfo]) {
         let name = info.name;
         let netlist = (info.build)();
         let gate_count = netlist.gates.len();
-        let compiled =
-            compile(&netlist).unwrap_or_else(|err| panic!("circuit '{name}' failed to compile: {err:?}"));
+        let compiled = compile(&netlist)
+            .unwrap_or_else(|err| panic!("circuit '{name}' failed to compile: {err:?}"));
         let (size_x, size_y, size_z) = compiled.world.size();
         println!("  {name:<14} {gate_count:>4} gates   {size_x}x{size_y}x{size_z}");
     }
@@ -661,7 +675,9 @@ fn main() {
         None => None,
     };
     if pins_path.is_some() && !grown {
-        eprintln!("--pins requires --grown: pinned ports compile through the generation front door");
+        eprintln!(
+            "--pins requires --grown: pinned ports compile through the generation front door"
+        );
         std::process::exit(1);
     }
     let circuits = available_circuits();
@@ -671,7 +687,12 @@ fn main() {
         return;
     }
 
-    let SelectedCircuit { name, netlist, output_labels, lowering_path } = match select(&args, &circuits) {
+    let SelectedCircuit {
+        name,
+        netlist,
+        output_labels,
+        lowering_path,
+    } = match select(&args, &circuits) {
         Ok(selected) => selected,
         Err(message) => {
             eprintln!("{message}");
@@ -748,10 +769,15 @@ fn main() {
 
     let output_dir = Path::new("output");
     std::fs::create_dir_all(output_dir).expect("failed to create the output directory");
-    let stem = if grown { format!("{name}.grown") } else { name.clone() };
+    let stem = if grown {
+        format!("{name}.grown")
+    } else {
+        name.clone()
+    };
     let output_path = output_dir.join(format!("{stem}.litematic"));
 
-    litematic::save(&output_path, &compiled.world, &name).expect("failed to write the litematic file");
+    litematic::save(&output_path, &compiled.world, &name)
+        .expect("failed to write the litematic file");
 
     // A plain-text block dump beside the litematic, one non-air block per
     // line -- `x y z kind facing lit power` -- for viewers that are not
@@ -803,27 +829,29 @@ fn main() {
         use std::io::Write;
         let json_path = output_dir.join(format!("{stem}.pinout.json"));
         let mut json = std::fs::File::create(&json_path).expect("failed to create the pinout json");
-        let entry =
-            |key: &str, (x, y, z): (i32, i32, i32), pin: Option<PortPin>, role: PortRole| match pin {
-                Some(pin) => {
-                    let handover = handover_in_the_world(&compiled.world, key, (x, y, z), pin, role)
-                        .unwrap_or_else(|why| panic!("the pinout would describe a world that did not ship: {why}"));
-                    format!(
-                        "\"{key}\":{{\"at\":[{x},{y},{z}],\"toward\":\"{}\",\"handover\":[{},{},{}]}}",
-                        facing_name(pin.toward),
-                        handover.x,
-                        handover.y,
-                        handover.z
-                    )
-                }
-                None => format!("\"{key}\":[{x},{y},{z}]"),
-            };
+        let entry = |key: &str,
+                     (x, y, z): (i32, i32, i32),
+                     pin: Option<PortPin>,
+                     role: PortRole| match pin {
+            Some(pin) => {
+                let handover = handover_in_the_world(&compiled.world, key, (x, y, z), pin, role)
+                    .unwrap_or_else(|why| {
+                        panic!("the pinout would describe a world that did not ship: {why}")
+                    });
+                format!(
+                    "\"{key}\":{{\"at\":[{x},{y},{z}],\"toward\":\"{}\",\"handover\":[{},{},{}]}}",
+                    facing_name(pin.toward),
+                    handover.x,
+                    handover.y,
+                    handover.z
+                )
+            }
+            None => format!("\"{key}\":[{x},{y},{z}]"),
+        };
         let inputs = compiled
             .input_positions
             .iter()
-            .map(|(name, &position)| {
-                entry(name, position, placements.get(name), PortRole::Input)
-            })
+            .map(|(name, &position)| entry(name, position, placements.get(name), PortRole::Input))
             .collect::<Vec<_>>()
             .join(",");
         let label_of: std::collections::BTreeMap<&str, &str> = output_labels
@@ -836,15 +864,21 @@ fn main() {
             .map(|(signal, &position)| {
                 let pin = placements.get(signal);
                 let key = match pin {
-                    Some(_) => label_of.get(signal.as_str()).copied().unwrap_or(signal.as_str()),
+                    Some(_) => label_of
+                        .get(signal.as_str())
+                        .copied()
+                        .unwrap_or(signal.as_str()),
                     None => signal.as_str(),
                 };
                 entry(key, position, pin, PortRole::Output)
             })
             .collect::<Vec<_>>()
             .join(",");
-        write!(json, "{{\"inputs\":{{{inputs}}},\"outputs\":{{{outputs}}}}}")
-            .expect("failed to write the pinout json");
+        write!(
+            json,
+            "{{\"inputs\":{{{inputs}}},\"outputs\":{{{outputs}}}}}"
+        )
+        .expect("failed to write the pinout json");
         println!("wrote {}", json_path.display());
     }
 
@@ -893,7 +927,10 @@ mod tests {
         assert_eq!(pins.outputs[0].1.at, Anchor { x: 7, y: 2, z: 0 });
         assert_eq!(pins.outputs[0].1.toward, Facing::West);
 
-        assert!(parse_pins_file("{}").expect("an empty object pins nothing").inputs.is_empty());
+        assert!(parse_pins_file("{}")
+            .expect("an empty object pins nothing")
+            .inputs
+            .is_empty());
     }
 
     /// Every malformation is refused with a message that names it -- the
@@ -907,15 +944,27 @@ mod tests {
             // A section this format does not have.
             (r#"{"outpts": {}}"#, "outpts"),
             // A facing that is not one of the four horizontal names.
-            (r#"{"inputs": {"a": {"at": [1,1,1], "toward": "up"}}}"#, "up"),
-            (r#"{"inputs": {"a": {"at": [1,1,1], "toward": "North"}}}"#, "North"),
+            (
+                r#"{"inputs": {"a": {"at": [1,1,1], "toward": "up"}}}"#,
+                "up",
+            ),
+            (
+                r#"{"inputs": {"a": {"at": [1,1,1], "toward": "North"}}}"#,
+                "North",
+            ),
             // A pin missing one of its two required keys.
             (r#"{"inputs": {"a": {"at": [1,1,1]}}}"#, "toward"),
             (r#"{"inputs": {"a": {"toward": "south"}}}"#, "\"at\""),
             // A key a pin does not have.
-            (r#"{"inputs": {"a": {"at": [1,1,1], "toward": "south", "colour": "red"}}}"#, "colour"),
+            (
+                r#"{"inputs": {"a": {"at": [1,1,1], "toward": "south", "colour": "red"}}}"#,
+                "colour",
+            ),
             // A coordinate that is not a three-integer array.
-            (r#"{"inputs": {"a": {"at": [1,1], "toward": "south"}}}"#, "integer"),
+            (
+                r#"{"inputs": {"a": {"at": [1,1], "toward": "south"}}}"#,
+                "integer",
+            ),
             // The same port pinned twice in one section.
             (
                 r#"{"inputs": {"a": {"at": [1,1,1], "toward": "south"},
@@ -925,8 +974,7 @@ mod tests {
             // Content after the closing brace.
             (r#"{} trailing"#, "trailing"),
         ] {
-            let error = parse_pins_file(broken)
-                .expect_err(&format!("must refuse: {broken}"));
+            let error = parse_pins_file(broken).expect_err(&format!("must refuse: {broken}"));
             assert!(
                 error.contains(must_mention),
                 "the refusal of `{broken}` must mention `{must_mention}`, got: {error}"
@@ -938,7 +986,12 @@ mod tests {
     fn duplicate_sections_and_pin_keys_are_refused_with_full_context() {
         for (broken, section, port, key) in [
             (r#"{"inputs": {}, "inputs": {}}"#, "inputs", None, "inputs"),
-            (r#"{"outputs": {}, "outputs": {}}"#, "outputs", None, "outputs"),
+            (
+                r#"{"outputs": {}, "outputs": {}}"#,
+                "outputs",
+                None,
+                "outputs",
+            ),
             (
                 r#"{"inputs": {"a": {"at": [1,1,1], "at": [2,2,2], "toward": "south"}}}"#,
                 "inputs",
@@ -976,7 +1029,10 @@ mod tests {
     fn a_defective_pin_is_named_by_its_port() {
         let error = parse_pins_file(r#"{"outputs": {"g": {"at": [1,1,1], "toward": "down"}}}"#)
             .expect_err("a vertical toward is refused");
-        assert!(error.contains('g'), "the port name travels with the defect: {error}");
+        assert!(
+            error.contains('g'),
+            "the port name travels with the defect: {error}"
+        );
     }
 
     /// Output pins arrive as display labels and leave as internal signals;
@@ -993,14 +1049,24 @@ mod tests {
         let placements = resolve_pins(&pins, &labels).expect("`y` resolves through the labels");
         assert_eq!(
             placements.get("a"),
-            Some(PortPin { at: Anchor { x: 3, y: 1, z: 20 }, toward: Facing::South })
+            Some(PortPin {
+                at: Anchor { x: 3, y: 1, z: 20 },
+                toward: Facing::South
+            })
         );
         assert_eq!(
             placements.get("g6"),
-            Some(PortPin { at: Anchor { x: 5, y: 1, z: 2 }, toward: Facing::North }),
+            Some(PortPin {
+                at: Anchor { x: 5, y: 1, z: 2 },
+                toward: Facing::North
+            }),
             "the placement is keyed by the internal signal the label names"
         );
-        assert_eq!(placements.get("y"), None, "the display label itself pins nothing");
+        assert_eq!(
+            placements.get("y"),
+            None,
+            "the display label itself pins nothing"
+        );
     }
 
     /// A world holding exactly one repeater, so the two predicates behind
@@ -1028,7 +1094,10 @@ mod tests {
     #[test]
     fn a_reported_handover_is_read_out_of_the_world_and_a_disagreement_is_named() {
         let at = Anchor { x: 4, y: 1, z: 6 };
-        let pin = PortPin { at, toward: Facing::North };
+        let pin = PortPin {
+            at,
+            toward: Facing::North,
+        };
 
         // An input reads the caller's cell from the north neighbour.
         let reader = Anchor { x: 4, y: 1, z: 5 };
@@ -1039,8 +1108,9 @@ mod tests {
         );
         // The same world says nothing about an output pinned there: a
         // delivering repeater would store the opposite facing.
-        assert!(handover_in_the_world(&world, "d0", (at.x, at.y, at.z), pin, PortRole::Output)
-            .is_err());
+        assert!(
+            handover_in_the_world(&world, "d0", (at.x, at.y, at.z), pin, PortRole::Output).is_err()
+        );
 
         // An output drives the caller's cell from the south neighbour.
         let deliverer = Anchor { x: 4, y: 1, z: 7 };
@@ -1056,14 +1126,20 @@ mod tests {
         let error = handover_in_the_world(&empty, "y", (at.x, at.y, at.z), pin, PortRole::Output)
             .expect_err("an empty world holds no handover");
         assert!(error.contains('y'), "the refusal names the port: {error}");
-        assert!(error.contains("(4, 1, 7)"), "and the cell the pin named: {error}");
+        assert!(
+            error.contains("(4, 1, 7)"),
+            "and the cell the pin named: {error}"
+        );
 
         // So is a recorded position that has drifted off the pin: the sidecar
         // would otherwise print a cell nobody owns.
         let world = world_with_a_repeater(deliverer, Facing::South);
         let error = handover_in_the_world(&world, "y", (9, 1, 9), pin, PortRole::Output)
             .expect_err("a recorded cell that is not the pinned one");
-        assert!(error.contains("(9, 1, 9)"), "the refusal names the drift: {error}");
+        assert!(
+            error.contains("(9, 1, 9)"),
+            "the refusal names the drift: {error}"
+        );
     }
 
     /// A label the circuit does not declare is refused by name, with the
@@ -1076,6 +1152,9 @@ mod tests {
 
         let error = resolve_pins(&pins, &labels).expect_err("`q` labels nothing");
         assert!(error.contains('q'), "the refusal names the label: {error}");
-        assert!(error.contains('y'), "and offers the labels that exist: {error}");
+        assert!(
+            error.contains('y'),
+            "and offers the labels that exist: {error}"
+        );
     }
 }

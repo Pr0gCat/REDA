@@ -7,20 +7,22 @@ use reda::compile::topology::GateKind;
 use std::path::PathBuf;
 
 use reda::circuits::and4::build_and4_netlist;
+use reda::compile::fragment_synth::identity::{ObservationId, PhysicalEndpointId};
+use reda::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
 use reda::compile::physical;
 use reda::compile::planner::{
     emit_candidate, emit_primitives, seed_from_legacy, verify_candidate, Anchor, NodeRealisation,
     NormalisedScore, PlannerWeights, PortPlacements, RouteTerminalKind,
 };
 use reda::compile::topology::Primitive;
-use reda::redstone::world::block::{BlockKind, Facing};
-use reda::redstone::world::storage::World;
 use reda::compile::{
     compile, compile_legacy, compile_planned, CompileError, CompiledCircuit, Gate, Netlist,
 };
 use reda::formats::litematic;
 use reda::redstone::simulator::position::Position;
 use reda::redstone::simulator::Simulator;
+use reda::redstone::world::block::{BlockKind, Facing};
+use reda::redstone::world::storage::World;
 
 const MAX_TICKS: u64 = 500;
 
@@ -140,6 +142,19 @@ fn fanout_netlist() -> Netlist {
     }
 }
 
+fn mixed_merge_netlist() -> Netlist {
+    Netlist {
+        inputs: vec!["a".to_string(), "b".to_string()],
+        outputs: vec!["out".to_string(), "spy".to_string()],
+        gates: vec![
+            Gate::nor("na", &["a"]),
+            Gate::merge("m", &["na", "b"]),
+            Gate::nor("out", &["m"]),
+            Gate::nor("spy", &["na"]),
+        ],
+    }
+}
+
 /// and4 through the **emitter**, which is the only path that carries a
 /// `LegacyEmission` for `seed_from_legacy` to extract.
 ///
@@ -209,7 +224,10 @@ fn assert_worlds_identical(realised: &World, expected: &World, what: &str) {
         if got != want {
             total += 1;
             if shown.len() < 12 {
-                shown.push(format!("  ({x}, {y}, {z}): got {:?}, want {:?}", got.kind, want.kind));
+                shown.push(format!(
+                    "  ({x}, {y}, {z}): got {:?}, want {:?}",
+                    got.kind, want.kind
+                ));
             }
         }
     }
@@ -257,6 +275,132 @@ fn a_legacy_seed_re_emits_the_exact_world_the_legacy_compiler_built() {
             .expect("a legacy seed must be fully realisable");
 
         assert_worlds_identical(&realised.world, &compiled.world, name);
+    }
+}
+
+#[test]
+fn a_typed_one_to_one_candidate_re_emits_the_exact_legacy_world() {
+    let (and4, _) = build_and4_netlist();
+    let circuits: [(&str, Netlist); 5] = [
+        ("not", not_netlist()),
+        ("bare merge", bare_merge_netlist()),
+        ("mixed merge", mixed_merge_netlist()),
+        ("fanout", fanout_netlist()),
+        ("and4", and4),
+    ];
+
+    for (name, netlist) in circuits {
+        let compiled = compile_legacy(&netlist).expect("legacy fixture compiles");
+        let adapted = LegacyCandidateAdapter::adapt(&netlist, &compiled)
+            .expect("legacy seed adapts without inspecting world ownership");
+        let expected_primitives = adapted
+            .candidate
+            .instances
+            .instances
+            .iter()
+            .map(|instance| instance.expanded.topology.primitives.len())
+            .sum::<usize>();
+        assert_eq!(
+            adapted.candidate.placements.len(),
+            expected_primitives,
+            "{name}: every expanded primitive has one physical owner"
+        );
+        for placement in adapted.candidate.placements.values() {
+            for block in &placement.blocks {
+                if block.state.kind == BlockKind::Repeater {
+                    let block_facing = match block.state.facing.unwrap() {
+                        Facing::North => reda::compile::geometry::CellFacing::NORTH,
+                        Facing::East => reda::compile::geometry::CellFacing::EAST,
+                        Facing::South => reda::compile::geometry::CellFacing::SOUTH,
+                        Facing::West => reda::compile::geometry::CellFacing::WEST,
+                        Facing::Up | Facing::Down => {
+                            panic!("{name}: repeater cannot face vertically")
+                        }
+                    };
+                    assert_eq!(placement.facing, block_facing, "{name}: repeater facing");
+                    assert_eq!(
+                        placement.variant,
+                        u16::from(block_facing.index()),
+                        "{name}: repeater variant"
+                    );
+                }
+            }
+        }
+        adapted
+            .candidate
+            .validate_physical_ownership()
+            .expect("typed physical ownership is exclusive");
+        for route in adapted.candidate.routes.values() {
+            let source_observation = match route.source {
+                PhysicalEndpointId::PrimaryInput(port) => ObservationId::PrimaryInput(port),
+                PhysicalEndpointId::PrimitiveOutput(primitive) => {
+                    ObservationId::PrimitiveOutput(primitive)
+                }
+                PhysicalEndpointId::Junction(instance) => ObservationId::JunctionOutput(instance),
+                other => panic!("{name}: route {:?} has invalid source {other:?}", route.id),
+            };
+            let source_at = adapted.candidate.observations[&source_observation].site.at;
+            for branch in &route.branches {
+                let root = compiled
+                    .world
+                    .get(branch.root.x, branch.root.y, branch.root.z);
+                assert!(
+                    !matches!(root.kind, BlockKind::Air | BlockKind::Solid),
+                    "{name}: route {:?} branch {:?} starts on an electrical cell, not {:?}",
+                    route.id,
+                    branch.sink,
+                    root.kind
+                );
+                let source_gap = (source_at.x - branch.root.x).abs()
+                    + (source_at.y - branch.root.y).abs()
+                    + (source_at.z - branch.root.z).abs();
+                assert!(
+                    source_gap <= 1,
+                    "{name}: route {:?} branch {:?} starts {source_gap} cells from source {:?}",
+                    route.id,
+                    branch.sink,
+                    route.source
+                );
+                let physical_repeaters = branch
+                    .path
+                    .iter()
+                    .filter(|at| compiled.world.get(at.x, at.y, at.z).kind == BlockKind::Repeater)
+                    .count() as u64;
+                let topology_terminal = u64::from(matches!(
+                    branch.terminal.delayed_owner,
+                    Some(reda::compile::fragment_synth::candidate::DelayedOwner::Primitive(_))
+                ));
+                assert_eq!(
+                    branch.terminal.repeaters,
+                    physical_repeaters - topology_terminal,
+                    "{name}: route {:?} branch {:?} charges only route-owned repeaters",
+                    route.id,
+                    branch.sink
+                );
+            }
+        }
+        let realised = adapted
+            .candidate
+            .emit_world(compiled.world.size())
+            .expect("typed candidate emits");
+
+        assert_worlds_identical(&realised, &compiled.world, name);
+        assert_eq!(
+            adapted.input_positions, compiled.input_positions,
+            "{name}: inputs"
+        );
+        assert_eq!(
+            adapted.output_positions, compiled.output_positions,
+            "{name}: outputs"
+        );
+        assert_eq!(
+            adapted.gate_output_positions, compiled.gate_output_positions,
+            "{name}: gates"
+        );
+        assert_eq!(
+            adapted.gate_facings, compiled.gate_facings,
+            "{name}: facings"
+        );
     }
 }
 
@@ -491,7 +635,10 @@ fn a_compiled_not_gate_matches_its_truth_table() {
         .run_until_stable(MAX_TICKS)
         .expect("circuit must settle before the first reading");
 
-    let lever_a = driver_for(simulator.world(), *compiled.input_positions.get("a").unwrap());
+    let lever_a = driver_for(
+        simulator.world(),
+        *compiled.input_positions.get("a").unwrap(),
+    );
     let output_y = *compiled.output_positions.get("y").unwrap();
 
     let rows: [(bool, bool); 2] = [(false, true), (true, false)];
@@ -515,8 +662,14 @@ fn a_compiled_and_gate_matches_its_truth_table() {
         .run_until_stable(MAX_TICKS)
         .expect("circuit must settle before the first reading");
 
-    let lever_a = driver_for(simulator.world(), *compiled.input_positions.get("a").unwrap());
-    let lever_b = driver_for(simulator.world(), *compiled.input_positions.get("b").unwrap());
+    let lever_a = driver_for(
+        simulator.world(),
+        *compiled.input_positions.get("a").unwrap(),
+    );
+    let lever_b = driver_for(
+        simulator.world(),
+        *compiled.input_positions.get("b").unwrap(),
+    );
     let output_y = *compiled.output_positions.get("y").unwrap();
 
     // 四列全測：00->0, 01->0, 10->0, 11->1
@@ -562,7 +715,11 @@ fn a_mixed_pinned_and_gate_computes_through_the_callers_own_cells() {
     let pinned_in = *compiled.input_positions.get("a").unwrap();
     let lever_b = *compiled.input_positions.get("b").unwrap();
     let pinned_out = *compiled.output_positions.get("y").unwrap();
-    assert_eq!(pinned_in, (10, 1, 40), "a pinned port records the caller's own cell");
+    assert_eq!(
+        pinned_in,
+        (10, 1, 40),
+        "a pinned port records the caller's own cell"
+    );
     assert_eq!(pinned_out, (16, 1, 40));
 
     // The caller's side, built after compilation and outside REDA's knowledge:
@@ -573,8 +730,14 @@ fn a_mixed_pinned_and_gate_computes_through_the_callers_own_cells() {
 
     let driver_a = driver_for(&compiled.world, pinned_in);
     let driver_b = driver_for(&compiled.world, lever_b);
-    assert!(matches!(driver_a, Driver::CallerCell(_)), "`a` is driven by the caller's cell");
-    assert!(matches!(driver_b, Driver::Lever(_)), "`b` keeps today's lever");
+    assert!(
+        matches!(driver_a, Driver::CallerCell(_)),
+        "`a` is driven by the caller's cell"
+    );
+    assert!(
+        matches!(driver_b, Driver::Lever(_)),
+        "`b` keeps today's lever"
+    );
 
     let mut simulator = Simulator::new(world);
     simulator
@@ -590,7 +753,10 @@ fn a_mixed_pinned_and_gate_computes_through_the_callers_own_cells() {
         set_lever(&mut simulator, driver_a, a);
         set_lever(&mut simulator, driver_b, b);
         let output = read_output(&simulator, pinned_out);
-        assert_eq!(output, expected, "AND({a}, {b}) should be {expected}, got {output}");
+        assert_eq!(
+            output, expected,
+            "AND({a}, {b}) should be {expected}, got {output}"
+        );
     }
 
     // The fixtures were the test's, never the circuit's -- the source the last

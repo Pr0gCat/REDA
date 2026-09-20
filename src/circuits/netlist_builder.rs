@@ -50,7 +50,12 @@ impl NetlistBuilder {
     /// invents cannot collide with the names already in the netlist it is
     /// lowering (see `lowering::fresh_prefix`).
     pub(crate) fn with_prefix(prefix: String) -> Self {
-        NetlistBuilder { gates: Vec::new(), not_cache: HashMap::new(), prefix, counter: 0 }
+        NetlistBuilder {
+            gates: Vec::new(),
+            not_cache: HashMap::new(),
+            prefix,
+            counter: 0,
+        }
     }
 
     /// Every gate built so far, in construction order.
@@ -81,7 +86,9 @@ impl NetlistBuilder {
     /// input rather than being duplicated beside a freshly built one.
     pub(crate) fn adopt(&mut self, gate: Gate) {
         if gate.kind == GateKind::Nor(1) {
-            self.not_cache.entry(gate.inputs[0].clone()).or_insert_with(|| gate.output.clone());
+            self.not_cache
+                .entry(gate.inputs[0].clone())
+                .or_insert_with(|| gate.output.clone());
         }
         self.gates.push(gate);
     }
@@ -94,10 +101,23 @@ impl NetlistBuilder {
     /// realisable kinds instead: their arity comes from the input list
     /// rather than from the caller, which is what constant folding needs.
     pub(crate) fn cell(&mut self, kind: GateKind, inputs: &[String]) -> String {
-        assert!(!kind.is_realisable(), "use nor()/merge() for a realisable kind, not cell()");
-        assert_eq!(inputs.len(), kind.arity(), "{kind:?} takes {} input(s)", kind.arity());
+        assert!(
+            !kind.is_realisable(),
+            "use nor()/merge() for a realisable kind, not cell()"
+        );
+        assert_eq!(
+            inputs.len(),
+            kind.arity(),
+            "{kind:?} takes {} input(s)",
+            kind.arity()
+        );
         let output = self.fresh_name();
-        self.gates.push(Gate { name: output.clone(), inputs: inputs.to_vec(), output: output.clone(), kind });
+        self.gates.push(Gate {
+            name: output.clone(),
+            inputs: inputs.to_vec(),
+            output: output.clone(),
+            kind,
+        });
         output
     }
 
@@ -196,7 +216,10 @@ impl NetlistBuilder {
             }
             level = next;
         }
-        level.into_iter().next().expect("and_reduce called with an empty signal list")
+        level
+            .into_iter()
+            .next()
+            .expect("and_reduce called with an empty signal list")
     }
 
     /// The OR of a signal list of any length, folded into a tree of
@@ -220,6 +243,9 @@ impl NetlistBuilder {
             }
             level = next;
         }
-        level.into_iter().next().expect("or_reduce called with an empty signal list")
+        level
+            .into_iter()
+            .next()
+            .expect("or_reduce called with an empty signal list")
     }
 }

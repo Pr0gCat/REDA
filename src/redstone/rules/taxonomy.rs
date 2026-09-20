@@ -137,9 +137,8 @@ pub fn flags_of(state: &BlockState) -> BlockFlags {
         };
 
         if top_is_full {
-            bits |= BlockFlags::SUPPORT_FULL
-                | BlockFlags::SUPPORT_RIGID
-                | BlockFlags::SUPPORT_CENTER;
+            bits |=
+                BlockFlags::SUPPORT_FULL | BlockFlags::SUPPORT_RIGID | BlockFlags::SUPPORT_CENTER;
         }
         if side_is_full {
             bits |= BlockFlags::SIDE_FULL;
@@ -687,7 +686,11 @@ mod tests {
 
     #[test]
     fn blocks_that_support_nothing_still_support_nothing() {
-        for name in ["minecraft:farmland", "minecraft:dirt_path", "minecraft:composter"] {
+        for name in [
+            "minecraft:farmland",
+            "minecraft:dirt_path",
+            "minecraft:composter",
+        ] {
             let b = named(BlockKind::Other, name);
             let f = flags_of(&b);
             assert!(!f.can_carry_dust(), "{name} must not hold dust");
@@ -706,9 +709,18 @@ mod tests {
         let honey = named(BlockKind::Other, "minecraft:honey_block");
         let f = flags_of(&honey);
         assert!(!f.can_carry_dust(), "honey block must not hold dust");
-        assert!(!f.can_carry_repeater(), "honey block must not hold a repeater");
-        assert!(!f.can_carry_torch(), "honey block must not hold a standing torch");
-        assert!(!f.can_attach_wall_torch(), "honey block has no full side face either");
+        assert!(
+            !f.can_carry_repeater(),
+            "honey block must not hold a repeater"
+        );
+        assert!(
+            !f.can_carry_torch(),
+            "honey block must not hold a standing torch"
+        );
+        assert!(
+            !f.can_attach_wall_torch(),
+            "honey block has no full side face either"
+        );
         assert!(!f.is_conductive(), "honey block does not conduct");
     }
 
@@ -761,7 +773,13 @@ mod tests {
         rep.facing = Some(Facing::West);
 
         assert_ne!(power_emitted_toward(&rep, Facing::East), PowerOutput::INERT);
-        for other in [Facing::North, Facing::South, Facing::West, Facing::Up, Facing::Down] {
+        for other in [
+            Facing::North,
+            Facing::South,
+            Facing::West,
+            Facing::Up,
+            Facing::Down,
+        ] {
             assert_eq!(
                 power_emitted_toward(&rep, other),
                 PowerOutput::INERT,
@@ -773,7 +791,14 @@ mod tests {
     #[test]
     fn an_unlit_component_emits_nothing_in_every_direction() {
         let rep = named(BlockKind::Repeater, "minecraft:repeater");
-        for d in [Facing::North, Facing::South, Facing::East, Facing::West, Facing::Up, Facing::Down] {
+        for d in [
+            Facing::North,
+            Facing::South,
+            Facing::East,
+            Facing::West,
+            Facing::Up,
+            Facing::Down,
+        ] {
             assert_eq!(power_emitted_toward(&rep, d), PowerOutput::INERT);
         }
     }

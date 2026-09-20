@@ -1,7 +1,9 @@
 //! 方塊狀態的型別定義。這是整個 crate 的底層資料，不依賴任何其他模組。
 
+use serde::Serialize;
+
 /// 方塊的種類。只列出紅石相關的；其餘一律 `Other`，靠 `name` 區分。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum BlockKind {
     Air,
     /// 一般的完整方塊（石頭、泥土、羊毛…）
@@ -31,7 +33,7 @@ pub enum BlockKind {
 }
 
 /// 方塊朝向。中繼器、比較器、牆上火把、活塞都需要。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Facing {
     North,
     South,
@@ -63,7 +65,7 @@ impl Facing {
 /// 原因：舊程式碼從不寫這個屬性，貼上結構後 Minecraft 套用這個預設，
 /// 而我們排線時從未替拉桿蓋一面牆，於是拉桿在方塊更新時掉成掉落物。
 /// 見 `minecraft.wiki/w/Lever`（Java 1.20 blockstate 表）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Face {
     /// 立在地板上：附著在**下方**方塊的頂面（需要 `SUPPORT_FULL`）。
     Floor,
@@ -76,7 +78,7 @@ pub enum Face {
 }
 
 /// 半磚位於方塊格的哪一半。這決定它的頂面能不能承載東西。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum SlabHalf {
     /// 上半磚：頂面是完整實心面
     Top,
@@ -90,7 +92,7 @@ pub enum SlabHalf {
 ///
 /// `name` 保留原始的 Minecraft 方塊 ID（例如 `minecraft:smooth_stone`），
 /// 因為方塊分類（§2.2）必須查表，不能從 `kind` 推導。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct BlockState {
     pub kind: BlockKind,
     pub facing: Option<Facing>,

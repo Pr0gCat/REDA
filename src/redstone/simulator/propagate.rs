@@ -7,15 +7,43 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::redstone::rules::taxonomy::{flags_of, power_emitted_by, power_emitted_toward, BlockPower, PowerOutput};
-use crate::redstone::world::block::Facing;
+use serde::Serialize;
+
+use crate::redstone::rules::taxonomy::{
+    flags_of, power_emitted_by, power_emitted_toward, BlockPower, PowerOutput,
+};
 use crate::redstone::simulator::connectivity::{dust_connections, dust_powers_block_toward};
 use crate::redstone::simulator::position::{Position, ALL_SIX, HORIZONTAL};
 use crate::redstone::world::block::BlockKind;
+use crate::redstone::world::block::Facing;
 use crate::redstone::world::storage::World;
 
 /// 紅石訊號的最大強度。
 pub const MAX_SIGNAL_STRENGTH: u8 = 15;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PropagationPolicy {
+    DirectedDustComponent,
+}
+
+impl PropagationPolicy {
+    fn recompute(self, world: &mut World) -> Vec<Position> {
+        match self {
+            PropagationPolicy::DirectedDustComponent => recompute_directed_dust_component(world),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PropagationSemantics {
+    pub policy: PropagationPolicy,
+    pub semantic_version: u64,
+}
+
+pub const PROPAGATION_SEMANTICS: PropagationSemantics = PropagationSemantics {
+    policy: PropagationPolicy::DirectedDustComponent,
+    semantic_version: 1,
+};
 
 /// 重算「這次可能受影響」的紅石粉網路，回傳強度有改變的位置。
 ///
@@ -41,6 +69,10 @@ pub const MAX_SIGNAL_STRENGTH: u8 = 15;
 /// `active_dust` 的子集，一個大小跟這次受影響的紅石粉數量成正比的 map
 /// 就夠。
 pub fn recompute_dust_strengths(world: &mut World) -> Vec<Position> {
+    PROPAGATION_SEMANTICS.policy.recompute(world)
+}
+
+fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
     let dirty = world.take_dirty();
     if dirty.is_empty() {
         return Vec::new();
@@ -383,7 +415,9 @@ pub fn diode_rear_signal(world: &World, rear: Position) -> u8 {
 
 /// 從 `from` 看向 `to` 是哪個方向。兩者不相鄰時回傳 `None`。
 fn direction_from(from: Position, to: Position) -> Option<Facing> {
-    ALL_SIX.into_iter().find(|&facing| from.offset(facing) == to)
+    ALL_SIX
+        .into_iter()
+        .find(|&facing| from.offset(facing) == to)
 }
 
 #[cfg(test)]
@@ -469,7 +503,11 @@ mod tests {
         recompute_dust_strengths(&mut w);
 
         for x in 1..=5 {
-            assert_eq!(w.get(x, 1, 0).power, 0, "dust at x={x} after source removal");
+            assert_eq!(
+                w.get(x, 1, 0).power,
+                0,
+                "dust at x={x} after source removal"
+            );
         }
     }
 
@@ -519,12 +557,16 @@ mod tests {
         let w_pos = Position::new(1, 1, 0);
         let x_pos = Position::new(2, 2, 0);
         assert!(
-            dust_connections(&w, w_pos, Facing::East).iter().any(|p| p == x_pos),
+            dust_connections(&w, w_pos, Facing::East)
+                .iter()
+                .any(|p| p == x_pos),
             "the climb W -> X must exist for this test to test anything"
         );
         for facing in HORIZONTAL {
             assert!(
-                !dust_connections(&w, x_pos, facing).iter().any(|p| p == w_pos),
+                !dust_connections(&w, x_pos, facing)
+                    .iter()
+                    .any(|p| p == w_pos),
                 "X -> W must not exist -- the edge must be one-way"
             );
         }
@@ -601,7 +643,11 @@ mod tests {
         w.set(0, 1, 0, redstone_block());
 
         let changed = recompute_dust_strengths(&mut w);
-        assert_eq!(changed.len(), 5, "all five dust cells went from 0 to non-zero");
+        assert_eq!(
+            changed.len(),
+            5,
+            "all five dust cells went from 0 to non-zero"
+        );
 
         let changed_again = recompute_dust_strengths(&mut w);
         assert_eq!(changed_again.len(), 0, "a second pass changes nothing");
@@ -650,7 +696,11 @@ mod tests {
         let elapsed = start.elapsed();
 
         // 先確認結果正確，不是只圖快而算錯
-        assert_eq!(changed.len(), 5, "all five dust cells should light up from the source");
+        assert_eq!(
+            changed.len(),
+            5,
+            "all five dust cells should light up from the source"
+        );
         assert_eq!(w.get(1, 1, 0).power, 15, "adjacent to the source");
         assert_eq!(w.get(5, 1, 0).power, 11);
 
@@ -686,7 +736,11 @@ mod tests {
         w.set(4, 1, 5, comparator);
 
         let (kind, strength) = block_signal_at(&w, Position::new(5, 1, 5));
-        assert_eq!(kind, BlockPower::Strong, "the comparator strongly powers the stone");
+        assert_eq!(
+            kind,
+            BlockPower::Strong,
+            "the comparator strongly powers the stone"
+        );
         assert_eq!(strength, 7, "and it must pass on 7, not 15");
     }
 
@@ -724,7 +778,11 @@ mod tests {
         // `power_emitted_toward`'s dust arm claimed this file handled it.
         let w = run_into_a_block(3);
         let (kind, strength) = block_signal_at(&w, Position::new(4, 1, 2));
-        assert_eq!(kind, BlockPower::Weak, "a run's far block is weakly powered");
+        assert_eq!(
+            kind,
+            BlockPower::Weak,
+            "a run's far block is weakly powered"
+        );
         assert_eq!(strength, 13, "and carries the run's own strength, not 15");
     }
 

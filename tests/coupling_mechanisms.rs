@@ -1060,7 +1060,11 @@ fn receiver_slots(m: Position) -> Vec<(Receiver, Position, Facing)> {
             m.offset(Facing::North),
             Facing::North,
         ),
-        (Receiver::Repeater(Facing::South), m.offset(Facing::North), Facing::North),
+        (
+            Receiver::Repeater(Facing::South),
+            m.offset(Facing::North),
+            Facing::North,
+        ),
         (
             Receiver::Comparator(Facing::South),
             m.offset(Facing::North),
@@ -1124,8 +1128,7 @@ fn table_five(out: &mut String) {
                     _ => (r.offset(away), away),
                 };
                 let driver = Emitter::new(kind, feed_dir);
-                let (cell, settled) =
-                    measure(driver, e, Some((m, Fill::Stone)), receiver, r);
+                let (cell, settled) = measure(driver, e, Some((m, Fill::Stone)), receiver, r);
                 if settled == Settled::LoadOnly {
                     mode = Settled::LoadOnly;
                 }
@@ -1651,7 +1654,10 @@ fn a_block_powered_only_by_dust_drives_no_further_dust() {
     );
     let (mode, settled) = settle(world);
     assert_eq!(mode, Settled::Stable);
-    assert!(settled.get(m.x, m.y + 1, m.z).power > 0, "the driving wire must be lit");
+    assert!(
+        settled.get(m.x, m.y + 1, m.z).power > 0,
+        "the driving wire must be lit"
+    );
     assert_eq!(
         block_signal_at(&settled, m),
         (BlockPower::Weak, 15),
@@ -1762,7 +1768,13 @@ fn a_torch_never_powers_its_own_support() {
         Emitter::new(Kind::WallTorch, Facing::East),
     ] {
         for d in ALL_SIX {
-            let cell = measure_dust(emitter, e, Some((e.offset(d), Fill::Stone)), e.offset(d).offset(d)).0;
+            let cell = measure_dust(
+                emitter,
+                e,
+                Some((e.offset(d), Fill::Stone)),
+                e.offset(d).offset(d),
+            )
+            .0;
             assert_eq!(
                 cell.is_coupled(),
                 d == Facing::Up,
@@ -1854,18 +1866,25 @@ fn a_one_way_dust_edge_can_land_in_two_components_of_the_walk() {
     assert!(
         HORIZONTAL
             .iter()
-            .any(|&d| dust_connections(&world, upper, d).iter().any(|p| p == lower)),
+            .any(|&d| dust_connections(&world, upper, d)
+                .iter()
+                .any(|p| p == lower)),
         "the upper wire must descend into the lower one"
     );
     assert!(
         HORIZONTAL
             .iter()
-            .all(|&d| dust_connections(&world, lower, d).iter().all(|p| p != upper)),
+            .all(|&d| dust_connections(&world, lower, d)
+                .iter()
+                .all(|p| p != upper)),
         "and the lower one must not climb back -- its step has no floor to stand on"
     );
 
     // Electrically the two are one net in the direction that matters.
-    assert_eq!(measure_pair(Fill::Air, Fill::Air, true), Coupling::Invisible);
+    assert_eq!(
+        measure_pair(Fill::Air, Fill::Air, true),
+        Coupling::Invisible
+    );
     assert_eq!(measure_pair(Fill::Air, Fill::Air, false), Coupling::No);
     assert!(
         !joined_by_the_dust_walk(&world, upper, lower),
@@ -1880,7 +1899,9 @@ fn a_one_way_dust_edge_can_land_in_two_components_of_the_walk() {
     assert!(
         HORIZONTAL
             .iter()
-            .any(|&d| dust_connections(&floored, lower, d).iter().any(|p| p == upper)),
+            .any(|&d| dust_connections(&floored, lower, d)
+                .iter()
+                .any(|p| p == upper)),
         "with a floor under the upper wire the climb must fire"
     );
     assert_eq!(
@@ -1888,7 +1909,10 @@ fn a_one_way_dust_edge_can_land_in_two_components_of_the_walk() {
         Coupling::Visible,
         "and the walk must then see the pair"
     );
-    assert_eq!(measure_pair(Fill::Stone, Fill::Air, false), Coupling::Visible);
+    assert_eq!(
+        measure_pair(Fill::Stone, Fill::Air, false),
+        Coupling::Visible
+    );
 }
 
 /// Weak power couples into a torch and into a diode's rear, and into nothing
@@ -2086,7 +2110,8 @@ fn only_a_conducting_mediator_carries_the_coupling() {
             continue;
         }
         assert_eq!(
-            carries, conductive,
+            carries,
+            conductive,
             "the {} mediator carried={carries} but is_conductive={conductive}",
             fill.name()
         );

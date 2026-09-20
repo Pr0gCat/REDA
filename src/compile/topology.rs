@@ -43,7 +43,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::compile::geometry;
+use crate::compile::metrics::Fingerprint;
 use crate::redstone::simulator::position::Position;
 
 // ---------------------------------------------------------------------
@@ -88,7 +91,7 @@ use crate::redstone::simulator::position::Position;
 ///   through, which makes it an edge's realisation, never a vertex. See the
 ///   spec: "Dust is not a node... it is the medium -- an edge, not a
 ///   vertex."
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Primitive {
     /// The only element with a function: dark when its support is powered.
     Torch,
@@ -183,7 +186,7 @@ pub enum Primitive {
 /// mandatory input-route repeater has never been part of *its* price. Note
 /// that "no primitive at all" is not "no cell at all": a merge still
 /// occupies a row and a rectangle, which is why its area is not zero.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum GateKind {
     // ---- realisable in redstone directly ----
     /// A NOR gate of `arity` inputs (1..=3): one torch on one support block.
@@ -226,6 +229,16 @@ pub enum GateKind {
     /// input is evaluated.  It deliberately has no boolean `evaluate`
     /// implementation; a DFF needs prior state and a clock transition.
     DffPosedge,
+}
+
+/// Stable identity of one registered combinational implementation.
+///
+/// The ordinal is registration order within `kind`; coordinates, placement,
+/// and search policy are deliberately absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct LibraryEntryId {
+    pub kind: GateKind,
+    pub ordinal: u16,
 }
 
 impl GateKind {
@@ -484,7 +497,7 @@ pub fn known_yosys_cell_types() -> impl Iterator<Item = (&'static str, GateKind)
 /// built for: a change of library data and this enum's own size, never of
 /// `Template`'s shape or of `primitive_graph::expand`, which only ever looks
 /// up whatever `Template::output` and `Template::inputs` name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TemplateNode {
     /// A gate's output torch (or, for a multi-torch entry, its first).
     /// Reading its `lit` state is reading that torch's own output, exactly
@@ -539,7 +552,7 @@ pub struct StatefulTopology {
 /// The type exists so a future entry (a different technique for the same
 /// [`GateKind`], added purely as library data) can carry one without
 /// `Template`'s shape changing to accommodate it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EmbeddingHint {
     /// The two nodes should end up on opposite sides of whatever they are
     /// both connected to.
@@ -557,23 +570,18 @@ pub enum EmbeddingHint {
 /// edge kinds either. See this module's doc comment, and the spec's
 /// "Topology carries no positions" / "Nothing physical lives here either".
 ///
-/// `nodes` and `internal_edges` are what let this shape hold a future
-/// technique that is *not* one-to-one with its gate (a delay repeater in
-/// series, say: two nodes, one internal edge from the input-landing node to
-/// the torch). Every entry this module ships today has one node and no
-/// internal edges -- see this module's doc comment for why that is the
-/// correct state of the library now, not a placeholder for something
-/// missing.
+/// `nodes` and `internal_edges` are what let this shape hold a technique that
+/// is *not* one-to-one with its gate.  The shipped `Buf` entry already uses
+/// that shape: two torches joined by one internal edge.
 pub struct Template {
     /// Every node this entry's graph has, and the primitive kind it will be
     /// realised as. A `Vec`, not a set, so `expand` instantiates them in one
     /// deterministic order.
     pub nodes: Vec<(TemplateNode, Primitive)>,
     /// Directed signal-flow edges between two of this entry's own nodes --
-    /// always between two `nodes` of the *same* entry. Empty for every entry
-    /// this module ships (a single-node entry has nothing to connect
-    /// internally); a multi-node technique (a delay repeater in series with
-    /// its torch) would use this for the edge between them.
+    /// always between two `nodes` of the *same* entry. Single-node entries
+    /// leave it empty; the shipped two-torch `Buf` uses one edge between its
+    /// two roles.
     pub internal_edges: Vec<(TemplateNode, TemplateNode)>,
     /// Which node this entry's `i`-th declared input's signal edge lands on,
     /// in order (`inputs.len()` is this entry's arity, *except* for
@@ -667,6 +675,15 @@ impl Library {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn replace_entries_for_testing(
+        &mut self,
+        kind: GateKind,
+        entries: Vec<LibraryEntry>,
+    ) {
+        self.entries.insert(kind, entries);
+    }
+
     /// Every technique known for `kind`, in the order they were registered.
     /// Empty (not absent) for a `kind` this library has never heard of.
     pub fn entries_for(&self, kind: GateKind) -> &[LibraryEntry] {
@@ -676,6 +693,23 @@ impl Library {
     /// Return one registered technique by its stable library index.
     pub fn entry_at(&self, kind: GateKind, index: usize) -> Option<&LibraryEntry> {
         self.entries_for(kind).get(index)
+    }
+
+    /// Return the typed stable ID for one registered technique.
+    pub fn entry_id_at(&self, kind: GateKind, index: usize) -> Option<LibraryEntryId> {
+        self.entry_at(kind, index)?;
+        let ordinal = u16::try_from(index).ok()?;
+        Some(LibraryEntryId { kind, ordinal })
+    }
+
+    /// Resolve a typed stable technique ID.
+    pub fn entry(&self, id: LibraryEntryId) -> Option<&LibraryEntry> {
+        self.entry_at(id.kind, usize::from(id.ordinal))
+    }
+
+    /// Canonical semantic revision of the registered cell topologies.
+    pub fn revision_fingerprint(&self) -> Fingerprint {
+        crate::compile::revisions::cell_library_revision(self)
     }
 
     /// The technique `primitive_graph::expand` should use for `kind` today.
@@ -688,6 +722,25 @@ impl Library {
     /// change of `Library`'s shape. `None` iff `kind` has no entry at all.
     pub fn choose(&self, kind: GateKind) -> Option<&LibraryEntry> {
         self.entries_for(kind).first()
+    }
+
+    /// Registered combinational techniques in deterministic gate-kind order.
+    /// Entry slices preserve their registration order.
+    pub(crate) fn revision_entries(
+        &self,
+    ) -> impl Iterator<Item = (GateKind, &[LibraryEntry])> + '_ {
+        self.entries
+            .iter()
+            .map(|(&kind, entries)| (kind, entries.as_slice()))
+    }
+
+    /// Registered stateful topologies in deterministic gate-kind order.
+    pub(crate) fn revision_stateful_entries(
+        &self,
+    ) -> impl Iterator<Item = (GateKind, &StatefulTopology)> + '_ {
+        self.stateful_entries
+            .iter()
+            .map(|(&kind, topology)| (kind, topology))
     }
 
     /// The fixed stateful topology for `kind`, if this library knows one.

@@ -15,10 +15,13 @@ pub mod schedule;
 
 use std::collections::HashMap;
 
+use serde::Serialize;
+
+use crate::compile::fragment_synth::identity::ObservationSite;
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
-use observer::{Observation, Observer};
+use observer::{Observation, Observer, TypedObservation};
 use position::Position;
 use schedule::{TickPriority, TickQueue};
 
@@ -48,22 +51,147 @@ pub enum SimulationError {
     UnsupportedComponent { position: Position, name: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundedSimulationError {
+    Simulation(SimulationError),
+    WorkLimitExceeded { used: u64, limit: u64 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum SimulatorComponentKind {
+    Air,
+    Solid,
+    Glass,
+    Slab,
+    RedstoneWire,
+    Repeater,
+    Comparator,
+    Torch,
+    WallTorch,
+    Lever,
+    RedstoneBlock,
+    Lamp,
+    Piston,
+    Button,
+    PressurePlate,
+    WeightedPressurePlate,
+    Observer,
+    Target,
+    DaylightDetector,
+    Other,
+}
+
+impl SimulatorComponentKind {
+    fn block_kind(self) -> BlockKind {
+        match self {
+            SimulatorComponentKind::Air => BlockKind::Air,
+            SimulatorComponentKind::Solid => BlockKind::Solid,
+            SimulatorComponentKind::Glass => BlockKind::Glass,
+            SimulatorComponentKind::Slab => BlockKind::Slab,
+            SimulatorComponentKind::RedstoneWire => BlockKind::RedstoneWire,
+            SimulatorComponentKind::Repeater => BlockKind::Repeater,
+            SimulatorComponentKind::Comparator => BlockKind::Comparator,
+            SimulatorComponentKind::Torch => BlockKind::Torch,
+            SimulatorComponentKind::WallTorch => BlockKind::WallTorch,
+            SimulatorComponentKind::Lever => BlockKind::Lever,
+            SimulatorComponentKind::RedstoneBlock => BlockKind::RedstoneBlock,
+            SimulatorComponentKind::Lamp => BlockKind::Lamp,
+            SimulatorComponentKind::Piston => BlockKind::Piston,
+            SimulatorComponentKind::Button => BlockKind::Button,
+            SimulatorComponentKind::PressurePlate => BlockKind::PressurePlate,
+            SimulatorComponentKind::WeightedPressurePlate => BlockKind::WeightedPressurePlate,
+            SimulatorComponentKind::Observer => BlockKind::Observer,
+            SimulatorComponentKind::Target => BlockKind::Target,
+            SimulatorComponentKind::DaylightDetector => BlockKind::DaylightDetector,
+            SimulatorComponentKind::Other => BlockKind::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum ComponentSupport {
+    Supported,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct ComponentSupportRegistration {
+    pub component: SimulatorComponentKind,
+    pub support: ComponentSupport,
+}
+
+impl ComponentSupportRegistration {
+    pub(crate) const fn supported(component: SimulatorComponentKind) -> Self {
+        ComponentSupportRegistration {
+            component,
+            support: ComponentSupport::Supported,
+        }
+    }
+
+    pub(crate) const fn unsupported(component: SimulatorComponentKind) -> Self {
+        ComponentSupportRegistration {
+            component,
+            support: ComponentSupport::Unsupported,
+        }
+    }
+}
+
+const COMPONENT_SUPPORT_REGISTRATIONS: [ComponentSupportRegistration; 20] = [
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Air),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Solid),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Glass),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Slab),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::RedstoneWire),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Repeater),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Comparator),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Torch),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::WallTorch),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Lever),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::RedstoneBlock),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Lamp),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::Piston),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::Button),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::PressurePlate),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::WeightedPressurePlate),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::Observer),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::Target),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::DaylightDetector),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Other),
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct SimulatorRevisionDescriptor {
+    pub schema_version: u64,
+    pub components: Vec<ComponentSupportRegistration>,
+    pub delays: component::ComponentDelaySemantics,
+    pub burnout: component::BurnoutSemantics,
+    pub repeater_priority_rules: Vec<component::RepeaterPriorityRule>,
+    pub comparator_priority_rules: Vec<component::ComparatorPriorityRule>,
+    pub tick_order: schedule::TickOrderSemantics,
+    pub propagation: propagate::PropagationSemantics,
+    pub wire_observation: observer::WireObservationSemantics,
+}
+
+pub(crate) fn revision_descriptor() -> SimulatorRevisionDescriptor {
+    SimulatorRevisionDescriptor {
+        schema_version: 1,
+        components: COMPONENT_SUPPORT_REGISTRATIONS.to_vec(),
+        delays: component::delay_semantics(),
+        burnout: component::burnout_semantics(),
+        repeater_priority_rules: component::REPEATER_PRIORITY_RULES.to_vec(),
+        comparator_priority_rules: component::COMPARATOR_PRIORITY_RULES.to_vec(),
+        tick_order: schedule::tick_order_semantics(),
+        propagation: propagate::PROPAGATION_SEMANTICS.clone(),
+        wire_observation: observer::WIRE_OBSERVATION_SEMANTICS.clone(),
+    }
+}
+
 /// 本階段明確不支援、必須回報而非靜默忽略的元件種類，`find_unsupported_component`
 /// 掃描用。
 ///
 /// 這份清單刻意不含中繼器、比較器 —— 它們的功率規則已經由 `taxonomy`
 /// 完整處理；中繼器與比較器的延遲、鎖存（中繼器獨有）與排程優先權都已經
 /// 接上 `step`。
-const UNSUPPORTED_KINDS: [BlockKind; 7] = [
-    BlockKind::Piston,
-    BlockKind::Observer,
-    BlockKind::Button,
-    BlockKind::PressurePlate,
-    BlockKind::WeightedPressurePlate,
-    BlockKind::Target,
-    BlockKind::DaylightDetector,
-];
-
 /// 世界裡第一個不支援的元件，連同它的原始方塊 ID。
 ///
 /// 用 `World::positions_of`（`World::set` 增量維護的稀疏索引）取代掃過
@@ -71,9 +199,10 @@ const UNSUPPORTED_KINDS: [BlockKind; 7] = [
 /// 正比。取扁平索引最小的那個，跟舊版線性掃描「回傳第一個碰到的」是
 /// 同一個順序（`positions_of` 依扁平索引遞增，也就是 YZX 掃描順序）。
 fn find_unsupported_component(world: &World) -> Option<(Position, String)> {
-    let flat = UNSUPPORTED_KINDS
+    let flat = COMPONENT_SUPPORT_REGISTRATIONS
         .iter()
-        .flat_map(|&kind| world.positions_of(kind))
+        .filter(|registration| registration.support == ComponentSupport::Unsupported)
+        .flat_map(|registration| world.positions_of(registration.component.block_kind()))
         .min()?;
     let (x, y, z) = world.decode(flat);
     let name = world.get(x, y, z).name.clone();
@@ -167,6 +296,10 @@ impl Simulator {
         self.queue.current_tick()
     }
 
+    pub fn work_done(&self) -> u64 {
+        self.work_done
+    }
+
     /// Attach a dynamic-timing-analysis observer watching exactly these
     /// positions, each carrying a human-readable label (typically a netlist
     /// signal name). Replaces any previously attached observer.
@@ -176,6 +309,14 @@ impl Simulator {
     /// an observation -- only changes from this point on do.
     pub fn attach_observer(&mut self, watched: impl IntoIterator<Item = (Position, String)>) {
         let mut observer = Observer::new(watched);
+        observer.reset(&self.world);
+        self.observer = Some(observer);
+    }
+
+    /// Attach an identity-preserving observer. Several sites may share one
+    /// coordinate or one display label and still produce independent events.
+    pub fn attach_typed_observer(&mut self, watched: impl IntoIterator<Item = ObservationSite>) {
+        let mut observer = Observer::typed(watched);
         observer.reset(&self.world);
         self.observer = Some(observer);
     }
@@ -196,6 +337,14 @@ impl Simulator {
     /// if no observer is attached.
     pub fn observations(&self) -> &[Observation] {
         self.observer.as_ref().map(Observer::log).unwrap_or(&[])
+    }
+
+    /// Typed log since the last reset. Empty for the compatibility observer.
+    pub fn typed_observations(&self) -> &[TypedObservation] {
+        self.observer
+            .as_ref()
+            .map(Observer::typed_log)
+            .unwrap_or(&[])
     }
 
     /// 推進一個 game tick。回傳這一刻有多少格的狀態改變了。
@@ -242,6 +391,52 @@ impl Simulator {
             }
 
             self.advance_one_tick();
+            game_ticks_run += 1;
+        }
+    }
+
+    /// Settle with both a game-tick cap and a request-scoped processed-event
+    /// cap. The next due event is refused before it is applied once the cap is
+    /// exhausted.
+    pub fn run_until_stable_bounded(
+        &mut self,
+        max_game_ticks: u64,
+        max_events: u64,
+    ) -> Result<u64, BoundedSimulationError> {
+        if let Some((position, name)) = find_unsupported_component(&self.world) {
+            return Err(BoundedSimulationError::Simulation(
+                SimulationError::UnsupportedComponent { position, name },
+            ));
+        }
+        let work_at_start = self.work_done;
+        let mut game_ticks_run = 0u64;
+        loop {
+            self.settle_from_current_state();
+            if self.queue.is_empty() {
+                return Ok(game_ticks_run);
+            }
+            if game_ticks_run >= max_game_ticks {
+                return Err(BoundedSimulationError::Simulation(
+                    SimulationError::Diverged {
+                        game_ticks: game_ticks_run,
+                        pending: self.queue.pending_count(),
+                    },
+                ));
+            }
+            let used = self
+                .work_done
+                .checked_sub(work_at_start)
+                .unwrap_or(u64::MAX);
+            let remaining = max_events.saturating_sub(used);
+            if self.advance_one_tick_bounded(remaining).is_err() {
+                return Err(BoundedSimulationError::WorkLimitExceeded {
+                    used: self
+                        .work_done
+                        .checked_sub(work_at_start)
+                        .unwrap_or(u64::MAX),
+                    limit: max_events,
+                });
+            }
             game_ticks_run += 1;
         }
     }
@@ -307,6 +502,29 @@ impl Simulator {
         }
 
         changed
+    }
+
+    fn advance_one_tick_bounded(&mut self, max_events: u64) -> Result<usize, ()> {
+        let due = self.queue.advance();
+        let now = self.queue.current_tick();
+        let mut changed = 0usize;
+        let allowed = usize::try_from(max_events).unwrap_or(usize::MAX);
+        let exhausted = due.len() > allowed;
+
+        for tick in due.iter().take(allowed) {
+            self.work_done += 1;
+            if self.apply_scheduled_tick(tick.position, now) {
+                changed += 1;
+            }
+        }
+        if exhausted {
+            return Err(());
+        }
+        changed += propagate::recompute_dust_strengths(&mut self.world).len();
+        if let Some(observer) = self.observer.as_mut() {
+            observer.sample(&self.world, now);
+        }
+        Ok(changed)
     }
 
     /// 套用一筆到期的排程，依方塊種類分派給對應的元件邏輯。
@@ -787,7 +1005,12 @@ mod tests {
 
         // 前方（輸出端）放一個一直充能的紅石塊 -- 如果中繼器誤把它當輸入，
         // 就會被觸發開啟
-        world.set(3, 0, 2, named("minecraft:redstone_block", BlockKind::RedstoneBlock));
+        world.set(
+            3,
+            0,
+            2,
+            named("minecraft:redstone_block", BlockKind::RedstoneBlock),
+        );
 
         let mut simulator = Simulator::new(world);
         for _ in 0..10 {
@@ -1049,7 +1272,12 @@ mod tests {
         // sides does not.
         let mut world = World::new(5, 5, 5);
         let repeater_pos = Position::new(2, 0, 2);
-        world.set(repeater_pos.x, repeater_pos.y, repeater_pos.z, repeater(Facing::North, 1, false));
+        world.set(
+            repeater_pos.x,
+            repeater_pos.y,
+            repeater_pos.z,
+            repeater(Facing::North, 1, false),
+        );
 
         let mut on_lever = lever();
         on_lever.lit = true;
@@ -1063,7 +1291,10 @@ mod tests {
             .expect("a lever feeding a repeater's input must settle");
 
         assert!(
-            simulator.world().get(repeater_pos.x, repeater_pos.y, repeater_pos.z).lit,
+            simulator
+                .world()
+                .get(repeater_pos.x, repeater_pos.y, repeater_pos.z)
+                .lit,
             "facing=North must read its input from the north, where the lit lever sits"
         );
         assert!(
@@ -1089,7 +1320,12 @@ mod tests {
         // the south.
         let mut world = World::new(5, 5, 5);
         let comparator_pos = Position::new(2, 0, 2);
-        world.set(comparator_pos.x, comparator_pos.y, comparator_pos.z, comparator(Facing::North, 0, false));
+        world.set(
+            comparator_pos.x,
+            comparator_pos.y,
+            comparator_pos.z,
+            comparator(Facing::North, 0, false),
+        );
 
         let mut on_lever = lever();
         on_lever.lit = true;
@@ -1103,7 +1339,11 @@ mod tests {
             .expect("a lever feeding a comparator's rear input must settle");
 
         assert!(
-            simulator.world().get(comparator_pos.x, comparator_pos.y, comparator_pos.z).power > 0,
+            simulator
+                .world()
+                .get(comparator_pos.x, comparator_pos.y, comparator_pos.z)
+                .power
+                > 0,
             "facing=North must read its main signal from the north, where the lit lever sits"
         );
         assert!(

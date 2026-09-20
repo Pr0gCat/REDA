@@ -16,8 +16,8 @@ use reda::circuits::and4::INPUT_NAMES as AND4_INPUT_NAMES;
 use reda::circuits::full_adder::build_full_adder_netlist;
 use reda::circuits::full_adder::INPUT_NAMES as ADDER_INPUT_NAMES;
 use reda::circuits::seven_segment::{
-    build_seven_segment_netlist, build_single_segment_netlist,
-    INPUT_NAMES as DECODER_INPUT_NAMES, TRUTH_TABLE,
+    build_seven_segment_netlist, build_single_segment_netlist, INPUT_NAMES as DECODER_INPUT_NAMES,
+    TRUTH_TABLE,
 };
 use reda::compile::{compile, compile_legacy, CompiledCircuit, Netlist, PlannerKind};
 use reda::redstone::rules::taxonomy::flags_of;
@@ -25,17 +25,24 @@ use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, Face, Facing};
 use reda::redstone::world::storage::World;
 use reda::timing::{
-    game_ticks_to_redstone_ticks, game_ticks_to_seconds, observations_to_result, summarize_worst_case,
-    watch_all_nets, TransitionResult,
+    game_ticks_to_redstone_ticks, game_ticks_to_seconds, observations_to_result,
+    summarize_worst_case, watch_all_nets, TransitionResult,
 };
 
 const MAX_TICKS: u64 = 2000;
 
 fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
-    let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+    let mut state = simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .clone();
     state.lit = on;
-    simulator.world_mut().set(position.0, position.1, position.2, state);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle after changing an input");
+    simulator
+        .world_mut()
+        .set(position.0, position.1, position.2, state);
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle after changing an input");
 }
 
 /// Same as `set_lever`, but also records the transition's timing -- the
@@ -50,11 +57,18 @@ fn set_lever_and_record(
     let start_tick = simulator.current_tick();
     set_lever(simulator, position, on);
     let settle_game_ticks = simulator.current_tick() - start_tick;
-    transitions.push(observations_to_result(simulator.observations(), start_tick, settle_game_ticks));
+    transitions.push(observations_to_result(
+        simulator.observations(),
+        start_tick,
+        settle_game_ticks,
+    ));
 }
 
 fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
-    simulator.world().get(position.0, position.1, position.2).lit
+    simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .lit
 }
 
 /// Print the worst case across an instrumented sweep: settle time (game
@@ -154,7 +168,9 @@ fn the_compiled_and4_matches_its_truth_table() {
     // `compile::routing_stats::analyze` afterwards to count the actual
     // measured critical path's repeaters.
     let mut simulator = Simulator::new(compiled.world.clone());
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
     simulator.attach_observer(watched);
 
     let mut mismatches = Vec::new();
@@ -167,14 +183,21 @@ fn the_compiled_and4_matches_its_truth_table() {
             combination & 1,
         ];
         for (&name, &bit) in AND4_INPUT_NAMES.iter().zip(bits.iter()) {
-            set_lever_and_record(&mut simulator, lever_positions[name], bit == 1, &mut transitions);
+            set_lever_and_record(
+                &mut simulator,
+                lever_positions[name],
+                bit == 1,
+                &mut transitions,
+            );
         }
 
         // Independently-written expected table: AND of all four bits.
         let expected = bits.iter().all(|&bit| bit == 1);
         let actual = read_output(&simulator, output_position);
         if actual != expected {
-            mismatches.push(format!("inputs={bits:?}: expected {expected}, got {actual}"));
+            mismatches.push(format!(
+                "inputs={bits:?}: expected {expected}, got {actual}"
+            ));
         }
     }
 
@@ -197,22 +220,39 @@ fn the_compiled_full_adder_matches_its_truth_table() {
         .iter()
         .map(|&name| (name, *compiled.input_positions.get(name).unwrap()))
         .collect();
-    let sum_position = *compiled.output_positions.get(&output_signal["sum"]).unwrap();
-    let cout_position = *compiled.output_positions.get(&output_signal["cout"]).unwrap();
+    let sum_position = *compiled
+        .output_positions
+        .get(&output_signal["sum"])
+        .unwrap();
+    let cout_position = *compiled
+        .output_positions
+        .get(&output_signal["cout"])
+        .unwrap();
     let watched = watch_all_nets(&compiled);
 
     // See the and4 test above for why this simulates on a clone of the
     // world rather than the world moved out of `compiled`.
     let mut simulator = Simulator::new(compiled.world.clone());
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
     simulator.attach_observer(watched);
 
     let mut mismatches = Vec::new();
     let mut transitions: Vec<TransitionResult> = Vec::new();
     for combination in 0u8..8 {
-        let bits = [(combination >> 2) & 1, (combination >> 1) & 1, combination & 1];
+        let bits = [
+            (combination >> 2) & 1,
+            (combination >> 1) & 1,
+            combination & 1,
+        ];
         for (&name, &bit) in ADDER_INPUT_NAMES.iter().zip(bits.iter()) {
-            set_lever_and_record(&mut simulator, lever_positions[name], bit == 1, &mut transitions);
+            set_lever_and_record(
+                &mut simulator,
+                lever_positions[name],
+                bit == 1,
+                &mut transitions,
+            );
         }
 
         // Independently-written expected table: a 1-bit binary adder.
@@ -223,10 +263,14 @@ fn the_compiled_full_adder_matches_its_truth_table() {
         let actual_sum = read_output(&simulator, sum_position);
         let actual_cout = read_output(&simulator, cout_position);
         if actual_sum != expected_sum {
-            mismatches.push(format!("inputs={bits:?} sum: expected {expected_sum}, got {actual_sum}"));
+            mismatches.push(format!(
+                "inputs={bits:?} sum: expected {expected_sum}, got {actual_sum}"
+            ));
         }
         if actual_cout != expected_cout {
-            mismatches.push(format!("inputs={bits:?} cout: expected {expected_cout}, got {actual_cout}"));
+            mismatches.push(format!(
+                "inputs={bits:?} cout: expected {expected_cout}, got {actual_cout}"
+            ));
         }
     }
 
@@ -262,15 +306,27 @@ fn the_compiled_segment_a_matches_its_truth_table() {
     // See the and4 test above for why this simulates on a clone of the
     // world rather than the world moved out of `compiled`.
     let mut simulator = Simulator::new(compiled.world.clone());
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
     simulator.attach_observer(watched);
 
     let mut mismatches = Vec::new();
     let mut transitions: Vec<TransitionResult> = Vec::new();
     for value in 0u8..16 {
-        let bits = [(value >> 3) & 1, (value >> 2) & 1, (value >> 1) & 1, value & 1];
+        let bits = [
+            (value >> 3) & 1,
+            (value >> 2) & 1,
+            (value >> 1) & 1,
+            value & 1,
+        ];
         for (&name, &bit) in DECODER_INPUT_NAMES.iter().zip(bits.iter()) {
-            set_lever_and_record(&mut simulator, lever_positions[name], bit == 1, &mut transitions);
+            set_lever_and_record(
+                &mut simulator,
+                lever_positions[name],
+                bit == 1,
+                &mut transitions,
+            );
         }
 
         // Independently-sourced expected value: the project's own truth
@@ -278,7 +334,9 @@ fn the_compiled_segment_a_matches_its_truth_table() {
         let expected = (value as usize) < TRUTH_TABLE.len() && TRUTH_TABLE[value as usize][0] == 1;
         let actual = read_output(&simulator, output_position);
         if actual != expected {
-            mismatches.push(format!("d3d2d1d0={value:04b}: expected {expected}, got {actual}"));
+            mismatches.push(format!(
+                "d3d2d1d0={value:04b}: expected {expected}, got {actual}"
+            ));
         }
     }
 
@@ -289,7 +347,13 @@ fn the_compiled_segment_a_matches_its_truth_table() {
         mismatches.join("\n")
     );
 
-    report_timing("segment_a", &netlist, &compiled, &[output_signal], &transitions);
+    report_timing(
+        "segment_a",
+        &netlist,
+        &compiled,
+        &[output_signal],
+        &transitions,
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -360,7 +424,9 @@ fn the_settle_model_is_exact_on_the_emitters_layout() {
             .collect();
         let watched = watch_all_nets(&compiled);
         let mut simulator = Simulator::new(compiled.world.clone());
-        simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+        simulator
+            .run_until_stable(MAX_TICKS)
+            .expect("circuit must settle before the first reading");
         simulator.attach_observer(watched);
 
         let mut transitions: Vec<TransitionResult> = Vec::new();
@@ -372,9 +438,9 @@ fn the_settle_model_is_exact_on_the_emitters_layout() {
         }
 
         let summary = summarize_worst_case(&netlist, &compiled, &outputs, &transitions);
-        let model = summary.critical_path_model_game_ticks.unwrap_or_else(|| {
-            panic!("{name}: the emitter's own layout must have a settle model")
-        });
+        let model = summary
+            .critical_path_model_game_ticks
+            .unwrap_or_else(|| panic!("{name}: the emitter's own layout must have a settle model"));
         eprintln!(
             "{name} (emitter layout): {} gates + {:?} repeaters -> {model} predicted, \
              {} measured",
@@ -420,9 +486,21 @@ fn the_settle_model_is_exact_on_the_emitters_layout() {
 fn every_reference_circuit_records_which_path_produced_it() {
     let circuits: [(&str, Netlist, PlannerKind); 4] = [
         ("and4", build_and4_netlist().0, PlannerKind::Unified3d),
-        ("full_adder", build_full_adder_netlist().0, PlannerKind::Unified3d),
-        ("segment_a", build_single_segment_netlist(0).0, PlannerKind::Legacy),
-        ("seven_segment", build_seven_segment_netlist().0, PlannerKind::Legacy),
+        (
+            "full_adder",
+            build_full_adder_netlist().0,
+            PlannerKind::Unified3d,
+        ),
+        (
+            "segment_a",
+            build_single_segment_netlist(0).0,
+            PlannerKind::Legacy,
+        ),
+        (
+            "seven_segment",
+            build_seven_segment_netlist().0,
+            PlannerKind::Legacy,
+        ),
     ];
 
     for (name, netlist, expected) in circuits {

@@ -34,17 +34,24 @@ use reda::frontend::synthesize_verilog;
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::BlockKind;
 use reda::timing::{
-    game_ticks_to_redstone_ticks, game_ticks_to_seconds, observations_to_result, summarize_worst_case,
-    watch_all_nets, TransitionResult,
+    game_ticks_to_redstone_ticks, game_ticks_to_seconds, observations_to_result,
+    summarize_worst_case, watch_all_nets, TransitionResult,
 };
 
 const MAX_TICKS: u64 = 2000;
 
 fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
-    let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+    let mut state = simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .clone();
     state.lit = on;
-    simulator.world_mut().set(position.0, position.1, position.2, state);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle after changing an input");
+    simulator
+        .world_mut()
+        .set(position.0, position.1, position.2, state);
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle after changing an input");
 }
 
 /// Same as `set_lever`, but also records the transition's timing -- the
@@ -59,11 +66,18 @@ fn set_lever_and_record(
     let start_tick = simulator.current_tick();
     set_lever(simulator, position, on);
     let settle_game_ticks = simulator.current_tick() - start_tick;
-    transitions.push(observations_to_result(simulator.observations(), start_tick, settle_game_ticks));
+    transitions.push(observations_to_result(
+        simulator.observations(),
+        start_tick,
+        settle_game_ticks,
+    ));
 }
 
 fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
-    simulator.world().get(position.0, position.1, position.2).lit
+    simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .lit
 }
 
 fn non_air_blocks(compiled: &CompiledCircuit) -> usize {
@@ -121,7 +135,10 @@ fn report_timing(
         game_ticks_to_redstone_ticks(summary.worst_settle_game_ticks),
         game_ticks_to_seconds(summary.worst_settle_game_ticks),
     );
-    match (summary.critical_path_repeater_count, summary.critical_path_model_game_ticks) {
+    match (
+        summary.critical_path_repeater_count,
+        summary.critical_path_model_game_ticks,
+    ) {
         (Some(repeaters), Some(model)) => {
             eprintln!(
                 "{label} timing: critical-path settle model (this layout) = {} gates + \
@@ -186,7 +203,8 @@ fn compile_simulate_and_check(
     output_positions_of: impl Fn(&CompiledCircuit) -> Vec<(i32, i32, i32)>,
     expected: impl Fn(u8) -> Vec<bool>,
 ) -> (usize, usize, u64) {
-    let netlist = &lower_netlist(source_netlist).expect("netlist must lower into torches and merges");
+    let netlist =
+        &lower_netlist(source_netlist).expect("netlist must lower into torches and merges");
     if netlist.gates.len() != source_netlist.gates.len() {
         eprintln!(
             "{label} cells: {} ({} gates) -> lowered {} ({} gates)",
@@ -200,29 +218,44 @@ fn compile_simulate_and_check(
     let compiled = compile(netlist).expect("netlist must be acyclic and fully driven");
     let block_count = non_air_blocks(&compiled);
 
-    let lever_positions: HashMap<&str, (i32, i32, i32)> =
-        input_names.iter().map(|&name| (name, *compiled.input_positions.get(name).unwrap())).collect();
+    let lever_positions: HashMap<&str, (i32, i32, i32)> = input_names
+        .iter()
+        .map(|&name| (name, *compiled.input_positions.get(name).unwrap()))
+        .collect();
     let output_positions = output_positions_of(&compiled);
 
     let watched = watch_all_nets(&compiled);
     let mut simulator = Simulator::new(compiled.world.clone());
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
     simulator.attach_observer(watched);
 
     let mut mismatches = Vec::new();
     let mut transitions: Vec<TransitionResult> = Vec::new();
     let combinations = 1u32 << input_count;
     for combination in 0..combinations {
-        let bits: Vec<u8> = (0..input_count).rev().map(|i| ((combination >> i) & 1) as u8).collect();
+        let bits: Vec<u8> = (0..input_count)
+            .rev()
+            .map(|i| ((combination >> i) & 1) as u8)
+            .collect();
         for (&name, &bit) in input_names.iter().zip(bits.iter()) {
-            set_lever_and_record(&mut simulator, lever_positions[name], bit == 1, &mut transitions);
+            set_lever_and_record(
+                &mut simulator,
+                lever_positions[name],
+                bit == 1,
+                &mut transitions,
+            );
         }
 
         let expected_values = expected(combination as u8);
         for (i, &position) in output_positions.iter().enumerate() {
             let actual = read_output(&simulator, position);
             if actual != expected_values[i] {
-                mismatches.push(format!("inputs={bits:?} output[{i}]: expected {}, got {actual}", expected_values[i]));
+                mismatches.push(format!(
+                    "inputs={bits:?} output[{i}]: expected {}, got {actual}",
+                    expected_values[i]
+                ));
             }
         }
     }
@@ -257,7 +290,14 @@ fn compile_simulate_and_check(
     );
 
     let outputs: Vec<String> = netlist.outputs.clone();
-    let settle = report_timing(label, netlist, &compiled, &outputs, &transitions, require_exact_path_model);
+    let settle = report_timing(
+        label,
+        netlist,
+        &compiled,
+        &outputs,
+        &transitions,
+        require_exact_path_model,
+    );
 
     eprintln!(
         "{label}: {gate_count} gates, {block_count} blocks, {settle} game ticks settle, \
@@ -307,7 +347,8 @@ fn the_verilog_and4_matches_its_truth_table() {
 /// Release measurement: 47 lowered gates, 10,088 blocks, and 86 game ticks.
 /// This is Pareto-better than the all-positive 56 / 12,348 / 88 baseline.
 fn optimised_lowering_preserves_every_verilog_decoder_vector() {
-    let source = std::fs::read_to_string("tests/fixtures/seven_segment.v").expect("fixture must exist");
+    let source =
+        std::fs::read_to_string("tests/fixtures/seven_segment.v").expect("fixture must exist");
     let (netlist, port_map) =
         synthesize_verilog(&source, "bcd_seven_segment").expect("seven_segment.v must synthesize");
 
@@ -317,7 +358,10 @@ fn optimised_lowering_preserves_every_verilog_decoder_vector() {
 
     let expected_segments = |value: u8| -> Vec<bool> {
         if (value as usize) < TRUTH_TABLE.len() {
-            TRUTH_TABLE[value as usize].iter().map(|&bit| bit == 1).collect()
+            TRUTH_TABLE[value as usize]
+                .iter()
+                .map(|&bit| bit == 1)
+                .collect()
         } else {
             vec![false; 7]
         }
@@ -331,7 +375,10 @@ fn optimised_lowering_preserves_every_verilog_decoder_vector() {
         &["d3", "d2", "d1", "d0"],
         4,
         move |compiled| {
-            output_signals_for_closure.iter().map(|s| *compiled.output_positions.get(s).unwrap()).collect()
+            output_signals_for_closure
+                .iter()
+                .map(|s| *compiled.output_positions.get(s).unwrap())
+                .collect()
         },
         expected_segments,
     );
@@ -350,7 +397,10 @@ fn optimised_lowering_preserves_every_verilog_decoder_vector() {
     );
 
     let (hand_netlist, hand_segment_signal) = build_seven_segment_netlist();
-    let hand_signals: Vec<String> = segment_names.iter().map(|&s| hand_segment_signal[s].clone()).collect();
+    let hand_signals: Vec<String> = segment_names
+        .iter()
+        .map(|&s| hand_segment_signal[s].clone())
+        .collect();
     let hand_stats = compile_simulate_and_check(
         "hand-written seven_segment",
         &hand_netlist,
@@ -358,7 +408,12 @@ fn optimised_lowering_preserves_every_verilog_decoder_vector() {
         true,
         &["d3", "d2", "d1", "d0"],
         4,
-        move |compiled| hand_signals.iter().map(|s| *compiled.output_positions.get(s).unwrap()).collect(),
+        move |compiled| {
+            hand_signals
+                .iter()
+                .map(|s| *compiled.output_positions.get(s).unwrap())
+                .collect()
+        },
         expected_segments,
     );
 
@@ -393,8 +448,9 @@ fn optimised_lowering_preserves_every_verilog_decoder_vector() {
 #[test]
 fn the_baked_netlists_match_fresh_synthesis() {
     for circuit in verilog::CIRCUITS {
-        let (netlist, output_labels) =
-            circuit.synthesize().unwrap_or_else(|error| panic!("{} must synthesize: {error}", circuit.name));
+        let (netlist, output_labels) = circuit
+            .synthesize()
+            .unwrap_or_else(|error| panic!("{} must synthesize: {error}", circuit.name));
         let fresh = verilog::baked::render(circuit, &netlist, &output_labels)
             .unwrap_or_else(|error| panic!("{}'s fresh netlist {error}", circuit.name));
 
@@ -429,8 +485,16 @@ fn the_baked_netlists_match_fresh_synthesis() {
         // one Yosys just produced, not merely a file that happens to render
         // the same way.
         let (baked_netlist, baked_labels) = circuit.baked_netlist();
-        assert_eq!(baked_netlist, netlist, "{}: baked netlist differs from the fresh one", circuit.name);
-        assert_eq!(baked_labels, output_labels, "{}: baked output labels differ", circuit.name);
+        assert_eq!(
+            baked_netlist, netlist,
+            "{}: baked netlist differs from the fresh one",
+            circuit.name
+        );
+        assert_eq!(
+            baked_labels, output_labels,
+            "{}: baked output labels differ",
+            circuit.name
+        );
     }
 }
 

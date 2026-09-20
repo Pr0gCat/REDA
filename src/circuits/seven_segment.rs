@@ -37,11 +37,22 @@ pub const INPUT_NAMES: [&str; 4] = ["d3", "d2", "d1", "d0"];
 fn build_minterms(builder: &mut NetlistBuilder) -> Vec<String> {
     let mut minterm_signal: Vec<String> = Vec::with_capacity(10);
     for value in 0u8..10 {
-        let bits = [(value >> 3) & 1, (value >> 2) & 1, (value >> 1) & 1, value & 1];
+        let bits = [
+            (value >> 3) & 1,
+            (value >> 2) & 1,
+            (value >> 1) & 1,
+            value & 1,
+        ];
         let literals: Vec<String> = INPUT_NAMES
             .iter()
             .zip(bits.iter())
-            .map(|(&name, &bit)| if bit == 1 { name.to_string() } else { builder.not(name) })
+            .map(|(&name, &bit)| {
+                if bit == 1 {
+                    name.to_string()
+                } else {
+                    builder.not(name)
+                }
+            })
             .collect();
         minterm_signal.push(builder.and_reduce(literals));
     }

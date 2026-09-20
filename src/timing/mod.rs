@@ -34,12 +34,13 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::compile::fragment_synth::identity::{ObservationId, ObservationSite};
 use crate::compile::routing_stats;
 use crate::compile::{CompiledCircuit, Netlist};
 use crate::redstone::simulator::component::{
     LAMP_TURN_OFF_DELAY_GAME_TICKS, LAMP_TURN_ON_DELAY_GAME_TICKS, TORCH_DELAY_GAME_TICKS,
 };
-use crate::redstone::simulator::observer::Observation;
+use crate::redstone::simulator::observer::{Observation, TypedObservation};
 use crate::redstone::simulator::position::Position;
 use crate::redstone::simulator::schedule::MIN_SCHEDULE_DELAY_GAME_TICKS;
 use crate::redstone::simulator::{SimulationError, Simulator};
@@ -102,6 +103,46 @@ pub struct TransitionResult {
     pub nets: BTreeMap<String, NetTiming>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedNetTiming {
+    pub site: ObservationSite,
+    changes: Vec<(u64, bool)>,
+}
+
+impl TypedNetTiming {
+    pub fn changes(&self) -> &[(u64, bool)] {
+        &self.changes
+    }
+
+    pub fn arrival_tick(&self) -> Option<u64> {
+        self.changes.last().map(|&(tick, _)| tick)
+    }
+
+    pub fn glitched(&self) -> bool {
+        self.changes.len() > 1
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedTransitionResult {
+    pub settle_game_ticks: u64,
+    pub nets: BTreeMap<ObservationId, TypedNetTiming>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WitnessActivity {
+    Active,
+    StaticFallback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransitionWitness {
+    pub transition_index: usize,
+    pub observation: ObservationId,
+    pub arrival_tick: Option<u64>,
+    pub activity: WitnessActivity,
+}
+
 /// Turn an observer's log into a `TransitionResult`, expressing every tick
 /// relative to `start_tick` (the absolute tick the transition began at).
 pub fn observations_to_result(
@@ -121,7 +162,135 @@ pub fn observations_to_result(
             .changes
             .push((relative_tick, observation.value));
     }
-    TransitionResult { settle_game_ticks, nets }
+    TransitionResult {
+        settle_game_ticks,
+        nets,
+    }
+}
+
+pub fn typed_observations_to_result(
+    sites: &BTreeMap<ObservationId, ObservationSite>,
+    log: &[TypedObservation],
+    start_tick: u64,
+    settle_game_ticks: u64,
+) -> TypedTransitionResult {
+    let mut nets = BTreeMap::<ObservationId, TypedNetTiming>::new();
+    for observation in log {
+        let Some(site) = sites.get(&observation.id) else {
+            continue;
+        };
+        nets.entry(observation.id)
+            .or_insert_with(|| TypedNetTiming {
+                site: site.clone(),
+                changes: Vec::new(),
+            })
+            .changes
+            .push((observation.tick - start_tick, observation.value));
+    }
+    TypedTransitionResult {
+        settle_game_ticks,
+        nets,
+    }
+}
+
+/// Select a stable causal witness. A changed declared output wins; if no
+/// output changed, retain the latest changing primitive or primary input.
+/// Only a completely quiet transition uses a static fallback.
+pub fn transition_witness(
+    transition_index: usize,
+    transition: &TypedTransitionResult,
+    declared_outputs: &[ObservationId],
+) -> Option<TransitionWitness> {
+    let latest = |ids: &mut dyn Iterator<Item = ObservationId>| {
+        ids.filter_map(|id| {
+            transition
+                .nets
+                .get(&id)
+                .and_then(TypedNetTiming::arrival_tick)
+                .map(|tick| (tick, id))
+        })
+        .max_by_key(|&(tick, id)| (tick, std::cmp::Reverse(id)))
+    };
+
+    if let Some((tick, observation)) = latest(&mut declared_outputs.iter().copied()) {
+        return Some(TransitionWitness {
+            transition_index,
+            observation,
+            arrival_tick: Some(tick),
+            activity: WitnessActivity::Active,
+        });
+    }
+    let mut internal = transition.nets.keys().copied().filter(|id| {
+        matches!(
+            id,
+            ObservationId::PrimitiveOutput(_) | ObservationId::PrimaryInput(_)
+        )
+    });
+    if let Some((tick, observation)) = latest(&mut internal) {
+        return Some(TransitionWitness {
+            transition_index,
+            observation,
+            arrival_tick: Some(tick),
+            activity: WitnessActivity::Active,
+        });
+    }
+    declared_outputs
+        .first()
+        .copied()
+        .map(|observation| TransitionWitness {
+            transition_index,
+            observation,
+            arrival_tick: None,
+            activity: WitnessActivity::StaticFallback,
+        })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedTimingSummary {
+    pub worst_settle_game_ticks: u64,
+    /// Lowest tied index retained for compatibility with scalar consumers.
+    pub worst_transition_index: usize,
+    pub worst_transition_indices: Vec<usize>,
+    pub witnesses: BTreeMap<usize, TransitionWitness>,
+}
+
+pub fn summarize_typed_worst_case(
+    declared_outputs: &[ObservationId],
+    transitions: &[TypedTransitionResult],
+) -> TypedTimingSummary {
+    assert!(
+        !transitions.is_empty(),
+        "typed timing summary needs at least one transition"
+    );
+    assert!(
+        !declared_outputs.is_empty(),
+        "typed timing summary needs a declared output"
+    );
+    let worst_settle_game_ticks = transitions
+        .iter()
+        .map(|transition| transition.settle_game_ticks)
+        .max()
+        .unwrap_or(0);
+    let worst_transition_indices = transitions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, transition)| {
+            (transition.settle_game_ticks == worst_settle_game_ticks).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let witnesses = worst_transition_indices
+        .iter()
+        .filter_map(|&index| {
+            transition_witness(index, &transitions[index], declared_outputs)
+                .map(|witness| (index, witness))
+        })
+        .collect();
+    TypedTimingSummary {
+        worst_settle_game_ticks,
+        worst_transition_index: worst_transition_indices[0],
+        worst_transition_indices,
+        witnesses,
+    }
 }
 
 /// Measure one input transition end to end: re-baseline the simulator's
@@ -140,7 +309,29 @@ pub fn measure_transition(
     let start_tick = simulator.current_tick();
     apply_input(simulator);
     let settle_game_ticks = simulator.run_until_stable(max_game_ticks)?;
-    Ok(observations_to_result(simulator.observations(), start_tick, settle_game_ticks))
+    Ok(observations_to_result(
+        simulator.observations(),
+        start_tick,
+        settle_game_ticks,
+    ))
+}
+
+pub fn measure_typed_transition(
+    simulator: &mut Simulator,
+    sites: &BTreeMap<ObservationId, ObservationSite>,
+    max_game_ticks: u64,
+    apply_input: impl FnOnce(&mut Simulator),
+) -> Result<TypedTransitionResult, SimulationError> {
+    simulator.reset_observer();
+    let start_tick = simulator.current_tick();
+    apply_input(simulator);
+    let settle_game_ticks = simulator.run_until_stable(max_game_ticks)?;
+    Ok(typed_observations_to_result(
+        sites,
+        simulator.typed_observations(),
+        start_tick,
+        settle_game_ticks,
+    ))
 }
 
 /// Every net a compiled circuit exposes, ready to hand to
@@ -148,9 +339,8 @@ pub fn measure_transition(
 /// gate's actual output torch (which includes the netlist's declared
 /// outputs -- a declared output's signal name is some gate's `output`).
 pub fn watch_all_nets(compiled: &CompiledCircuit) -> Vec<(Position, String)> {
-    let mut watched = Vec::with_capacity(
-        compiled.input_positions.len() + compiled.gate_output_positions.len(),
-    );
+    let mut watched =
+        Vec::with_capacity(compiled.input_positions.len() + compiled.gate_output_positions.len());
     for (name, &(x, y, z)) in &compiled.input_positions {
         watched.push((Position::new(x, y, z), name.clone()));
     }
@@ -158,6 +348,12 @@ pub fn watch_all_nets(compiled: &CompiledCircuit) -> Vec<(Position, String)> {
         watched.push((Position::new(x, y, z), name.clone()));
     }
     watched
+}
+
+/// Every typed observation carried by a compiled circuit. Coordinates and
+/// labels may repeat; callers must keep `ObservationId` as the key.
+pub fn watch_all_typed(compiled: &CompiledCircuit) -> Vec<ObservationSite> {
+    compiled.observations.sites().into_values().collect()
 }
 
 // ---------------------------------------------------------------------
@@ -175,8 +371,12 @@ pub fn logic_depth(netlist: &Netlist) -> usize {
     let Some(order) = netlist.topological_order() else {
         return 0;
     };
-    let producer_of: HashMap<&str, usize> =
-        netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
+    let producer_of: HashMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(i, gate)| (gate.output.as_str(), i))
+        .collect();
 
     let mut depth = vec![0usize; netlist.gates.len()];
     for &g in &order {
@@ -236,9 +436,17 @@ pub fn logic_depth_bound_game_ticks(netlist: &Netlist) -> u64 {
 /// `planner::critical_path_delay` does have the per-edge weights and is
 /// exact on all six reference circuits, including these two. Where the two
 /// disagree, that one is the one to believe.
-pub fn critical_path(netlist: &Netlist, arrivals: &BTreeMap<String, u64>, output: &str) -> Vec<String> {
-    let producer_of: HashMap<&str, usize> =
-        netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
+pub fn critical_path(
+    netlist: &Netlist,
+    arrivals: &BTreeMap<String, u64>,
+    output: &str,
+) -> Vec<String> {
+    let producer_of: HashMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(i, gate)| (gate.output.as_str(), i))
+        .collect();
 
     let mut path = vec![output.to_string()];
     let mut current = output.to_string();
@@ -277,14 +485,18 @@ fn critical_path_non_merge_gate_count(netlist: &Netlist, path: &[String]) -> usi
     if path.len() < 2 {
         return 0;
     }
-    let producer_of: HashMap<&str, usize> =
-        netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
+    let producer_of: HashMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(i, gate)| (gate.output.as_str(), i))
+        .collect();
     path[1..]
         .iter()
         .filter(|signal| {
-            let &gate_index = producer_of
-                .get(signal.as_str())
-                .unwrap_or_else(|| panic!("critical path signal `{signal}` must be some gate's output"));
+            let &gate_index = producer_of.get(signal.as_str()).unwrap_or_else(|| {
+                panic!("critical path signal `{signal}` must be some gate's output")
+            });
             !netlist.gates[gate_index].is_merge()
         })
         .count()
@@ -326,33 +538,45 @@ pub fn critical_path_repeaters(
         return Some(0);
     }
 
-    let producer_of: HashMap<&str, usize> =
-        netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
+    let producer_of: HashMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(i, gate)| (gate.output.as_str(), i))
+        .collect();
     let report = routing_stats::analyze(netlist, compiled).ok()?;
 
-    Some(critical_path
-        .windows(2)
-        .map(|hop| {
-            let (source, sink_output) = (&hop[0], &hop[1]);
-            let &gate_index = producer_of
-                .get(sink_output.as_str())
-                .unwrap_or_else(|| panic!("critical path signal `{sink_output}` must be some gate's output"));
-            let gate = &netlist.gates[gate_index];
-            let input_index = gate
-                .inputs
-                .iter()
-                .position(|input| input == source)
-                .unwrap_or_else(|| panic!("critical path signal `{source}` must feed `{sink_output}`"));
-            let sink_label = format!("{sink_output}.in[{input_index}]");
-            report
-                .edges
-                .iter()
-                .find(|edge| &edge.source == source && edge.sink == sink_label)
-                .unwrap_or_else(|| panic!("no routed edge found for critical-path hop {source} -> {sink_label}"))
-                .total()
-                .repeaters
-        })
-        .sum())
+    Some(
+        critical_path
+            .windows(2)
+            .map(|hop| {
+                let (source, sink_output) = (&hop[0], &hop[1]);
+                let &gate_index = producer_of.get(sink_output.as_str()).unwrap_or_else(|| {
+                    panic!("critical path signal `{sink_output}` must be some gate's output")
+                });
+                let gate = &netlist.gates[gate_index];
+                let input_index = gate
+                    .inputs
+                    .iter()
+                    .position(|input| input == source)
+                    .unwrap_or_else(|| {
+                        panic!("critical path signal `{source}` must feed `{sink_output}`")
+                    });
+                let sink_label = format!("{sink_output}.in[{input_index}]");
+                report
+                    .edges
+                    .iter()
+                    .find(|edge| &edge.source == source && edge.sink == sink_label)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "no routed edge found for critical-path hop {source} -> {sink_label}"
+                        )
+                    })
+                    .total()
+                    .repeaters
+            })
+            .sum(),
+    )
 }
 
 /// The corrected settle-time model: predicts settle time from the *actual
@@ -407,9 +631,14 @@ pub fn critical_path_settle_model_game_ticks(
     critical_path_repeaters: usize,
     lamp_turns_on: bool,
 ) -> u64 {
-    let lamp_delay = if lamp_turns_on { LAMP_TURN_ON_DELAY_GAME_TICKS } else { LAMP_TURN_OFF_DELAY_GAME_TICKS };
+    let lamp_delay = if lamp_turns_on {
+        LAMP_TURN_ON_DELAY_GAME_TICKS
+    } else {
+        LAMP_TURN_OFF_DELAY_GAME_TICKS
+    };
     let lamp_delay = lamp_delay.max(MIN_SCHEDULE_DELAY_GAME_TICKS);
-    TORCH_DELAY_GAME_TICKS * (critical_path_gate_count as u64 + critical_path_repeaters as u64) + lamp_delay
+    TORCH_DELAY_GAME_TICKS * (critical_path_gate_count as u64 + critical_path_repeaters as u64)
+        + lamp_delay
 }
 
 // ---------------------------------------------------------------------
@@ -435,6 +664,8 @@ pub struct TimingSummary {
     pub worst_settle_game_ticks: u64,
     /// Index into the `transitions` slice `summarize_worst_case` was given.
     pub worst_transition_index: usize,
+    /// Every index tied at the worst settle time, in input order.
+    pub worst_transition_indices: Vec<usize>,
     /// Whichever declared output arrived latest in the worst transition.
     pub critical_output: String,
     pub critical_path: Vec<String>,
@@ -494,21 +725,34 @@ pub fn summarize_worst_case(
     outputs: &[String],
     transitions: &[TransitionResult],
 ) -> TimingSummary {
-    assert!(!transitions.is_empty(), "summarize_worst_case needs at least one transition");
-    assert!(!outputs.is_empty(), "summarize_worst_case needs at least one output");
+    assert!(
+        !transitions.is_empty(),
+        "summarize_worst_case needs at least one transition"
+    );
+    assert!(
+        !outputs.is_empty(),
+        "summarize_worst_case needs at least one output"
+    );
 
     let mut glitch_counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut worst_index = 0usize;
-    let mut worst_ticks = 0u64;
-    for (index, transition) in transitions.iter().enumerate() {
+    let worst_ticks = transitions
+        .iter()
+        .map(|transition| transition.settle_game_ticks)
+        .max()
+        .unwrap_or(0);
+    let worst_transition_indices = transitions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, transition)| {
+            (transition.settle_game_ticks == worst_ticks).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let worst_index = worst_transition_indices[0];
+    for transition in transitions {
         for output in outputs {
             if transition.nets.get(output).is_some_and(NetTiming::glitched) {
                 *glitch_counts.entry(output.clone()).or_insert(0) += 1;
             }
-        }
-        if transition.settle_game_ticks >= worst_ticks {
-            worst_ticks = transition.settle_game_ticks;
-            worst_index = index;
         }
     }
 
@@ -554,6 +798,7 @@ pub fn summarize_worst_case(
     TimingSummary {
         worst_settle_game_ticks: worst_ticks,
         worst_transition_index: worst_index,
+        worst_transition_indices,
         critical_output,
         critical_path: path,
         logic_depth: depth,
@@ -569,6 +814,10 @@ pub fn summarize_worst_case(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compile::fragment_synth::identity::{
+        InstanceId, PortId, PrimitiveId, TopologyNodeId,
+    };
+    use crate::compile::geometry::Anchor;
     use crate::compile::Gate;
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {
@@ -607,12 +856,19 @@ mod tests {
             ],
         };
         assert_eq!(logic_depth(&netlist), 3);
-        assert_eq!(logic_depth_bound_game_ticks(&netlist), 3 * TORCH_DELAY_GAME_TICKS);
+        assert_eq!(
+            logic_depth_bound_game_ticks(&netlist),
+            3 * TORCH_DELAY_GAME_TICKS
+        );
     }
 
     #[test]
     fn logic_depth_of_an_empty_netlist_is_zero() {
-        let netlist = Netlist { inputs: vec![], outputs: vec![], gates: vec![] };
+        let netlist = Netlist {
+            inputs: vec![],
+            outputs: vec![],
+            gates: vec![],
+        };
         assert_eq!(logic_depth(&netlist), 0);
     }
 
@@ -625,26 +881,204 @@ mod tests {
             outputs: vec!["out".to_string()],
             gates: vec![nor("p", &["x"]), nor("q", &["y"]), nor("out", &["p", "q"])],
         };
-        let arrivals: BTreeMap<String, u64> =
-            [("p".to_string(), 5), ("q".to_string(), 10), ("out".to_string(), 12)]
-                .into_iter()
-                .collect();
+        let arrivals: BTreeMap<String, u64> = [
+            ("p".to_string(), 5),
+            ("q".to_string(), 10),
+            ("out".to_string(), 12),
+        ]
+        .into_iter()
+        .collect();
 
         let path = critical_path(&netlist, &arrivals, "out");
-        assert_eq!(path, vec!["y".to_string(), "q".to_string(), "out".to_string()]);
+        assert_eq!(
+            path,
+            vec!["y".to_string(), "q".to_string(), "out".to_string()]
+        );
     }
 
     #[test]
     fn critical_path_of_a_primary_input_is_just_itself() {
-        let netlist = Netlist { inputs: vec!["x".to_string()], outputs: vec![], gates: vec![] };
+        let netlist = Netlist {
+            inputs: vec!["x".to_string()],
+            outputs: vec![],
+            gates: vec![],
+        };
         let arrivals = BTreeMap::new();
-        assert_eq!(critical_path(&netlist, &arrivals, "x"), vec!["x".to_string()]);
+        assert_eq!(
+            critical_path(&netlist, &arrivals, "x"),
+            vec!["x".to_string()]
+        );
     }
 
     #[test]
     fn tick_conversions_use_the_documented_ratios() {
         assert_eq!(game_ticks_to_redstone_ticks(158), 79.0);
         assert_eq!(game_ticks_to_seconds(20), 1.0);
+    }
+
+    fn typed_timing(id: ObservationId, tick: u64) -> TypedNetTiming {
+        TypedNetTiming {
+            site: ObservationSite {
+                id,
+                at: Anchor { x: 1, y: 1, z: 1 },
+                logical_owner: None,
+                display_label: None,
+            },
+            changes: vec![(tick, true)],
+        }
+    }
+
+    #[test]
+    fn witness_uses_latest_active_internal_node_when_output_does_not_change() {
+        let output = ObservationId::DeclaredOutput(PortId(0));
+        let input = ObservationId::PrimaryInput(PortId(0));
+        let primitive = ObservationId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(3),
+            node: TopologyNodeId(0),
+        });
+        let transition = TypedTransitionResult {
+            settle_game_ticks: 8,
+            nets: [
+                (input, typed_timing(input, 1)),
+                (primitive, typed_timing(primitive, 7)),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        assert_eq!(
+            transition_witness(4, &transition, &[output]),
+            Some(TransitionWitness {
+                transition_index: 4,
+                observation: primitive,
+                arrival_tick: Some(7),
+                activity: WitnessActivity::Active,
+            })
+        );
+    }
+
+    #[test]
+    fn witness_uses_static_fallback_only_for_a_quiet_transition() {
+        let output = ObservationId::DeclaredOutput(PortId(2));
+        let transition = TypedTransitionResult {
+            settle_game_ticks: 0,
+            nets: BTreeMap::new(),
+        };
+        assert_eq!(
+            transition_witness(2, &transition, &[output]),
+            Some(TransitionWitness {
+                transition_index: 2,
+                observation: output,
+                arrival_tick: None,
+                activity: WitnessActivity::StaticFallback,
+            })
+        );
+    }
+
+    #[test]
+    fn typed_summary_retains_a_witness_for_every_tied_worst_transition() {
+        let output = ObservationId::DeclaredOutput(PortId(0));
+        let transitions = vec![
+            TypedTransitionResult {
+                settle_game_ticks: 8,
+                nets: [(output, typed_timing(output, 7))].into_iter().collect(),
+            },
+            TypedTransitionResult {
+                settle_game_ticks: 3,
+                nets: BTreeMap::new(),
+            },
+            TypedTransitionResult {
+                settle_game_ticks: 8,
+                nets: BTreeMap::new(),
+            },
+        ];
+        let summary = summarize_typed_worst_case(&[output], &transitions);
+        assert_eq!(summary.worst_transition_indices, vec![0, 2]);
+        assert_eq!(summary.worst_transition_index, 0);
+        assert_eq!(summary.witnesses.len(), 2);
+        assert_eq!(summary.witnesses[&0].activity, WitnessActivity::Active);
+        assert_eq!(
+            summary.witnesses[&2].activity,
+            WitnessActivity::StaticFallback
+        );
+    }
+
+    #[test]
+    fn worst_case_retains_all_ties_and_uses_lowest_compatibility_index() {
+        let netlist = Netlist {
+            inputs: vec!["x".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![nor("y", &["x"])],
+        };
+        let compiled = crate::compile::compile_legacy(&netlist).unwrap();
+        let transitions = vec![
+            TransitionResult {
+                settle_game_ticks: 6,
+                nets: BTreeMap::new(),
+            },
+            TransitionResult {
+                settle_game_ticks: 2,
+                nets: BTreeMap::new(),
+            },
+            TransitionResult {
+                settle_game_ticks: 6,
+                nets: BTreeMap::new(),
+            },
+        ];
+        let summary = summarize_worst_case(&netlist, &compiled, &["y".to_string()], &transitions);
+        assert_eq!(summary.worst_transition_indices, vec![0, 2]);
+        assert_eq!(summary.worst_transition_index, 0);
+    }
+
+    #[test]
+    fn compiled_circuit_keeps_primitive_and_instance_aliases_as_distinct_sites() {
+        let netlist = Netlist {
+            inputs: vec!["x".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![nor("y", &["x"])],
+        };
+        let compiled = crate::compile::compile_legacy(&netlist).unwrap();
+        let primitive = ObservationId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(0),
+            node: TopologyNodeId(0),
+        });
+        let instance = ObservationId::InstanceOutput(InstanceId(0));
+        let sites = compiled.observations.sites();
+        assert_eq!(sites[&primitive].at, sites[&instance].at);
+        assert_ne!(sites[&primitive].id, sites[&instance].id);
+        assert!(watch_all_typed(&compiled)
+            .iter()
+            .any(|site| site.id == primitive));
+        assert!(watch_all_typed(&compiled)
+            .iter()
+            .any(|site| site.id == instance));
+    }
+
+    #[test]
+    fn compiled_circuit_includes_isolating_merge_primitive_metadata() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["out".to_string(), "spy".to_string()],
+            gates: vec![
+                Gate::nor("na", &["a"]),
+                Gate::merge("m", &["na", "b"]),
+                Gate::nor("out", &["m"]),
+                Gate::nor("spy", &["na"]),
+            ],
+        };
+        let compiled = crate::compile::compile_legacy(&netlist).unwrap();
+        let isolator = PrimitiveId {
+            instance: InstanceId(1),
+            node: TopologyNodeId(0),
+        };
+        assert!(compiled
+            .observations
+            .primitive_outputs
+            .contains_key(&isolator));
+        assert!(compiled
+            .observations
+            .junction_outputs
+            .contains_key(&InstanceId(1)));
     }
 
     // -------------------------------------------------------------------
@@ -741,39 +1175,80 @@ mod tests {
         let support_b1 = lever_pos.offset(Facing::South);
         let torch_b1 = support_b1.offset(Facing::South);
         world.set(support_b1.x, support_b1.y, support_b1.z, stone());
-        world.set(torch_b1.x, torch_b1.y, torch_b1.z, wall_torch(Facing::South));
+        world.set(
+            torch_b1.x,
+            torch_b1.y,
+            torch_b1.z,
+            wall_torch(Facing::South),
+        );
 
         let support_b2 = torch_b1.offset(Facing::South);
         let torch_b2 = support_b2.offset(Facing::South);
         world.set(support_b2.x, support_b2.y, support_b2.z, stone());
-        world.set(torch_b2.x, torch_b2.y, torch_b2.z, wall_torch(Facing::South));
+        world.set(
+            torch_b2.x,
+            torch_b2.y,
+            torch_b2.z,
+            wall_torch(Facing::South),
+        );
 
         let support_b3 = torch_b2.offset(Facing::South);
         let torch_b3 = support_b3.offset(Facing::South);
         world.set(support_b3.x, support_b3.y, support_b3.z, stone());
-        world.set(torch_b3.x, torch_b3.y, torch_b3.z, wall_torch(Facing::South));
+        world.set(
+            torch_b3.x,
+            torch_b3.y,
+            torch_b3.z,
+            wall_torch(Facing::South),
+        );
 
         let repeater_b1 = torch_b3.offset(Facing::South);
         // facing=North -> input north, output south: continues the chain
-        world.set(repeater_b1.x, repeater_b1.y, repeater_b1.z, repeater(Facing::North));
+        world.set(
+            repeater_b1.x,
+            repeater_b1.y,
+            repeater_b1.z,
+            repeater(Facing::North),
+        );
         let lamp_b = repeater_b1.offset(Facing::South);
         world.set(lamp_b.x, lamp_b.y, lamp_b.z, lamp());
 
         let mut simulator = Simulator::new(world);
-        simulator.run_until_stable(200).expect("the lever-off steady state must settle");
+        simulator
+            .run_until_stable(200)
+            .expect("the lever-off steady state must settle");
         // Both chains have an odd number of inversions (1 and 3), so with the
         // lever off (unpowered support -> torch lit -> ... -> lamp lit) both
         // lamps rest lit, the same way a single NOT gate would.
-        assert!(simulator.world().get(lamp_a.x, lamp_a.y, lamp_a.z).lit, "lamp_a must start lit (lever off)");
-        assert!(simulator.world().get(lamp_b.x, lamp_b.y, lamp_b.z).lit, "lamp_b must start lit (lever off)");
+        assert!(
+            simulator.world().get(lamp_a.x, lamp_a.y, lamp_a.z).lit,
+            "lamp_a must start lit (lever off)"
+        );
+        assert!(
+            simulator.world().get(lamp_b.x, lamp_b.y, lamp_b.z).lit,
+            "lamp_b must start lit (lever off)"
+        );
 
-        let mut on_lever = simulator.world().get(lever_pos.x, lever_pos.y, lever_pos.z).clone();
+        let mut on_lever = simulator
+            .world()
+            .get(lever_pos.x, lever_pos.y, lever_pos.z)
+            .clone();
         on_lever.lit = true;
-        simulator.world_mut().set(lever_pos.x, lever_pos.y, lever_pos.z, on_lever);
-        let settle = simulator.run_until_stable(200).expect("this feedforward circuit must settle");
+        simulator
+            .world_mut()
+            .set(lever_pos.x, lever_pos.y, lever_pos.z, on_lever);
+        let settle = simulator
+            .run_until_stable(200)
+            .expect("this feedforward circuit must settle");
 
-        assert!(!simulator.world().get(lamp_a.x, lamp_a.y, lamp_a.z).lit, "lamp_a must end up dark (lever on)");
-        assert!(!simulator.world().get(lamp_b.x, lamp_b.y, lamp_b.z).lit, "lamp_b must end up dark (lever on)");
+        assert!(
+            !simulator.world().get(lamp_a.x, lamp_a.y, lamp_a.z).lit,
+            "lamp_a must end up dark (lever on)"
+        );
+        assert!(
+            !simulator.world().get(lamp_b.x, lamp_b.y, lamp_b.z).lit,
+            "lamp_b must end up dark (lever on)"
+        );
         assert_eq!(
             settle, 14,
             "see the hand-derived timeline above -- chain A (1 gate, 4 repeaters) is the true \

@@ -60,35 +60,51 @@ use self::topology::Primitive;
 /// module's own doc comment for what it is for.
 #[cfg(test)]
 pub mod coupling;
+pub mod emission;
 /// The derived energising range of every block this compiler writes, read out
 /// of the derived artifacts. Measurement only, `#[cfg(test)]` for the same
 /// reason `coupling` above is. See the module's own doc comment.
 #[cfg(test)]
 pub mod energising;
 pub mod equivalence;
+pub mod fragment_synth;
 pub mod geometry;
 pub mod lowering;
+pub mod metrics;
 pub mod physical;
 pub mod planner;
 pub mod polarity;
 pub mod primitive_graph;
 pub mod relax;
-pub mod routing_stats;
-/// A CDCL SAT solver and a tagged CNF builder, used by `planner`'s windowed
-/// model. Test-only, so it ships in nothing and takes no dependency.
-#[cfg(test)]
-pub mod satcnf;
 /// The incremental settle against a full re-settle, cell by cell, over every
 /// surface this project reads truth through. Measurement only plus one pin --
 /// see the module doc and `redstone::simulator::differential`.
 #[cfg(test)]
 pub mod resettle_differential;
+pub mod revisions;
+pub mod routing;
+pub mod routing_stats;
+/// A CDCL SAT solver and a tagged CNF builder, used by `planner`'s windowed
+/// model. Test-only, so it ships in nothing and takes no dependency.
+#[cfg(test)]
+pub mod satcnf;
 /// The static strength walk against the running `Simulator`, cell by cell.
 /// Measurement only -- see the module doc.
 #[cfg(test)]
 pub mod strength_differential;
 pub mod topology;
+pub mod verification;
 pub mod world_partition;
+
+pub use fragment_synth::{
+    compile_fragment_synth, CapWorkCounters, ProposalTerminal, ProposalTrace, StopReason,
+    SynthesisBudget, SynthesisCaseFingerprint, SynthesisError, SynthesisInput, SynthesisResult,
+};
+
+pub(crate) use verification::physical_verifier_revision_descriptor;
+#[cfg(test)]
+pub(crate) use verification::PhysicalVerifierRuleId;
+use verification::{RealisedWorldVerifierCheckId, REALISED_WORLD_VERIFIER_PIPELINE};
 
 // ---------------------------------------------------------------------
 // 網表
@@ -1528,6 +1544,112 @@ impl std::fmt::Display for CompileError {
 
 impl std::error::Error for CompileError {}
 
+/// Typed observation metadata carried by every compiled circuit. A physical
+/// coordinate may intentionally appear in several maps; identity is the map
+/// key, never the coordinate or display label.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CircuitObservations {
+    pub primary_inputs:
+        BTreeMap<fragment_synth::identity::PortId, fragment_synth::identity::ObservationSite>,
+    pub primitive_outputs:
+        BTreeMap<fragment_synth::identity::PrimitiveId, fragment_synth::identity::ObservationSite>,
+    pub instance_outputs:
+        BTreeMap<fragment_synth::identity::InstanceId, fragment_synth::identity::ObservationSite>,
+    pub junction_outputs:
+        BTreeMap<fragment_synth::identity::InstanceId, fragment_synth::identity::ObservationSite>,
+    pub declared_outputs:
+        BTreeMap<fragment_synth::identity::PortId, fragment_synth::identity::ObservationSite>,
+}
+
+impl CircuitObservations {
+    pub fn from_expanded(candidate: &fragment_synth::candidate::ExpandedPhysicalCandidate) -> Self {
+        let mut observations = Self::default();
+        for (&id, verified) in &candidate.observations {
+            match id {
+                fragment_synth::identity::ObservationId::PrimaryInput(port) => {
+                    observations
+                        .primary_inputs
+                        .insert(port, verified.site.clone());
+                }
+                fragment_synth::identity::ObservationId::PrimitiveOutput(primitive) => {
+                    observations
+                        .primitive_outputs
+                        .insert(primitive, verified.site.clone());
+                }
+                fragment_synth::identity::ObservationId::InstanceOutput(instance) => {
+                    observations
+                        .instance_outputs
+                        .insert(instance, verified.site.clone());
+                }
+                fragment_synth::identity::ObservationId::JunctionOutput(instance) => {
+                    observations
+                        .junction_outputs
+                        .insert(instance, verified.site.clone());
+                }
+                fragment_synth::identity::ObservationId::DeclaredOutput(port) => {
+                    observations
+                        .declared_outputs
+                        .insert(port, verified.site.clone());
+                }
+            }
+        }
+        observations
+    }
+
+    pub fn sites(
+        &self,
+    ) -> BTreeMap<fragment_synth::identity::ObservationId, fragment_synth::identity::ObservationSite>
+    {
+        let mut sites = BTreeMap::new();
+        sites.extend(
+            self.primary_inputs
+                .values()
+                .cloned()
+                .map(|site| (site.id, site)),
+        );
+        sites.extend(
+            self.primitive_outputs
+                .values()
+                .cloned()
+                .map(|site| (site.id, site)),
+        );
+        sites.extend(
+            self.instance_outputs
+                .values()
+                .cloned()
+                .map(|site| (site.id, site)),
+        );
+        sites.extend(
+            self.junction_outputs
+                .values()
+                .cloned()
+                .map(|site| (site.id, site)),
+        );
+        sites.extend(
+            self.declared_outputs
+                .values()
+                .cloned()
+                .map(|site| (site.id, site)),
+        );
+        sites
+    }
+
+    fn from_plan(
+        netlist: &Netlist,
+        plan: &planner::PlanCandidate,
+        world: &World,
+    ) -> Result<Self, CompileError> {
+        let adapted = fragment_synth::legacy_adapter::LegacyCandidateAdapter::adapt_plan(
+            netlist, plan, world,
+        )
+        .map_err(|error| CompileError::CandidateMetadataViolation {
+            item: "circuit observations".to_string(),
+            reason: error.to_string(),
+        })?;
+        Ok(Self::from_expanded(&adapted.candidate))
+    }
+}
+
 /// 編譯完成的電路。
 pub struct CompiledCircuit {
     pub world: World,
@@ -1559,6 +1681,7 @@ pub struct CompiledCircuit {
     /// junction is dust, and dust has no facing to read. A verifier that
     /// re-derives a gate's socket faces has to be told which faces those are.
     pub gate_facings: Vec<geometry::CellFacing>,
+    pub observations: CircuitObservations,
     /// Explicit ownership data recorded while the legacy emitter places the
     /// world.  This is intentionally not reconstructed from block kinds.
     ///
@@ -1616,6 +1739,8 @@ pub(crate) struct LegacyRoute {
     blocks: Vec<BlockState>,
     /// The block one cell below each anchor, parallel to `anchors`.
     floors: Vec<BlockState>,
+    /// One ordered source-to-terminal path per `terminals` entry.
+    branch_paths: Vec<Vec<Anchor>>,
 }
 
 impl LegacyRoute {
@@ -1637,6 +1762,10 @@ impl LegacyRoute {
 
     pub(crate) fn floors(&self) -> &[BlockState] {
         &self.floors
+    }
+
+    pub(crate) fn branch_paths(&self) -> &[Vec<Anchor>] {
+        &self.branch_paths
     }
 }
 
@@ -1742,7 +1871,7 @@ fn lay_dust_run(
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
         }
-        route.claim(pos);
+        route.claim_signal(pos);
         pos = pos.offset(direction);
     }
     ending_strength
@@ -1897,7 +2026,7 @@ fn lay_bent_path(
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
         }
-        route.claim(pos);
+        route.claim_signal(pos);
         prev = pos;
     }
 
@@ -2086,7 +2215,7 @@ fn lay_bent_path_bare(
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
         }
-        route.claim(pos);
+        route.claim_signal(pos);
         prev = pos;
     }
     (
@@ -2188,6 +2317,13 @@ struct Footprint {
     route_terminals: Vec<Vec<RouteTerminal>>,
     /// Every repeater this pass laid, attributed to the [`Leg`] carrying it.
     repeaters: BTreeMap<(usize, Leg), u64>,
+    /// Ordered electrical cells written while one named leg is active.
+    leg_cells: BTreeMap<(usize, Leg), Vec<Anchor>>,
+    /// Track cells are shared prefixes, so they are recorded by slot and
+    /// sliced toward each tap only after all exits are known.
+    track_cells: BTreeMap<(usize, usize), Vec<Anchor>>,
+    /// One source-to-terminal path, parallel to `route_terminals`.
+    branch_paths: Vec<Vec<Vec<Anchor>>>,
 }
 
 impl Footprint {
@@ -2198,6 +2334,9 @@ impl Footprint {
             route_anchors: Vec::new(),
             route_terminals: Vec::new(),
             repeaters: BTreeMap::new(),
+            leg_cells: BTreeMap::new(),
+            track_cells: BTreeMap::new(),
+            branch_paths: Vec::new(),
         }
     }
 
@@ -2208,6 +2347,9 @@ impl Footprint {
             route_anchors: Vec::new(),
             route_terminals: Vec::new(),
             repeaters: BTreeMap::new(),
+            leg_cells: BTreeMap::new(),
+            track_cells: BTreeMap::new(),
+            branch_paths: Vec::new(),
         }
     }
 
@@ -2246,6 +2388,36 @@ impl Footprint {
         *self.repeaters.entry((net, leg)).or_default() += 1;
     }
 
+    fn claim_leg_cell(&mut self, pos: Position, net: usize, leg: Leg) {
+        self.claim(pos, net);
+        if self.recording {
+            let cell = Anchor {
+                x: pos.x,
+                y: pos.y,
+                z: pos.z,
+            };
+            let cells = self.leg_cells.entry((net, leg)).or_default();
+            if cells.last() != Some(&cell) {
+                cells.push(cell);
+            }
+        }
+    }
+
+    fn claim_track_cell(&mut self, pos: Position, net: usize, slot: usize) {
+        self.claim(pos, net);
+        if self.recording {
+            let cell = Anchor {
+                x: pos.x,
+                y: pos.y,
+                z: pos.z,
+            };
+            let cells = self.track_cells.entry((net, slot)).or_default();
+            if !cells.contains(&cell) {
+                cells.push(cell);
+            }
+        }
+    }
+
     /// Record that `count` repeaters stand between slot `slot`'s track entry
     /// column and its tap at `tap_x`.
     ///
@@ -2253,7 +2425,8 @@ impl Footprint {
     /// [`Footprint::note_repeater`]: one `lay_track` call fills every tap of
     /// one slot, and each tap needs a different prefix of the same run.
     fn note_track_tap(&mut self, net: usize, slot: usize, tap_x: i32, count: u64) {
-        self.repeaters.insert((net, Leg::Track { slot, tap_x }), count);
+        self.repeaters
+            .insert((net, Leg::Track { slot, tap_x }), count);
     }
 
     /// How many repeaters `net` laid on `leg`. Zero for a leg nothing laid --
@@ -2325,6 +2498,7 @@ impl Footprint {
                     terminals: self.route_terminals.get(net).cloned().unwrap_or_default(),
                     blocks,
                     floors,
+                    branch_paths: self.branch_paths.get(net).cloned().unwrap_or_default(),
                 }
             })
             .collect()
@@ -2349,6 +2523,17 @@ struct Route<'a> {
 impl Route<'_> {
     fn claim(&mut self, pos: Position) {
         self.footprint.claim(pos, self.net);
+    }
+
+    fn claim_signal(&mut self, pos: Position) {
+        let leg = self
+            .leg
+            .expect("every electrical route cell outside a track belongs to a named leg");
+        self.footprint.claim_leg_cell(pos, self.net, leg);
+    }
+
+    fn claim_track(&mut self, pos: Position, slot: usize) {
+        self.footprint.claim_track_cell(pos, self.net, slot);
     }
 
     /// Attribute every repeater written from here on to `leg`.
@@ -2510,7 +2695,7 @@ fn move_between_layers(
             route.claim(rest.down());
             world.set(rest.x, rest.y, rest.z, repeater(direction));
             route.note_repeater();
-            route.claim(rest);
+            route.claim_signal(rest);
             if !route.footprint.recording {
                 seal_cross_talk(world, rest, direction, route);
             }
@@ -2518,7 +2703,7 @@ fn move_between_layers(
             ensure_floor(world, rest_output);
             route.claim(rest_output.down());
             world.set(rest_output.x, rest_output.y, rest_output.z, dust());
-            route.claim(rest_output);
+            route.claim_signal(rest_output);
             if !route.footprint.recording {
                 seal_cross_talk(world, rest_output, direction, route);
             }
@@ -2527,10 +2712,10 @@ fn move_between_layers(
         if climbing {
             let riser = current.offset(direction);
             world.set(riser.x, riser.y, riser.z, stone());
-            route.claim(riser);
+            route.claim_signal(riser);
             let landing = riser.up();
             world.set(landing.x, landing.y, landing.z, dust());
-            route.claim(landing);
+            route.claim_signal(landing);
             if !route.footprint.recording {
                 seal_cross_talk(world, landing, direction, route);
             }
@@ -2541,7 +2726,7 @@ fn move_between_layers(
             ensure_floor(world, landing);
             route.claim(landing.down());
             world.set(landing.x, landing.y, landing.z, dust());
-            route.claim(landing);
+            route.claim_signal(landing);
             if !route.footprint.recording {
                 seal_cross_talk(world, landing, direction, route);
             }
@@ -2704,7 +2889,7 @@ fn lay_track(
             } else {
                 world.set(pos.x, pos.y, pos.z, dust());
             }
-            route.claim(pos);
+            route.claim_track(pos, slot);
             if taps.contains(&x) {
                 exit_strength.insert(x, strengths[k]);
                 route.note_track_tap(slot, x, laid);
@@ -2789,11 +2974,7 @@ pub(crate) fn place_input_terminal(
 /// The route that feeds this terminal ends *at* the repeater's cell, so the
 /// write is shared with `emit_routes` and idempotent -- both put the same
 /// blockstate there.
-pub(crate) fn place_output_terminal(
-    world: &mut World,
-    home: Position,
-    toward: Facing,
-) -> Position {
+pub(crate) fn place_output_terminal(world: &mut World, home: Position, toward: Facing) -> Position {
     let driver = home.offset(toward.opposite());
     ensure_floor(world, driver);
     world.set(driver.x, driver.y, driver.z, repeater(toward));
@@ -4264,7 +4445,10 @@ fn emit(
             move_between_layers(world, entry, Facing::North, band_y(eff_band), &mut route);
             for exit in net.exits(slot, &plan.centre_x) {
                 let top = Position::new(exit.x(), band_y(eff_band), z);
-                route.begin(Leg::RampUp { slot, tap_x: exit.x() });
+                route.begin(Leg::RampUp {
+                    slot,
+                    tap_x: exit.x(),
+                });
                 move_between_layers(world, top, Facing::North, GATE_Y, &mut route);
             }
         }
@@ -4327,7 +4511,7 @@ fn emit(
                 ensure_floor(world, start);
                 world.set(start.x, start.y, start.z, dust());
                 route.claim(start.down());
-                route.claim(start);
+                route.claim_signal(start);
                 net_source_strength[n].saturating_sub(1)
             } else {
                 net_source_strength[n]
@@ -4601,11 +4785,15 @@ fn resolve_terminal_repeaters(
 
     for (n, net) in nets.iter().enumerate() {
         let mut priced: BTreeMap<(String, usize), u64> = BTreeMap::new();
+        let mut paths: BTreeMap<(String, usize), Vec<Anchor>> = BTreeMap::new();
+        let source = footprint
+            .route_anchors
+            .get(n)
+            .and_then(|anchors| anchors.first())
+            .copied()
+            .expect("every routed net records its source pin");
         let mut charge = |gate: usize, input_index: usize, total: u64| {
-            let previous = priced.insert(
-                (netlist.gates[gate].output.clone(), input_index),
-                total,
-            );
+            let previous = priced.insert((netlist.gates[gate].output.clone(), input_index), total);
             assert!(
                 previous.is_none(),
                 "net {n} priced `{}.in[{input_index}]` twice",
@@ -4615,6 +4803,14 @@ fn resolve_terminal_repeaters(
 
         if bypass[n] {
             let (gate, input_index) = net.sinks[0][0];
+            let mut path = vec![source];
+            append_route_path(
+                &mut path,
+                footprint
+                    .leg_cells
+                    .get(&(n, Leg::Branch { gate, input_index })),
+            );
+            paths.insert((netlist.gates[gate].output.clone(), input_index), path);
             charge(
                 gate,
                 input_index,
@@ -4626,31 +4822,67 @@ fn resolve_terminal_repeaters(
             // later slot the running total carried across the feed-through
             // that led here.
             let mut arriving = 0u64;
+            let mut arriving_path = vec![source];
             for slot in 0..net.channels.len() {
                 let on_the_track = arriving
                     + footprint.leg_repeaters(n, Leg::Column { slot })
                     + footprint.leg_repeaters(n, Leg::RampDown { slot });
+                let mut on_the_track_path = arriving_path.clone();
+                append_route_path(
+                    &mut on_the_track_path,
+                    footprint.leg_cells.get(&(n, Leg::Column { slot })),
+                );
+                append_route_path(
+                    &mut on_the_track_path,
+                    footprint.leg_cells.get(&(n, Leg::RampDown { slot })),
+                );
                 let mut carried = None;
+                let mut carried_path = None;
                 for exit in net.exits(slot, centre_x) {
                     let tap_x = exit.x();
                     let at_landing = on_the_track
                         + footprint.leg_repeaters(n, Leg::Track { slot, tap_x })
                         + footprint.leg_repeaters(n, Leg::RampUp { slot, tap_x });
+                    let mut at_landing_path = on_the_track_path.clone();
+                    append_track_prefix(
+                        &mut at_landing_path,
+                        footprint.track_cells.get(&(n, slot)),
+                        net.entry_column(slot),
+                        tap_x,
+                    );
+                    append_route_path(
+                        &mut at_landing_path,
+                        footprint.leg_cells.get(&(n, Leg::RampUp { slot, tap_x })),
+                    );
                     match exit {
                         Exit::Socket {
                             gate, input_index, ..
-                        } => charge(
-                            gate,
-                            input_index,
-                            at_landing
-                                + footprint.leg_repeaters(n, Leg::Branch { gate, input_index }),
-                        ),
+                        } => {
+                            let mut path = at_landing_path;
+                            append_route_path(
+                                &mut path,
+                                footprint
+                                    .leg_cells
+                                    .get(&(n, Leg::Branch { gate, input_index })),
+                            );
+                            paths.insert((netlist.gates[gate].output.clone(), input_index), path);
+                            charge(
+                                gate,
+                                input_index,
+                                at_landing
+                                    + footprint.leg_repeaters(n, Leg::Branch { gate, input_index }),
+                            );
+                        }
                         // At most one per slot, by construction: `Net::exits`
                         // pushes `hops[slot]` and nothing else.
-                        Exit::Feedthrough { .. } => carried = Some(at_landing),
+                        Exit::Feedthrough { .. } => {
+                            carried = Some(at_landing);
+                            carried_path = Some(at_landing_path);
+                        }
                     }
                 }
                 arriving = carried.unwrap_or(0);
+                arriving_path = carried_path.unwrap_or_default();
             }
         }
 
@@ -4669,6 +4901,7 @@ fn resolve_terminal_repeaters(
             terminals.len(),
             priced.len()
         );
+        let mut terminal_paths = Vec::with_capacity(terminals.len());
         for terminal in terminals.iter_mut() {
             let key = (terminal.sink.gate.clone(), terminal.sink.input_index);
             terminal.repeaters = *priced.get(&key).unwrap_or_else(|| {
@@ -4677,6 +4910,51 @@ fn resolve_terminal_repeaters(
                     terminal.sink.gate, terminal.sink.input_index
                 )
             });
+            terminal_paths.push(paths.remove(&key).unwrap_or_else(|| {
+                panic!(
+                    "net {n} recorded no physical path for `{}.in[{}]`",
+                    terminal.sink.gate, terminal.sink.input_index
+                )
+            }));
+        }
+        if footprint.branch_paths.len() <= n {
+            footprint.branch_paths.resize_with(n + 1, Vec::new);
+        }
+        footprint.branch_paths[n] = terminal_paths;
+    }
+}
+
+fn append_route_path(path: &mut Vec<Anchor>, cells: Option<&Vec<Anchor>>) {
+    for &cell in cells.into_iter().flatten() {
+        if path.last() != Some(&cell) {
+            path.push(cell);
+        }
+    }
+}
+
+fn append_track_prefix(
+    path: &mut Vec<Anchor>,
+    cells: Option<&Vec<Anchor>>,
+    source_x: i32,
+    tap_x: i32,
+) {
+    let direction = (tap_x - source_x).signum();
+    if direction == 0 {
+        return;
+    }
+    let distance = (tap_x - source_x).abs();
+    let mut prefix = cells
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|cell| {
+            (cell.x - source_x).signum() == direction && (cell.x - source_x).abs() <= distance
+        })
+        .collect::<Vec<_>>();
+    prefix.sort_by_key(|cell| (cell.x - source_x).abs());
+    for cell in prefix {
+        if path.last() != Some(&cell) {
+            path.push(cell);
         }
     }
 }
@@ -4931,7 +5209,9 @@ fn world_size(plan: &Floorplan, nets: &[Net], row_z: &[i32]) -> (i32, i32) {
 /// (needs a candidate socket position before any real gate is placed) and
 /// `routing_stats` (needs the same lookup to read results back out of an
 /// already-compiled world).
-fn cell_geometry_by_input_count(netlist: &Netlist) -> HashMap<(usize, geometry::CellFacing), NorCell> {
+fn cell_geometry_by_input_count(
+    netlist: &Netlist,
+) -> HashMap<(usize, geometry::CellFacing), NorCell> {
     let mut cells = HashMap::new();
     let mut scratch = World::new(20, GATE_ONLY_SCRATCH_HEIGHT, 20);
     // North is the only key this map is ever built for, because it is the only
@@ -5821,7 +6101,10 @@ fn mark_powered(
 /// reach it" and "does nothing else" asked in the same breath -- a net
 /// belongs in the answer if and only if it is one of the gate's own
 /// inputs.
-fn net_reach(world: &World, cells: &[Position]) -> HashSet<Position> {
+pub(crate) fn net_network_and_reach(
+    world: &World,
+    cells: &[Position],
+) -> (HashSet<Position>, HashSet<Position>) {
     let mut in_network: HashSet<Position> = HashSet::new();
     let mut queue: VecDeque<Position> = VecDeque::new();
     let mut powered: HashSet<Position> = HashSet::new();
@@ -5874,7 +6157,11 @@ fn net_reach(world: &World, cells: &[Position]) -> HashSet<Position> {
         }
     }
 
-    powered
+    (in_network, powered)
+}
+
+fn net_reach(world: &World, cells: &[Position]) -> HashSet<Position> {
+    net_network_and_reach(world, cells).1
 }
 
 /// The torch-merge invariant: every gate's output torch must genuinely
@@ -6569,10 +6856,7 @@ fn net_signal_strength(
 /// the judge and `strength_differential::walk_by_group` its replica -- a
 /// redirection written into one and not the other is a drift the replica's
 /// own guard test cannot see on unpinned circuits.
-pub(crate) fn input_source_component(
-    world: &World,
-    recorded: Position,
-) -> (Position, &BlockState) {
+pub(crate) fn input_source_component(world: &World, recorded: Position) -> (Position, &BlockState) {
     match input_terminal_reader(world, recorded) {
         Some(reader) => (reader, world.get(reader.x, reader.y, reader.z)),
         None => {
@@ -6645,7 +6929,11 @@ pub fn output_terminal_handover(world: &World, recorded: Position) -> Option<Pos
 /// integration test or the viewer stands in for the caller. Nothing REDA
 /// compiles ever calls it, and the cell it writes is one REDA never owns.
 pub fn drive_caller_cell(world: &mut World, at: (i32, i32, i32), on: bool) {
-    let state = if on { redstone_block() } else { BlockState::air() };
+    let state = if on {
+        redstone_block()
+    } else {
+        BlockState::air()
+    };
     world.set(at.0, at.1, at.2, state);
 }
 
@@ -6943,17 +7231,26 @@ pub(crate) fn verify_realised_world(
     input_positions: &BTreeMap<String, (i32, i32, i32)>,
     output_positions: &BTreeMap<String, (i32, i32, i32)>,
 ) -> Result<(), CompileError> {
-    verify_connectivity(world, reservation, netlist, nets, gate_output_positions)?;
-    verify_torch_merge(world, reservation, netlist, nets, gate_output_positions)?;
-    verify_signal_strength(
-        world,
-        reservation,
-        netlist,
-        nets,
-        gate_output_positions,
-        input_positions,
-        output_positions,
-    )
+    for registration in REALISED_WORLD_VERIFIER_PIPELINE {
+        match registration.check {
+            RealisedWorldVerifierCheckId::CouplingAndConnectivity => {
+                verify_connectivity(world, reservation, netlist, nets, gate_output_positions)?;
+            }
+            RealisedWorldVerifierCheckId::TorchMergeStructure => {
+                verify_torch_merge(world, reservation, netlist, nets, gate_output_positions)?;
+            }
+            RealisedWorldVerifierCheckId::SignalStrength => verify_signal_strength(
+                world,
+                reservation,
+                netlist,
+                nets,
+                gate_output_positions,
+                input_positions,
+                output_positions,
+            )?,
+        }
+    }
+    Ok(())
 }
 
 /// Check that a route's recorded terminals describe the block realisations
@@ -7474,8 +7771,10 @@ pub fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError
 
     let seed = planner::seed_from_legacy_parts(netlist, &legacy_emission).map_err(planner_error)?;
     let realised = planner::realise_and_verify(&seed, netlist, size).map_err(planner_error)?;
+    let observations = CircuitObservations::from_plan(netlist, &seed, &realised.world)?;
 
     Ok(CompiledCircuit {
+        observations,
         world: realised.world,
         input_positions: realised.ports.input_positions,
         output_positions: realised.ports.output_positions,
@@ -7550,28 +7849,28 @@ pub fn compile_grown(
     // A circuit both arms refuse pays for both; that is the honest cost of
     // a portfolio whose members win different circuits, and the ledger
     // carries every number behind it.
-    let candidate = planner::plan_from_netlist_with_growth(
-        netlist,
-        placements,
-        planner::GROWN_SHIPPING_RULE,
-    )
-    .or_else(|_| {
-        planner::plan_from_netlist_with_growth(
-            netlist,
-            placements,
-            planner::GrowthRule {
-                search: planner::SearchModel::StrengthAware,
-                ..planner::GROWN_SHIPPING_RULE
-            },
-        )
-    })
-    .map_err(planner_error)?;
-    let gate_facings: Vec<geometry::CellFacing> =
-        (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect();
+    let candidate =
+        planner::plan_from_netlist_with_growth(netlist, placements, planner::GROWN_SHIPPING_RULE)
+            .or_else(|_| {
+                planner::plan_from_netlist_with_growth(
+                    netlist,
+                    placements,
+                    planner::GrowthRule {
+                        search: planner::SearchModel::StrengthAware,
+                        ..planner::GROWN_SHIPPING_RULE
+                    },
+                )
+            })
+            .map_err(planner_error)?;
+    let gate_facings: Vec<geometry::CellFacing> = (0..netlist.gates.len())
+        .map(|g| candidate.facing_of(g))
+        .collect();
     let size = planner::candidate_world_size(&candidate);
     let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
+    let observations = CircuitObservations::from_plan(netlist, &candidate, &realised.world)?;
 
     Ok(CompiledCircuit {
+        observations,
         world: realised.world,
         input_positions: realised.ports.input_positions,
         output_positions: realised.ports.output_positions,
@@ -7594,19 +7893,22 @@ fn compile_planned_within(
     placements: &planner::PortPlacements,
     rip_up_rounds: usize,
 ) -> Result<CompiledCircuit, CompileError> {
-    let candidate =
-        planner::plan_from_netlist_within(netlist, placements, rip_up_rounds).map_err(planner_error)?;
+    let candidate = planner::plan_from_netlist_within(netlist, placements, rip_up_rounds)
+        .map_err(planner_error)?;
     // Read before `candidate` is moved into `realise_and_verify`, and read off
     // the candidate rather than assumed: since Task 10 `plan_from_netlist`
     // places by relaxation and relaxation turns gates, so a verifier handed
     // north would inspect the wrong cells -- and pass, because the cells it
     // inspects are empty rather than wrong.
-    let gate_facings: Vec<geometry::CellFacing> =
-        (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect();
+    let gate_facings: Vec<geometry::CellFacing> = (0..netlist.gates.len())
+        .map(|g| candidate.facing_of(g))
+        .collect();
     let size = planner::candidate_world_size(&candidate);
     let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
+    let observations = CircuitObservations::from_plan(netlist, &candidate, &realised.world)?;
 
     Ok(CompiledCircuit {
+        observations,
         world: realised.world,
         input_positions: realised.ports.input_positions,
         output_positions: realised.ports.output_positions,
@@ -7638,13 +7940,12 @@ fn planner_error(error: planner::PlannerError) -> CompileError {
     }
 }
 
-/// Which of `compile`'s two paths produced the world a `CompiledCircuit`
-/// carries.
+/// Which placement path produced the world a `CompiledCircuit` carries.
 ///
-/// **This names the placer, not the realiser.** Both paths end in
-/// `planner::realise_and_verify`, so the world is the planner's realisation
-/// either way and the four physical invariants ran on it either way; what
-/// differs is where the anchors came from and who routed between them.
+/// **This names the placer, not the realiser.** The legacy and unified paths
+/// end in `planner::realise_and_verify`; fragment synthesis has its own typed
+/// realisation authority. Every path still returns only after its complete
+/// physical invariant set passes.
 ///
 /// It exists so a fallback is visible. `compile` swallows the planner's error
 /// by design -- a trial that failed is not a compile that failed -- and
@@ -7659,8 +7960,9 @@ pub enum PlannerKind {
     /// Placed by spring relaxation and routed by A* with rip-up, both in
     /// `compile::planner`. `compile_planned`, and `compile` where it works.
     Unified3d,
+    /// Built independently by the timing-directed fragment synthesiser.
+    FragmentSynth,
 }
-
 
 /// Every cell a gate's own realisation occupies, found by realising it into a
 /// scratch world rather than by re-deriving the cell geometry a second time.
@@ -7822,10 +8124,17 @@ pub(crate) fn lever_footprint(
     anchor: Anchor,
     facing: geometry::CellFacing,
 ) -> (Vec<Anchor>, Anchor) {
-    let stepped = Position::new(anchor.x, anchor.y, anchor.z)
-        .offset(geometry::output_direction(facing));
-    let pin = Anchor { x: stepped.x, y: stepped.y, z: stepped.z };
-    let above = Anchor { y: anchor.y + 1, ..anchor };
+    let stepped =
+        Position::new(anchor.x, anchor.y, anchor.z).offset(geometry::output_direction(facing));
+    let pin = Anchor {
+        x: stepped.x,
+        y: stepped.y,
+        z: stepped.z,
+    };
+    let above = Anchor {
+        y: anchor.y + 1,
+        ..anchor
+    };
     (vec![anchor, pin, above], pin)
 }
 
@@ -7847,7 +8156,11 @@ pub(crate) fn input_terminal_footprint(
     let home = Position::new(anchor.x, anchor.y, anchor.z);
     let reader = home.offset(toward);
     let pin = reader.offset(toward);
-    let cell = |p: Position| Anchor { x: p.x, y: p.y, z: p.z };
+    let cell = |p: Position| Anchor {
+        x: p.x,
+        y: p.y,
+        z: p.z,
+    };
     (
         vec![anchor, cell(reader), cell(pin)],
         vec![cell(reader), cell(pin)],
@@ -7868,7 +8181,11 @@ pub(crate) fn output_terminal_footprint(
 ) -> (Vec<Anchor>, Vec<Anchor>, Anchor) {
     let home = Position::new(anchor.x, anchor.y, anchor.z);
     let driver = home.offset(toward.opposite());
-    let handover = Anchor { x: driver.x, y: driver.y, z: driver.z };
+    let handover = Anchor {
+        x: driver.x,
+        y: driver.y,
+        z: driver.z,
+    };
     (vec![anchor, handover], vec![handover], handover)
 }
 
@@ -8038,7 +8355,10 @@ mod tests {
 
         assert_eq!(compiled.gate_facings.len(), netlist.gates.len());
         assert!(
-            compiled.gate_facings.iter().all(|&facing| facing == CellFacing::NORTH),
+            compiled
+                .gate_facings
+                .iter()
+                .all(|&facing| facing == CellFacing::NORTH),
             "`compile_legacy` seeds from the legacy emitter, so every gate must still be north"
         );
     }
@@ -8238,11 +8558,17 @@ mod tests {
         let mut simulator = Simulator::new(world.clone());
         simulator.run_until_stable(50).expect("settles");
         assert_eq!(
-            simulator.world().get(net_a_wire.x, net_a_wire.y, net_a_wire.z).power,
+            simulator
+                .world()
+                .get(net_a_wire.x, net_a_wire.y, net_a_wire.z)
+                .power,
             15
         );
         assert_eq!(
-            simulator.world().get(net_b_wire.x, net_b_wire.y, net_b_wire.z).power,
+            simulator
+                .world()
+                .get(net_b_wire.x, net_b_wire.y, net_b_wire.z)
+                .power,
             15,
             "net b's wire reads 15 from a lever it is not connected to"
         );
@@ -8251,7 +8577,10 @@ mod tests {
             .set(lever_cell.x, lever_cell.y, lever_cell.z, lever(false));
         simulator.run_until_stable(50).expect("settles again");
         assert_eq!(
-            simulator.world().get(net_b_wire.x, net_b_wire.y, net_b_wire.z).power,
+            simulator
+                .world()
+                .get(net_b_wire.x, net_b_wire.y, net_b_wire.z)
+                .power,
             0,
             "and it follows that lever, which is what makes this a merge"
         );
@@ -8291,7 +8620,12 @@ mod tests {
         let support = Position::new(3, 1, 3);
         let torch_cell = Position::new(3, 1, 4);
         world.set(support.x, support.y, support.z, stone());
-        world.set(torch_cell.x, torch_cell.y, torch_cell.z, wall_torch(Facing::South));
+        world.set(
+            torch_cell.x,
+            torch_cell.y,
+            torch_cell.z,
+            wall_torch(Facing::South),
+        );
         // Net a's own wire, driven by that torch directly.
         let net_a_wire = Position::new(4, 1, 4);
         world.set(net_a_wire.x, net_a_wire.y - 1, net_a_wire.z, stone());
@@ -8309,11 +8643,17 @@ mod tests {
         let mut simulator = Simulator::new(world.clone());
         simulator.run_until_stable(50).expect("settles");
         assert!(
-            simulator.world().get(torch_cell.x, torch_cell.y, torch_cell.z).lit,
+            simulator
+                .world()
+                .get(torch_cell.x, torch_cell.y, torch_cell.z)
+                .lit,
             "the torch must be lit, or this test measures nothing"
         );
         assert_eq!(
-            simulator.world().get(net_b_wire.x, net_b_wire.y, net_b_wire.z).power,
+            simulator
+                .world()
+                .get(net_b_wire.x, net_b_wire.y, net_b_wire.z)
+                .power,
             15,
             "net b's wire reads 15 from a gate torch it is not connected to"
         );
@@ -8322,9 +8662,17 @@ mod tests {
             .world_mut()
             .set(support.x, support.y - 1, support.z, lever(true));
         simulator.run_until_stable(50).expect("settles again");
-        assert!(!simulator.world().get(torch_cell.x, torch_cell.y, torch_cell.z).lit);
+        assert!(
+            !simulator
+                .world()
+                .get(torch_cell.x, torch_cell.y, torch_cell.z)
+                .lit
+        );
         assert_eq!(
-            simulator.world().get(net_b_wire.x, net_b_wire.y, net_b_wire.z).power,
+            simulator
+                .world()
+                .get(net_b_wire.x, net_b_wire.y, net_b_wire.z)
+                .power,
             0,
             "and it inverts with that gate, which is what makes this a merge"
         );
@@ -8401,13 +8749,17 @@ mod tests {
         assert!(
             [Facing::North, Facing::South, Facing::East, Facing::West]
                 .iter()
-                .any(|&d| dust_connections(&world, upper, d).iter().any(|p| p == lower)),
+                .any(|&d| dust_connections(&world, upper, d)
+                    .iter()
+                    .any(|p| p == lower)),
             "the upper wire must descend into the lower one"
         );
         assert!(
             [Facing::North, Facing::South, Facing::East, Facing::West]
                 .iter()
-                .all(|&d| dust_connections(&world, lower, d).iter().all(|p| p != upper)),
+                .all(|&d| dust_connections(&world, lower, d)
+                    .iter()
+                    .all(|p| p != upper)),
             "and the lower one must not climb back -- its step has no floor"
         );
 
@@ -8435,7 +8787,9 @@ mod tests {
         assert!(
             [Facing::North, Facing::South, Facing::East, Facing::West]
                 .iter()
-                .any(|&d| dust_connections(&floored, lower, d).iter().any(|p| p == upper)),
+                .any(|&d| dust_connections(&floored, lower, d)
+                    .iter()
+                    .any(|p| p == upper)),
             "with a floor under the upper wire the climb must fire"
         );
         let err = verify_connectivity(&floored, &reservation, &netlist, &nets, &BTreeMap::new())
@@ -9582,12 +9936,7 @@ mod tests {
             let torch = place_test_gate(&mut world, Position::new(1, 0, 2));
             let handover =
                 lay_test_dust_run(&mut world, &mut reservation, Position::new(2, 1, 2), run, 1);
-            world.set(
-                handover.x,
-                handover.y,
-                handover.z,
-                repeater(Facing::East),
-            );
+            world.set(handover.x, handover.y, handover.z, repeater(Facing::East));
             reservation.insert(handover, 1);
             let callers_cell = handover.offset(Facing::East);
 
@@ -9622,10 +9971,15 @@ mod tests {
         };
 
         let (arrives, _) = judge(15);
-        assert_eq!(arrives, Ok(()), "a signal that still arrives at the rear delivers");
+        assert_eq!(
+            arrives,
+            Ok(()),
+            "a signal that still arrives at the rear delivers"
+        );
 
         let (dies, handover) = judge(16);
-        let err = dies.expect_err("a handover nothing feeds can deliver nothing into the caller's cell");
+        let err =
+            dies.expect_err("a handover nothing feeds can deliver nothing into the caller's cell");
         assert_eq!(
             err,
             CompileError::SignalStrengthViolation {
@@ -10007,8 +10361,12 @@ mod tests {
             let circuit = crate::circuits::verilog::find(name)
                 .unwrap_or_else(|| panic!("{name} must be in the catalog"));
             let (netlist, _) = circuit.baked_netlist();
-            if optimised { lower_optimised(&netlist) } else { lower(&netlist) }
-                .unwrap_or_else(|error| panic!("{name} must lower: {error}"))
+            if optimised {
+                lower_optimised(&netlist)
+            } else {
+                lower(&netlist)
+            }
+            .unwrap_or_else(|error| panic!("{name} must lower: {error}"))
         };
 
         vec![
@@ -10017,7 +10375,10 @@ mod tests {
             ("segment_a", build_single_segment_netlist(0).0),
             ("seven_segment", build_seven_segment_netlist().0),
             ("verilog:and4", lowered("verilog:and4", false)),
-            ("verilog:seven_segment", lowered("verilog:seven_segment", true)),
+            (
+                "verilog:seven_segment",
+                lowered("verilog:seven_segment", true),
+            ),
         ]
     }
 
@@ -10060,9 +10421,13 @@ mod tests {
         for ((name, netlist), (expected_name, expected_kind)) in
             the_six_condition_netlists().into_iter().zip(expected)
         {
-            assert_eq!(name, expected_name, "the two lists must stay in the same order");
-            let compiled = compile(&netlist)
-                .unwrap_or_else(|error| panic!("{name} must compile by one path or the other: {error}"));
+            assert_eq!(
+                name, expected_name,
+                "the two lists must stay in the same order"
+            );
+            let compiled = compile(&netlist).unwrap_or_else(|error| {
+                panic!("{name} must compile by one path or the other: {error}")
+            });
             assert_eq!(
                 compiled.planner_kind(),
                 expected_kind,
@@ -10230,7 +10595,9 @@ mod tests {
         };
         assert!(primitive_graph::shared_merge_branches(&private).is_empty());
         assert_eq!(
-            compile(&private).expect("a private merge compiles").planner_kind(),
+            compile(&private)
+                .expect("a private merge compiles")
+                .planner_kind(),
             PlannerKind::Unified3d,
             "the gate is about the shape, not about merges as such"
         );
@@ -10403,9 +10770,14 @@ mod tests {
         );
 
         // And low is low: the caller unpowers their cell, the pin follows.
-        let mut off = simulator.world().get(lever_at.x, lever_at.y, lever_at.z).clone();
+        let mut off = simulator
+            .world()
+            .get(lever_at.x, lever_at.y, lever_at.z)
+            .clone();
         off.lit = false;
-        simulator.world_mut().set(lever_at.x, lever_at.y, lever_at.z, off);
+        simulator
+            .world_mut()
+            .set(lever_at.x, lever_at.y, lever_at.z, off);
         simulator.run_until_stable(2000).expect("settles again");
         assert_eq!(simulator.world().get(pin.x, pin.y, pin.z).power, 0);
     }
@@ -10435,6 +10807,10 @@ mod tests {
         assert_eq!(handover, Anchor { x: 9, y: 1, z: 10 });
         assert!(footprint.contains(&anchor), "the caller's cell is claimed");
         assert!(!conductors.contains(&anchor), "and ships empty");
-        assert_eq!(conductors, vec![handover], "only the delivery repeater conducts");
+        assert_eq!(
+            conductors,
+            vec![handover],
+            "only the delivery repeater conducts"
+        );
     }
 }

@@ -55,9 +55,8 @@ fn lowered(name: &str, optimised: bool) -> Netlist {
 /// exact call `compile` makes. `the_measured_plan_is_the_shipped_world` checks
 /// the rebuild block for block against the world `compile` returned.
 fn shipping_case(name: &'static str, netlist: Netlist) -> Case {
-    let compiled = compile::compile(&netlist).unwrap_or_else(|error| {
-        panic!("{name} must compile through the shipping path: {error}")
-    });
+    let compiled = compile::compile(&netlist)
+        .unwrap_or_else(|error| panic!("{name} must compile through the shipping path: {error}"));
     let (candidate, path) = match compiled.planner_kind() {
         PlannerKind::Legacy => {
             let emission = compiled
@@ -72,6 +71,9 @@ fn shipping_case(name: &'static str, netlist: Netlist) -> Case {
             plan_from_netlist_within(&netlist, &PortPlacements::default(), TRIAL_RIP_UP_ROUNDS)
                 .expect("the planner path reproduces"),
             "planner, rip-up".to_string(),
+        ),
+        PlannerKind::FragmentSynth => panic!(
+            "compile() must not silently select the explicit fragment-synthesis API before the replacement gate"
         ),
     };
     Case {
@@ -211,8 +213,10 @@ fn describe(measurement: &Measurement) -> String {
     for note in &measurement.unmeasured {
         lines.push(format!("    NOT MEASURED: {note}"));
     }
-    lines.join("
-")
+    lines.join(
+        "
+",
+    )
 }
 
 /// **The assertion.** The replica walk and the shipping judge must reach the
@@ -431,7 +435,10 @@ fn a_gate_input_its_own_net_cannot_reach_is_refused() {
                         .iter()
                         .find(|other| other.root == group.root)
                         .and_then(|other| {
-                            other.readings.iter().find(|other| other.cell == reading.cell)
+                            other
+                                .readings
+                                .iter()
+                                .find(|other| other.cell == reading.cell)
                         })
                         .expect("the same support is still read after the cut");
 
@@ -541,7 +548,9 @@ fn the_false_pass_count_on_the_plans_as_built() {
 fn the_walk_against_the_simulator_cell_by_cell() {
     use crate::circuits::and4::build_and4_netlist;
     use crate::circuits::full_adder::build_full_adder_netlist;
-    use crate::circuits::seven_segment::{build_seven_segment_netlist, build_single_segment_netlist};
+    use crate::circuits::seven_segment::{
+        build_seven_segment_netlist, build_single_segment_netlist,
+    };
     use std::time::Instant;
 
     let mut cases: Vec<Case> = vec![
@@ -568,8 +577,7 @@ fn the_walk_against_the_simulator_cell_by_cell() {
         "segment_a [NEGOTIATED]",
         build_single_segment_netlist(0).0,
         SEGMENT_A_SCHEDULE,
-    )
-    {
+    ) {
         cases.push(case);
     } else {
         eprintln!("NOT MEASURED: negotiated segment_a did not route");
@@ -705,7 +713,11 @@ fn the_measured_plan_is_the_shipped_world() {
         let parts = planner::realise_without_verifying(&case.candidate, &case.netlist, size)
             .expect("it realises");
         let (sx, sy, sz) = compiled.world.size();
-        assert_eq!(parts.realised.world.size(), (sx, sy, sz), "{name}: same size");
+        assert_eq!(
+            parts.realised.world.size(),
+            (sx, sy, sz),
+            "{name}: same size"
+        );
         for x in 0..sx {
             for y in 0..sy {
                 for z in 0..sz {
@@ -782,7 +794,10 @@ fn the_geometry_under_every_named_disagreement() {
     use crate::circuits::full_adder::build_full_adder_netlist;
     use crate::circuits::seven_segment::build_single_segment_netlist;
 
-    let mut cases: Vec<Case> = vec![shipping_case("segment_a", build_single_segment_netlist(0).0)];
+    let mut cases: Vec<Case> = vec![shipping_case(
+        "segment_a",
+        build_single_segment_netlist(0).0,
+    )];
     if let Some(case) = negotiated_case(
         "full_adder [NEGOTIATED]",
         build_full_adder_netlist().0,
@@ -794,8 +809,7 @@ fn the_geometry_under_every_named_disagreement() {
         "segment_a [NEGOTIATED]",
         build_single_segment_netlist(0).0,
         SEGMENT_A_SCHEDULE,
-    )
-    {
+    ) {
         cases.push(case);
     }
 
@@ -915,7 +929,11 @@ fn the_one_shipping_circuit_cell_the_two_answers_differ_on() {
                 reading.walk,
                 reading.solo,
                 reading.live,
-                if reading.walk == 0 && reading.solo > 0 { "   <-- DIFFERS" } else { "" },
+                if reading.walk == 0 && reading.solo > 0 {
+                    "   <-- DIFFERS"
+                } else {
+                    ""
+                },
             );
             if reading.walk == 0 && reading.solo > 0 {
                 // Who owns everything touching it, and what does g16 alone put
@@ -957,8 +975,8 @@ fn the_one_shipping_circuit_cell_the_two_answers_differ_on() {
                         reading.cell,
                         direction,
                     );
-                    let back: Vec<Position> = crate::redstone::simulator::connectivity::
-                        dust_connections(
+                    let back: Vec<Position> =
+                        crate::redstone::simulator::connectivity::dust_connections(
                             &parts.realised.world,
                             reading.cell.offset(direction),
                             direction.opposite(),
@@ -1110,7 +1128,10 @@ fn genuine_decay_is_still_refused() {
                         .iter()
                         .find(|other| other.root == group.root)
                         .and_then(|other| {
-                            other.readings.iter().find(|other| other.cell == reading.cell)
+                            other
+                                .readings
+                                .iter()
+                                .find(|other| other.cell == reading.cell)
                         })
                         .is_some_and(|before| before.solo > 0);
                     if reading.solo > 0 || !delivered_before {

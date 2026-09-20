@@ -18,6 +18,7 @@ use crate::redstone::simulator::propagate::{
 use crate::redstone::simulator::schedule::TickPriority;
 use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 use crate::redstone::world::storage::World;
+use serde::Serialize;
 
 /// 火把從被迫改變到真正翻轉之間的延遲：2 game tick（1 redstone tick）。
 pub const TORCH_DELAY_GAME_TICKS: u64 = 2;
@@ -27,6 +28,92 @@ pub const BURNOUT_WINDOW_GAME_TICKS: u64 = 60;
 
 /// 視窗內超過這個改變次數就燒毀。
 pub const BURNOUT_CHANGE_LIMIT: usize = 8;
+
+pub const REPEATER_MIN_DELAY_REDSTONE_TICKS: u64 = 1;
+pub const REPEATER_GAME_TICKS_PER_REDSTONE_TICK: u64 = 2;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ComponentDelaySemantics {
+    pub torch_game_ticks: u64,
+    pub repeater_min_redstone_ticks: u64,
+    pub repeater_game_ticks_per_redstone_tick: u64,
+    pub comparator_game_ticks: u64,
+    pub lamp_turn_on_game_ticks: u64,
+    pub lamp_turn_off_game_ticks: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BurnoutSemantics {
+    pub window_game_ticks: u64,
+    pub change_limit: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum RepeaterPriorityCondition {
+    FeedsDiodeBackOrSide,
+    TurningOff,
+    Otherwise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RepeaterPriorityRule {
+    pub condition: RepeaterPriorityCondition,
+    pub priority: TickPriority,
+}
+
+pub const REPEATER_PRIORITY_RULES: [RepeaterPriorityRule; 3] = [
+    RepeaterPriorityRule {
+        condition: RepeaterPriorityCondition::FeedsDiodeBackOrSide,
+        priority: TickPriority::Highest,
+    },
+    RepeaterPriorityRule {
+        condition: RepeaterPriorityCondition::TurningOff,
+        priority: TickPriority::Higher,
+    },
+    RepeaterPriorityRule {
+        condition: RepeaterPriorityCondition::Otherwise,
+        priority: TickPriority::High,
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ComparatorPriorityCondition {
+    FeedsDiodeBackOrSide,
+    Otherwise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ComparatorPriorityRule {
+    pub condition: ComparatorPriorityCondition,
+    pub priority: TickPriority,
+}
+
+pub const COMPARATOR_PRIORITY_RULES: [ComparatorPriorityRule; 2] = [
+    ComparatorPriorityRule {
+        condition: ComparatorPriorityCondition::FeedsDiodeBackOrSide,
+        priority: TickPriority::High,
+    },
+    ComparatorPriorityRule {
+        condition: ComparatorPriorityCondition::Otherwise,
+        priority: TickPriority::Normal,
+    },
+];
+
+fn repeater_priority_for(condition: RepeaterPriorityCondition) -> TickPriority {
+    REPEATER_PRIORITY_RULES
+        .iter()
+        .find(|rule| rule.condition == condition)
+        .map(|rule| rule.priority)
+        .expect("every repeater priority condition must be registered")
+}
+
+fn comparator_priority_for(condition: ComparatorPriorityCondition) -> TickPriority {
+    COMPARATOR_PRIORITY_RULES
+        .iter()
+        .find(|rule| rule.condition == condition)
+        .map(|rule| rule.priority)
+        .expect("every comparator priority condition must be registered")
+}
 
 /// 火把附著在哪一格。
 ///
@@ -191,7 +278,7 @@ pub fn repeater_input_is_powered(world: &World, pos: Position) -> bool {
 pub fn repeater_priority(world: &World, pos: Position, turning_off: bool) -> TickPriority {
     let state = world.get(pos.x, pos.y, pos.z);
     let Some(facing) = state.facing else {
-        return TickPriority::High;
+        return repeater_priority_for(RepeaterPriorityCondition::Otherwise);
     };
 
     // `facing` points from output to input (Minecraft Wiki), so this
@@ -203,13 +290,14 @@ pub fn repeater_priority(world: &World, pos: Position, turning_off: bool) -> Tic
             .facing
             .is_some_and(|target_facing| target_facing != facing.opposite());
 
-    if faces_back_or_side_of_diode {
-        TickPriority::Highest
+    let condition = if faces_back_or_side_of_diode {
+        RepeaterPriorityCondition::FeedsDiodeBackOrSide
     } else if turning_off {
-        TickPriority::Higher
+        RepeaterPriorityCondition::TurningOff
     } else {
-        TickPriority::High
-    }
+        RepeaterPriorityCondition::Otherwise
+    };
+    repeater_priority_for(condition)
 }
 
 /// 中繼器的延遲換算成 game tick。
@@ -217,8 +305,8 @@ pub fn repeater_priority(world: &World, pos: Position, turning_off: bool) -> Tic
 /// `delay` 應該是 1..=4；0 視為 1，因為讀檔可能給出不完整的資料。
 /// 1 個紅石刻 = 2 個 game tick。
 pub fn repeater_delay_game_ticks(state: &BlockState) -> u64 {
-    let redstone_ticks = if state.delay == 0 { 1 } else { state.delay };
-    redstone_ticks as u64 * 2
+    let redstone_ticks = u64::from(state.delay).max(REPEATER_MIN_DELAY_REDSTONE_TICKS);
+    redstone_ticks * REPEATER_GAME_TICKS_PER_REDSTONE_TICK
 }
 
 /// 比較器的後方輸入位置。
@@ -250,7 +338,10 @@ pub fn comparator_side_positions(state: &BlockState, pos: Position) -> [Option<P
 /// `mode` 屬性缺席一律視為比較模式 —— 這是原版的預設值，也是 A1 階段
 /// 保留未建模屬性的直接後果：讀檔給什麼字串就照什麼字串判斷，缺席不猜。
 pub fn comparator_is_subtract_mode(state: &BlockState) -> bool {
-    state.extra_properties.get("mode").is_some_and(|mode| mode == "subtract")
+    state
+        .extra_properties
+        .get("mode")
+        .is_some_and(|mode| mode == "subtract")
 }
 
 /// 比較器後方讀進來的主訊號強度。
@@ -314,7 +405,7 @@ pub fn comparator_output(world: &World, pos: Position) -> u8 {
 pub fn comparator_priority(world: &World, pos: Position) -> TickPriority {
     let state = world.get(pos.x, pos.y, pos.z);
     let Some(facing) = state.facing else {
-        return TickPriority::Normal;
+        return comparator_priority_for(ComparatorPriorityCondition::Otherwise);
     };
 
     // `facing` points from output to input (Minecraft Wiki), so this
@@ -326,16 +417,35 @@ pub fn comparator_priority(world: &World, pos: Position) -> TickPriority {
             .facing
             .is_some_and(|target_facing| target_facing != facing.opposite());
 
-    if faces_back_or_side_of_diode {
-        TickPriority::High
+    let condition = if faces_back_or_side_of_diode {
+        ComparatorPriorityCondition::FeedsDiodeBackOrSide
     } else {
-        TickPriority::Normal
-    }
+        ComparatorPriorityCondition::Otherwise
+    };
+    comparator_priority_for(condition)
 }
 
 /// 比較器從被迫改變到真正輸出之間的延遲：固定 2 game tick（1 redstone
 /// tick），不像中繼器可以調整。
 pub const COMPARATOR_DELAY_GAME_TICKS: u64 = 2;
+
+pub fn delay_semantics() -> ComponentDelaySemantics {
+    ComponentDelaySemantics {
+        torch_game_ticks: TORCH_DELAY_GAME_TICKS,
+        repeater_min_redstone_ticks: REPEATER_MIN_DELAY_REDSTONE_TICKS,
+        repeater_game_ticks_per_redstone_tick: REPEATER_GAME_TICKS_PER_REDSTONE_TICK,
+        comparator_game_ticks: COMPARATOR_DELAY_GAME_TICKS,
+        lamp_turn_on_game_ticks: LAMP_TURN_ON_DELAY_GAME_TICKS,
+        lamp_turn_off_game_ticks: LAMP_TURN_OFF_DELAY_GAME_TICKS,
+    }
+}
+
+pub fn burnout_semantics() -> BurnoutSemantics {
+    BurnoutSemantics {
+        window_game_ticks: BURNOUT_WINDOW_GAME_TICKS,
+        change_limit: BURNOUT_CHANGE_LIMIT,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -388,7 +498,9 @@ mod tests {
         state.power = power;
         state.lit = lit;
         if let Some(mode) = mode {
-            state.extra_properties.insert("mode".to_string(), mode.to_string());
+            state
+                .extra_properties
+                .insert("mode".to_string(), mode.to_string());
         }
         state
     }
@@ -396,7 +508,10 @@ mod tests {
     #[test]
     fn a_standing_torch_is_attached_to_the_block_below() {
         let pos = Position::new(3, 4, 5);
-        assert_eq!(torch_support_position(&torch(), pos), Some(Position::new(3, 3, 5)));
+        assert_eq!(
+            torch_support_position(&torch(), pos),
+            Some(Position::new(3, 3, 5))
+        );
     }
 
     #[test]
@@ -475,7 +590,11 @@ mod tests {
     #[test]
     fn a_bent_run_leaves_the_same_torch_lit() {
         let world = run_into_a_torchs_support(true);
-        assert_eq!(world.get(3, 1, 2).power, 13, "the run is powered just the same");
+        assert_eq!(
+            world.get(3, 1, 2).power,
+            13,
+            "the run is powered just the same"
+        );
         assert!(
             torch_should_be_lit(&world, Position::new(4, 2, 2)),
             "one perpendicular branch costs the run its direction, and the \
@@ -556,7 +675,10 @@ mod tests {
     fn burnout_recovers_once_old_changes_leave_the_window() {
         // 讓火把燒毀來換取收斂是錯的做法 -- 它必須會恢復
         let changes: Vec<u64> = (1..=9).collect();
-        assert!(is_burned_out(&changes, 60), "第一筆改變（tick 1）還在視窗內");
+        assert!(
+            is_burned_out(&changes, 60),
+            "第一筆改變（tick 1）還在視窗內"
+        );
         assert!(
             !is_burned_out(&changes, 61),
             "第一筆改變滑出視窗後只剩 8 次，燒毀應該解除"
@@ -592,7 +714,10 @@ mod tests {
     #[test]
     fn a_zero_delay_is_treated_as_one() {
         // 檔案裡可能有任何東西
-        assert_eq!(repeater_delay_game_ticks(&repeater(Facing::East, 0, false)), 2);
+        assert_eq!(
+            repeater_delay_game_ticks(&repeater(Facing::East, 0, false)),
+            2
+        );
     }
 
     #[test]
@@ -701,7 +826,12 @@ mod tests {
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
         // facing=West -> rear input west, at (1,0,2)
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, None, 0, false));
+        world.set(
+            pos.x,
+            pos.y,
+            pos.z,
+            comparator(Facing::West, None, 0, false),
+        );
 
         // 後方是另一個朝同方向、輸出朝東（進到我們後方）的比較器，直接送出
         // 類比值 9（不是固定的 15，才能抓到「硬編成開關」的錯誤實作）
@@ -722,7 +852,12 @@ mod tests {
     fn compare_mode_outputs_zero_when_a_side_is_stronger() {
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, None, 0, false));
+        world.set(
+            pos.x,
+            pos.y,
+            pos.z,
+            comparator(Facing::West, None, 0, false),
+        );
         world.set(1, 0, 2, comparator(Facing::West, None, 9, true));
 
         // 北側石頭被另一個比較器強充能到 12，比後方的 9 強
@@ -743,7 +878,12 @@ mod tests {
         // rear 12, side 5 -> 7
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, Some("subtract"), 0, false));
+        world.set(
+            pos.x,
+            pos.y,
+            pos.z,
+            comparator(Facing::West, Some("subtract"), 0, false),
+        );
         world.set(1, 0, 2, comparator(Facing::West, None, 12, true));
 
         world.set(2, 0, 1, stone());
@@ -758,7 +898,12 @@ mod tests {
         // rear 3, side 9 -> 0，不是負數繞回
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, Some("subtract"), 0, false));
+        world.set(
+            pos.x,
+            pos.y,
+            pos.z,
+            comparator(Facing::West, Some("subtract"), 0, false),
+        );
         world.set(1, 0, 2, comparator(Facing::West, None, 3, true));
 
         world.set(2, 0, 1, stone());

@@ -74,10 +74,22 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use serde::Serialize;
+
 use super::geometry::{self, CellFacing};
 use super::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use super::topology::TemplateNode;
 use super::{input_socket_feeds_support, CompiledCircuit, Netlist};
+use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
+use crate::compile::fragment_synth::identity::{GateIndex, InstanceId, PortId};
+use crate::compile::fragment_synth::instance_graph::{
+    InstanceRole, LogicalSignalId, PhysicalSink, SynthesisError,
+};
+use crate::compile::fragment_synth::topology::{
+    instantiate, prove_topology_semantics, TopologyError, TopologySemanticsError,
+};
+use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
+use crate::compile::topology::{GateKind, Library};
 use crate::redstone::rules::taxonomy::flags_of;
 use crate::redstone::simulator::component::torch_support_position;
 use crate::redstone::simulator::position::Position;
@@ -86,73 +98,156 @@ use crate::redstone::world::block::BlockKind;
 /// Why the compiled world does not match what `expand` says it should be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EquivalenceError {
+    UnsupportedStatefulProof {
+        gate: GateIndex,
+    },
+    CombinationalCycle,
+    InstanceGraphProofFailure {
+        source: SynthesisError,
+    },
+    TopologyInstantiationFailure {
+        instance: InstanceId,
+        source: TopologyError,
+    },
+    SelectedImplementationMismatch {
+        instance: InstanceId,
+    },
+    EquivalenceProofFailure {
+        instance: InstanceId,
+        source: TopologySemanticsError,
+    },
+    ProofExhausted {
+        used: u64,
+        limit: u64,
+    },
     /// The graph's total node count does not match what [`resolve_
     /// contributors`] implies from `Netlist` alone (levers + lamps + one
     /// node per `Nor`/`Buf` gate + one `IsolatingRepeater` per non-bare
     /// merge branch).
-    NodeCountMismatch { expected: usize, actual: usize },
+    NodeCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
     /// The graph's total edge count does not match what [`resolve_
     /// contributors`] implies.
-    EdgeCountMismatch { expected: usize, actual: usize },
+    EdgeCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
     /// A `Nor`/`Buf` gate's own instance is missing a node for the one
     /// fixed role (`TemplateNode::Torch`) every `topology::nor_entry` must
     /// provide.
-    MissingRole { gate: String, role: TemplateNode },
+    MissingRole {
+        gate: String,
+        role: TemplateNode,
+    },
     /// The number of edges landing on a gate's own node cluster from outside
     /// it does not match `Netlist`'s own declared arity for that gate --
     /// the graph-side half of "did `expand` wire up every declared input".
-    GraphInputEdgeCountMismatch { gate: String, netlist_arity: usize, graph_edge_count: usize },
+    GraphInputEdgeCountMismatch {
+        gate: String,
+        netlist_arity: usize,
+        graph_edge_count: usize,
+    },
     /// `CompiledCircuit::gate_output_positions` has no entry for this gate's
     /// output at all.
-    TorchNotPlaced { gate: String },
+    TorchNotPlaced {
+        gate: String,
+    },
     /// The world cell at a gate's recorded torch position is not a torch, or
     /// is a wall torch with no recorded facing -- `torch_support_position`
     /// could not resolve a support for it.
-    TorchHasNoResolvableSupport { gate: String, torch: (i32, i32, i32) },
+    TorchHasNoResolvableSupport {
+        gate: String,
+        torch: (i32, i32, i32),
+    },
     /// The block a gate's torch is attached to is not conductive --
     /// `verify_torch_merge` would already reject this, but this module
     /// checks it directly rather than only trusting that invariant ran.
-    SupportNotConductive { gate: String, support: (i32, i32, i32) },
+    SupportNotConductive {
+        gate: String,
+        support: (i32, i32, i32),
+    },
     /// One of this gate's declared input sockets (by `geometry::input_
     /// directions` index, `< arity`) does not actively feed the support. The
     /// terminal may be a repeater or straight, directed dust.
-    InputSocketDoesNotFeedSupport { gate: String, input_index: usize, socket: (i32, i32, i32) },
+    InputSocketDoesNotFeedSupport {
+        gate: String,
+        input_index: usize,
+        socket: (i32, i32, i32),
+    },
     /// A socket direction beyond this gate's declared arity nonetheless
     /// actively feeds the support -- more inputs than the netlist declares.
-    UndeclaredInputFeedsSupport { gate: String, direction_index: usize, socket: (i32, i32, i32) },
+    UndeclaredInputFeedsSupport {
+        gate: String,
+        direction_index: usize,
+        socket: (i32, i32, i32),
+    },
     /// A merge gate's own junction (`CompiledCircuit::gate_output_positions`)
     /// is not plain dust -- `place_merge_gate` never writes anything else
     /// there.
-    JunctionNotDust { gate: String, junction: (i32, i32, i32) },
+    JunctionNotDust {
+        gate: String,
+        junction: (i32, i32, i32),
+    },
     /// A merge's declared **bare** branch (`input_index < arity`) has a
     /// repeater at its own socket instead of plain dust -- bare means
     /// nothing terminates it (see `GateKind::Or`'s doc comment).
-    BareBranchSocketNotDust { gate: String, input_index: usize, socket: (i32, i32, i32) },
+    BareBranchSocketNotDust {
+        gate: String,
+        input_index: usize,
+        socket: (i32, i32, i32),
+    },
     /// A merge's declared **isolated** branch has no repeater facing the
     /// junction at its own socket.
-    IsolatedBranchSocketNotARepeaterFacingJunction { gate: String, input_index: usize, socket: (i32, i32, i32) },
+    IsolatedBranchSocketNotARepeaterFacingJunction {
+        gate: String,
+        input_index: usize,
+        socket: (i32, i32, i32),
+    },
     /// A socket direction beyond a merge's declared arity is nonetheless
     /// occupied by a repeater facing into the junction.
-    UndeclaredMergeInputFeedsJunction { gate: String, direction_index: usize, socket: (i32, i32, i32) },
+    UndeclaredMergeInputFeedsJunction {
+        gate: String,
+        direction_index: usize,
+        socket: (i32, i32, i32),
+    },
     /// `CompiledCircuit::input_positions` has no entry for this primary
     /// input.
-    LeverNotPlaced { name: String },
+    LeverNotPlaced {
+        name: String,
+    },
     /// The world cell at a primary input's recorded lever position is not a
     /// lever.
-    LeverWrongKind { name: String, position: (i32, i32, i32) },
+    LeverWrongKind {
+        name: String,
+        position: (i32, i32, i32),
+    },
     /// `CompiledCircuit::output_positions` has no entry for this declared
     /// output.
-    LampNotPlaced { name: String },
+    LampNotPlaced {
+        name: String,
+    },
     /// The world cell at a declared output's recorded lamp position is not
     /// a lamp.
-    LampWrongKind { name: String, position: (i32, i32, i32) },
+    LampWrongKind {
+        name: String,
+        position: (i32, i32, i32),
+    },
     /// A declared output's lamp is not at the fixed offset `emit` always
     /// places it at (one cell past its driving gate's torch, then straight
     /// down) -- the physical realisation of the torch-to-lamp edge.
-    LampNotAtFixedOffsetFromTorch { name: String, expected: (i32, i32, i32), actual: (i32, i32, i32) },
+    LampNotAtFixedOffsetFromTorch {
+        name: String,
+        expected: (i32, i32, i32),
+        actual: (i32, i32, i32),
+    },
     /// The graph's input edges, translated back to netlist-level identities,
     /// do not match the net structure `Netlist` implies on its own.
-    InputEdgesDoNotMatchNetlist { only_in_graph: usize, only_in_netlist: usize },
+    InputEdgesDoNotMatchNetlist {
+        only_in_graph: usize,
+        only_in_netlist: usize,
+    },
 }
 
 impl std::fmt::Display for EquivalenceError {
@@ -162,6 +257,241 @@ impl std::fmt::Display for EquivalenceError {
 }
 
 impl std::error::Error for EquivalenceError {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum EquivalenceProofStep {
+    InputAxiom {
+        port: PortId,
+    },
+    Instance {
+        instance: InstanceId,
+        logical_gate: GateIndex,
+        role: InstanceRole,
+        topology: Fingerprint,
+    },
+    Assignment {
+        sink: PhysicalSink,
+        signal: LogicalSignalId,
+    },
+    Output {
+        port: PortId,
+        signal: LogicalSignalId,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EquivalenceCertificate {
+    pub lowered_netlist_hash: Fingerprint,
+    pub candidate_fingerprint: Fingerprint,
+    pub library_revision: Fingerprint,
+    pub ordered_input_axioms: Vec<PortId>,
+    pub proof_steps: Vec<EquivalenceProofStep>,
+    pub work_used: u64,
+    pub fingerprint: Fingerprint,
+}
+
+#[derive(Serialize)]
+struct NetlistFingerprintGate<'a> {
+    name: &'a str,
+    inputs: &'a [String],
+    output: &'a str,
+    kind: GateKind,
+}
+
+#[derive(Serialize)]
+struct NetlistFingerprintPayload<'a> {
+    inputs: &'a [String],
+    outputs: &'a [String],
+    gates: Vec<NetlistFingerprintGate<'a>>,
+}
+
+#[derive(Serialize)]
+struct CertificateFingerprintPayload<'a> {
+    lowered_netlist_hash: &'a Fingerprint,
+    candidate_fingerprint: &'a Fingerprint,
+    library_revision: &'a Fingerprint,
+    ordered_input_axioms: &'a [PortId],
+    proof_steps: &'a [EquivalenceProofStep],
+    work_used: u64,
+}
+
+fn lowered_netlist_fingerprint(netlist: &Netlist) -> Fingerprint {
+    let payload = NetlistFingerprintPayload {
+        inputs: &netlist.inputs,
+        outputs: &netlist.outputs,
+        gates: netlist
+            .gates
+            .iter()
+            .map(|gate| NetlistFingerprintGate {
+                name: &gate.name,
+                inputs: &gate.inputs,
+                output: &gate.output,
+                kind: gate.kind,
+            })
+            .collect(),
+    };
+    canonical_fingerprint(&serde_json::to_vec(&payload).expect("a lowered netlist must serialize"))
+}
+
+fn append_proof_step(
+    steps: &mut Vec<EquivalenceProofStep>,
+    step: EquivalenceProofStep,
+    limit: u64,
+) -> Result<(), EquivalenceError> {
+    let used = u64::try_from(steps.len())
+        .ok()
+        .and_then(|count| count.checked_add(1))
+        .ok_or(EquivalenceError::ProofExhausted {
+            used: u64::MAX,
+            limit,
+        })?;
+    if used > limit {
+        return Err(EquivalenceError::ProofExhausted { used, limit });
+    }
+    steps.push(step);
+    Ok(())
+}
+
+/// Prove the typed physical instance graph implements the lowered Boolean DAG.
+///
+/// This proof never enumerates input vectors. Each selected implementation is
+/// instantiated independently, then stable graph assignments preserve the
+/// already-proved symbolic meaning of each logical signal.
+pub fn prove_combinational_equivalence(
+    lowered: &Netlist,
+    candidate: &ExpandedPhysicalCandidate,
+    library: &Library,
+    max_equivalence_proof_steps: u64,
+) -> Result<EquivalenceCertificate, EquivalenceError> {
+    for (index, gate) in lowered.gates.iter().enumerate() {
+        if gate.kind.is_sequential() {
+            return Err(EquivalenceError::UnsupportedStatefulProof {
+                gate: GateIndex(u32::try_from(index).map_err(|_| {
+                    EquivalenceError::InstanceGraphProofFailure {
+                        source: SynthesisError::IdentityOverflow,
+                    }
+                })?),
+            });
+        }
+    }
+    let topological_order = lowered
+        .combinational_order()
+        .ok_or(EquivalenceError::CombinationalCycle)?;
+    candidate
+        .instances
+        .validate(lowered)
+        .map_err(|source| EquivalenceError::InstanceGraphProofFailure { source })?;
+
+    let ordered_input_axioms = candidate.instances.primary_inputs.clone();
+    let mut proof_steps = Vec::new();
+    for &port in &ordered_input_axioms {
+        append_proof_step(
+            &mut proof_steps,
+            EquivalenceProofStep::InputAxiom { port },
+            max_equivalence_proof_steps,
+        )?;
+    }
+
+    for gate_index in topological_order {
+        let gate_id = GateIndex(u32::try_from(gate_index).map_err(|_| {
+            EquivalenceError::InstanceGraphProofFailure {
+                source: SynthesisError::IdentityOverflow,
+            }
+        })?);
+        for instance in candidate
+            .instances
+            .instances
+            .iter()
+            .filter(|instance| instance.logical_gate == gate_id)
+        {
+            let independently_instantiated = instantiate(
+                library,
+                &lowered.gates[gate_index],
+                instance.id,
+                &instance.implementation,
+            )
+            .map_err(|source| EquivalenceError::TopologyInstantiationFailure {
+                instance: instance.id,
+                source,
+            })?;
+            if independently_instantiated != instance.expanded {
+                return Err(EquivalenceError::SelectedImplementationMismatch {
+                    instance: instance.id,
+                });
+            }
+            prove_topology_semantics(
+                &independently_instantiated.topology,
+                lowered.gates[gate_index].kind,
+            )
+            .map_err(|source| EquivalenceError::EquivalenceProofFailure {
+                instance: instance.id,
+                source,
+            })?;
+            append_proof_step(
+                &mut proof_steps,
+                EquivalenceProofStep::Instance {
+                    instance: instance.id,
+                    logical_gate: instance.logical_gate,
+                    role: instance.role,
+                    topology: independently_instantiated.topology.fingerprint,
+                },
+                max_equivalence_proof_steps,
+            )?;
+        }
+    }
+
+    for assignment in &candidate.instances.assignments {
+        append_proof_step(
+            &mut proof_steps,
+            EquivalenceProofStep::Assignment {
+                sink: assignment.sink,
+                signal: assignment.signal,
+            },
+            max_equivalence_proof_steps,
+        )?;
+    }
+    for assignment in &candidate.instances.assignments {
+        if let PhysicalSink::DeclaredOutput(port) = assignment.sink {
+            append_proof_step(
+                &mut proof_steps,
+                EquivalenceProofStep::Output {
+                    port,
+                    signal: assignment.signal,
+                },
+                max_equivalence_proof_steps,
+            )?;
+        }
+    }
+
+    let lowered_netlist_hash = lowered_netlist_fingerprint(lowered);
+    let candidate_fingerprint = candidate.fingerprint();
+    let library_revision = library.revision_fingerprint();
+    let work_used =
+        u64::try_from(proof_steps.len()).map_err(|_| EquivalenceError::ProofExhausted {
+            used: u64::MAX,
+            limit: max_equivalence_proof_steps,
+        })?;
+    let fingerprint = canonical_fingerprint(
+        &serde_json::to_vec(&CertificateFingerprintPayload {
+            lowered_netlist_hash: &lowered_netlist_hash,
+            candidate_fingerprint: &candidate_fingerprint,
+            library_revision: &library_revision,
+            ordered_input_axioms: &ordered_input_axioms,
+            proof_steps: &proof_steps,
+            work_used,
+        })
+        .expect("an equivalence certificate must serialize"),
+    );
+    Ok(EquivalenceCertificate {
+        lowered_netlist_hash,
+        candidate_fingerprint,
+        library_revision,
+        ordered_input_axioms,
+        proof_steps,
+        work_used,
+        fingerprint,
+    })
+}
 
 // ---------------------------------------------------------------------
 // Independent restatement of `expand`'s own bare-chain resolution
@@ -247,8 +577,12 @@ pub(super) fn resolve_contributors(netlist: &Netlist) -> NetlistResolution {
     let order = netlist
         .topological_order()
         .expect("compile() already rejected a cyclic netlist before this ever runs, and expand() re-checks it too");
-    let producer_of: HashMap<&str, usize> =
-        netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
+    let producer_of: HashMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(i, gate)| (gate.output.as_str(), i))
+        .collect();
     let input_names: HashSet<&str> = netlist.inputs.iter().map(|s| s.as_str()).collect();
 
     let mut consumers_of: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -257,16 +591,20 @@ pub(super) fn resolve_contributors(netlist: &Netlist) -> NetlistResolution {
             consumers_of.entry(input.as_str()).or_default().push(g);
         }
     }
-    let branch_is_bare =
-        |signal: &str, into_gate: usize| consumers_of.get(signal).is_some_and(|gs| gs.iter().all(|&g| g == into_gate));
-
-    let resolve_signal = |signal: &str, contributors_of_gate: &[Vec<Contributor>]| -> Vec<Contributor> {
-        if input_names.contains(signal) {
-            vec![Contributor::PrimaryInput(signal.to_string())]
-        } else {
-            contributors_of_gate[producer_of[signal]].clone()
-        }
+    let branch_is_bare = |signal: &str, into_gate: usize| {
+        consumers_of
+            .get(signal)
+            .is_some_and(|gs| gs.iter().all(|&g| g == into_gate))
     };
+
+    let resolve_signal =
+        |signal: &str, contributors_of_gate: &[Vec<Contributor>]| -> Vec<Contributor> {
+            if input_names.contains(signal) {
+                vec![Contributor::PrimaryInput(signal.to_string())]
+            } else {
+                contributors_of_gate[producer_of[signal]].clone()
+            }
+        };
 
     let mut contributors_of_gate: Vec<Vec<Contributor>> = vec![Vec::new(); netlist.gates.len()];
     let mut is_bare: HashMap<(usize, usize), bool> = HashMap::new();
@@ -298,7 +636,11 @@ pub(super) fn resolve_contributors(netlist: &Netlist) -> NetlistResolution {
         }
     }
 
-    NetlistResolution { contributors_of_gate, is_bare, contributors_of_input }
+    NetlistResolution {
+        contributors_of_gate,
+        is_bare,
+        contributors_of_input,
+    }
 }
 
 /// One (producer, consuming landing point) pair, in netlist-level terms
@@ -332,9 +674,24 @@ pub fn verify_expansion_matches_compiled(
 
     for (g, gate) in netlist.gates.iter().enumerate() {
         if gate.is_merge() {
-            verify_merge_gate_structure(netlist, graph, compiled, g, compiled.gate_facings[g], &resolution)?;
+            verify_merge_gate_structure(
+                netlist,
+                graph,
+                compiled,
+                g,
+                compiled.gate_facings[g],
+                &resolution,
+            )?;
         } else {
-            verify_gate_structure(netlist, graph, compiled, g, gate.inputs.len(), compiled.gate_facings[g], &resolution)?;
+            verify_gate_structure(
+                netlist,
+                graph,
+                compiled,
+                g,
+                gate.inputs.len(),
+                compiled.gate_facings[g],
+                &resolution,
+            )?;
         }
     }
 
@@ -354,7 +711,11 @@ pub fn verify_expansion_matches_compiled(
 /// Node/edge totals [`resolve_contributors`] implies, independent of
 /// `graph` -- the first, cheapest cross-check that `expand` built neither
 /// too much nor too little.
-fn verify_counts(netlist: &Netlist, graph: &PrimitiveGraph, resolution: &NetlistResolution) -> Result<(), EquivalenceError> {
+fn verify_counts(
+    netlist: &Netlist,
+    graph: &PrimitiveGraph,
+    resolution: &NetlistResolution,
+) -> Result<(), EquivalenceError> {
     let mut expected_nodes = netlist.inputs.len() + netlist.outputs.len();
     let mut expected_edges = 0usize;
 
@@ -383,11 +744,17 @@ fn verify_counts(netlist: &Netlist, graph: &PrimitiveGraph, resolution: &Netlist
     }
 
     if graph.nodes.len() != expected_nodes {
-        return Err(EquivalenceError::NodeCountMismatch { expected: expected_nodes, actual: graph.nodes.len() });
+        return Err(EquivalenceError::NodeCountMismatch {
+            expected: expected_nodes,
+            actual: graph.nodes.len(),
+        });
     }
 
     if graph.edges.len() != expected_edges {
-        return Err(EquivalenceError::EdgeCountMismatch { expected: expected_edges, actual: graph.edges.len() });
+        return Err(EquivalenceError::EdgeCountMismatch {
+            expected: expected_edges,
+            actual: graph.edges.len(),
+        });
     }
 
     Ok(())
@@ -414,7 +781,10 @@ fn verify_gate_structure(
         .iter()
         .any(|&id| matches!(&graph.nodes[id].provenance, Provenance::Gate { gate, role: TemplateNode::Torch } if *gate == g));
     if !has_torch {
-        return Err(EquivalenceError::MissingRole { gate: gate_name, role: TemplateNode::Torch });
+        return Err(EquivalenceError::MissingRole {
+            gate: gate_name,
+            role: TemplateNode::Torch,
+        });
     }
 
     // The graph's own claimed edge count: edges landing on this gate's node
@@ -427,8 +797,14 @@ fn verify_gate_structure(
     // land more than one edge on this same Torch node, if its own producer
     // is a bare-merge chain with more than one ultimate contributor.
     let own: HashSet<NodeId> = graph.gate_nodes[g].iter().copied().collect();
-    let graph_edge_count = graph.edges.iter().filter(|e| own.contains(&e.to) && !own.contains(&e.from)).count();
-    let expected_edge_count: usize = (0..arity).map(|index| resolution.contributors_of_input[&(g, index)].len()).sum();
+    let graph_edge_count = graph
+        .edges
+        .iter()
+        .filter(|e| own.contains(&e.to) && !own.contains(&e.from))
+        .count();
+    let expected_edge_count: usize = (0..arity)
+        .map(|index| resolution.contributors_of_input[&(g, index)].len())
+        .sum();
     if graph_edge_count != expected_edge_count {
         return Err(EquivalenceError::GraphInputEdgeCountMismatch {
             gate: gate_name,
@@ -438,14 +814,19 @@ fn verify_gate_structure(
     }
 
     // Now walk the actual world.
-    let (tx, ty, tz) =
-        *compiled.gate_output_positions.get(&gate_name).ok_or_else(|| EquivalenceError::TorchNotPlaced {
+    let (tx, ty, tz) = *compiled
+        .gate_output_positions
+        .get(&gate_name)
+        .ok_or_else(|| EquivalenceError::TorchNotPlaced {
             gate: gate_name.clone(),
         })?;
     let torch_pos = Position::new(tx, ty, tz);
     let torch_state = compiled.world.get(tx, ty, tz);
     let support = torch_support_position(torch_state, torch_pos).ok_or_else(|| {
-        EquivalenceError::TorchHasNoResolvableSupport { gate: gate_name.clone(), torch: (tx, ty, tz) }
+        EquivalenceError::TorchHasNoResolvableSupport {
+            gate: gate_name.clone(),
+            torch: (tx, ty, tz),
+        }
     })?;
 
     let support_state = compiled.world.get(support.x, support.y, support.z);
@@ -506,7 +887,10 @@ fn verify_merge_gate_structure(
     let mut owned_by_index: HashMap<usize, NodeId> = HashMap::new();
     for &id in &graph.gate_nodes[g] {
         match &graph.nodes[id].provenance {
-            Provenance::Gate { gate, role: TemplateNode::IsolatingRepeater(index) } if *gate == g => {
+            Provenance::Gate {
+                gate,
+                role: TemplateNode::IsolatingRepeater(index),
+            } if *gate == g => {
                 owned_by_index.insert(*index, id);
             }
             other => panic!("merge gate `{gate_name}` owns an unexpected node: {other:?}"),
@@ -547,19 +931,26 @@ fn verify_merge_gate_structure(
 
     // World side: the junction itself is dust, and every declared input's
     // own socket matches whichever realisation `resolution` says it is.
-    let (jx, jy, jz) = *compiled.gate_output_positions.get(&gate_name).ok_or_else(|| EquivalenceError::TorchNotPlaced {
-        gate: gate_name.clone(),
-    })?;
+    let (jx, jy, jz) = *compiled
+        .gate_output_positions
+        .get(&gate_name)
+        .ok_or_else(|| EquivalenceError::TorchNotPlaced {
+            gate: gate_name.clone(),
+        })?;
     let junction = Position::new(jx, jy, jz);
     let junction_state = compiled.world.get(jx, jy, jz);
     if junction_state.kind != BlockKind::RedstoneWire {
-        return Err(EquivalenceError::JunctionNotDust { gate: gate_name.clone(), junction: (jx, jy, jz) });
+        return Err(EquivalenceError::JunctionNotDust {
+            gate: gate_name.clone(),
+            junction: (jx, jy, jz),
+        });
     }
 
     for (index, &direction) in geometry::input_directions(facing).iter().enumerate() {
         let socket = junction.offset(direction);
         let socket_state = compiled.world.get(socket.x, socket.y, socket.z);
-        let feeds_junction = socket_state.kind == BlockKind::Repeater && socket_state.facing == Some(direction);
+        let feeds_junction =
+            socket_state.kind == BlockKind::Repeater && socket_state.facing == Some(direction);
 
         if index < arity {
             let bare = resolution.is_bare[&(g, index)];
@@ -572,11 +963,13 @@ fn verify_merge_gate_structure(
                     });
                 }
             } else if !feeds_junction {
-                return Err(EquivalenceError::IsolatedBranchSocketNotARepeaterFacingJunction {
-                    gate: gate_name.clone(),
-                    input_index: index,
-                    socket: (socket.x, socket.y, socket.z),
-                });
+                return Err(
+                    EquivalenceError::IsolatedBranchSocketNotARepeaterFacingJunction {
+                        gate: gate_name.clone(),
+                        input_index: index,
+                        socket: (socket.x, socket.y, socket.z),
+                    },
+                );
             }
         } else if feeds_junction {
             return Err(EquivalenceError::UndeclaredMergeInputFeedsJunction {
@@ -601,19 +994,26 @@ fn contributor_label(netlist: &Netlist, graph: &PrimitiveGraph, node: NodeId) ->
         Provenance::PrimaryOutput { name } => {
             panic!("a Lamp node (`{name}`) is never anyone's producer, only a consumer")
         }
-        Provenance::Gate { gate, role: TemplateNode::Torch } => netlist.gates[*gate].output.clone(),
-        Provenance::Gate { gate, role: TemplateNode::IsolatingRepeater(index) } => {
-            Contributor::IsolatingRepeater(netlist.gates[*gate].output.clone(), *index).label()
-        }
+        Provenance::Gate {
+            gate,
+            role: TemplateNode::Torch,
+        } => netlist.gates[*gate].output.clone(),
+        Provenance::Gate {
+            gate,
+            role: TemplateNode::IsolatingRepeater(index),
+        } => Contributor::IsolatingRepeater(netlist.gates[*gate].output.clone(), *index).label(),
         other => panic!("node with provenance {other:?} is never anyone's producer"),
     }
 }
 
 fn verify_lever(compiled: &CompiledCircuit, name: &str) -> Result<(), EquivalenceError> {
-    let &(x, y, z) = compiled
-        .input_positions
-        .get(name)
-        .ok_or_else(|| EquivalenceError::LeverNotPlaced { name: name.to_string() })?;
+    let &(x, y, z) =
+        compiled
+            .input_positions
+            .get(name)
+            .ok_or_else(|| EquivalenceError::LeverNotPlaced {
+                name: name.to_string(),
+            })?;
     let state = compiled.world.get(x, y, z);
     // A pinned input records the caller's own cell, which ships empty, and
     // the lever check applies only to unpinned ports: what drives that cell is
@@ -625,16 +1025,24 @@ fn verify_lever(compiled: &CompiledCircuit, name: &str) -> Result<(), Equivalenc
         return Ok(());
     }
     if state.kind != BlockKind::Lever {
-        return Err(EquivalenceError::LeverWrongKind { name: name.to_string(), position: (x, y, z) });
+        return Err(EquivalenceError::LeverWrongKind {
+            name: name.to_string(),
+            position: (x, y, z),
+        });
     }
     Ok(())
 }
 
-fn verify_lamp(netlist: &Netlist, compiled: &CompiledCircuit, output_name: &str) -> Result<(), EquivalenceError> {
-    let &(lx, ly, lz) = compiled
-        .output_positions
-        .get(output_name)
-        .ok_or_else(|| EquivalenceError::LampNotPlaced { name: output_name.to_string() })?;
+fn verify_lamp(
+    netlist: &Netlist,
+    compiled: &CompiledCircuit,
+    output_name: &str,
+) -> Result<(), EquivalenceError> {
+    let &(lx, ly, lz) = compiled.output_positions.get(output_name).ok_or_else(|| {
+        EquivalenceError::LampNotPlaced {
+            name: output_name.to_string(),
+        }
+    })?;
     let lamp_state = compiled.world.get(lx, ly, lz);
     // A pinned output records the caller's own cell, which ships empty and has
     // no lamp at all -- the lamp invariant, fixed offset included, applies only
@@ -647,7 +1055,10 @@ fn verify_lamp(netlist: &Netlist, compiled: &CompiledCircuit, output_name: &str)
         return Ok(());
     }
     if lamp_state.kind != BlockKind::Lamp {
-        return Err(EquivalenceError::LampWrongKind { name: output_name.to_string(), position: (lx, ly, lz) });
+        return Err(EquivalenceError::LampWrongKind {
+            name: output_name.to_string(),
+            position: (lx, ly, lz),
+        });
     }
 
     // The index, not the `&Gate`: a `&Gate` cannot index `gate_facings`, and
@@ -661,7 +1072,9 @@ fn verify_lamp(netlist: &Netlist, compiled: &CompiledCircuit, output_name: &str)
     let &(tx, ty, tz) = compiled
         .gate_output_positions
         .get(&netlist.gates[driving].output)
-        .ok_or_else(|| EquivalenceError::TorchNotPlaced { gate: netlist.gates[driving].output.clone() })?;
+        .ok_or_else(|| EquivalenceError::TorchNotPlaced {
+            gate: netlist.gates[driving].output.clone(),
+        })?;
 
     // The fixed relationship `emit` actually builds: one cell in the
     // torch's own output direction (its net's own source pin), then
@@ -708,14 +1121,20 @@ fn verify_input_edges_match_netlist(
                 }
                 let consumer = Contributor::IsolatingRepeater(gate.output.clone(), index).label();
                 for producer in &resolution.contributors_of_input[&(g, index)] {
-                    from_netlist.push(NetEdge { producer: producer.label(), consumer: consumer.clone() });
+                    from_netlist.push(NetEdge {
+                        producer: producer.label(),
+                        consumer: consumer.clone(),
+                    });
                 }
             }
         } else {
             let consumer = gate.output.clone();
             for index in 0..gate.inputs.len() {
                 for producer in &resolution.contributors_of_input[&(g, index)] {
-                    from_netlist.push(NetEdge { producer: producer.label(), consumer: consumer.clone() });
+                    from_netlist.push(NetEdge {
+                        producer: producer.label(),
+                        consumer: consumer.clone(),
+                    });
                 }
             }
         }
@@ -728,7 +1147,10 @@ fn verify_input_edges_match_netlist(
             .expect("every declared output is driven by a gate -- checked by `compile` before this ever runs");
         let consumer = format!("OUTPUT:{output_name}");
         for producer in &resolution.contributors_of_gate[driving_gate] {
-            from_netlist.push(NetEdge { producer: producer.label(), consumer: consumer.clone() });
+            from_netlist.push(NetEdge {
+                producer: producer.label(),
+                consumer: consumer.clone(),
+            });
         }
     }
 
@@ -743,10 +1165,17 @@ fn verify_input_edges_match_netlist(
         .iter()
         .enumerate()
         .filter_map(|(id, node)| match &node.provenance {
-            Provenance::Gate { gate, role: TemplateNode::Torch } => Some((id, gate_name(*gate))),
-            Provenance::Gate { gate, role: TemplateNode::IsolatingRepeater(index) } => {
-                Some((id, Contributor::IsolatingRepeater(gate_name(*gate), *index).label()))
-            }
+            Provenance::Gate {
+                gate,
+                role: TemplateNode::Torch,
+            } => Some((id, gate_name(*gate))),
+            Provenance::Gate {
+                gate,
+                role: TemplateNode::IsolatingRepeater(index),
+            } => Some((
+                id,
+                Contributor::IsolatingRepeater(gate_name(*gate), *index).label(),
+            )),
             _ => None,
         })
         .collect();
@@ -770,7 +1199,10 @@ fn verify_input_edges_match_netlist(
                 None => continue,
             },
         };
-        from_graph.push(NetEdge { producer: producer_label(edge.from), consumer });
+        from_graph.push(NetEdge {
+            producer: producer_label(edge.from),
+            consumer,
+        });
     }
 
     let mut tally: HashMap<NetEdge, i64> = HashMap::new();
@@ -781,7 +1213,11 @@ fn verify_input_edges_match_netlist(
         *tally.entry(edge).or_insert(0) -= 1;
     }
     let only_in_netlist: i64 = tally.values().filter(|&&count| count > 0).sum();
-    let only_in_graph: i64 = tally.values().filter(|&&count| count < 0).map(|count| -count).sum();
+    let only_in_graph: i64 = tally
+        .values()
+        .filter(|&&count| count < 0)
+        .map(|count| -count)
+        .sum();
 
     if only_in_netlist != 0 || only_in_graph != 0 {
         return Err(EquivalenceError::InputEdgesDoNotMatchNetlist {
@@ -798,17 +1234,209 @@ mod tests {
     use super::*;
     use crate::circuits::and4::build_and4_netlist;
     use crate::circuits::full_adder::build_full_adder_netlist;
-    use crate::circuits::seven_segment::{build_seven_segment_netlist, build_single_segment_netlist};
+    use crate::circuits::seven_segment::{
+        build_seven_segment_netlist, build_single_segment_netlist,
+    };
     use crate::compile::compile;
+    use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
+    use crate::compile::fragment_synth::identity::{ImplementationKey, LibraryEntryId};
+    use crate::compile::fragment_synth::instance_graph::{
+        Instance, InstanceGraph, InstanceRole, LogicalSignalId, PhysicalDriver, PhysicalSink,
+        SinkAssignment,
+    };
+    use crate::compile::planner::PortPlacements;
     use crate::compile::primitive_graph::expand;
-    use crate::compile::topology::Library;
+    use crate::compile::topology::{Library, LibraryEntry, Primitive, Template};
 
     fn check(netlist: &Netlist) {
         let compiled = compile(netlist).expect("reference circuits compile");
         let library = Library::default_library();
-        let graph = expand(netlist, &library).expect("reference circuits only use NOR gates of fan-in 1..=3");
+        let graph = expand(netlist, &library)
+            .expect("reference circuits only use NOR gates of fan-in 1..=3");
         verify_expansion_matches_compiled(netlist, &graph, &compiled)
             .expect("the expanded graph must account for exactly what compile() built");
+    }
+
+    fn symbolic_candidate(netlist: &Netlist, library: &Library) -> ExpandedPhysicalCandidate {
+        ExpandedPhysicalCandidate::empty(
+            InstanceGraph::one_to_one(netlist, library).expect("fixture graph"),
+            PortPlacements::default(),
+        )
+    }
+
+    fn nine_input_tree() -> Netlist {
+        let inputs = (0..9).map(|index| format!("i{index}")).collect::<Vec<_>>();
+        let mut gates = Vec::new();
+        let mut previous = inputs[0].clone();
+        for (index, input) in inputs.iter().enumerate().skip(1) {
+            let output = format!("g{index}");
+            gates.push(crate::compile::Gate::nor(
+                output.clone(),
+                &[previous.as_str(), input.as_str()],
+            ));
+            previous = output;
+        }
+        Netlist {
+            inputs,
+            outputs: vec![previous],
+            gates,
+        }
+    }
+
+    #[test]
+    fn nine_input_tree_uses_a_bounded_symbolic_proof_without_truth_enumeration() {
+        let netlist = nine_input_tree();
+        let library = Library::default_library();
+        let candidate = symbolic_candidate(&netlist, &library);
+
+        let certificate =
+            prove_combinational_equivalence(&netlist, &candidate, &library, 1_000_000)
+                .expect("nine inputs must use the compositional path");
+
+        assert_eq!(certificate.ordered_input_axioms.len(), 9);
+        assert_eq!(certificate.candidate_fingerprint, candidate.fingerprint());
+        assert!(!certificate.fingerprint.as_str().is_empty());
+        assert!(
+            certificate.work_used < 100,
+            "proof is structural, not 2^9 rows"
+        );
+    }
+
+    #[test]
+    fn wrong_assignment_and_selected_implementation_cannot_receive_a_certificate() {
+        let netlist = nine_input_tree();
+        let library = Library::default_library();
+        let mut wrong_assignment = symbolic_candidate(&netlist, &library);
+        let assignment = wrong_assignment
+            .instances
+            .assignments
+            .iter_mut()
+            .find(|assignment| {
+                assignment.sink
+                    == PhysicalSink::InstanceInput {
+                        instance: InstanceId(0),
+                        input_index: 0,
+                    }
+            })
+            .expect("first gate input");
+        assignment.signal = LogicalSignalId::PrimaryInput(PortId(8));
+        assert!(matches!(
+            prove_combinational_equivalence(&netlist, &wrong_assignment, &library, 1_000_000),
+            Err(EquivalenceError::InstanceGraphProofFailure { .. })
+        ));
+
+        let mut wrong_implementation = symbolic_candidate(&netlist, &library);
+        let wrong_key = ImplementationKey::Library(LibraryEntryId {
+            kind: GateKind::Buf,
+            ordinal: 0,
+        });
+        wrong_implementation.instances.instances[0].implementation = wrong_key;
+        wrong_implementation.instances.instances[0]
+            .expanded
+            .implementation = wrong_key;
+        assert!(matches!(
+            prove_combinational_equivalence(&netlist, &wrong_implementation, &library, 1_000_000),
+            Err(EquivalenceError::TopologyInstantiationFailure { .. })
+        ));
+    }
+
+    #[test]
+    fn proof_cap_is_a_structured_refusal() {
+        let netlist = nine_input_tree();
+        let library = Library::default_library();
+        let candidate = symbolic_candidate(&netlist, &library);
+
+        assert_eq!(
+            prove_combinational_equivalence(&netlist, &candidate, &library, 0),
+            Err(EquivalenceError::ProofExhausted { used: 1, limit: 0 })
+        );
+    }
+
+    #[test]
+    fn independently_instantiated_wrong_topology_semantics_are_rejected() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![crate::compile::Gate::nor("y", &["a"])],
+        };
+        let mut library = Library::default_library();
+        library.replace_entries_for_testing(
+            GateKind::Nor(1),
+            vec![LibraryEntry {
+                name: "wrong identity implementation",
+                template: Template {
+                    nodes: vec![(TemplateNode::Torch, Primitive::Repeater)],
+                    internal_edges: Vec::new(),
+                    inputs: vec![TemplateNode::Torch],
+                    output: Some(TemplateNode::Torch),
+                    embedding_hints: Vec::new(),
+                },
+            }],
+        );
+        let candidate = symbolic_candidate(&netlist, &library);
+
+        assert!(matches!(
+            prove_combinational_equivalence(&netlist, &candidate, &library, 100),
+            Err(EquivalenceError::EquivalenceProofFailure {
+                source: TopologySemanticsError::GateSemanticsMismatch { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn duplicate_with_different_ordered_inputs_is_not_promotable() {
+        let netlist = Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["y".into()],
+            gates: vec![crate::compile::Gate::nor("y", &["a", "b"])],
+        };
+        let library = Library::default_library();
+        let mut candidate = symbolic_candidate(&netlist, &library);
+        let canonical = candidate.instances.instances[0].clone();
+        let duplicate_id = InstanceId(1);
+        candidate.instances.instances.push(Instance {
+            id: duplicate_id,
+            logical_gate: canonical.logical_gate,
+            role: InstanceRole::Duplicate { ordinal: 0 },
+            implementation: canonical.implementation,
+            expanded: instantiate(
+                &library,
+                &netlist.gates[0],
+                duplicate_id,
+                &canonical.implementation,
+            )
+            .expect("duplicate topology"),
+        });
+        candidate.instances.assignments.extend([
+            SinkAssignment {
+                sink: PhysicalSink::InstanceInput {
+                    instance: duplicate_id,
+                    input_index: 0,
+                },
+                signal: LogicalSignalId::PrimaryInput(PortId(1)),
+                driver: PhysicalDriver::PrimaryInput(PortId(1)),
+            },
+            SinkAssignment {
+                sink: PhysicalSink::InstanceInput {
+                    instance: duplicate_id,
+                    input_index: 1,
+                },
+                signal: LogicalSignalId::PrimaryInput(PortId(1)),
+                driver: PhysicalDriver::PrimaryInput(PortId(1)),
+            },
+        ]);
+        candidate
+            .instances
+            .assignments
+            .sort_by_key(|assignment| assignment.sink);
+
+        assert!(matches!(
+            prove_combinational_equivalence(&netlist, &candidate, &library, 100),
+            Err(EquivalenceError::InstanceGraphProofFailure {
+                source: SynthesisError::DuplicateInputMismatch { .. }
+            })
+        ));
     }
 
     #[test]

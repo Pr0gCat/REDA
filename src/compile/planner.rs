@@ -1,20 +1,30 @@
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::compile::fragment_synth::identity::{
+    ConnectionId, InstanceId, PhysicalEndpointId, PortId, PrimitiveId, RouteId, RoutedSinkId,
+    TopologyNodeId,
+};
 use crate::compile::primitive_graph::{self, reexpand_gate, EntrySelection, NodeId};
+#[cfg(test)]
+use crate::compile::routing::realise_branch_from;
+use crate::compile::routing::{
+    NonEmptyRouteSinks, PhysicalReservationKind, PhysicalReservationOwner, PhysicalReservations,
+    PhysicalRouter, RealisedRouteTree, RouteEndpoint, RouteRequest, RouteSink as TypedRouteSink,
+    RouteTarget, RouterFailure as TypedRouterFailure, RouterLimits, TerminalContract,
+    TerminalRequirement,
+};
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::{self, geometry, relax, CompiledCircuit, LegacyEmission, Netlist};
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::{BlockState, Facing};
 use crate::redstone::world::storage::World;
 
-/// A fixed coordinate selected by the planner without referring to a world.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Anchor {
-    pub x: i32,
-    pub y: i32,
-    pub z: i32,
-}
+pub use crate::compile::geometry::Anchor;
+pub use crate::compile::routing::{
+    terminal_style, RouteTerminalKind, TerminalApproach, TerminalStyle,
+};
 
 /// What a node becomes when a candidate is turned back into blocks.
 ///
@@ -31,12 +41,16 @@ pub enum NodeRealisation {
     /// caller offers to full strength -- stands in the single neighbour
     /// `toward` names, and the route's source is the cell past it. No lever:
     /// what drives the caller's cell is the caller's business.
-    InputTerminal { toward: Facing },
+    InputTerminal {
+        toward: Facing,
+    },
     /// A pinned output's terminal. The anchor is the **caller's** cell and
     /// ships empty; REDA's delivery repeater stands in the neighbour opposite
     /// `toward` and drives into it. An extra sink on the declared output's
     /// net. No lamp: what reads the cell is the caller's business.
-    OutputTerminal { toward: Facing },
+    OutputTerminal {
+        toward: Facing,
+    },
 }
 
 /// The node whose primitive is placed at an anchor.  Candidate coordinates
@@ -157,90 +171,9 @@ pub struct Route {
     /// than derived: the emitter floors cells it then leaves empty, and a
     /// finished world cannot say which stone was laid for which reason.
     floors: Vec<BlockState>,
-}
-
-/// The physical component selected at a route's final socket.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RouteTerminalKind {
-    RepeaterIntoSupport,
-    DirectedDustIntoSupport,
-    /// A private branch ending directly in a declared wire merge's dust.
-    BareMergeDust,
-    /// A private merge branch whose strength budget still needs a final
-    /// repeater; it terminates at merge dust, never at a NOR support.
-    BareMergeRepeater,
-    /// A pinned declared output's handover: the branch ends in the delivery
-    /// repeater that drives the caller's cell. Always a repeater -- measured
-    /// (`tests/terminal_handover.rs`) as the only construction that powers a
-    /// lamp, a solid block and dust alike, whatever shape the wire behind it
-    /// takes. Its `RouteSink::gate` carries the port name (the producing
-    /// gate's own output signal) and its `input_index` is zero by convention;
-    /// consumers that resolve sinks against gate inputs skip this kind.
-    OutputTerminalRepeater,
-}
-
-/// The conservative choice for an ordinary route's final cell.
-///
-/// A dust terminal is valid only when the route proves a straight, live and
-/// isolated approach into the support.  The physical emitter performs the
-/// simulator-backed check as well; this planner-level record prevents a
-/// local move from assuming that an old terminal decision remains valid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TerminalStyle {
-    DirectedDustIntoSupport,
-    RepeaterIntoSupport,
-}
-
-impl From<TerminalStyle> for RouteTerminalKind {
-    fn from(style: TerminalStyle) -> Self {
-        match style {
-            TerminalStyle::DirectedDustIntoSupport => Self::DirectedDustIntoSupport,
-            TerminalStyle::RepeaterIntoSupport => Self::RepeaterIntoSupport,
-        }
-    }
-}
-
-/// The three cells which establish whether dust can directly power a support.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TerminalApproach {
-    pub predecessor: Anchor,
-    pub terminal: Anchor,
-    pub support: Anchor,
-    pub predecessor_strength: u8,
-    pub isolation_proven: bool,
-}
-
-impl TerminalApproach {
-    pub fn new(
-        predecessor: Anchor,
-        terminal: Anchor,
-        support: Anchor,
-        predecessor_strength: u8,
-        isolation_proven: bool,
-    ) -> Self {
-        Self {
-            predecessor,
-            terminal,
-            support,
-            predecessor_strength,
-            isolation_proven,
-        }
-    }
-}
-
-/// Choose dust only for a fully proven directed terminal.
-pub fn terminal_style(approach: &TerminalApproach) -> TerminalStyle {
-    let incoming = unit_horizontal_direction(approach.predecessor, approach.terminal);
-    let outgoing = unit_horizontal_direction(approach.terminal, approach.support);
-    if approach.predecessor_strength > 1
-        && approach.isolation_proven
-        && incoming.is_some()
-        && incoming == outgoing
-    {
-        TerminalStyle::DirectedDustIntoSupport
-    } else {
-        TerminalStyle::RepeaterIntoSupport
-    }
+    /// Ordered source-to-terminal paths, parallel to `terminals` when the
+    /// producer recorded branch topology.
+    branch_paths: Vec<Vec<Anchor>>,
 }
 
 impl Route {
@@ -260,6 +193,7 @@ impl Route {
             terminals: Vec::new(),
             realisation: Vec::new(),
             floors: Vec::new(),
+            branch_paths: Vec::new(),
         }
     }
 
@@ -269,12 +203,14 @@ impl Route {
         terminals: Vec<RouteTerminal>,
         realisation: Vec<BlockState>,
         floors: Vec<BlockState>,
+        branch_paths: Vec<Vec<Anchor>>,
     ) -> Self {
         let mut route = Self::new(id.clone(), anchors);
         route.owner = Some(id);
         route.terminals = terminals;
         route.realisation = realisation;
         route.floors = floors;
+        route.branch_paths = branch_paths;
         route
     }
 
@@ -286,7 +222,7 @@ impl Route {
         anchors: Vec<Anchor>,
         terminals: Vec<RouteTerminal>,
     ) -> Self {
-        Self::from_legacy(id, anchors, terminals, Vec::new(), Vec::new())
+        Self::from_legacy(id, anchors, terminals, Vec::new(), Vec::new(), Vec::new())
     }
 
     /// The block this route puts in each of its anchors, in anchor order.
@@ -322,6 +258,15 @@ impl Route {
     /// The sink identity and physical terminal for every fanout branch.
     pub fn terminals(&self) -> &[RouteTerminal] {
         &self.terminals
+    }
+
+    /// Final block states one cell below each route anchor.
+    pub fn floors(&self) -> &[BlockState] {
+        &self.floors
+    }
+
+    pub fn branch_paths(&self) -> &[Vec<Anchor>] {
+        &self.branch_paths
     }
 }
 
@@ -613,7 +558,10 @@ pub enum PlannerError {
     NetlistDoesNotMatchCompiledOutput,
     UnknownPrimitive(NodeId),
     AnchorOccupied(Anchor),
-    NoLocalRoute { from: Anchor, to: Anchor },
+    NoLocalRoute {
+        from: Anchor,
+        to: Anchor,
+    },
     /// Somebody fixed this port's position, so no move may change it.
     PortIsPinned(String),
     /// A pin that can never become a terminal, refused **by name** and with
@@ -626,7 +574,10 @@ pub enum PlannerError {
     /// A node's recorded realisation cannot be turned into blocks -- either
     /// the primitive has no emitter yet, or it contradicts the gate it is
     /// supposed to be realising.
-    UnrealisableNode { id: String, reason: String },
+    UnrealisableNode {
+        id: String,
+        reason: String,
+    },
     PhysicalInvariant(compile::CompileError),
     /// The relaxation could not produce a placement.
     Relaxation(relax::RelaxError),
@@ -847,13 +798,14 @@ pub fn emit_primitives(
         // `primitive_nodes` carries the same coordinate alongside identity.
         // Realising from one while the other disagrees would build a circuit
         // nobody scored, so a disagreement is an error rather than a choice.
-        let anchor = *candidate
-            .anchors
-            .get(index)
-            .ok_or_else(|| PlannerError::UnrealisableNode {
-                id: node.id.clone(),
-                reason: "no anchor for this node".to_string(),
-            })?;
+        let anchor =
+            *candidate
+                .anchors
+                .get(index)
+                .ok_or_else(|| PlannerError::UnrealisableNode {
+                    id: node.id.clone(),
+                    reason: "no anchor for this node".to_string(),
+                })?;
         if anchor != node.anchor {
             return Err(PlannerError::UnrealisableNode {
                 id: node.id.clone(),
@@ -910,8 +862,7 @@ pub fn emit_primitives(
                     }
                     NodeRealisation::InputTerminal { toward } => {
                         let home = Position::new(anchor.x, anchor.y, anchor.z);
-                        let (terminal, _) =
-                            compile::place_input_terminal(&mut world, home, toward);
+                        let (terminal, _) = compile::place_input_terminal(&mut world, home, toward);
                         // The port's cell is the caller's own, not the reader
                         // standing beside it: that is the coordinate the
                         // contract is stated over, and what a pinout consumer
@@ -1108,267 +1059,159 @@ pub fn try_move(
 
         let owner = route.id.clone();
         let (source, terminals) = moved.route_endpoints(route_index, primitive, from, to);
-        let mut rebuilt = route.clone();
-        rebuilt.anchors.clear();
-        rebuilt.realisation.clear();
-        rebuilt.floors.clear();
-        let mut branches = Vec::with_capacity(terminals.len());
-        for (support, terminal) in terminals {
-            let path = deterministic_astar(
-                source,
-                terminal,
-                support,
-                &owner,
-                &reservation,
-                &OwnJoinCheck::off(),
-                &Prices::RipUp(&Congestion::default()),
-            )
-            .ok_or(
-                PlannerError::NoLocalRoute {
-                    from: source,
-                    to: terminal,
-                },
-            )?;
-            reserve_path(&mut reservation, &owner, &path);
-            let laid = realise_branch(source, &path);
-            // A fanout's branches share a trunk. The first branch to reach a
-            // cell lays it, exactly as the legacy emitter's `claim` records
-            // the first net to conduct through one; appending it again would
-            // give one cell two blocks and two owners.
-            for ((anchor, block), floor) in
-                path.iter().zip(laid.blocks).zip(laid.floors)
-            {
-                if rebuilt.anchors.contains(anchor) {
+        let typed_route = RouteId(route_index as u32);
+        let typed_reservations = typed_reservations(&reservation, typed_route, &owner);
+        let typed_sinks = terminals
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (support, terminal))| {
+                let connection = ConnectionId::Internal {
+                    instance: InstanceId(route_index as u32),
+                    edge_index: ordinal as u16,
+                };
+                let requirement = route
+                    .terminals
+                    .get(ordinal)
+                    .map(|record| match record.kind {
+                        RouteTerminalKind::BareMergeDust | RouteTerminalKind::BareMergeRepeater => {
+                            TerminalRequirement::Exact(record.kind)
+                        }
+                        _ => TerminalRequirement::Automatic,
+                    })
+                    .unwrap_or(TerminalRequirement::DirectedDust);
+                TypedRouteSink {
+                    id: RoutedSinkId {
+                        route: typed_route,
+                        ordinal: ordinal as u16,
+                    },
+                    endpoint: PhysicalEndpointId::Landing(connection),
+                    anchor: *terminal,
+                    allowed_entry: facing_between(*support, *terminal),
+                    terminal: TerminalContract::Sink {
+                        target: RouteTarget::Connection(connection),
+                        support: *support,
+                        requirement,
+                    },
+                }
+            })
+            .collect();
+        let typed_sinks = NonEmptyRouteSinks::new(typed_sinks)
+            .expect("route_endpoints always returns at least one sink");
+        let mut sink_attempts = vec![typed_sinks.clone()];
+        if route.terminals.is_empty() && typed_sinks.as_slice().len() == 1 {
+            for allowed_entry in [Facing::North, Facing::East, Facing::South, Facing::West] {
+                if allowed_entry == typed_sinks.as_slice()[0].allowed_entry {
                     continue;
                 }
-                rebuilt.anchors.push(*anchor);
-                rebuilt.realisation.push(block);
-                rebuilt.floors.push(floor);
+                let mut alternative = typed_sinks.as_slice().to_vec();
+                alternative[0].allowed_entry = allowed_entry;
+                sink_attempts.push(
+                    NonEmptyRouteSinks::new(alternative)
+                        .expect("the synthetic route still has one sink"),
+                );
             }
-            branches.push((path, support, laid.strength_before_terminal, laid.repeaters));
+        }
+        let source_endpoint = RouteEndpoint {
+            id: PhysicalEndpointId::Junction(InstanceId(route_index as u32)),
+            anchor: source,
+            allowed_exit: facing_between(source, typed_sinks.as_slice()[0].anchor),
+            terminal: TerminalContract::Source {
+                signal_strength: crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+            },
+        };
+        let mut routed = None;
+        let mut last_error = None;
+        for attempt in &sink_attempts {
+            let mut staged_claims = Vec::new();
+            match crate::compile::routing::route_strict_with_policy(
+                RouteRequest {
+                    id: typed_route,
+                    source: source_endpoint.clone(),
+                    sinks: attempt,
+                    reservations: &typed_reservations,
+                    limits: RouterLimits {
+                        max_node_expansions: u64::MAX,
+                        max_queue_entries: u64::MAX,
+                    },
+                },
+                crate::compile::routing::RoutingJoinPolicy::Off,
+                |_| 0,
+                |at, claim_owner, kind| staged_claims.push((at, claim_owner, kind)),
+            ) {
+                Ok(tree) => {
+                    routed = Some((tree, staged_claims));
+                    break;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        let (tree, claims) = routed.ok_or_else(|| {
+            let error = last_error.expect("at least one typed routing attempt was made");
+            match error {
+                TypedRouterFailure::NoLocalRoute { sink, .. } => PlannerError::NoLocalRoute {
+                    from: source,
+                    to: typed_sinks.as_slice()[usize::from(sink.ordinal)].anchor,
+                },
+                other => PlannerError::PhysicalInvariant(
+                    compile::CompileError::CandidateMetadataViolation {
+                        item: owner.clone(),
+                        reason: other.to_string(),
+                    },
+                ),
+            }
+        })?;
+        for (at, claim_owner, kind) in claims {
+            let occupancy = match (claim_owner, kind) {
+                (PhysicalReservationOwner::Route(_), PhysicalReservationKind::Conductor(_)) => {
+                    Some(Occupancy::Wire)
+                }
+                (
+                    PhysicalReservationOwner::Route(_) | PhysicalReservationOwner::RouteStair(_),
+                    PhysicalReservationKind::Floor(_),
+                ) => Some(Occupancy::Stone),
+                (
+                    PhysicalReservationOwner::RouteStair(_),
+                    PhysicalReservationKind::MandatoryAir,
+                ) => Some(Occupancy::Air),
+                _ => None,
+            };
+            if let Some(occupancy) = occupancy {
+                reservation.insert(at, &owner, occupancy);
+            }
         }
 
-        for (terminal, (path, support, strength_before_terminal, branch_repeaters)) in
-            rebuilt.terminals.iter_mut().zip(branches)
-        {
-            // The branch was just re-laid, so its repeater count is a fact
-            // again. Keeping the seed's would leave the primary cost term
-            // blind to exactly the changes the optimiser makes.
-            terminal.repeaters = branch_repeaters;
-            if matches!(
-                terminal.kind,
-                RouteTerminalKind::BareMergeDust | RouteTerminalKind::BareMergeRepeater
-            ) {
-                continue;
-            }
-            let Some(&predecessor) = path.get(path.len().saturating_sub(2)) else {
-                terminal.kind = RouteTerminalKind::RepeaterIntoSupport;
-                continue;
-            };
-            let terminal_anchor = *path.last().expect("A* paths always include their goal");
-            let approach = TerminalApproach::new(
-                predecessor,
-                terminal_anchor,
-                support,
-                strength_before_terminal,
-                terminal_is_isolated(&reservation, &owner, predecessor, terminal_anchor, support),
-            );
-            let style = terminal_style(&approach);
-            terminal.kind = style.into();
-            // The branch ends somewhere new, so the sink's recorded cell has
-            // to move with it: everything downstream -- the reservation, the
-            // terminal check, the invariants -- reads the terminal from here.
-            terminal.sink.anchor = terminal_anchor;
-
-            // And the block there has to be the one the style names. The
-            // strength budget laid this cell before the style was chosen; a
-            // plan that says repeater over dust is the same lie the legacy
-            // emitter used to tell, and the terminal check catches it either
-            // way, so make it true rather than let it be caught.
-            if let Some(index) = rebuilt
-                .anchors
-                .iter()
-                .position(|anchor| *anchor == terminal_anchor)
-            {
-                rebuilt.realisation[index] = match style {
-                    TerminalStyle::RepeaterIntoSupport
-                        if unit_horizontal_direction(predecessor, terminal_anchor).is_some() =>
-                    {
-                        compile::repeater(compile::direction_from(
-                            Position::new(predecessor.x, predecessor.y, predecessor.z),
-                            Position::new(terminal_anchor.x, terminal_anchor.y, terminal_anchor.z),
-                        ))
-                    }
-                    _ => compile::dust(),
+        let mut rebuilt = route.clone();
+        rebuilt.anchors = tree.cells.iter().map(|cell| cell.at).collect();
+        rebuilt.realisation = tree.cells.iter().map(|cell| cell.state.clone()).collect();
+        rebuilt.floors = tree
+            .cells
+            .iter()
+            .map(|cell| {
+                let floor_at = Anchor {
+                    y: cell.at.y - 1,
+                    ..cell.at
                 };
-            }
+                tree.floors
+                    .iter()
+                    .find(|floor| floor.at == floor_at)
+                    .map(|floor| floor.state.clone())
+                    .unwrap_or_else(compile::stone)
+            })
+            .collect();
+        rebuilt.branch_paths = tree
+            .branches
+            .iter()
+            .map(|branch| branch.path.clone())
+            .collect();
+        for (terminal, branch) in rebuilt.terminals.iter_mut().zip(&tree.branches) {
+            terminal.sink.anchor = branch.terminal.at;
+            terminal.kind = branch.terminal.kind;
+            terminal.repeaters = branch.terminal.repeaters;
         }
         moved.routes[route_index] = rebuilt;
     }
 
     Ok(moved)
-}
-
-/// One rerouted branch, turned into the blocks that branch actually needs.
-struct LaidBranch {
-    blocks: Vec<BlockState>,
-    floors: Vec<BlockState>,
-    /// The signal strength arriving at the cell before the terminal -- read
-    /// off the same repeater plan that produced `blocks`, not estimated from
-    /// the path's length.
-    strength_before_terminal: u8,
-    /// Repeaters this branch lays between the source and its terminal.
-    repeaters: u64,
-    /// Whether the signal is still alive when it reaches the last cell.
-    ///
-    /// A refresh can only stand on a flat cell, and a path that climbs and
-    /// drops repeatedly leaves nowhere to put one -- so the budget asks for a
-    /// refresh, finds every candidate is a stair, and the run carries on
-    /// decaying. The route is laid, connected and dead. Saying so here turns
-    /// it into a routing failure, which the negotiation loop already knows how
-    /// to answer: charge what pushed this path into the air and take a flatter
-    /// one.
-    carries: bool,
-}
-
-/// Lay dust along a rerouted branch, refreshing it with repeaters exactly
-/// where the strength budget demands.
-///
-/// This is `compile::plan_bent_path`, the same budget the legacy router
-/// spends -- a second implementation of dust decay would be a second thing to
-/// be wrong about, and the planner already had one: the terminal choice used
-/// to assume a strength of `16 - path length`, which is neither the real
-/// maximum nor aware that a repeater resets it.
-fn realise_branch(source: Anchor, cells: &[Anchor]) -> LaidBranch {
-    realise_branch_from(
-        source,
-        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
-        cells,
-    )
-}
-
-/// [`realise_branch`], continuing from a signal that has already travelled.
-///
-/// A fanout's branches share a trunk, and the trunk keeps the blocks the first
-/// branch laid. A later branch that plans its refreshes from full strength
-/// across its whole path is therefore planning refreshes it will not get: the
-/// ones it wanted on the trunk are discarded, and its tail runs from wherever
-/// the trunk actually left the signal. So it is told.
-fn realise_branch_from(previous_cell: Anchor, incoming: u8, cells: &[Anchor]) -> LaidBranch {
-    let source = previous_cell;
-    let mut bends: BTreeSet<usize> = cells
-        .windows(3)
-        .enumerate()
-        .filter(|(_, window)| direction(window[0], window[1]) != direction(window[1], window[2]))
-        .map(|(index, _)| index + 1)
-        .collect();
-    // A repeater needs a flat cell to stand on and a horizontal facing, so a
-    // staircase step can never hold one. `bend_indices` already means exactly
-    // "no repeater here", so saying it there lets `plan_bent_path` put the
-    // refresh somewhere it fits -- rather than placing one on a stair and
-    // having realisation quietly downgrade it to dust and lose the refresh.
-    let mut previous = source;
-    for (index, cell) in cells.iter().enumerate() {
-        if cell.y != previous.y {
-            bends.insert(index);
-        }
-        previous = *cell;
-    }
-
-    // Reserve for the stairs. Every cell of a climb spends strength and none
-    // of them can hold a repeater, so the refreshes have to be far enough
-    // ahead to carry the run through them -- which is exactly what `reserve`
-    // means to `plan_bent_path`. Pricing climbs in the search instead was
-    // tried and moved them to where the signal could no longer afford them.
-    let stairs = bends
-        .iter()
-        .filter(|&&index| {
-            let before = if index == 0 { source } else { cells[index - 1] };
-            cells[index].y != before.y
-        })
-        .count();
-    let reserve = (stairs as i32).min(compile::MAX_DUST_RUN - 2);
-    let (is_repeater, _) = compile::plan_bent_path(cells.len(), &bends, incoming, reserve);
-
-    // A refresh immediately before every climb. A staircase spends one
-    // strength per level and can hold no repeater anywhere along it, so a
-    // climb entered on a tired signal arrives dead however short it is --
-    // which is what left segment_a connected and unpowered. Entered at full
-    // strength it is affordable, and this is the only cell that can make it
-    // so: the last flat one before the stairs.
-    let mut is_repeater = is_repeater;
-    let mut previous = source;
-    for (index, cell) in cells.iter().enumerate() {
-        if cell.y != previous.y && index > 0 {
-            let before = index - 1;
-            if !bends.contains(&before) {
-                is_repeater[before] = true;
-            }
-        }
-        previous = *cell;
-    }
-
-    let mut blocks = Vec::with_capacity(cells.len());
-    let mut previous = source;
-    for (index, cell) in cells.iter().enumerate() {
-        // A repeater needs a horizontal facing, so a cell reached by a step
-        // in Y can only be dust -- that is what a dust staircase is. The
-        // strength budget may have wanted a refresh here; if losing it
-        // matters, `verify_signal_strength` says so rather than this guessing.
-        let step = unit_horizontal_direction(previous, *cell);
-        let block = match (is_repeater[index], step) {
-            (true, Some(_)) => compile::repeater(compile::direction_from(
-                Position::new(previous.x, previous.y, previous.z),
-                Position::new(cell.x, cell.y, cell.z),
-            )),
-            _ => compile::dust(),
-        };
-        blocks.push(block);
-        previous = *cell;
-    }
-
-    // Strength at the cell before the terminal: full again if that cell is a
-    // repeater, otherwise the maximum less one per dust cell since the last
-    // refresh.
-    let strength_before_terminal = match cells.len().checked_sub(2) {
-        None => incoming,
-        Some(index) => {
-            let last_refresh = (0..=index).rev().find(|&i| is_repeater[i]);
-            match last_refresh {
-                Some(refresh) => crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
-                    .saturating_sub((index - refresh) as u8),
-                None => incoming.saturating_sub((index + 1) as u8),
-            }
-        }
-    };
-
-    // Walk the blocks that were actually laid, not the plan that asked for
-    // them: a refresh the plan wanted and could not place is exactly the case
-    // this has to catch.
-    let mut carried = incoming;
-    let mut carries = true;
-    for block in &blocks {
-        if block.kind == crate::redstone::world::block::BlockKind::Repeater {
-            carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
-            continue;
-        }
-        carried = carried.saturating_sub(1);
-        if carried == 0 {
-            carries = false;
-            break;
-        }
-    }
-
-    LaidBranch {
-        floors: vec![compile::stone(); blocks.len()],
-        repeaters: blocks
-            .iter()
-            .filter(|block| block.kind == crate::redstone::world::block::BlockKind::Repeater)
-            .count() as u64,
-        blocks,
-        strength_before_terminal,
-        carries,
-    }
 }
 
 impl PlanCandidate {
@@ -1410,7 +1253,6 @@ impl PlanCandidate {
         }
         Ok(())
     }
-
 
     fn route_is_incident(&self, route: &Route, primitive: NodeId) -> bool {
         let Some(node) = self.primitive_nodes.get(primitive) else {
@@ -1585,6 +1427,7 @@ impl PlanCandidate {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct SearchState {
     estimate: u64,
@@ -1592,6 +1435,7 @@ struct SearchState {
     anchor: Anchor,
 }
 
+#[cfg(test)]
 fn deterministic_astar(
     start: Anchor,
     goal: Anchor,
@@ -1656,48 +1500,58 @@ fn deterministic_astar(
             // could afford to learn (128 iterations of the same latch
             // corridor, measured). `OwnJoinPolicy::Off` -- every rip-up
             // caller -- returns false without reading anything.
-            if own_join.blocks(next, state.anchor, start, goal, owner, reservation, &previous) {
+            if own_join.blocks(
+                next,
+                state.anchor,
+                start,
+                goal,
+                owner,
+                reservation,
+                &previous,
+            ) {
                 continue;
             }
 
             if !within_bounds(next, min, max)
                 || !anchor_is_free_for(next, start, goal, terminal_support, owner, reservation)
-                || staircase_clearance(state.anchor, next).into_iter().any(|cell| {
-                    let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
-                        occupied_by != owner && occupied_by != stair_guard(owner)
-                    });
-                    // The riser is the one cell a climb *wants* filled -- it
-                    // becomes this route's own floor -- so it may already be
-                    // ours, or a stair this route built: two branches climbing
-                    // one stair is reuse. Everything else a staircase needs has
-                    // to be empty, and empty means empty. A solid block is what
-                    // stops a climb, and every route lays solid floors, so a
-                    // route passing overhead seals this one's way up without
-                    // owning anything that conducts.
-                    let is_riser = next.y > state.anchor.y && cell.y == state.anchor.y;
-                    if is_riser {
-                        return foreign || reservation.conductor_owner(&cell).is_some();
-                    }
-                    // A cell this net's OWN stair guard holds as air is, by
-                    // the blocks alone, the other half of the reuse the
-                    // riser arm promises -- and exempting it is measured to
-                    // be UNSHIPPABLE until the search knows strength. Built
-                    // and killed three times on 2026-08-28: unbounded, it
-                    // let routes ride stairs anywhere and plans went
-                    // geometry-connected but electrically dead (negotiated
-                    // full_adder g2 -> g10, segment_a's grown plan g4 ->
-                    // g20); bounded to the branch's own start it still
-                    // re-rolled every growth trajectory and segment_a found
-                    // no plan twice more (795.9s, 788.0s). A staircase can
-                    // hold no refresh and this search prices distance, not
-                    // strength, so every admission here trades legality it
-                    // can see for decay it cannot. What this arm costs while
-                    // it stands: the decoder's three pocket nets (own pin
-                    // walled by their first branch's stair) stay unroutable
-                    // -- `a_second_branch_reclimbing_waits_for_a_strength_aware_search`
-                    // pins both halves of that trade.
-                    reservation.owner(&cell).is_some()
-                })
+                || staircase_clearance(state.anchor, next)
+                    .into_iter()
+                    .any(|cell| {
+                        let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
+                            occupied_by != owner && occupied_by != stair_guard(owner)
+                        });
+                        // The riser is the one cell a climb *wants* filled -- it
+                        // becomes this route's own floor -- so it may already be
+                        // ours, or a stair this route built: two branches climbing
+                        // one stair is reuse. Everything else a staircase needs has
+                        // to be empty, and empty means empty. A solid block is what
+                        // stops a climb, and every route lays solid floors, so a
+                        // route passing overhead seals this one's way up without
+                        // owning anything that conducts.
+                        let is_riser = next.y > state.anchor.y && cell.y == state.anchor.y;
+                        if is_riser {
+                            return foreign || reservation.conductor_owner(&cell).is_some();
+                        }
+                        // A cell this net's OWN stair guard holds as air is, by
+                        // the blocks alone, the other half of the reuse the
+                        // riser arm promises -- and exempting it is measured to
+                        // be UNSHIPPABLE until the search knows strength. Built
+                        // and killed three times on 2026-08-28: unbounded, it
+                        // let routes ride stairs anywhere and plans went
+                        // geometry-connected but electrically dead (negotiated
+                        // full_adder g2 -> g10, segment_a's grown plan g4 ->
+                        // g20); bounded to the branch's own start it still
+                        // re-rolled every growth trajectory and segment_a found
+                        // no plan twice more (795.9s, 788.0s). A staircase can
+                        // hold no refresh and this search prices distance, not
+                        // strength, so every admission here trades legality it
+                        // can see for decay it cannot. What this arm costs while
+                        // it stands: the decoder's three pocket nets (own pin
+                        // walled by their first branch's stair) stay unroutable
+                        // -- `a_second_branch_reclimbing_waits_for_a_strength_aware_search`
+                        // pins both halves of that trade.
+                        reservation.owner(&cell).is_some()
+                    })
             {
                 continue;
             }
@@ -1718,8 +1572,7 @@ fn deterministic_astar(
             // before there was anything to overrule it, and only moved climbs
             // to where the signal could no longer afford them.
             const CLIMB_COST: u64 = 3;
-            let closer_in_y =
-                (next.y - goal.y).abs() < (state.anchor.y - goal.y).abs();
+            let closer_in_y = (next.y - goal.y).abs() < (state.anchor.y - goal.y).abs();
             let step_cost = if next.y == state.anchor.y || closer_in_y {
                 1
             } else {
@@ -1747,64 +1600,8 @@ fn deterministic_astar(
     None
 }
 
-/// One state of the strength-aware search: where the signal is, which way it
-/// entered, and how much of it is left.
-///
-/// `entered` is the horizontal step direction encoded 0..=3, or 4 for "no
-/// horizontal entry" -- the branch source, or a cell entered by a climb or a
-/// descent. It is part of the state because it decides the one thing the
-/// distance-only search cannot see: whether THIS cell could hold a refresh
-/// (a repeater needs the signal to pass straight through, horizontally).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct StrengthSearchState {
-    estimate: u64,
-    travelled: u64,
-    anchor: Anchor,
-    entered: u8,
-    carried: u8,
-}
-
-fn entered_code(from: Anchor, to: Anchor) -> u8 {
-    match unit_horizontal_direction(from, to) {
-        Some((1, 0, 0)) => 0,
-        Some((-1, 0, 0)) => 1,
-        Some((0, 0, 1)) => 2,
-        Some((0, 0, -1)) => 3,
-        _ => 4,
-    }
-}
-
-/// [`deterministic_astar`], with the strength budget in the state.
-///
-/// The distance-only search prices distance and cannot see decay, and one
-/// night measured what that blindness costs from both sides: it proposes
-/// paths that arrive electrically dead (`the route ... decays to nothing`),
-/// and every attempt to widen its move set -- stair reuse, bounded or not --
-/// re-rolled whole growth trajectories into plans that verified nowhere
-/// (three kills, 2026-08-28, the ledger's record). Here the state is
-/// `(anchor, entry direction, carried strength)`:
-///
-/// - a step costs one strength, climbs included -- `realise_branch_from`'s
-///   own arithmetic;
-/// - a cell passed straight through horizontally may hold a refresh, so the
-///   signal leaves it at full strength -- the same cells `plan_bent_path`
-///   can put a repeater on (not a bend, not a stair), so what this search
-///   admits, realisation can build;
-/// - a cell of this branch's own already-laid trunk is ridden at the trunk's
-///   own arithmetic: its block KIND is handed in as `trunk`, a repeater
-///   restores and dust decays -- the same walk the shared-prefix accounting
-///   applies to a ridden line, cell for cell (the first draft handed in
-///   per-cell strengths from a positional walk of the whole route, which
-///   crosses branch boundaries and is wrong on both sides of every one);
-/// - a state that would arrive with nothing is not generated at all.
-///
-/// **Not on any shipping path.** The shipping searches stay distance-only
-/// until this one measures strictly better beside them -- the criterion-4
-/// gauntlet is the law. Dominance: a state is skipped when another visit to
-/// the same `(anchor, entered)` was both cheaper and stronger; the frontier
-/// per key is tiny (strength has 15 values) and the search stays
-/// deterministic, every tie broken by the state's own ordering.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Legacy reservation/pricing adapter around the durable StrengthAware kernel.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn strength_aware_astar(
     start: Anchor,
@@ -1814,11 +1611,10 @@ fn strength_aware_astar(
     reservation: &Reservation,
     own_join: &OwnJoinCheck,
     prices: &Prices,
-    trunk: &BTreeMap<Anchor, crate::redstone::world::block::BlockKind>,
+    trunk: &BTreeMap<Anchor, BlockState>,
     source_strength: u8,
 ) -> Option<Vec<Anchor>> {
     let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
-    const CLIMB: i32 = 3;
     let min = Anchor {
         x: start.x.min(goal.x).saturating_sub(margin),
         y: start.y.min(goal.y),
@@ -1826,162 +1622,39 @@ fn strength_aware_astar(
     };
     let max = Anchor {
         x: start.x.max(goal.x).saturating_add(margin),
-        y: start.y.max(goal.y).saturating_add(CLIMB),
+        y: start.y.max(goal.y).saturating_add(3),
         z: start.z.max(goal.z).saturating_add(margin),
     };
-
-    let start_state = StrengthSearchState {
-        estimate: manhattan_distance(start, goal),
-        travelled: 0,
-        anchor: start,
-        entered: 4,
-        carried: source_strength,
-    };
-    let mut frontier = BTreeSet::from([start_state]);
-    // Per (anchor, entered): the (travelled, carried) pairs already accepted.
-    // A new visit dominated on both axes is skipped.
-    let mut visited: BTreeMap<(Anchor, u8), Vec<(u64, u8)>> = BTreeMap::new();
-    visited.insert((start, 4), vec![(0, start_state.carried)]);
-    // Keyed WITH travelled: a generation edge always goes to a strictly
-    // smaller travelled, so the chain below can never cycle however often a
-    // better path re-claims the same (anchor, entered, carried).
-    type StateKey = (Anchor, u8, u8, u64);
-    let mut parent: BTreeMap<StateKey, StateKey> = BTreeMap::new();
-
-    while let Some(state) = frontier.iter().next().copied() {
-        frontier.remove(&state);
-        if state.anchor == goal {
-            // Rebuild the anchor path off the state chain.
-            let mut path = vec![state.anchor];
-            let mut walk = (state.anchor, state.entered, state.carried, state.travelled);
-            while let Some(&up) = parent.get(&walk) {
-                path.push(up.0);
-                walk = up;
-            }
-            path.reverse();
-            return Some(path);
-        }
-
-        // The chain this state actually took, materialised anchor-by-anchor
-        // for the two path-shape rules that read a parent map.
-        let chain: BTreeMap<Anchor, Anchor> = {
-            let mut chain = BTreeMap::new();
-            let mut walk = (state.anchor, state.entered, state.carried, state.travelled);
-            while let Some(&up) = parent.get(&walk) {
-                chain.insert(walk.0, up.0);
-                walk = up;
-            }
-            chain
-        };
-
-        for next in neighbours(state.anchor) {
-            // One branch, one visit per cell. Dust is a conductor: a path
-            // that returns to its own cell has already joined it, so the
-            // doubled tail carries nothing the first pass did not -- and a
-            // simple path is what lets `chain` above stay an acyclic map
-            // (an anchor revisited would fold it into a cycle, and the two
-            // path-shape rules below walk it).
-            if next == start || chain.contains_key(&next) {
-                continue;
-            }
-            if self_obstructs(&chain, state.anchor, next) {
-                continue;
-            }
-            if own_join.blocks(next, state.anchor, start, goal, owner, reservation, &chain) {
-                continue;
-            }
-            if !within_bounds(next, min, max)
+    crate::compile::routing::strength_aware_astar(
+        start,
+        goal,
+        trunk,
+        source_strength,
+        |chain, at, next| {
+            if self_obstructs(chain, at, next)
+                || own_join.blocks(next, at, start, goal, owner, reservation, chain)
+                || !within_bounds(next, min, max)
                 || !anchor_is_free_for(next, start, goal, terminal_support, owner, reservation)
-                || staircase_clearance(state.anchor, next).into_iter().any(|cell| {
-                    let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
-                        occupied_by != owner && occupied_by != stair_guard(owner)
-                    });
-                    let is_riser = next.y > state.anchor.y && cell.y == state.anchor.y;
-                    if is_riser {
-                        return foreign || reservation.conductor_owner(&cell).is_some();
-                    }
-                    // The reuse the distance-only search must refuse is safe
-                    // here: strength is in the state, so a ride that decays
-                    // dies in the arithmetic instead of in the built world.
-                    reservation.owner(&cell).is_some()
-                        && reservation.air_owner(&cell) != Some(stair_guard(owner).as_str())
-                })
             {
-                continue;
+                return false;
             }
-
-            // The strength arithmetic. Riding a trunk cell follows the
-            // trunk's own realisation -- a repeater restores, dust decays --
-            // which is the shared-prefix walk, cell for cell. Off the trunk,
-            // leaving strength is full when THIS cell can hold a refresh:
-            // entered and left straight through, horizontally, and not a
-            // cell whose block is already built.
-            let carried = match trunk.get(&next) {
-                Some(kind) => {
-                    if *kind == crate::redstone::world::block::BlockKind::Repeater {
-                        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
-                    } else {
-                        match state.carried.checked_sub(1) {
-                            None | Some(0) => continue,
-                            Some(left) => left,
-                        }
-                    }
+            !staircase_clearance(at, next).into_iter().any(|cell| {
+                let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
+                    occupied_by != owner && occupied_by != stair_guard(owner)
+                });
+                let is_riser = next.y > at.y && cell.y == at.y;
+                if is_riser {
+                    return foreign || reservation.conductor_owner(&cell).is_some();
                 }
-                None => {
-                    let step = entered_code(state.anchor, next);
-                    let straight_through = state.entered == step
-                        && step != 4
-                        && !trunk.contains_key(&state.anchor)
-                        && state.anchor != start;
-                    let leaving = if straight_through {
-                        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
-                    } else {
-                        state.carried
-                    };
-                    match leaving.checked_sub(1) {
-                        None | Some(0) => continue,
-                        Some(left) => left,
-                    }
-                }
-            };
-
-            const CLIMB_COST: u64 = 3;
-            let closer_in_y = (next.y - goal.y).abs() < (state.anchor.y - goal.y).abs();
-            let step_cost = if next.y == state.anchor.y || closer_in_y { 1 } else { CLIMB_COST };
-            let next_travelled = state
-                .travelled
-                .saturating_add(step_cost)
-                .saturating_add(prices.price(&next));
-
-            let entered = entered_code(state.anchor, next);
-            let seen = visited.entry((next, entered)).or_default();
-            if seen
-                .iter()
-                .any(|&(travelled, strength)| travelled <= next_travelled && strength >= carried)
-            {
-                continue;
-            }
-            seen.retain(|&(travelled, strength)| {
-                !(next_travelled <= travelled && carried >= strength)
-            });
-            seen.push((next_travelled, carried));
-
-            parent.insert(
-                (next, entered, carried, next_travelled),
-                (state.anchor, state.entered, state.carried, state.travelled),
-            );
-            frontier.insert(StrengthSearchState {
-                estimate: next_travelled.saturating_add(manhattan_distance(next, goal)),
-                travelled: next_travelled,
-                anchor: next,
-                entered,
-                carried,
-            });
-        }
-    }
-    None
+                reservation.owner(&cell).is_some()
+                    && reservation.air_owner(&cell) != Some(stair_guard(owner).as_str())
+            })
+        },
+        |next| prices.price(next),
+    )
 }
 
+#[cfg(test)]
 fn reconstruct_path(previous: BTreeMap<Anchor, Anchor>, goal: Anchor) -> Vec<Anchor> {
     let mut path = vec![goal];
     while let Some(&parent) = previous.get(path.last().expect("path is non-empty")) {
@@ -1997,12 +1670,19 @@ fn reconstruct_path(previous: BTreeMap<Anchor, Anchor>, goal: Anchor) -> Vec<Anc
 /// each of those one level up or one level down. Never the cell directly above
 /// or below -- dust does not stack, it climbs, and a search that thinks
 /// otherwise lays runs that carry nothing.
+#[cfg(test)]
 fn neighbours(anchor: Anchor) -> Vec<Anchor> {
     let mut steps = Vec::with_capacity(12);
     for sideways in horizontal_neighbours(anchor) {
         steps.push(sideways);
-        steps.push(Anchor { y: sideways.y + 1, ..sideways });
-        steps.push(Anchor { y: sideways.y - 1, ..sideways });
+        steps.push(Anchor {
+            y: sideways.y + 1,
+            ..sideways
+        });
+        steps.push(Anchor {
+            y: sideways.y - 1,
+            ..sideways
+        });
     }
     steps
 }
@@ -2039,11 +1719,8 @@ fn neighbours(anchor: Anchor) -> Vec<Anchor> {
 /// rip-up to re-price a poisoned corridor) stopped finding lawful detours
 /// that exist, because `previous` records one best chain per cell and a
 /// refused suffix cannot resurrect the clean equal-cost chain.
-fn self_obstructs(
-    previous: &BTreeMap<Anchor, Anchor>,
-    at: Anchor,
-    next: Anchor,
-) -> bool {
+#[cfg(test)]
+fn self_obstructs(previous: &BTreeMap<Anchor, Anchor>, at: Anchor, next: Anchor) -> bool {
     // The cell whose floor would fill the gap this drop needs.
     let drop_blocker = (next.y < at.y).then(|| Anchor {
         x: next.x,
@@ -2059,7 +1736,10 @@ fn self_obstructs(
     // The cell this step's own floor would land on: an own path cell there
     // holds dust the floor would delete. (An own cell one level *above* is
     // the recorded benign order instead -- see the doc comment.)
-    let crushed_below = Anchor { y: next.y - 1, ..next };
+    let crushed_below = Anchor {
+        y: next.y - 1,
+        ..next
+    };
 
     let mut successor = None;
     let mut walk = Some(at);
@@ -2157,6 +1837,7 @@ enum Prices<'a> {
         /// Which searcher lays the branches -- see [`SearchModel`]. Carried
         /// here for the same reason `own_join` is; [`Prices::RipUp`] is
         /// always distance-only, byte for byte the shipping search.
+        #[allow(dead_code)]
         search: SearchModel,
     },
 }
@@ -2195,6 +1876,7 @@ impl Prices<'_> {
     }
 
     /// Which searcher lays this router's branches.
+    #[cfg(test)]
     fn search(&self) -> SearchModel {
         match self {
             Prices::RipUp(_) => SearchModel::DistanceOnly,
@@ -2247,6 +1929,7 @@ pub(crate) enum OwnJoinPolicy {
     /// Refuse an own-net join whose joined cell is beyond a repeater of the
     /// laid route (not dust-reachable from the departure). Gainless parallel
     /// joins stay legal; within-branch loops stay invisible.
+    #[cfg_attr(not(test), allow(dead_code))]
     Narrow,
     /// Own wire is foreign wire everywhere but the attachment prefix: no
     /// re-entry, no join halo. The realised graph equals the intended tree.
@@ -2262,6 +1945,7 @@ pub(crate) const NEGOTIATED_OWN_JOIN: OwnJoinPolicy = OwnJoinPolicy::Wide;
 
 /// One branch's search-time tree rule, built by [`lay_net`] per branch from
 /// what is already laid, and asked once per candidate step.
+#[cfg(test)]
 struct OwnJoinCheck {
     policy: OwnJoinPolicy,
     /// [`OwnJoinPolicy::Narrow`] only: which dust-connected component of the
@@ -2273,6 +1957,7 @@ struct OwnJoinCheck {
     dust_component: BTreeMap<Anchor, u32>,
 }
 
+#[cfg(test)]
 impl OwnJoinCheck {
     /// The rule switched off -- what every [`Prices::RipUp`] caller passes.
     fn off() -> Self {
@@ -2399,11 +2084,10 @@ impl OwnJoinCheck {
                     // primitive-owned, never own wire, but IS a laid anchor
                     // once the first branch exists, so the component map can
                     // still answer for it.
-                    let departure = std::iter::successors(Some(at), |cell| {
-                        previous.get(cell).copied()
-                    })
-                    .find(|cell| own_wire(cell))
-                    .unwrap_or(start);
+                    let departure =
+                        std::iter::successors(Some(at), |cell| previous.get(cell).copied())
+                            .find(|cell| own_wire(cell))
+                            .unwrap_or(start);
                     let same_component = self
                         .dust_component
                         .get(&departure)
@@ -2452,12 +2136,19 @@ fn staircase_clearance(from: Anchor, to: Anchor) -> Vec<Anchor> {
     }
     let riser = Anchor { y: from.y, ..to };
     if to.y > from.y {
-        vec![riser, Anchor { y: from.y + 1, ..from }]
+        vec![
+            riser,
+            Anchor {
+                y: from.y + 1,
+                ..from
+            },
+        ]
     } else {
         vec![riser]
     }
 }
 
+#[cfg(test)]
 fn within_bounds(anchor: Anchor, min: Anchor, max: Anchor) -> bool {
     anchor.x >= min.x
         && anchor.x <= max.x
@@ -2467,6 +2158,7 @@ fn within_bounds(anchor: Anchor, min: Anchor, max: Anchor) -> bool {
         && anchor.z <= max.z
 }
 
+#[cfg(test)]
 fn anchor_is_free_for(
     anchor: Anchor,
     start: Anchor,
@@ -2546,8 +2238,14 @@ fn keep_out(anchor: Anchor) -> Vec<Anchor> {
     let mut cells = Vec::with_capacity(12);
     for neighbour in horizontal_neighbours(anchor) {
         cells.push(neighbour);
-        cells.push(Anchor { y: neighbour.y + 1, ..neighbour });
-        cells.push(Anchor { y: neighbour.y - 1, ..neighbour });
+        cells.push(Anchor {
+            y: neighbour.y + 1,
+            ..neighbour
+        });
+        cells.push(Anchor {
+            y: neighbour.y - 1,
+            ..neighbour
+        });
     }
     cells
 }
@@ -2581,6 +2279,7 @@ fn keep_out(anchor: Anchor) -> Vec<Anchor> {
 /// doc comment for the two measurements that stopped it), [`ring_closed_in`]
 /// (the post-lay ring rule), and [`dust_join_neighbours`] (the search-time
 /// tree rule). One statement of the lid, by standing rule 6.
+#[cfg(test)]
 fn join_lid(anchor: Anchor, neighbour: Anchor) -> Option<Anchor> {
     match neighbour.y.cmp(&anchor.y) {
         std::cmp::Ordering::Equal => None,
@@ -2612,6 +2311,7 @@ fn join_lid(anchor: Anchor, neighbour: Anchor) -> Option<Anchor> {
 /// reservation's stone commitment. What "sealed" may mean is the caller's
 /// derivation to defend; what a lid *is* is stated here and in [`join_lid`]
 /// only.
+#[cfg(test)]
 fn dust_join_neighbours(cell: Anchor, sealed: &impl Fn(Anchor) -> bool) -> Vec<Anchor> {
     keep_out(cell)
         .into_iter()
@@ -2770,7 +2470,6 @@ fn reserve_path(reservation: &mut Reservation, owner: &str, path: &[Anchor]) {
     }
 }
 
-
 /// The socket a route ends in, guessed from the direction it approached out
 /// of -- the answer of last resort, for a route whose sink the netlist never
 /// declared.
@@ -2806,6 +2505,7 @@ fn preferred_axis_direction(from: Anchor, to: Anchor) -> (i32, i32, i32) {
     }
 }
 
+#[cfg(test)]
 fn terminal_is_isolated(
     reservation: &Reservation,
     owner: &str,
@@ -2987,6 +2687,7 @@ impl Reservation {
 
     /// The owner of a cell that conducts; `None` for an empty cell or one
     /// holding nothing but solid material.
+    #[cfg(test)]
     fn conductor_owner(&self, anchor: &Anchor) -> Option<&str> {
         self.cells.get(anchor).and_then(|(owner, occupancy)| {
             matches!(occupancy, Occupancy::Wire | Occupancy::GateConductor)
@@ -3005,6 +2706,7 @@ impl Reservation {
     /// ([`OwnJoinCheck`]) is a production reader now: it asks which cells hold
     /// *this net's own wire*, and a primitive's `GateConductor` must not
     /// answer -- the join relation is wire against wire.
+    #[cfg(test)]
     fn wire_owner(&self, anchor: &Anchor) -> Option<&str> {
         self.cells.get(anchor).and_then(|(owner, occupancy)| {
             matches!(occupancy, Occupancy::Wire).then_some(owner.as_str())
@@ -3017,6 +2719,7 @@ impl Reservation {
     /// "will not be a conductive full block" -- air, dust, a torch, a lever,
     /// or a cell nobody has claimed at all -- and every one of those leaves a
     /// vertical pair joined, so `None` is a refusal.
+    #[cfg(test)]
     fn stone_owner(&self, anchor: &Anchor) -> Option<&str> {
         self.cells.get(anchor).and_then(|(owner, occupancy)| {
             matches!(occupancy, Occupancy::Stone).then_some(owner.as_str())
@@ -3028,6 +2731,7 @@ impl Reservation {
     /// `stair:` guard. `Some` means a staircase already depends on this cell
     /// being empty, so a floor written here cuts that staircase: the lid rule
     /// in [`anchor_is_free_for`] is the reader.
+    #[cfg(test)]
     fn air_owner(&self, anchor: &Anchor) -> Option<&str> {
         self.cells.get(anchor).and_then(|(owner, occupancy)| {
             matches!(occupancy, Occupancy::Air).then_some(owner.as_str())
@@ -3078,9 +2782,7 @@ impl Reservation {
         );
         self.cells
             .keys()
-            .filter(|cell| {
-                cell.x >= lo.x && cell.x <= hi.x && cell.z >= lo.z && cell.z <= hi.z
-            })
+            .filter(|cell| cell.x >= lo.x && cell.x <= hi.x && cell.z >= lo.z && cell.z <= hi.z)
             .copied()
             .collect()
     }
@@ -3558,12 +3260,8 @@ pub(crate) fn plan_from_netlist_with_growth(
         let (outcome, charged) = match rule.router {
             RouterKind::RipUp => {
                 let mut congestion = Congestion::default();
-                let outcome = route_every_net_charging(
-                    candidate,
-                    netlist,
-                    RIP_UP_ROUNDS,
-                    &mut congestion,
-                );
+                let outcome =
+                    route_every_net_charging(candidate, netlist, RIP_UP_ROUNDS, &mut congestion);
                 (outcome, congestion.charged)
             }
             RouterKind::Negotiated => {
@@ -3997,7 +3695,7 @@ fn pin_roles<'a>(
 /// failure three stages downstream. The one refusal that cannot be made here
 /// -- a handover the router genuinely could not reach -- is raised against the
 /// same pin by [`lay_net`], as [`PinRefusal::UnreachableHandover`].
-fn validate_port_placements(
+pub(crate) fn validate_port_placements(
     netlist: &Netlist,
     placements: &PortPlacements,
 ) -> Result<(), PlannerError> {
@@ -4038,9 +3736,7 @@ fn validate_port_placements(
     // handover the pin names. The net cell joins them because for an input it
     // is REDA's own dust and for an output it is the router's one approach --
     // either way no second port may stand there.
-    let claims = |pin: &PortPin, role: PortRole| {
-        [pin.at, pin.handover(role), pin.net_cell(role)]
-    };
+    let claims = |pin: &PortPin, role: PortRole| [pin.at, pin.handover(role), pin.net_cell(role)];
 
     for (index, (port, pin, role)) in roles.iter().enumerate() {
         for (_other_port, other, other_role) in &roles[index + 1..] {
@@ -4057,7 +3753,9 @@ fn validate_port_placements(
                 return Err(invalid(
                     port,
                     pin,
-                    PinRefusal::NoGapFrom { other_pinned_cell: other.at },
+                    PinRefusal::NoGapFrom {
+                        other_pinned_cell: other.at,
+                    },
                 ));
             }
             let ours = claims(pin, *role);
@@ -4068,7 +3766,9 @@ fn validate_port_placements(
                 return Err(invalid(
                     port,
                     pin,
-                    PinRefusal::CollidesWith { other_port_cell: shared },
+                    PinRefusal::CollidesWith {
+                        other_port_cell: shared,
+                    },
                 ));
             }
         }
@@ -4186,7 +3886,12 @@ fn route_every_net(
     netlist: &Netlist,
     rip_up_rounds: usize,
 ) -> Result<PlanCandidate, PlannerError> {
-    route_every_net_charging(candidate, netlist, rip_up_rounds, &mut Congestion::default())
+    route_every_net_charging(
+        candidate,
+        netlist,
+        rip_up_rounds,
+        &mut Congestion::default(),
+    )
 }
 
 /// [`route_every_net`] with the congestion table lent in rather than owned,
@@ -4258,7 +3963,10 @@ fn net_sinks(netlist: &Netlist) -> BTreeMap<String, Vec<(usize, usize)>> {
 /// handover repeater.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NetConsumer {
-    Gate { gate: usize, input_index: usize },
+    Gate {
+        gate: usize,
+        input_index: usize,
+    },
     /// The extra sink a pinned declared output puts on its own net: the
     /// delivery repeater at `handover`, which a diode can only be entered
     /// from behind, so it has exactly **one** lawful approach -- `net_cell`,
@@ -4284,7 +3992,10 @@ enum NetConsumer {
 /// what makes its net routable at all: `build_nets`' legacy convention drops
 /// a signal with no gate-input sink, and before terminals existed such a
 /// signal genuinely had nowhere to go.
-fn net_consumers(netlist: &Netlist, candidate: &PlanCandidate) -> BTreeMap<String, Vec<NetConsumer>> {
+fn net_consumers(
+    netlist: &Netlist,
+    candidate: &PlanCandidate,
+) -> BTreeMap<String, Vec<NetConsumer>> {
     let mut consumers: BTreeMap<String, Vec<NetConsumer>> = BTreeMap::new();
     for (signal, sinks) in net_sinks(netlist) {
         consumers.insert(
@@ -4304,14 +4015,20 @@ fn net_consumers(netlist: &Netlist, candidate: &PlanCandidate) -> BTreeMap<Strin
             .strip_prefix("output:")
             .expect("terminal nodes are named output:<port>")
             .to_string();
-        let pin = PortPin { at: node.anchor, toward };
-        consumers.entry(port.clone()).or_default().push(NetConsumer::Terminal {
-            port,
+        let pin = PortPin {
             at: node.anchor,
-            handover: pin.handover(PortRole::Output),
-            net_cell: pin.net_cell(PortRole::Output),
             toward,
-        });
+        };
+        consumers
+            .entry(port.clone())
+            .or_default()
+            .push(NetConsumer::Terminal {
+                port,
+                at: node.anchor,
+                handover: pin.handover(PortRole::Output),
+                net_cell: pin.net_cell(PortRole::Output),
+                toward,
+            });
     }
     consumers
 }
@@ -4362,7 +4079,10 @@ fn preclaim_socket_approaches(
         let support = candidate.anchors[gate];
         let facing = candidate.facing_of(gate);
         for (input_index, driver) in definition.inputs.iter().enumerate() {
-            let socket = step(support, compile::geometry::input_directions(facing)[input_index]);
+            let socket = step(
+                support,
+                compile::geometry::input_directions(facing)[input_index],
+            );
             let approach = Anchor {
                 x: socket.x + (socket.x - support.x),
                 y: socket.y + (socket.y - support.y),
@@ -4544,6 +4264,7 @@ fn merge_source_strength(
 ///   invariant passed. An output cell that ships open -- no own anchor
 ///   above it, no stone commitment -- still radiates nothing, exactly as
 ///   `net_signal_strength` records it.
+#[cfg(test)]
 fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, BTreeSet<Anchor>)> {
     use crate::redstone::world::block::BlockKind;
 
@@ -4581,7 +4302,10 @@ fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, B
                 _ => Vec::new(),
             };
         }
-        let above = Anchor { y: output.y + 1, ..output };
+        let above = Anchor {
+            y: output.y + 1,
+            ..output
+        };
         let ships_solid =
             kind_of.contains_key(&above) || reservation.stone_owner(&output).is_some();
         if !ships_solid {
@@ -4590,8 +4314,14 @@ fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, B
         horizontal_neighbours(output)
             .into_iter()
             .chain([
-                Anchor { y: output.y + 1, ..output },
-                Anchor { y: output.y - 1, ..output },
+                Anchor {
+                    y: output.y + 1,
+                    ..output
+                },
+                Anchor {
+                    y: output.y - 1,
+                    ..output
+                },
             ])
             .filter(|face| {
                 kind_of
@@ -4659,7 +4389,11 @@ fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, B
             if at == input {
                 return Some((cell, seen));
             }
-            frontier.extend(steps_from(at).into_iter().filter(|next| !seen.contains(next)));
+            frontier.extend(
+                steps_from(at)
+                    .into_iter()
+                    .filter(|next| !seen.contains(next)),
+            );
         }
     }
     None
@@ -4684,7 +4418,8 @@ fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, B
 /// running under both, which is the point: a difference between the two
 /// routers can only come from those two arguments.
 #[allow(clippy::too_many_arguments)]
-fn lay_net(
+#[cfg(test)]
+fn legacy_lay_net_reference(
     signal: &str,
     source: Anchor,
     consumers: &[NetConsumer],
@@ -4722,8 +4457,10 @@ fn lay_net(
             NetConsumer::Gate { gate, input_index } => {
                 let support = candidate.anchors[*gate];
                 let facing = candidate.facing_of(*gate);
-                let socket =
-                    step(support, compile::geometry::input_directions(facing)[*input_index]);
+                let socket = step(
+                    support,
+                    compile::geometry::input_directions(facing)[*input_index],
+                );
                 let approach = Anchor {
                     x: socket.x + (socket.x - support.x),
                     y: socket.y + (socket.y - support.y),
@@ -4731,7 +4468,9 @@ fn lay_net(
                 };
                 (socket, vec![approach])
             }
-            NetConsumer::Terminal { handover, net_cell, .. } => (*handover, vec![*net_cell]),
+            NetConsumer::Terminal {
+                handover, net_cell, ..
+            } => (*handover, vec![*net_cell]),
         };
         // What this branch's failure is called, in the error's own words.
         let sink_label = match consumer {
@@ -4749,11 +4488,11 @@ fn lay_net(
         // aware searcher rides them at the shared-prefix arithmetic
         // (repeater restores, dust decays) along its own path, which is
         // exactly the walk the accounting below applies to a ridden line.
-        let trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockKind> = route
+        let trunk: BTreeMap<Anchor, BlockState> = route
             .anchors
             .iter()
             .zip(&route.realisation)
-            .map(|(anchor, block)| (*anchor, block.kind))
+            .map(|(anchor, block)| (*anchor, block.clone()))
             .collect();
         let mut found: Option<Vec<Anchor>> = None;
         let mut aimed_at = approaches[0];
@@ -4798,13 +4537,13 @@ fn lay_net(
                 // through the negotiation loop, so rip-up and re-ordering get
                 // their turns first; this is the sentence the loop ends on.
                 let error = match consumer {
-                    NetConsumer::Terminal { port, at, handover, .. } => {
-                        PlannerError::InvalidPortPin {
-                            port: port.clone(),
-                            at: *at,
-                            refusal: PinRefusal::UnreachableHandover { cell: *handover },
-                        }
-                    }
+                    NetConsumer::Terminal {
+                        port, at, handover, ..
+                    } => PlannerError::InvalidPortPin {
+                        port: port.clone(),
+                        at: *at,
+                        refusal: PinRefusal::UnreachableHandover { cell: *handover },
+                    },
                     NetConsumer::Gate { .. } => PlannerError::NoLocalRoute {
                         from: source,
                         to: approach,
@@ -4840,9 +4579,7 @@ fn lay_net(
                 .iter()
                 .position(|laid| laid == anchor)
                 .expect("the shared prefix is by definition already laid");
-            if route.realisation[index].kind
-                == crate::redstone::world::block::BlockKind::Repeater
-            {
+            if route.realisation[index].kind == crate::redstone::world::block::BlockKind::Repeater {
                 carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
                 trunk_repeaters += 1;
             } else {
@@ -4889,8 +4626,7 @@ fn lay_net(
             .blocks
             .last()
             .is_some_and(|block| block.kind == crate::redstone::world::block::BlockKind::Repeater);
-        for ((anchor, block), floor) in path[shared..].iter().zip(laid.blocks).zip(laid.floors)
-        {
+        for ((anchor, block), floor) in path[shared..].iter().zip(laid.blocks).zip(laid.floors) {
             if route.anchors.contains(anchor) {
                 continue;
             }
@@ -4945,17 +4681,23 @@ fn lay_net(
                             socket,
                             support,
                             laid.strength_before_terminal,
-                            terminal_is_isolated(reservation, &signal, predecessor, socket, support),
+                            terminal_is_isolated(
+                                reservation,
+                                &signal,
+                                predecessor,
+                                socket,
+                                support,
+                            ),
                         ))
                     };
                     if let Some(index) = route.anchors.iter().position(|anchor| *anchor == socket) {
                         route.realisation[index] = match style {
-                            TerminalStyle::RepeaterIntoSupport => compile::repeater(
-                                compile::direction_from(
+                            TerminalStyle::RepeaterIntoSupport => {
+                                compile::repeater(compile::direction_from(
                                     Position::new(predecessor.x, predecessor.y, predecessor.z),
                                     Position::new(socket.x, socket.y, socket.z),
-                                ),
-                            ),
+                                ))
+                            }
                             TerminalStyle::DirectedDustIntoSupport => compile::dust(),
                         };
                     }
@@ -4984,7 +4726,9 @@ fn lay_net(
                     repeaters: trunk_repeaters + laid.repeaters,
                 });
             }
-            NetConsumer::Terminal { port, at, toward, .. } => {
+            NetConsumer::Terminal {
+                port, at, toward, ..
+            } => {
                 // The contract's one delivery repeater, whatever the
                 // shared-trunk overlap did: aimed along `toward` so its output
                 // lands in the caller's cell, and written here so the plan says
@@ -5053,8 +4797,421 @@ fn lay_net(
                 ),
             }));
         }
+        route.branch_paths.push(path);
     }
     Ok(route)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lay_net(
+    signal: &str,
+    source: Anchor,
+    consumers: &[NetConsumer],
+    netlist: &Netlist,
+    candidate: &PlanCandidate,
+    reservation: &mut Reservation,
+    prices: &Prices,
+) -> Result<Route, Box<RoutingFailure>> {
+    let route_id = RouteId(0);
+    let (typed_source, typed_sinks) =
+        typed_legacy_request_parts(route_id, signal, source, consumers, netlist, candidate);
+    let typed_reservations = typed_reservations(reservation, route_id, signal);
+    let adapter = LegacyPlannerRouterAdapter::new(signal, consumers, netlist, reservation, prices);
+    match adapter.route(RouteRequest {
+        id: route_id,
+        source: typed_source,
+        sinks: &typed_sinks,
+        reservations: &typed_reservations,
+        limits: RouterLimits {
+            max_node_expansions: u64::MAX,
+            max_queue_entries: u64::MAX,
+        },
+    }) {
+        Ok(tree) => Ok(adapter.convert_to_legacy(tree)),
+        Err(_) => Err(adapter
+            .take_failure()
+            .expect("legacy refusal keeps its exact compatibility envelope")),
+    }
+}
+
+/// Lossless compatibility boundary between the string-labelled shipping
+/// planner and the durable typed physical-router contract.
+///
+/// It preserves the legacy labels and refusal envelope around the shared typed
+/// routing authority, and converts results back from exact `BlockState`
+/// records rather than reconstructing them from coordinates.
+struct LegacyPlannerRouterAdapter<'a> {
+    signal: &'a str,
+    consumers: &'a [NetConsumer],
+    netlist: &'a Netlist,
+    reservation: RefCell<&'a mut Reservation>,
+    prices: &'a Prices<'a>,
+    failure: RefCell<Option<Box<RoutingFailure>>>,
+}
+
+impl<'a> LegacyPlannerRouterAdapter<'a> {
+    fn new(
+        signal: &'a str,
+        consumers: &'a [NetConsumer],
+        netlist: &'a Netlist,
+        reservation: &'a mut Reservation,
+        prices: &'a Prices<'a>,
+    ) -> Self {
+        Self {
+            signal,
+            consumers,
+            netlist,
+            reservation: RefCell::new(reservation),
+            prices,
+            failure: RefCell::new(None),
+        }
+    }
+
+    fn take_failure(&self) -> Option<Box<RoutingFailure>> {
+        self.failure.borrow_mut().take()
+    }
+
+    fn convert_to_legacy(&self, tree: RealisedRouteTree) -> Route {
+        let mut floors = Vec::with_capacity(tree.cells.len());
+        for cell in &tree.cells {
+            let floor_at = Anchor {
+                y: cell.at.y - 1,
+                ..cell.at
+            };
+            floors.push(
+                tree.floors
+                    .iter()
+                    .find(|floor| floor.at == floor_at)
+                    .map(|floor| floor.state.clone())
+                    .unwrap_or_else(compile::stone),
+            );
+        }
+        let terminals = tree
+            .branches
+            .iter()
+            .zip(self.consumers)
+            .map(|(branch, consumer)| RouteTerminal {
+                sink: match consumer {
+                    NetConsumer::Gate { gate, input_index } => RouteSink {
+                        gate: self.netlist.gates[*gate].output.clone(),
+                        input_index: *input_index,
+                        anchor: branch.terminal.at,
+                    },
+                    NetConsumer::Terminal { port, .. } => RouteSink {
+                        gate: port.clone(),
+                        input_index: 0,
+                        anchor: branch.terminal.at,
+                    },
+                },
+                kind: branch.terminal.kind,
+                repeaters: branch.terminal.repeaters,
+            })
+            .collect();
+        Route {
+            id: self.signal.to_string(),
+            anchors: tree.cells.iter().map(|cell| cell.at).collect(),
+            owner: Some(self.signal.to_string()),
+            terminals,
+            realisation: tree.cells.into_iter().map(|cell| cell.state).collect(),
+            floors,
+            branch_paths: tree
+                .branches
+                .into_iter()
+                .map(|branch| branch.path)
+                .collect(),
+        }
+    }
+}
+
+impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
+    fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, TypedRouterFailure> {
+        let route = request.id;
+        let source_id = request.source.id;
+        let source = request.source.anchor;
+        let sinks = request.sinks.as_slice().to_vec();
+        let join_policy = match self.prices.own_join() {
+            OwnJoinPolicy::Off => crate::compile::routing::RoutingJoinPolicy::Off,
+            OwnJoinPolicy::Narrow => crate::compile::routing::RoutingJoinPolicy::Narrow,
+            OwnJoinPolicy::Wide => crate::compile::routing::RoutingJoinPolicy::Wide,
+        };
+        let outcome = crate::compile::routing::route_with_policy(
+            request,
+            join_policy,
+            |at| self.prices.price(at),
+            |at, owner, kind| {
+                let (owner, occupancy) = match (owner, kind) {
+                    (PhysicalReservationOwner::Route(_), PhysicalReservationKind::Conductor(_)) => {
+                        (self.signal.to_string(), Occupancy::Wire)
+                    }
+                    (PhysicalReservationOwner::Route(_), PhysicalReservationKind::Floor(_)) => {
+                        (self.signal.to_string(), Occupancy::Stone)
+                    }
+                    (
+                        PhysicalReservationOwner::RouteStair(_),
+                        PhysicalReservationKind::Floor(_),
+                    ) => (stair_guard(self.signal), Occupancy::Stone),
+                    (
+                        PhysicalReservationOwner::RouteStair(_),
+                        PhysicalReservationKind::MandatoryAir,
+                    ) => (stair_guard(self.signal), Occupancy::Air),
+                    (PhysicalReservationOwner::Sink(sink), PhysicalReservationKind::KeepOut) => {
+                        let consumer = &self.consumers[usize::from(sink.ordinal)];
+                        let guard = match consumer {
+                            NetConsumer::Gate { gate, input_index } => format!(
+                                "terminal:{}.in[{input_index}]",
+                                self.netlist.gates[*gate].output
+                            ),
+                            NetConsumer::Terminal { port, .. } => {
+                                format!("terminal:output:{port}")
+                            }
+                        };
+                        (guard, Occupancy::Solid)
+                    }
+                    _ => return,
+                };
+                self.reservation.borrow_mut().insert(at, &owner, occupancy);
+            },
+        );
+        match outcome {
+            Ok(tree) => Ok(tree),
+            Err(error @ TypedRouterFailure::RouterLimitExceeded { .. }) => Err(error),
+            Err(error) => {
+                let sink_id = match &error {
+                    TypedRouterFailure::NoLocalRoute { sink, .. }
+                    | TypedRouterFailure::RingClosure { sink, .. } => Some(*sink),
+                    TypedRouterFailure::WrongRepeaterAxis { .. }
+                    | TypedRouterFailure::InvalidRequest { .. }
+                    | TypedRouterFailure::Refused { .. } => None,
+                    TypedRouterFailure::RouterLimitExceeded { .. } => unreachable!(),
+                };
+                let sink = sink_id
+                    .and_then(|id| sinks.get(usize::from(id.ordinal)))
+                    .or_else(|| sinks.first());
+                let approach = sink
+                    .map(|sink| step(sink.anchor, sink.allowed_entry))
+                    .unwrap_or(source);
+                let planner_error = match (&error, sink_id) {
+                    (TypedRouterFailure::NoLocalRoute { .. }, Some(id)) => {
+                        match &self.consumers[usize::from(id.ordinal)] {
+                            NetConsumer::Terminal {
+                                port, at, handover, ..
+                            } => PlannerError::InvalidPortPin {
+                                port: port.clone(),
+                                at: *at,
+                                refusal: PinRefusal::UnreachableHandover { cell: *handover },
+                            },
+                            NetConsumer::Gate { .. } => PlannerError::NoLocalRoute {
+                                from: source,
+                                to: approach,
+                            },
+                        }
+                    }
+                    (TypedRouterFailure::RingClosure { repeater, .. }, Some(id)) => {
+                        let label = legacy_sink_label(
+                            &self.consumers[usize::from(id.ordinal)],
+                            self.netlist,
+                        );
+                        PlannerError::PhysicalInvariant(
+                            compile::CompileError::CandidateMetadataViolation {
+                                item: self.signal.to_string(),
+                                reason: format!(
+                                    "the branch to {label} closes a ring: the repeater at ({}, {}, {}) reaches its own input cell through this net's own cells, and a route that feeds its own repeater input is a latch, not a wire",
+                                    repeater.x, repeater.y, repeater.z
+                                ),
+                            },
+                        )
+                    }
+                    _ => PlannerError::PhysicalInvariant(
+                        compile::CompileError::CandidateMetadataViolation {
+                            item: self.signal.to_string(),
+                            reason: error.to_string(),
+                        },
+                    ),
+                };
+                let charge_outright = match &error {
+                    TypedRouterFailure::RingClosure { charged, .. } => charged.clone(),
+                    _ => Vec::new(),
+                };
+                *self.failure.borrow_mut() = Some(Box::new(RoutingFailure {
+                    blocked: self.signal.to_string(),
+                    corridor: (source, approach),
+                    reservation: self.reservation.borrow().clone(),
+                    charge_outright,
+                    error: planner_error,
+                }));
+                let category = error.category();
+                Err(TypedRouterFailure::Refused {
+                    route,
+                    source: source_id,
+                    sink: sink_id,
+                    category,
+                })
+            }
+        }
+    }
+}
+
+fn legacy_sink_label(consumer: &NetConsumer, netlist: &Netlist) -> String {
+    match consumer {
+        NetConsumer::Gate { gate, input_index } => {
+            format!("{}.in[{input_index}]", netlist.gates[*gate].output)
+        }
+        NetConsumer::Terminal { port, .. } => format!("output `{port}`'s terminal"),
+    }
+}
+
+fn typed_reservations(
+    reservation: &Reservation,
+    route: RouteId,
+    signal: &str,
+) -> PhysicalReservations {
+    let mut typed = PhysicalReservations::new();
+    for (ordinal, (&at, (owner, occupancy))) in reservation.cells.iter().enumerate() {
+        let typed_owner = if owner == signal {
+            PhysicalReservationOwner::Route(route)
+        } else if owner == &stair_guard(signal) {
+            PhysicalReservationOwner::RouteStair(route)
+        } else {
+            PhysicalReservationOwner::KeepOut(ordinal as u32)
+        };
+        let kind = match occupancy {
+            Occupancy::Wire => PhysicalReservationKind::Conductor(compile::dust()),
+            Occupancy::Stone => PhysicalReservationKind::Floor(compile::stone()),
+            Occupancy::Air => PhysicalReservationKind::MandatoryAir,
+            Occupancy::GateConductor => PhysicalReservationKind::Conductor(compile::dust()),
+            Occupancy::Solid => PhysicalReservationKind::KeepOut,
+        };
+        typed.reserve(at, typed_owner, kind);
+    }
+    typed
+}
+
+fn typed_endpoint_id(netlist: &Netlist, signal: &str) -> PhysicalEndpointId {
+    if let Some(index) = netlist.inputs.iter().position(|input| input == signal) {
+        return PhysicalEndpointId::PrimaryInput(PortId(index as u32));
+    }
+    let gate = netlist
+        .gates
+        .iter()
+        .position(|gate| gate.output == signal)
+        .expect("every routed signal has an input or gate source");
+    if netlist.gates[gate].is_merge() {
+        PhysicalEndpointId::Junction(InstanceId(gate as u32))
+    } else {
+        PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(gate as u32),
+            node: TopologyNodeId(0),
+        })
+    }
+}
+
+fn facing_between(from: Anchor, to: Anchor) -> Facing {
+    match unit_horizontal_direction(from, to) {
+        Some((1, 0, 0)) => Facing::East,
+        Some((-1, 0, 0)) => Facing::West,
+        Some((0, 0, 1)) => Facing::South,
+        Some((0, 0, -1)) => Facing::North,
+        _ => Facing::East,
+    }
+}
+
+fn typed_legacy_request_parts(
+    route: RouteId,
+    signal: &str,
+    source: Anchor,
+    consumers: &[NetConsumer],
+    netlist: &Netlist,
+    candidate: &PlanCandidate,
+) -> (RouteEndpoint, NonEmptyRouteSinks) {
+    let mut sinks = Vec::with_capacity(consumers.len());
+    let mut first_approach = None;
+    for (ordinal, consumer) in consumers.iter().enumerate() {
+        let id = RoutedSinkId {
+            route,
+            ordinal: ordinal as u16,
+        };
+        let typed = match consumer {
+            NetConsumer::Gate { gate, input_index } => {
+                let support = candidate.anchors[*gate];
+                let socket = step(
+                    support,
+                    compile::geometry::input_directions(candidate.facing_of(*gate))[*input_index],
+                );
+                let approach = Anchor {
+                    x: socket.x + (socket.x - support.x),
+                    y: socket.y + (socket.y - support.y),
+                    z: socket.z + (socket.z - support.z),
+                };
+                first_approach.get_or_insert(approach);
+                let connection = ConnectionId::External {
+                    instance: InstanceId(*gate as u32),
+                    input_index: *input_index as u16,
+                };
+                let bare_merge = netlist.gates[*gate].is_merge()
+                    && consumers.iter().all(|other| {
+                        matches!(other, NetConsumer::Gate { gate: sink, .. } if sink == gate)
+                    });
+                let requirement = if bare_merge {
+                    TerminalRequirement::Exact(RouteTerminalKind::BareMergeRepeater)
+                } else if netlist.gates[*gate].is_merge() {
+                    TerminalRequirement::Exact(RouteTerminalKind::RepeaterIntoSupport)
+                } else {
+                    TerminalRequirement::Automatic
+                };
+                TypedRouteSink {
+                    id,
+                    endpoint: PhysicalEndpointId::Landing(connection),
+                    anchor: socket,
+                    allowed_entry: facing_between(socket, approach),
+                    terminal: TerminalContract::Sink {
+                        target: RouteTarget::Connection(connection),
+                        support,
+                        requirement,
+                    },
+                }
+            }
+            NetConsumer::Terminal {
+                at,
+                toward: _,
+                handover,
+                net_cell,
+                ..
+            } => {
+                first_approach.get_or_insert(*net_cell);
+                let port = netlist
+                    .outputs
+                    .iter()
+                    .position(|output| output == signal)
+                    .unwrap_or(ordinal);
+                TypedRouteSink {
+                    id,
+                    endpoint: PhysicalEndpointId::DeclaredOutput(PortId(port as u32)),
+                    anchor: *handover,
+                    allowed_entry: facing_between(*handover, *net_cell),
+                    terminal: TerminalContract::Sink {
+                        target: RouteTarget::DeclaredOutput(PortId(port as u32)),
+                        support: *at,
+                        requirement: TerminalRequirement::Exact(
+                            RouteTerminalKind::OutputTerminalRepeater,
+                        ),
+                    },
+                }
+            }
+        };
+        sinks.push(typed);
+    }
+    let endpoint = RouteEndpoint {
+        id: typed_endpoint_id(netlist, signal),
+        anchor: source,
+        allowed_exit: facing_between(source, first_approach.unwrap_or(source)),
+        terminal: TerminalContract::Source {
+            signal_strength: merge_source_strength(netlist, candidate, signal, source),
+        },
+    };
+    (
+        endpoint,
+        NonEmptyRouteSinks::new(sinks).expect("the routed net map contains only non-empty nets"),
+    )
 }
 
 fn route_in_order(
@@ -5072,21 +5229,37 @@ fn route_in_order(
 
     let prices = Prices::RipUp(congestion);
     let mut routes = Vec::with_capacity(sinks.len());
-    for signal in order {
+    for (route_ordinal, signal) in order.iter().enumerate() {
         let consumers = sinks
             .get(signal)
             .cloned()
             .expect("the order is built from these very keys");
         let source = net_source(&candidate, signal)?;
-        routes.push(lay_net(
-            signal,
-            source,
-            &consumers,
-            netlist,
-            &candidate,
-            &mut reservation,
-            &prices,
-        )?);
+        let route_id = RouteId(route_ordinal as u32);
+        let (typed_source, typed_sinks) =
+            typed_legacy_request_parts(route_id, signal, source, &consumers, netlist, &candidate);
+        let typed_reservations = typed_reservations(&reservation, route_id, signal);
+        let adapter =
+            LegacyPlannerRouterAdapter::new(signal, &consumers, netlist, &mut reservation, &prices);
+        match adapter.route(RouteRequest {
+            id: route_id,
+            source: typed_source,
+            sinks: &typed_sinks,
+            reservations: &typed_reservations,
+            // Task 13 owns any shipping cap change.  `u64::MAX` is fixed and
+            // deterministic here; zero-limit behavior is still typed above.
+            limits: RouterLimits {
+                max_node_expansions: u64::MAX,
+                max_queue_entries: u64::MAX,
+            },
+        }) {
+            Ok(tree) => routes.push(adapter.convert_to_legacy(tree)),
+            Err(_) => {
+                return Err(adapter
+                    .take_failure()
+                    .expect("legacy refusal keeps its exact compatibility envelope"));
+            }
+        }
     }
 
     candidate.routes = routes;
@@ -5198,8 +5371,14 @@ type ByNet = BTreeMap<String, u32>;
 fn exclusion_zone(cell: Anchor) -> Vec<Anchor> {
     let mut cells = Vec::with_capacity(15);
     cells.push(cell);
-    cells.push(Anchor { y: cell.y + 1, ..cell });
-    cells.push(Anchor { y: cell.y - 1, ..cell });
+    cells.push(Anchor {
+        y: cell.y + 1,
+        ..cell
+    });
+    cells.push(Anchor {
+        y: cell.y - 1,
+        ..cell
+    });
     cells.extend(keep_out(cell));
     cells
 }
@@ -5316,7 +5495,10 @@ const HISTORY_WEIGHT: u64 = 8;
 
 impl Negotiation {
     fn stamp(map: &mut BTreeMap<Anchor, ByNet>, cell: Anchor, net: &str) {
-        *map.entry(cell).or_default().entry(net.to_string()).or_insert(0) += 1;
+        *map.entry(cell)
+            .or_default()
+            .entry(net.to_string())
+            .or_insert(0) += 1;
     }
 
     fn unstamp(map: &mut BTreeMap<Anchor, ByNet>, cell: Anchor, net: &str) {
@@ -5391,7 +5573,14 @@ impl Negotiation {
         // Someone else's staircase needs this cell to stay air -- and the cell
         // below it, because this wire's own floor would fill that one.
         contenders += Self::foreign(&self.air, cell, mine);
-        contenders += Self::foreign(&self.air, &Anchor { y: cell.y - 1, ..*cell }, mine);
+        contenders += Self::foreign(
+            &self.air,
+            &Anchor {
+                y: cell.y - 1,
+                ..*cell
+            },
+            mine,
+        );
         history
             .saturating_mul(HISTORY_WEIGHT)
             .saturating_add(contenders.saturating_mul(self.present))
@@ -5407,7 +5596,10 @@ impl Negotiation {
         let mut out = BTreeSet::new();
         for (net, claim) in &self.claims {
             for cell in &claim.wire {
-                let floor = Anchor { y: cell.y - 1, ..*cell };
+                let floor = Anchor {
+                    y: cell.y - 1,
+                    ..*cell
+                };
                 if Self::foreign(&self.shadow, cell, net) > 0
                     || Self::foreign(&self.air, cell, net) > 0
                     || Self::foreign(&self.air, &floor, net) > 0
@@ -5416,7 +5608,10 @@ impl Negotiation {
                 }
             }
             for cell in &claim.air {
-                let lid = Anchor { y: cell.y + 1, ..*cell };
+                let lid = Anchor {
+                    y: cell.y + 1,
+                    ..*cell
+                };
                 if Self::foreign(&self.wire, cell, net) > 0
                     || Self::foreign(&self.wire, &lid, net) > 0
                 {
@@ -5475,7 +5670,10 @@ fn preclaim_terminal_guards(
         let support = candidate.anchors[gate];
         let facing = candidate.facing_of(gate);
         for input_index in 0..definition.inputs.len() {
-            let socket = step(support, compile::geometry::input_directions(facing)[input_index]);
+            let socket = step(
+                support,
+                compile::geometry::input_directions(facing)[input_index],
+            );
             let approach = Anchor {
                 x: socket.x + (socket.x - support.x),
                 y: socket.y + (socket.y - support.y),
@@ -5497,7 +5695,10 @@ fn preclaim_terminal_guards(
         let Some(port) = node.id.strip_prefix("output:") else {
             continue;
         };
-        let pin = PortPin { at: node.anchor, toward };
+        let pin = PortPin {
+            at: node.anchor,
+            toward,
+        };
         let handover = pin.handover(PortRole::Output);
         let approach = pin.net_cell(PortRole::Output);
         let guard = format!("terminal:output:{port}");
@@ -5866,6 +6067,7 @@ pub(crate) fn seed_from_legacy_parts(
                 route.terminals().to_vec(),
                 route.blocks().to_vec(),
                 route.floors().to_vec(),
+                route.branch_paths().to_vec(),
             )
         })
         .collect();
@@ -5978,41 +6180,7 @@ fn verified_parts(
     netlist: &Netlist,
     size: (i32, i32, i32),
 ) -> Result<(RealisedCandidate, compile::Reservation, Vec<compile::Net>), PlannerError> {
-    let reservation = verify_spacing(candidate)?;
-    let nets = verification_nets(candidate, netlist)?;
-
-    let realised = emit_candidate(candidate, netlist, size)?;
-
-    verify_terminal_contract(candidate, &realised.world, &reservation)?;
-
-    // Terminal style is a planning decision, so it is checked against what
-    // realisation actually put at each sink -- a plan claiming directed dust
-    // over a repeater is priced wrongly even when the circuit works.
-    for (net, route) in candidate.routes.iter().enumerate() {
-        compile::verify_route_terminals(
-            &realised.world,
-            &reservation,
-            netlist,
-            &nets,
-            net,
-            &route.id,
-            &route.terminals,
-        )
-        .map_err(PlannerError::PhysicalInvariant)?;
-    }
-
-    compile::verify_realised_world(
-        &realised.world,
-        &reservation,
-        netlist,
-        &nets,
-        &realised.ports.gate_output_positions,
-        &realised.ports.input_positions,
-        &realised.ports.output_positions,
-    )
-    .map_err(PlannerError::PhysicalInvariant)?;
-
-    Ok((realised, reservation, nets))
+    compile::verification::verify_legacy_candidate(candidate, netlist, size)
 }
 
 /// The terminal-contract invariant, one clause per promise the spec states
@@ -6036,7 +6204,7 @@ fn verified_parts(
 /// `verify_spacing` proved, and signal-carrying primitive cells, read from the
 /// candidate's recorded conductor classification. Ownership is never guessed
 /// by scanning blocks, and inert primitive floor or fill stays permitted.
-fn verify_terminal_contract(
+pub(crate) fn verify_terminal_contract(
     candidate: &PlanCandidate,
     world: &World,
     reservation: &compile::Reservation,
@@ -6061,7 +6229,10 @@ fn verify_terminal_contract(
             _ => continue,
         };
         let port = port.unwrap_or(&node.id);
-        let pin = PortPin { at: node.anchor, toward };
+        let pin = PortPin {
+            at: node.anchor,
+            toward,
+        };
 
         let at = node.anchor;
         let standing = world.get(at.x, at.y, at.z);
@@ -6119,13 +6290,7 @@ fn verify_terminal_contract(
                          and signal-carrying primitive conductors but may contain inert support, \
                          floor, or fill, so whatever the caller puts in their own cell drives \
                          nothing it never agreed to touch",
-                        at.x,
-                        at.y,
-                        at.z,
-                        primitive.id,
-                        neighbour.x,
-                        neighbour.y,
-                        neighbour.z
+                        at.x, at.y, at.z, primitive.id, neighbour.x, neighbour.y, neighbour.z
                     ),
                 ));
             }
@@ -6165,7 +6330,9 @@ fn verify_terminal_contract(
 ///
 /// Returns the reservation it proved, so the world-scanning invariants read
 /// the same ownership this check established rather than a second opinion.
-fn verify_spacing(candidate: &PlanCandidate) -> Result<compile::Reservation, PlannerError> {
+pub(crate) fn verify_spacing(
+    candidate: &PlanCandidate,
+) -> Result<compile::Reservation, PlannerError> {
     let mut reservation = compile::Reservation::new();
     for (net, route) in candidate.routes.iter().enumerate() {
         for anchor in &route.anchors {
@@ -6203,7 +6370,7 @@ fn verify_spacing(candidate: &PlanCandidate) -> Result<compile::Reservation, Pla
 /// gate input each of its terminals lands on.  Nothing here consults the
 /// legacy floorplan, which is what made the old net list impossible to
 /// produce for a moved candidate.
-fn verification_nets(
+pub(crate) fn verification_nets(
     candidate: &PlanCandidate,
     netlist: &Netlist,
 ) -> Result<Vec<compile::Net>, PlannerError> {
@@ -6266,9 +6433,7 @@ fn verification_nets(
                     id: candidate.routes[net].id.clone(),
                     reason: format!(
                         "input {} of {} is already driven by {}",
-                        terminal.sink.input_index,
-                        terminal.sink.gate,
-                        candidate.routes[other].id
+                        terminal.sink.input_index, terminal.sink.gate, candidate.routes[other].id
                     ),
                 });
             }
@@ -6635,7 +6800,6 @@ fn enumerate_moves(candidate: &PlanCandidate, seed: u64) -> Vec<Move> {
     moves
 }
 
-
 /// One local change, not yet made.
 #[derive(Debug, Clone, Copy)]
 enum Move {
@@ -6767,8 +6931,6 @@ fn candidate_allows_entry(candidate: &PlanCandidate, gate: usize, entry: usize) 
                 .all(|terminal| terminal.sink.gate == name)
     })
 }
-
-
 
 fn bounding_volume(candidate: &PlanCandidate) -> u64 {
     let anchors = candidate.anchors.iter().copied().chain(
@@ -6904,7 +7066,6 @@ fn critical_path_delay(candidate: &PlanCandidate) -> u64 {
     worst.saturating_mul(crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS)
 }
 
-
 fn route_wire_length(route: &Route) -> u64 {
     route
         .anchors
@@ -7007,6 +7168,130 @@ mod tests {
     use super::*;
     use crate::circuits::and4::build_and4_netlist;
     use crate::compile::Gate;
+
+    #[test]
+    fn legacy_adapter_counts_nonzero_queue_cap_across_ordered_sinks() {
+        let at = |x, y, z| Anchor { x, y, z };
+        let netlist = Netlist {
+            inputs: vec!["n".to_string()],
+            outputs: vec!["left".to_string(), "right".to_string()],
+            gates: vec![Gate::nor("left", &["n"]), Gate::nor("right", &["n"])],
+        };
+        let candidate = PlanCandidate::with_facings(
+            vec![at(2, 1, 0), at(4, 1, 4)],
+            Vec::new(),
+            Vec::new(),
+            vec![geometry::CellFacing::NORTH, geometry::CellFacing::NORTH],
+        );
+        let consumers = vec![
+            NetConsumer::Gate {
+                gate: 0,
+                input_index: 0,
+            },
+            NetConsumer::Gate {
+                gate: 1,
+                input_index: 0,
+            },
+        ];
+        let source = at(0, 1, 0);
+        let route = RouteId(91);
+        let (typed_source, typed_sinks) =
+            typed_legacy_request_parts(route, "n", source, &consumers, &netlist, &candidate);
+        let mut reservation = Reservation::new();
+        let typed_reservations = typed_reservations(&reservation, route, "n");
+        let congestion = Congestion::default();
+        let prices = Prices::RipUp(&congestion);
+        let adapter =
+            LegacyPlannerRouterAdapter::new("n", &consumers, &netlist, &mut reservation, &prices);
+
+        let failure = adapter
+            .route(RouteRequest {
+                id: route,
+                source: typed_source.clone(),
+                sinks: &typed_sinks,
+                reservations: &typed_reservations,
+                limits: RouterLimits {
+                    max_node_expansions: u64::MAX,
+                    max_queue_entries: 1,
+                },
+            })
+            .expect_err("the second sink must spend the request's third expansion");
+
+        assert_eq!(
+            failure,
+            TypedRouterFailure::RouterLimitExceeded {
+                route,
+                source: typed_source.id,
+                sink: typed_sinks.as_slice()[1].id,
+                kind: crate::compile::routing::RouterLimitKind::QueueEntries,
+                limit: 1,
+                work_used: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn typed_gate_conductor_reservation_remains_foreign_to_the_route() {
+        let route = RouteId(92);
+        let blocked = Anchor { x: 1, y: 1, z: 0 };
+        let mut legacy = Reservation::new();
+        legacy.insert(blocked, "primitive:gate", Occupancy::GateConductor);
+        let reservations = typed_reservations(&legacy, route, "n");
+        assert!(matches!(
+            reservations.get(&blocked),
+            Some(crate::compile::routing::PhysicalReservation {
+                owner: PhysicalReservationOwner::KeepOut(_),
+                kind: PhysicalReservationKind::Conductor(_),
+            })
+        ));
+
+        let source = RouteEndpoint {
+            id: PhysicalEndpointId::PrimaryInput(PortId(0)),
+            anchor: Anchor { x: 0, y: 1, z: 0 },
+            allowed_exit: Facing::East,
+            terminal: TerminalContract::Source {
+                signal_strength: 15,
+            },
+        };
+        let connection = ConnectionId::External {
+            instance: InstanceId(0),
+            input_index: 0,
+        };
+        let sinks = NonEmptyRouteSinks::new(vec![TypedRouteSink {
+            id: RoutedSinkId { route, ordinal: 0 },
+            endpoint: PhysicalEndpointId::Landing(connection),
+            anchor: Anchor { x: 4, y: 1, z: 0 },
+            allowed_entry: Facing::West,
+            terminal: TerminalContract::Sink {
+                target: RouteTarget::Connection(connection),
+                support: Anchor { x: 5, y: 1, z: 0 },
+                requirement: TerminalRequirement::Repeater,
+            },
+        }])
+        .unwrap();
+
+        // Strict typed routing without the seed-only source-exit rule: the
+        // gate conductor sits exactly on the source's East exit cell, and this
+        // test is about reservation ownership, not the seed's escape policy.
+        let tree = crate::compile::routing::route_strict_with_policy(
+            RouteRequest {
+                id: route,
+                source,
+                sinks: &sinks,
+                reservations: &reservations,
+                limits: RouterLimits {
+                    max_node_expansions: 10_000,
+                    max_queue_entries: 50_000,
+                },
+            },
+            crate::compile::routing::RoutingJoinPolicy::Off,
+            |_| 0,
+            |_, _, _| {},
+        )
+        .expect("the route detours around a gate-owned conductor");
+
+        assert!(!tree.cells.iter().any(|cell| cell.at == blocked));
+    }
 
     fn local_move_fixture() -> PlanCandidate {
         let anchors = vec![
@@ -7561,7 +7846,6 @@ mod tests {
         assert_eq!(effort[0].variant, 0);
     }
 
-
     #[test]
     fn a_rejected_topology_alternative_leaves_the_best_candidate_unchanged() {
         let seed = fixture_seed_with_illegal_alternative();
@@ -7742,6 +8026,229 @@ mod tests {
         seed_from_legacy(&netlist, &compiled).expect("fanout fixture must seed")
     }
 
+    fn freshly_placed(netlist: &Netlist) -> PlanCandidate {
+        let placements = PortPlacements::default();
+        let placement = relaxed_placement(netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement).expect("snaps");
+        candidate_from_snapped(netlist, &placements, &snapped)
+    }
+
+    fn route_in_order_with_reference(
+        mut candidate: PlanCandidate,
+        netlist: &Netlist,
+        order: &[String],
+        congestion: &Congestion,
+    ) -> Result<PlanCandidate, Box<RoutingFailure>> {
+        let mut reservation = reserve_primitives(&candidate.primitive_nodes);
+        let sinks = net_consumers(netlist, &candidate);
+        preclaim_socket_approaches(&mut reservation, &candidate, netlist);
+        preclaim_pinned_cell_halos(&mut reservation, &candidate);
+        let prices = Prices::RipUp(congestion);
+        let mut routes = Vec::with_capacity(sinks.len());
+        for signal in order {
+            let consumers = sinks
+                .get(signal)
+                .cloned()
+                .expect("the order is built from these sinks");
+            let source = net_source(&candidate, signal)?;
+            routes.push(legacy_lay_net_reference(
+                signal,
+                source,
+                &consumers,
+                netlist,
+                &candidate,
+                &mut reservation,
+                &prices,
+            )?);
+        }
+        candidate.routes = routes;
+        Ok(candidate)
+    }
+
+    #[test]
+    fn legacy_adapter_keeps_and4_and_fanout_routes_byte_exact() {
+        let fanout = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["left".to_string(), "right".to_string()],
+            gates: vec![Gate::nor("left", &["a"]), Gate::nor("right", &["a"])],
+        };
+        for (name, netlist) in [("and4", build_and4_netlist().0), ("fanout", fanout)] {
+            let candidate = freshly_placed(&netlist);
+            let order: Vec<_> = net_consumers(&netlist, &candidate).into_keys().collect();
+            let expected = route_in_order_with_reference(
+                candidate.clone(),
+                &netlist,
+                &order,
+                &Congestion::default(),
+            )
+            .unwrap_or_else(|failure| panic!("{name} reference routes: {}", failure.error));
+            let actual = route_in_order(candidate, &netlist, &order, &Congestion::default())
+                .unwrap_or_else(|failure| panic!("{name} typed adapter routes: {}", failure.error));
+
+            assert_eq!(actual.routes, expected.routes, "{name} exact route parity");
+        }
+    }
+
+    #[test]
+    fn legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact() {
+        use crate::circuits::full_adder::{build_full_adder_netlist, INPUT_NAMES};
+
+        let (netlist, outputs) = build_full_adder_netlist();
+        let output_signals = [&outputs["sum"], &outputs["cout"]];
+        let free = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("full_adder places unpinned");
+        let (mut min_z, mut base_x, mut max_z) = (i32::MAX, i32::MAX, i32::MIN);
+        for anchor in free.anchors() {
+            min_z = min_z.min(anchor.z);
+            max_z = max_z.max(anchor.z);
+            base_x = base_x.min(anchor.x);
+        }
+
+        let mut placements = PortPlacements::default();
+        for (index, name) in INPUT_NAMES.iter().enumerate() {
+            placements.pin(
+                *name,
+                Anchor {
+                    x: base_x + 2 * index as i32,
+                    y: 1,
+                    z: max_z + 4,
+                },
+                Facing::North,
+            );
+        }
+        for (index, signal) in output_signals.iter().enumerate() {
+            placements.pin(
+                signal.as_str(),
+                Anchor {
+                    x: base_x + 2 * index as i32,
+                    y: 1,
+                    z: (min_z - 4).max(1),
+                },
+                Facing::North,
+            );
+        }
+
+        let placement = relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement).expect("snaps");
+        let candidate = candidate_from_snapped(&netlist, &placements, &snapped);
+        fn route_every_net_with_reference(
+            candidate: PlanCandidate,
+            netlist: &Netlist,
+        ) -> Result<PlanCandidate, PlannerError> {
+            let mut order: Vec<String> = net_consumers(netlist, &candidate).into_keys().collect();
+            let mut congestion = Congestion::default();
+            let mut last = None;
+            for _ in 0..RIP_UP_ROUNDS {
+                match route_in_order_with_reference(candidate.clone(), netlist, &order, &congestion)
+                {
+                    Ok(routed) => return Ok(routed),
+                    Err(failure) => {
+                        let RoutingFailure {
+                            blocked,
+                            corridor,
+                            reservation,
+                            charge_outright,
+                            error,
+                        } = *failure;
+                        last = Some(error);
+                        let charged_air = congestion.charge_cells(&charge_outright);
+                        let charged =
+                            congestion.charge(&reservation, corridor.0, corridor.1, &blocked);
+                        let mut promoted = vec![blocked.clone()];
+                        promoted.extend(order.iter().filter(|name| **name != blocked).cloned());
+                        let reordered = promoted != order;
+                        order = promoted;
+                        if !charged && !reordered && !charged_air {
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(last.expect("a failed reference round records why"))
+        }
+
+        let expected = route_every_net_with_reference(candidate.clone(), &netlist)
+            .unwrap_or_else(|error| panic!("reference routes: {error}"));
+        let actual = route_every_net(candidate, &netlist, RIP_UP_ROUNDS)
+            .unwrap_or_else(|error| panic!("typed adapter routes: {error}"));
+
+        for (expected, actual) in expected.routes.iter().zip(&actual.routes) {
+            assert_eq!(actual, expected, "{} exact route parity", expected.id);
+        }
+    }
+
+    fn negotiate_once_with_reference(
+        mut candidate: PlanCandidate,
+        netlist: &Netlist,
+    ) -> Result<PlanCandidate, PlannerError> {
+        let sinks = net_consumers(netlist, &candidate);
+        let order: Vec<_> = sinks.keys().cloned().collect();
+        let hard = hard_furniture(&candidate, netlist);
+        let mut table = Negotiation::default();
+        table.present = PresentSchedule::SHIPPING.term(0);
+        let mut laid = BTreeMap::new();
+        for signal in &order {
+            table.release(signal);
+            let source = net_source(&candidate, signal).map_err(|failure| failure.error)?;
+            let consumers = sinks.get(signal).cloned().unwrap();
+            let mut reservation = hard.clone();
+            let route = {
+                let prices = Prices::Negotiated {
+                    table: &table,
+                    mine: signal,
+                    own_join: OwnJoinPolicy::Wide,
+                    search: SearchModel::DistanceOnly,
+                };
+                legacy_lay_net_reference(
+                    signal,
+                    source,
+                    &consumers,
+                    netlist,
+                    &candidate,
+                    &mut reservation,
+                    &prices,
+                )
+                .map_err(|failure| failure.error)?
+            };
+            table.claim(signal, claim_of(signal, &route, &reservation));
+            laid.insert(signal.clone(), route);
+        }
+        if !table.contested().is_empty() {
+            return Err(PlannerError::NoLocalRoute {
+                from: Anchor { x: 0, y: 0, z: 0 },
+                to: Anchor { x: 0, y: 0, z: 0 },
+            });
+        }
+        candidate.routes = order
+            .iter()
+            .map(|signal| laid.remove(signal).unwrap())
+            .collect();
+        Ok(candidate)
+    }
+
+    #[test]
+    fn negotiated_legacy_adapter_keeps_single_net_route_byte_exact() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        let candidate = freshly_placed(&netlist);
+        let expected = negotiate_once_with_reference(candidate.clone(), &netlist)
+            .expect("single-net reference negotiation converges in one iteration");
+        let mut trace = Vec::new();
+        let actual = negotiate_with_policy(
+            candidate,
+            &netlist,
+            1,
+            PresentSchedule::SHIPPING,
+            OwnJoinPolicy::Wide,
+            &mut trace,
+        )
+        .expect("single-net typed negotiation converges in one iteration");
+        assert_eq!(actual.routes, expected.routes);
+    }
+
     #[test]
     fn plan_candidate_equality_includes_primitive_nodes() {
         let expected = legacy_and4_seed();
@@ -7769,7 +8276,9 @@ mod tests {
     #[test]
     fn realisation_reproduces_the_legacy_world_for_every_reference_circuit() {
         use crate::circuits::full_adder::build_full_adder_netlist;
-        use crate::circuits::seven_segment::{build_seven_segment_netlist, build_single_segment_netlist};
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
 
         let circuits = [
             ("and4", build_and4_netlist().0),
@@ -7779,7 +8288,8 @@ mod tests {
         ];
 
         for (name, netlist) in circuits {
-            let compiled = compile::compile_legacy(&netlist).expect("reference circuits compile");
+            let compiled = compile::compile_legacy(&netlist)
+                .unwrap_or_else(|error| panic!("{name} reference circuit compiles: {error}"));
             let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
                 .expect("compiled output must seed");
             let realised = emit_candidate(&seed, &netlist, compiled.world.size())
@@ -7792,7 +8302,10 @@ mod tests {
                     differences += 1;
                 }
             }
-            assert_eq!(differences, 0, "{name}: realisation differs from the legacy world");
+            assert_eq!(
+                differences, 0,
+                "{name}: realisation differs from the legacy world"
+            );
         }
     }
 
@@ -7816,8 +8329,7 @@ mod tests {
         let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
             .expect("compiled output must seed");
 
-        verify_candidate(&seed, &netlist)
-            .expect("a seed's terminals must describe its own blocks");
+        verify_candidate(&seed, &netlist).expect("a seed's terminals must describe its own blocks");
     }
 
     /// The latest tick at which any declared output of `compiled` changes,
@@ -7895,8 +8407,10 @@ mod tests {
                 let settle = simulator.current_tick() - start;
                 let result = observations_to_result(simulator.observations(), start, settle);
                 for output in &netlist.outputs {
-                    if let Some(arrival) =
-                        result.nets.get(output.as_str()).and_then(|net| net.arrival_tick())
+                    if let Some(arrival) = result
+                        .nets
+                        .get(output.as_str())
+                        .and_then(|net| net.arrival_tick())
                     {
                         worst = worst.max(arrival);
                     }
@@ -7991,7 +8505,8 @@ mod tests {
             &compiled.gate_output_positions,
         );
         assert_eq!(
-            seed.cost().delay, measured,
+            seed.cost().delay,
+            measured,
             "full_adder's priced delay must be the delay full_adder has"
         );
         assert_eq!(seed.cost().delay, TORCH_DELAY_GAME_TICKS * (9 + 12));
@@ -8025,7 +8540,8 @@ mod tests {
             &compiled.gate_output_positions,
         );
         assert_eq!(
-            seed.cost().delay, measured,
+            seed.cost().delay,
+            measured,
             "segment_a's priced delay must be the delay segment_a has"
         );
         assert_eq!(seed.cost().delay, TORCH_DELAY_GAME_TICKS * (9 + 25));
@@ -8145,7 +8661,10 @@ mod tests {
         let (best_blocks, best_settle, best_wrong) = measure(&best);
 
         assert_eq!(seed_wrong, 0, "the seed must compute and4");
-        assert_eq!(best_wrong, 0, "optimisation must not change what the circuit computes");
+        assert_eq!(
+            best_wrong, 0,
+            "optimisation must not change what the circuit computes"
+        );
         assert!(
             best_blocks < seed_blocks,
             "optimisation must save blocks: {seed_blocks} -> {best_blocks}"
@@ -8173,7 +8692,9 @@ mod tests {
         let steps = neighbours(here);
 
         assert!(
-            !steps.iter().any(|step| step.x == here.x && step.z == here.z),
+            !steps
+                .iter()
+                .any(|step| step.x == here.x && step.z == here.z),
             "dust never reaches the cell directly above or below itself"
         );
         for step in &steps {
@@ -8279,7 +8800,8 @@ mod tests {
 
     /// The BCD digit `bits` spells, most-significant bit first.
     fn decoder_digit(bits: &[bool]) -> usize {
-        bits.iter().fold(0usize, |acc, &bit| acc * 2 + usize::from(bit))
+        bits.iter()
+            .fold(0usize, |acc, &bit| acc * 2 + usize::from(bit))
     }
 
     /// Segments `a`..`g` for a digit, dark for 10..15 -- which is what both
@@ -8288,7 +8810,9 @@ mod tests {
     fn seven_segment_expected(bits: &[bool]) -> Vec<bool> {
         let digit = decoder_digit(bits);
         let table = crate::circuits::seven_segment::TRUTH_TABLE;
-        (0..7).map(|segment| digit < table.len() && table[digit][segment] == 1).collect()
+        (0..7)
+            .map(|segment| digit < table.len() && table[digit][segment] == 1)
+            .collect()
     }
 
     /// Segment `a` alone -- index 0 of `SEGMENT_NAMES`, which is the segment
@@ -8545,7 +9069,10 @@ mod tests {
                 if neighbour == (handover.x, handover.y, handover.z) {
                     continue;
                 }
-                let kind = compiled.world.get(neighbour.0, neighbour.1, neighbour.2).kind;
+                let kind = compiled
+                    .world
+                    .get(neighbour.0, neighbour.1, neighbour.2)
+                    .kind;
                 assert!(
                     matches!(kind, BlockKind::Air | BlockKind::Solid | BlockKind::Glass),
                     "`{name}`'s pinned cell touches {kind:?} at {neighbour:?} -- what the \
@@ -8603,7 +9130,9 @@ mod tests {
 
         let mut simulator = crate::redstone::simulator::Simulator::new(world);
         if let Err(error) = simulator.run_until_stable(MAX_TICKS) {
-            return Err(format!("did not settle before the first reading: {error:?}"));
+            return Err(format!(
+                "did not settle before the first reading: {error:?}"
+            ));
         }
 
         let mut wrong = 0usize;
@@ -8636,9 +9165,9 @@ mod tests {
 
         match first {
             None => Ok(vectors),
-            Some(example) => {
-                Err(format!("{wrong} readings wrong over {vectors} vectors, first: {example}"))
-            }
+            Some(example) => Err(format!(
+                "{wrong} readings wrong over {vectors} vectors, first: {example}"
+            )),
         }
     }
 
@@ -8750,9 +9279,16 @@ mod tests {
             let circuit = crate::circuits::verilog::find(name)
                 .unwrap_or_else(|| panic!("{name} must be in the catalog"));
             let (netlist, labels) = circuit.baked_netlist();
-            let lowered = if optimised { lower_optimised(&netlist) } else { lower(&netlist) }
-                .unwrap_or_else(|error| panic!("{name} must lower: {error}"));
-            (lowered, labels.into_iter().map(|(_, signal)| signal).collect())
+            let lowered = if optimised {
+                lower_optimised(&netlist)
+            } else {
+                lower(&netlist)
+            }
+            .unwrap_or_else(|error| panic!("{name} must lower: {error}"));
+            (
+                lowered,
+                labels.into_iter().map(|(_, signal)| signal).collect(),
+            )
         };
         let (verilog_and4, verilog_and4_outputs) = lowered_verilog("verilog:and4", false);
         let (verilog_decoder, verilog_decoder_outputs) =
@@ -8784,7 +9320,10 @@ mod tests {
                 name: "seven_segment",
                 netlist: decoder,
                 inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
-                outputs: SEGMENT_NAMES.iter().map(|name| decoder_outputs[name].clone()).collect(),
+                outputs: SEGMENT_NAMES
+                    .iter()
+                    .map(|name| decoder_outputs[name].clone())
+                    .collect(),
                 expected: seven_segment_expected,
             },
             ConditionCircuit {
@@ -8809,28 +9348,25 @@ mod tests {
             let gates = case.netlist.gates.len();
 
             let started = Instant::now();
-            let place = match relaxed_placement(
-                &case.netlist,
-                &PortPlacements::default(),
-                SHIPPING_AXES,
-            ) {
-                Ok(placement) => match relax::snap(&placement) {
-                    Ok(_) => Ok(format!(
-                        "Ok {:.1}s ({} bodies, {} steps)",
-                        started.elapsed().as_secs_f64(),
-                        placement.graph.bodies.len(),
-                        placement.iterations
-                    )),
+            let place =
+                match relaxed_placement(&case.netlist, &PortPlacements::default(), SHIPPING_AXES) {
+                    Ok(placement) => match relax::snap(&placement) {
+                        Ok(_) => Ok(format!(
+                            "Ok {:.1}s ({} bodies, {} steps)",
+                            started.elapsed().as_secs_f64(),
+                            placement.graph.bodies.len(),
+                            placement.iterations
+                        )),
+                        Err(error) => Err(format!(
+                            "ERR after {:.1}s in snap: {error}",
+                            started.elapsed().as_secs_f64()
+                        )),
+                    },
                     Err(error) => Err(format!(
-                        "ERR after {:.1}s in snap: {error}",
+                        "ERR after {:.1}s in relax: {error}",
                         started.elapsed().as_secs_f64()
                     )),
-                },
-                Err(error) => Err(format!(
-                    "ERR after {:.1}s in relax: {error}",
-                    started.elapsed().as_secs_f64()
-                )),
-            };
+                };
 
             let started = Instant::now();
             let (route, candidate) = match &place {
@@ -9014,7 +9550,10 @@ mod tests {
                 "verilog:and4 (lower_optimised)",
                 lower_optimised(&and4_source).unwrap(),
             ),
-            ("verilog:seven_segment (lower)", lower(&decoder_source).unwrap()),
+            (
+                "verilog:seven_segment (lower)",
+                lower(&decoder_source).unwrap(),
+            ),
             (
                 "verilog:seven_segment (lower_optimised)",
                 lower_optimised(&decoder_source).unwrap(),
@@ -9032,12 +9571,14 @@ mod tests {
                 Ok(body_graph) => {
                     let mut per_junction: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
                     for weld in &body_graph.welds {
-                        if let relax::Weld::AtSocket { repeater, junction, .. } = weld {
+                        if let relax::Weld::AtSocket {
+                            repeater, junction, ..
+                        } = weld
+                        {
                             per_junction.entry(*junction).or_default().push(*repeater);
                         }
                     }
-                    let both: Vec<_> =
-                        per_junction.iter().filter(|(_, r)| r.len() >= 2).collect();
+                    let both: Vec<_> = per_junction.iter().filter(|(_, r)| r.len() >= 2).collect();
                     eprintln!(
                         "  {} bodies, {} welds over {} junctions, {} of them with BOTH sockets welded: {:?}",
                         body_graph.bodies.len(),
@@ -9089,7 +9630,10 @@ mod tests {
                 built.bodies[index].what, built.bodies[index].position, required[index]
             );
         }
-        eprintln!("    worst violation as built: {:?}", relax::worst_violation(&built, &required));
+        eprintln!(
+            "    worst violation as built: {:?}",
+            relax::worst_violation(&built, &required)
+        );
         match relaxed_placement(&minimal, &PortPlacements::default(), SHIPPING_AXES) {
             Ok(placement) => eprintln!("  relax Ok: {} steps", placement.iterations),
             Err(error) => eprintln!("  relax ERR: {error}"),
@@ -9196,9 +9740,13 @@ mod tests {
             };
         let rule = GrowthRule {
             share: setting("REDA_GROW_SHARE", "0.25").parse().expect("a share"),
-            growth: setting("REDA_GROW_GROWTH", "1.4").parse().expect("a factor"),
+            growth: setting("REDA_GROW_GROWTH", "1.4")
+                .parse()
+                .expect("a factor"),
             radius: setting("REDA_GROW_RADIUS", "6").parse().expect("a radius"),
-            iterations: setting("REDA_GROW_ITERATIONS", "12").parse().expect("a count"),
+            iterations: setting("REDA_GROW_ITERATIONS", "12")
+                .parse()
+                .expect("a count"),
             search: match setting("REDA_GROW_SEARCH", "distance").as_str() {
                 "distance" => SearchModel::DistanceOnly,
                 "strength" => SearchModel::StrengthAware,
@@ -9251,8 +9799,7 @@ mod tests {
     fn a_drifted_placement_is_translated_back_inside_the_world() {
         let (netlist, _) = build_and4_netlist();
         let placements = PortPlacements::default();
-        let placement =
-            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let placement = relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
         let mut snapped = relax::snap(&placement).expect("snaps");
         let reference = candidate_from_snapped(&netlist, &placements, &snapped);
 
@@ -9270,9 +9817,7 @@ mod tests {
         );
         // Same circuit: every anchor at the same offset from its minimum.
         let reference_min = reference.anchors.iter().map(|a| a.x).min().unwrap();
-        for (drifted_anchor, reference_anchor) in
-            drifted.anchors.iter().zip(&reference.anchors)
-        {
+        for (drifted_anchor, reference_anchor) in drifted.anchors.iter().zip(&reference.anchors) {
             assert_eq!(
                 drifted_anchor.x - min_x,
                 reference_anchor.x - reference_min,
@@ -9308,10 +9853,8 @@ mod tests {
         ] {
             reservation.insert(cell, "primitive:99", Occupancy::Solid);
         }
-        let trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockKind> = laid
-            .iter()
-            .map(|&cell| (cell, crate::redstone::world::block::BlockKind::RedstoneWire))
-            .collect();
+        let trunk: BTreeMap<Anchor, BlockState> =
+            laid.iter().map(|&cell| (cell, compile::dust())).collect();
 
         let goal = Anchor { x: 8, y: 2, z: 5 };
         let route = Route::new("me".to_string(), laid.clone());
@@ -9554,8 +10097,8 @@ mod tests {
     #[test]
     fn a_plan_outside_the_world_is_refused_by_name_not_realised_with_holes() {
         let (netlist, _) = build_and4_netlist();
-        let mut candidate = plan_from_netlist(&netlist, &PortPlacements::default())
-            .expect("and4 plans");
+        let mut candidate =
+            plan_from_netlist(&netlist, &PortPlacements::default()).expect("and4 plans");
         verify_candidate(&candidate, &netlist).expect("and4 verifies where it stands");
 
         let shift = |anchor: &mut Anchor| anchor.x -= 200;
@@ -9669,7 +10212,11 @@ mod tests {
         let compiled = compile::compile_grown(&netlist, &PortPlacements::default())
             .expect("and4 grows at iteration 1");
 
-        assert_eq!(compiled.world.size(), (68, 6, 61), "the grown and4's bounding box");
+        assert_eq!(
+            compiled.world.size(),
+            (68, 6, 61),
+            "the grown and4's bounding box"
+        );
         assert_eq!(
             world_digest(&compiled.world),
             7_885_360_476_135_848_183,
@@ -9711,8 +10258,8 @@ mod tests {
         let circuit = crate::circuits::verilog::find("verilog:seven_segment")
             .expect("the catalog has the decoder");
         let (netlist, labels) = circuit.baked_netlist();
-        let lowered = crate::compile::lowering::lower_optimised(&netlist)
-            .expect("the decoder lowers");
+        let lowered =
+            crate::compile::lowering::lower_optimised(&netlist).expect("the decoder lowers");
         let outputs: Vec<String> = labels.into_iter().map(|(_, signal)| signal).collect();
 
         let started = Instant::now();
@@ -9754,8 +10301,7 @@ mod tests {
         };
         let grown = plan_from_netlist_with_growth(&netlist, &PortPlacements::default(), rule)
             .expect("and4 routes and verifies at iteration 1");
-        let shipped = plan_from_netlist(&netlist, &PortPlacements::default())
-            .expect("and4 ships");
+        let shipped = plan_from_netlist(&netlist, &PortPlacements::default()).expect("and4 ships");
         assert_eq!(
             grown.anchors, shipped.anchors,
             "growth's first placement must be the shipping placement"
@@ -9898,8 +10444,14 @@ mod tests {
 
         // Rows and barycentres, re-measured 2026-08-14 by the method the doc
         // above states.
-        assert!(blocks < 572, "relaxation placed {blocks} blocks against 572");
-        assert!(settle < 22, "relaxation's delay term is {settle} against 22");
+        assert!(
+            blocks < 572,
+            "relaxation placed {blocks} blocks against 572"
+        );
+        assert!(
+            settle < 22,
+            "relaxation's delay term is {settle} against 22"
+        );
     }
 
     /// The row-and-barycentre candidate this task replaced, rebuilt so the
@@ -10145,7 +10697,10 @@ mod tests {
             ("segment_a", build_single_segment_netlist(0).0),
             ("seven_segment", build_seven_segment_netlist().0),
             ("verilog:and4", lowered("verilog:and4", false)),
-            ("verilog:seven_segment", lowered("verilog:seven_segment", true)),
+            (
+                "verilog:seven_segment",
+                lowered("verilog:seven_segment", true),
+            ),
         ];
 
         fn quantile(sorted: &[f64], q: f64) -> f64 {
@@ -10315,7 +10870,10 @@ mod tests {
                 crate::compile::lowering::lower(&gate_level)
             }
             .expect("it lowers");
-            (netlist, labels.into_iter().map(|(_, signal)| signal).collect())
+            (
+                netlist,
+                labels.into_iter().map(|(_, signal)| signal).collect(),
+            )
         };
         let (verilog_and4, verilog_and4_outputs) = lowered("verilog:and4", false);
         let (verilog_decoder, verilog_decoder_outputs) = lowered("verilog:seven_segment", true);
@@ -10429,7 +10987,11 @@ mod tests {
                     }
                 };
                 let cost = plan.cost();
-                let cells: usize = plan.routes().iter().map(|route| route.anchors().len()).sum();
+                let cells: usize = plan
+                    .routes()
+                    .iter()
+                    .map(|route| route.anchors().len())
+                    .sum();
                 let world = match verify_candidate(&plan, netlist) {
                     Err(error) => format!("VERIFY REFUSED: {error}"),
                     Ok(()) => {
@@ -10449,6 +11011,7 @@ mod tests {
                             }
                         }
                         let compiled = compile::CompiledCircuit {
+                            observations: compile::CircuitObservations::default(),
                             world: realised.world,
                             input_positions: realised.ports.input_positions,
                             output_positions: realised.ports.output_positions,
@@ -10540,12 +11103,21 @@ mod tests {
         let cases: Vec<(&str, Netlist)> = vec![
             ("and4", build_and4_netlist().0),
             ("verilog:and4", lowered("verilog:and4")),
-            ("full_adder", crate::circuits::full_adder::build_full_adder_netlist().0),
+            (
+                "full_adder",
+                crate::circuits::full_adder::build_full_adder_netlist().0,
+            ),
             // The two the whole direction was for. They place and do not route
             // at every radius from 1 to 15; the interval below one cell is the
             // one nobody had asked them about.
-            ("segment_a", crate::circuits::seven_segment::build_single_segment_netlist(0).0),
-            ("seven_segment", crate::circuits::seven_segment::build_seven_segment_netlist().0),
+            (
+                "segment_a",
+                crate::circuits::seven_segment::build_single_segment_netlist(0).0,
+            ),
+            (
+                "seven_segment",
+                crate::circuits::seven_segment::build_seven_segment_netlist().0,
+            ),
         ];
 
         for (name, netlist) in &cases {
@@ -10573,9 +11145,7 @@ mod tests {
                 // solve and not the circuit.
                 let layout = snapped
                     .iter()
-                    .map(|node| {
-                        format!("{} {} {}", node.anchor.x, node.anchor.y, node.anchor.z)
-                    })
+                    .map(|node| format!("{} {} {}", node.anchor.x, node.anchor.y, node.anchor.z))
                     .collect::<Vec<_>>()
                     .join("|");
                 let (mut min, mut max) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
@@ -10666,7 +11236,10 @@ mod tests {
         let cases: Vec<(&str, Netlist)> = vec![
             ("and4", build_and4_netlist().0),
             ("verilog:and4", lowered("verilog:and4")),
-            ("full_adder", crate::circuits::full_adder::build_full_adder_netlist().0),
+            (
+                "full_adder",
+                crate::circuits::full_adder::build_full_adder_netlist().0,
+            ),
         ];
 
         for (name, netlist) in &cases {
@@ -10686,7 +11259,10 @@ mod tests {
                         &start,
                         &PortPlacements::default(),
                         SHIPPING_AXES,
-                        relax::RelaxEffort { iterations: 256, seed },
+                        relax::RelaxEffort {
+                            iterations: 256,
+                            seed,
+                        },
                         rest,
                     );
                     let Ok(placement) = placement else {
@@ -10702,9 +11278,7 @@ mod tests {
                         min = (min.0.min(node.anchor.x), min.1.min(node.anchor.z));
                         max = (max.0.max(node.anchor.x), max.1.max(node.anchor.z));
                     }
-                    areas.push(
-                        (max.0 - min.0 + 1) as i64 * (max.1 - min.1 + 1) as i64,
-                    );
+                    areas.push((max.0 - min.0 + 1) as i64 * (max.1 - min.1 + 1) as i64);
                     let bare =
                         candidate_from_snapped(netlist, &PortPlacements::default(), &snapped);
                     match route_every_net(bare, netlist, RIP_UP_ROUNDS) {
@@ -10756,7 +11330,10 @@ mod tests {
         let cases: Vec<(&str, Netlist)> = vec![
             ("and4", build_and4_netlist().0),
             ("verilog:and4", lowered("verilog:and4")),
-            ("full_adder", crate::circuits::full_adder::build_full_adder_netlist().0),
+            (
+                "full_adder",
+                crate::circuits::full_adder::build_full_adder_netlist().0,
+            ),
         ];
 
         for (name, netlist) in &cases {
@@ -10847,7 +11424,10 @@ mod tests {
         let cases: Vec<(&str, Netlist)> = vec![
             ("and4", build_and4_netlist().0),
             ("verilog:and4", lowered("verilog:and4")),
-            ("full_adder", crate::circuits::full_adder::build_full_adder_netlist().0),
+            (
+                "full_adder",
+                crate::circuits::full_adder::build_full_adder_netlist().0,
+            ),
         ];
 
         for (name, netlist) in &cases {
@@ -10866,7 +11446,10 @@ mod tests {
                         &start,
                         &PortPlacements::default(),
                         SHIPPING_AXES,
-                        relax::RelaxEffort { iterations: 256, seed },
+                        relax::RelaxEffort {
+                            iterations: 256,
+                            seed,
+                        },
                         rest,
                     );
                     let Ok(placement) = placement else {
@@ -11111,8 +11694,10 @@ mod tests {
                     let required = relax::required_separations(&graph);
                     let low = required.iter().copied().fold(f64::INFINITY, f64::min);
                     let high = required.iter().copied().fold(0.0, f64::max);
-                    let dearer =
-                        required.iter().filter(|&&r| r > relax::VERTICAL_CLEARANCE).count();
+                    let dearer = required
+                        .iter()
+                        .filter(|&&r| r > relax::VERTICAL_CLEARANCE)
+                        .count();
                     eprintln!(
                         "         {name}: {} bodies, requirement {low}..{high}, \
                          {dearer} dearer than VERTICAL_CLEARANCE",
@@ -11121,9 +11706,10 @@ mod tests {
                 }
             }
 
-            for (axes, label) in
-                [(relax::Axes::IN_PLANE, "IN_PLANE"), (relax::Axes::ALL, "ALL     ")]
-            {
+            for (axes, label) in [
+                (relax::Axes::IN_PLANE, "IN_PLANE"),
+                (relax::Axes::ALL, "ALL     "),
+            ] {
                 match plan_with_axes(
                     &netlist,
                     &PortPlacements::default(),
@@ -11204,7 +11790,9 @@ mod tests {
             let source = candidate
                 .primitive_nodes()
                 .iter()
-                .find(|node| node.id == format!("gate:{owner}") || node.id == format!("input:{owner}"))
+                .find(|node| {
+                    node.id == format!("gate:{owner}") || node.id == format!("input:{owner}")
+                })
                 .map(|node| node.source())
                 .expect("and that source is a node");
             for terminal in route.terminals() {
@@ -11225,7 +11813,10 @@ mod tests {
             }
         }
 
-        assert!(checked > 0, "and4 has terminals, so something went wrong finding them");
+        assert!(
+            checked > 0,
+            "and4 has terminals, so something went wrong finding them"
+        );
         assert!(
             disagreements > 0,
             "the geometric guess agreed with the declared socket at all {checked} terminal(s), \
@@ -11263,7 +11854,10 @@ mod tests {
             .find(|&gate| candidate.facing_of(gate) != geometry::CellFacing::NORTH)
             .expect("relaxation turns something in and4, or this test proves nothing");
 
-        let to = Anchor { z: candidate.anchors()[turned].z - 1, ..candidate.anchors()[turned] };
+        let to = Anchor {
+            z: candidate.anchors()[turned].z - 1,
+            ..candidate.anchors()[turned]
+        };
         let moved = try_move(&candidate, turned, to).expect("one cell north is a legal move");
 
         let mut rebuilt = 0usize;
@@ -11282,7 +11876,10 @@ mod tests {
                 rebuilt += 1;
             }
         }
-        assert!(rebuilt > 0, "the move rebuilt nothing, so nothing was checked");
+        assert!(
+            rebuilt > 0,
+            "the move rebuilt nothing, so nothing was checked"
+        );
     }
 
     /// A gate owns the cell above its torch, because a lit torch strongly
@@ -11311,10 +11908,17 @@ mod tests {
             let (footprint, conductors, _) = compile::gate_footprint(origin, &gate, facing);
 
             let torch = step(
-                Anchor { x: origin.0, y: origin.1, z: origin.2 },
+                Anchor {
+                    x: origin.0,
+                    y: origin.1,
+                    z: origin.2,
+                },
                 geometry::output_direction(facing),
             );
-            let above = Anchor { y: torch.y + 1, ..torch };
+            let above = Anchor {
+                y: torch.y + 1,
+                ..torch
+            };
             assert!(
                 footprint.contains(&above),
                 "{facing:?}: nothing claims {above:?}, the cell above the torch at {torch:?}"
@@ -11341,7 +11945,10 @@ mod tests {
             let facing = geometry::CellFacing::from_index(index).expect("0..4 is horizontal");
             let anchor = Anchor { x: 20, y: 1, z: 20 };
             let (cells, pin) = compile::lever_footprint(anchor, facing);
-            let above = Anchor { y: anchor.y + 1, ..anchor };
+            let above = Anchor {
+                y: anchor.y + 1,
+                ..anchor
+            };
             assert!(
                 cells.contains(&above),
                 "{facing:?}: nothing claims {above:?}, the cell above the lever at {anchor:?}"
@@ -11356,7 +11963,8 @@ mod tests {
         let (netlist, _) = build_and4_netlist();
         let planned = plan_from_netlist(&netlist, &PortPlacements::default())
             .expect("and4 places by relaxation");
-        let compiled = crate::compile::compile_legacy(&netlist).expect("and4 compiles the legacy way");
+        let compiled =
+            crate::compile::compile_legacy(&netlist).expect("and4 compiles the legacy way");
         let legacy = seed_from_legacy(&netlist, &compiled).expect("and4 seeds from legacy");
         let rows = rows_and_barycentres(&netlist);
 
@@ -11370,7 +11978,10 @@ mod tests {
                 if node.realisation != NodeRealisation::Primitive(Primitive::Lever) {
                     continue;
                 }
-                let above = Anchor { y: node.anchor.y + 1, ..node.anchor };
+                let above = Anchor {
+                    y: node.anchor.y + 1,
+                    ..node.anchor
+                };
                 assert!(
                     node.occupied().contains(&above),
                     "{what}: {} does not claim {above:?}, the cell above its lever",
@@ -11384,7 +11995,11 @@ mod tests {
                 );
                 levers += 1;
             }
-            assert_eq!(levers, netlist.inputs.len(), "{what}: not every input is a lever");
+            assert_eq!(
+                levers,
+                netlist.inputs.len(),
+                "{what}: not every input is a lever"
+            );
         }
     }
 
@@ -11444,10 +12059,14 @@ mod tests {
         let compiled = crate::compile::compile_planned(&netlist, &PortPlacements::default())
             .expect("and4 compiles through the planner");
 
-        let expected: Vec<_> = (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect();
+        let expected: Vec<_> = (0..netlist.gates.len())
+            .map(|g| candidate.facing_of(g))
+            .collect();
         assert_eq!(compiled.gate_facings, expected);
         assert!(
-            expected.iter().any(|&facing| facing != geometry::CellFacing::NORTH),
+            expected
+                .iter()
+                .any(|&facing| facing != geometry::CellFacing::NORTH),
             "relaxation turns something in and4, or this test proves nothing"
         );
     }
@@ -11486,8 +12105,8 @@ mod tests {
         let mut placements = PortPlacements::default();
         placements.pin("a", elsewhere, Facing::North);
 
-        let pinned = plan_from_netlist(&netlist, &placements)
-            .expect("a pinned circuit must place too");
+        let pinned =
+            plan_from_netlist(&netlist, &placements).expect("a pinned circuit must place too");
         assert_eq!(
             pinned.port_anchor("a"),
             Some(elsewhere),
@@ -11496,7 +12115,9 @@ mod tests {
         let node = &pinned.primitive_nodes()[netlist.gates.len()];
         assert_eq!(
             node.realisation,
-            NodeRealisation::InputTerminal { toward: Facing::North },
+            NodeRealisation::InputTerminal {
+                toward: Facing::North
+            },
             "a pin declares a terminal, not a lever"
         );
         assert!(node.pinned, "and nothing may move it afterwards");
@@ -11525,15 +12146,33 @@ mod tests {
 
         // North is -z. An output at (10, 1, 20) whose signal leaves heading
         // north is driven from (10, 1, 21), which is south of it.
-        let output = PortPin { at, toward: Facing::North };
-        assert_eq!(output.handover(PortRole::Output), Anchor { x: 10, y: 1, z: 21 });
-        assert_eq!(output.net_cell(PortRole::Output), Anchor { x: 10, y: 1, z: 22 });
+        let output = PortPin {
+            at,
+            toward: Facing::North,
+        };
+        assert_eq!(
+            output.handover(PortRole::Output),
+            Anchor { x: 10, y: 1, z: 21 }
+        );
+        assert_eq!(
+            output.net_cell(PortRole::Output),
+            Anchor { x: 10, y: 1, z: 22 }
+        );
 
         // An input at the same cell whose signal enters heading north is read
         // at (10, 1, 19), which is north of it.
-        let input = PortPin { at, toward: Facing::North };
-        assert_eq!(input.handover(PortRole::Input), Anchor { x: 10, y: 1, z: 19 });
-        assert_eq!(input.net_cell(PortRole::Input), Anchor { x: 10, y: 1, z: 18 });
+        let input = PortPin {
+            at,
+            toward: Facing::North,
+        };
+        assert_eq!(
+            input.handover(PortRole::Input),
+            Anchor { x: 10, y: 1, z: 19 }
+        );
+        assert_eq!(
+            input.net_cell(PortRole::Input),
+            Anchor { x: 10, y: 1, z: 18 }
+        );
 
         // The two roles are mirror images through the caller's cell, and
         // neither ever lands on it.
@@ -11570,7 +12209,10 @@ mod tests {
             pinned,
             &netlist,
             PlannerWeights::default(),
-            PlannerEffort { evaluations: 64, seed: 3 },
+            PlannerEffort {
+                evaluations: 64,
+                seed: 3,
+            },
         );
 
         assert_eq!(best.port_anchor("a"), Some(where_it_went));
@@ -11772,7 +12414,11 @@ mod tests {
             .handover(PortRole::Output);
         assert_eq!(handover, Anchor { x: 10, y: 1, z: 39 });
         let built = compiled.world.get(handover.x, handover.y, handover.z);
-        assert_eq!(built.kind, BlockKind::Repeater, "the handover is the delivery repeater");
+        assert_eq!(
+            built.kind,
+            BlockKind::Repeater,
+            "the handover is the delivery repeater"
+        );
         assert_eq!(
             built.facing,
             Some(Facing::North),
@@ -11871,7 +12517,11 @@ mod tests {
         // Park one foreign dust cell directly beside `a`'s pinned cell, on the
         // side away from its handover so nothing else objects first.
         let mut tampered = candidate.clone();
-        let intruder = Anchor { x: at.x, y: 1, z: at.z + 1 };
+        let intruder = Anchor {
+            x: at.x,
+            y: 1,
+            z: at.z + 1,
+        };
         let mut stray = Route::new("b".to_string(), vec![intruder]);
         stray.owner = Some("b".to_string());
         stray.realisation = vec![compile::dust()];
@@ -11880,14 +12530,18 @@ mod tests {
 
         let error = verify_candidate(&tampered, &netlist)
             .expect_err("a foreign net beside the pinned cell is a violation");
-        let PlannerError::PhysicalInvariant(
-            compile::CompileError::PortTerminalViolation { port, reason },
-        ) = &error
+        let PlannerError::PhysicalInvariant(compile::CompileError::PortTerminalViolation {
+            port,
+            reason,
+        }) = &error
         else {
             panic!("refused, but not by the terminal contract: {error}");
         };
         assert_eq!(port, "a");
-        assert!(reason.contains("adjacent"), "the reason names the adjacency: {reason}");
+        assert!(
+            reason.contains("adjacent"),
+            "the reason names the adjacency: {reason}"
+        );
     }
 
     /// Terminal isolation is stated over every signal-carrying cell, not only
@@ -11901,17 +12555,18 @@ mod tests {
         placements.pin("a", at, Facing::North);
 
         let candidate = plan_from_netlist(&netlist, &placements).expect("plans pinned");
-        let mut realised = realise_without_verifying(
-            &candidate,
-            &netlist,
-            candidate_world_size(&candidate),
-        )
-        .expect("the valid candidate emits before the terminal judge runs");
+        let mut realised =
+            realise_without_verifying(&candidate, &netlist, candidate_world_size(&candidate))
+                .expect("the valid candidate emits before the terminal judge runs");
 
         // A primitive body can carry a signal without being a route anchor.
         // Put one at a non-handover neighbour and mirror it in the emitted
         // world, leaving `realised.reservation` unchanged on purpose.
-        let intruder = Anchor { x: at.x, y: 1, z: at.z + 1 };
+        let intruder = Anchor {
+            x: at.x,
+            y: 1,
+            z: at.z + 1,
+        };
         let mut tampered = candidate.clone();
         tampered.primitive_nodes.push(PrimitiveNode {
             id: "input:foreign".to_string(),
@@ -11927,20 +12582,21 @@ mod tests {
             .world
             .set(intruder.x, intruder.y, intruder.z, compile::lever(false));
 
-        let error = verify_terminal_contract(
-            &tampered,
-            &realised.realised.world,
-            &realised.reservation,
-        )
-        .expect_err("a primitive conductor beside the pinned cell is a violation");
-        let PlannerError::PhysicalInvariant(
-            compile::CompileError::PortTerminalViolation { port, reason },
-        ) = &error
+        let error =
+            verify_terminal_contract(&tampered, &realised.realised.world, &realised.reservation)
+                .expect_err("a primitive conductor beside the pinned cell is a violation");
+        let PlannerError::PhysicalInvariant(compile::CompileError::PortTerminalViolation {
+            port,
+            reason,
+        }) = &error
         else {
             panic!("refused, but not by the terminal contract: {error}");
         };
         assert_eq!(port, "a");
-        assert!(reason.contains("adjacent"), "the reason names the adjacency: {reason}");
+        assert!(
+            reason.contains("adjacent"),
+            "the reason names the adjacency: {reason}"
+        );
         assert!(
             reason.contains("(10, 1, 41)"),
             "the reason names the primitive cell: {reason}"
@@ -11974,7 +12630,11 @@ mod tests {
         // pinned cell -- the side opposite the handover, so nothing else
         // objects first.
         let mut tampered = candidate.clone();
-        let intruder = Anchor { x: at.x, y: 1, z: at.z + 1 };
+        let intruder = Anchor {
+            x: at.x,
+            y: 1,
+            z: at.z + 1,
+        };
         let own = tampered
             .routes
             .iter_mut()
@@ -11986,14 +12646,18 @@ mod tests {
 
         let error = verify_candidate(&tampered, &netlist)
             .expect_err("the port's own net beside its pinned cell is a violation");
-        let PlannerError::PhysicalInvariant(
-            compile::CompileError::PortTerminalViolation { port, reason },
-        ) = &error
+        let PlannerError::PhysicalInvariant(compile::CompileError::PortTerminalViolation {
+            port,
+            reason,
+        }) = &error
         else {
             panic!("refused, but not by the terminal contract: {error}");
         };
         assert_eq!(port, "a");
-        assert!(reason.contains("adjacent"), "the reason names the adjacency: {reason}");
+        assert!(
+            reason.contains("adjacent"),
+            "the reason names the adjacency: {reason}"
+        );
     }
 
     /// Both truth harnesses read a pinned output through the caller's own
@@ -12029,7 +12693,10 @@ mod tests {
             &placements,
         )
         .expect("every ordered transition reads NOR through the caller's own cells");
-        assert_eq!(seen, 12, "four states, every ordered transition between them");
+        assert_eq!(
+            seen, 12,
+            "four states, every ordered transition between them"
+        );
 
         let compiled = crate::compile::compile_planned(&netlist, &placements)
             .unwrap_or_else(|error| panic!("the mixed circuit compiles: {error}"));
@@ -12153,7 +12820,10 @@ mod tests {
         );
 
         // The unpinned sibling is untouched: its own lever, toggled as ever.
-        let &lever = compiled.input_positions.get("b").expect("`b` keeps its lever");
+        let &lever = compiled
+            .input_positions
+            .get("b")
+            .expect("`b` keeps its lever");
         assert_eq!(drivers[1].at(), lever);
         assert_eq!(
             fixture.get(lever.0, lever.1, lever.2).kind,
@@ -12202,7 +12872,11 @@ mod tests {
             // of this row.
             placements.pin(
                 *name,
-                Anchor { x: base.x + 2 * index as i32, y: 1, z: base.z + 4 },
+                Anchor {
+                    x: base.x + 2 * index as i32,
+                    y: 1,
+                    z: base.z + 4,
+                },
                 Facing::North,
             );
         }
@@ -12263,7 +12937,11 @@ mod tests {
         for (index, name) in INPUT_NAMES.iter().enumerate() {
             placements.pin(
                 *name,
-                Anchor { x: base_x + 2 * index as i32, y: 1, z: max_z + 4 },
+                Anchor {
+                    x: base_x + 2 * index as i32,
+                    y: 1,
+                    z: max_z + 4,
+                },
                 Facing::North,
             );
         }
@@ -12271,7 +12949,11 @@ mod tests {
         for (index, signal) in sinks.iter().enumerate() {
             placements.pin(
                 signal,
-                Anchor { x: base_x + 2 * index as i32, y: 1, z: (min_z - 4).max(1) },
+                Anchor {
+                    x: base_x + 2 * index as i32,
+                    y: 1,
+                    z: (min_z - 4).max(1),
+                },
                 Facing::North,
             );
         }
@@ -12327,7 +13009,10 @@ mod tests {
         // The signal leaves heading north, so the handover is south of the
         // caller's cell and the one approach is south of that again.
         let pinned = at(10, 1, 10);
-        let pin = PortPin { at: pinned, toward: Facing::North };
+        let pin = PortPin {
+            at: pinned,
+            toward: Facing::North,
+        };
         let consumer = NetConsumer::Terminal {
             port: "y".to_string(),
             at: pinned,
@@ -12369,14 +13054,21 @@ mod tests {
         )
         .expect_err("a walled-in handover cannot be reached");
 
-        let PlannerError::InvalidPortPin { port, at: named, refusal } = &failure.error else {
+        let PlannerError::InvalidPortPin {
+            port,
+            at: named,
+            refusal,
+        } = &failure.error
+        else {
             panic!("refused, but not against the pin: {}", failure.error);
         };
         assert_eq!(port, "y", "the refusal names the pin, not the corridor");
         assert_eq!(*named, pinned, "and the caller's own cell");
         assert_eq!(
             *refusal,
-            PinRefusal::UnreachableHandover { cell: at(10, 1, 11) },
+            PinRefusal::UnreachableHandover {
+                cell: at(10, 1, 11)
+            },
             "with the one cell that could not be reached, as data"
         );
     }
@@ -12531,8 +13223,8 @@ mod tests {
         let circuit = crate::circuits::verilog::find("verilog:seven_segment")
             .expect("the catalog has the decoder");
         let (netlist, labels) = circuit.baked_netlist();
-        let lowered = crate::compile::lowering::lower_optimised(&netlist)
-            .expect("the decoder lowers");
+        let lowered =
+            crate::compile::lowering::lower_optimised(&netlist).expect("the decoder lowers");
 
         let glyph: &[(&str, Anchor, Facing)] = &[
             ("a", Anchor { x: 76, y: 1, z: 24 }, Facing::North),
@@ -12560,10 +13252,17 @@ mod tests {
             placements.pin(signal.clone(), *at, *toward);
             segments.push(signal);
         }
-        for (index, name) in crate::circuits::seven_segment::INPUT_NAMES.iter().enumerate() {
+        for (index, name) in crate::circuits::seven_segment::INPUT_NAMES
+            .iter()
+            .enumerate()
+        {
             placements.pin(
                 *name,
-                Anchor { x: 76 + 12 * index as i32, y: 1, z: 120 },
+                Anchor {
+                    x: 76 + 12 * index as i32,
+                    y: 1,
+                    z: 120,
+                },
                 Facing::North,
             );
         }
@@ -12659,9 +13358,8 @@ mod tests {
         let (lowered, segments, placements) = pinned_glyph_decoder();
 
         let started = Instant::now();
-        let compiled = compile::compile_grown(&lowered, &placements).expect(
-            "the pinned decoder is generated by compile_grown, four invariants included",
-        );
+        let compiled = compile::compile_grown(&lowered, &placements)
+            .expect("the pinned decoder is generated by compile_grown, four invariants included");
         eprintln!(
             "compile_grown(verilog:seven_segment, glyph pins): Ok in {:.1}s",
             started.elapsed().as_secs_f64()
@@ -12720,16 +13418,20 @@ mod tests {
         let probes = install_fixture_probes(&mut fixture, &segments, &placements)
             .expect("every pinned output takes a probe lamp in the caller's own cell");
         let mut simulator = crate::redstone::simulator::Simulator::new(fixture);
-        simulator.run_until_stable(2000).expect("the idle world settles");
+        simulator
+            .run_until_stable(2000)
+            .expect("the idle world settles");
         let mut worst = 0u64;
         for combination in 0..16usize {
-            let bits: Vec<bool> =
-                (0..4).map(|index| (combination >> (3 - index)) & 1 == 1).collect();
+            let bits: Vec<bool> = (0..4)
+                .map(|index| (combination >> (3 - index)) & 1 == 1)
+                .collect();
             for (driver, &bit) in drivers.iter().zip(bits.iter()) {
                 driver.set(simulator.world_mut(), bit);
             }
-            let ticks =
-                simulator.run_until_stable(2000).expect("every vector settles");
+            let ticks = simulator
+                .run_until_stable(2000)
+                .expect("every vector settles");
             worst = worst.max(ticks);
 
             let want = seven_segment_expected(&bits);
@@ -12815,8 +13517,16 @@ mod tests {
         let mut min = (i32::MAX, i32::MAX, i32::MAX);
         let mut max = (i32::MIN, i32::MIN, i32::MIN);
         for anchor in candidate.anchors() {
-            min = (min.0.min(anchor.x), min.1.min(anchor.y), min.2.min(anchor.z));
-            max = (max.0.max(anchor.x), max.1.max(anchor.y), max.2.max(anchor.z));
+            min = (
+                min.0.min(anchor.x),
+                min.1.min(anchor.y),
+                min.2.min(anchor.z),
+            );
+            max = (
+                max.0.max(anchor.x),
+                max.1.max(anchor.y),
+                max.2.max(anchor.z),
+            );
         }
         (max.0 - min.0 + 1, max.1 - min.1 + 1, max.2 - min.2 + 1)
     }
@@ -12958,8 +13668,8 @@ mod tests {
                 relax::RelaxEffort::default(),
             )
             .unwrap_or_else(|error| panic!("{name} relaxes: {error}"));
-            let snapped = relax::snap(&placement)
-                .unwrap_or_else(|error| panic!("{name} snaps: {error}"));
+            let snapped =
+                relax::snap(&placement).unwrap_or_else(|error| panic!("{name} snaps: {error}"));
 
             assert!(
                 snapped.iter().any(|node| node.anchor.y > PLANNER_Y),
@@ -13062,7 +13772,8 @@ mod tests {
 
         let (netlist, _) = build_single_segment_netlist(0);
 
-        let compiled = compile::compile_legacy(&netlist).expect("segment_a compiles the legacy way");
+        let compiled =
+            compile::compile_legacy(&netlist).expect("segment_a compiles the legacy way");
         let emission = compiled.legacy_emission().expect("legacy metadata");
         let seed = seed_from_legacy_parts(&netlist, emission).expect("segment_a seeds");
 
@@ -13227,7 +13938,9 @@ mod tests {
                 };
                 if !ok {
                     mismatched += 1;
-                    *by_kind.entry(format!("{occ:?} promised, {got:?} built")).or_default() += 1;
+                    *by_kind
+                        .entry(format!("{occ:?} promised, {got:?} built"))
+                        .or_default() += 1;
                     if mismatched <= 6 {
                         eprintln!("RECON {name}: {cell:?} owner={owner} {occ:?} -> {got:?}");
                     }
@@ -13258,7 +13971,6 @@ mod tests {
             );
         }
     }
-
 
     /// The realised-vs-intended connectivity sweep, whole-family.
     ///
@@ -13314,7 +14026,11 @@ mod tests {
         use crate::redstone::world::block::BlockKind;
 
         let norm = |a: Anchor, b: Anchor| -> (Anchor, Anchor) {
-            if a <= b { (a, b) } else { (b, a) }
+            if a <= b {
+                (a, b)
+            } else {
+                (b, a)
+            }
         };
         // A legal path step: one horizontal cell, flat or one storey up/down.
         let step_adjacent = |a: &Anchor, b: &Anchor| -> bool {
@@ -13366,7 +14082,11 @@ mod tests {
                                 )
                                 .iter()
                                 {
-                                    let ta = Anchor { x: target.x, y: target.y, z: target.z };
+                                    let ta = Anchor {
+                                        x: target.x,
+                                        y: target.y,
+                                        z: target.z,
+                                    };
                                     if own.contains_key(&ta) {
                                         directed.insert((cell, ta));
                                         realised.insert(norm(cell, ta));
@@ -13530,7 +14250,10 @@ mod tests {
                 seed,
                 &netlist,
                 PlannerWeights::default(),
-                PlannerEffort { evaluations: 24, seed: 0x26_02 },
+                PlannerEffort {
+                    evaluations: 24,
+                    seed: 0x26_02,
+                },
             );
             let after = report.candidate.cost();
 
@@ -13539,10 +14262,14 @@ mod tests {
                  delay {}->{} wire {}->{} space {}->{} turns {}->{}",
                 netlist.gates.len(),
                 moves.len(),
-                before.delay, after.delay,
-                before.wire, after.wire,
-                before.space, after.space,
-                before.turns, after.turns,
+                before.delay,
+                after.delay,
+                before.wire,
+                after.wire,
+                before.space,
+                after.space,
+                before.turns,
+                after.turns,
             );
         }
     }
@@ -13636,7 +14363,10 @@ mod tests {
         let to = Anchor { x: 11, y: 2, z: 10 };
         let clearance = staircase_clearance(from, to);
         let riser = Anchor { y: from.y, ..to };
-        let headroom = Anchor { y: from.y + 1, ..from };
+        let headroom = Anchor {
+            y: from.y + 1,
+            ..from
+        };
         assert_eq!(
             clearance,
             vec![riser, headroom],
@@ -13834,9 +14564,7 @@ mod tests {
                 if let Some(cell) = held {
                     match lid {
                         Lid::Unclaimed => {}
-                        Lid::ClaimedNotStone => {
-                            reservation.insert(cell, "third", Occupancy::Solid)
-                        }
+                        Lid::ClaimedNotStone => reservation.insert(cell, "third", Occupancy::Solid),
                         Lid::Stone => reservation.insert(cell, "third", Occupancy::Stone),
                     }
                 }
@@ -14145,7 +14873,8 @@ mod tests {
         use crate::redstone::world::block::BlockKind;
 
         let (netlist, _) = build_and4_netlist();
-        let candidate = plan_from_netlist(&netlist, &PortPlacements::default()).expect("and4 must be placeable");
+        let candidate = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("and4 must be placeable");
         let realised = realise_and_verify(&candidate, &netlist, candidate_world_size(&candidate))
             .expect("and4 must be legal");
 
@@ -14247,6 +14976,21 @@ mod tests {
 
         let (primitive, to) = movable_target(&seed);
         let moved = try_move(&seed, primitive, to).expect("a legal local move must exist");
+
+        for route in moved.routes() {
+            assert_eq!(
+                route.terminals().len(),
+                route.branch_paths().len(),
+                "every moved route terminal keeps one explicit branch path"
+            );
+            for (terminal, path) in route.terminals().iter().zip(route.branch_paths()) {
+                assert_eq!(
+                    path.last(),
+                    Some(&terminal.sink.anchor),
+                    "a rebuilt branch path must end at its rebuilt terminal"
+                );
+            }
+        }
 
         verify_candidate(&moved, &netlist)
             .expect("a moved candidate must realise into a legal world");
@@ -14499,7 +15243,10 @@ mod tests {
                     // `order` and returns on the first refusal.
                     let laid = order.iter().position(|name| *name == blocked).unwrap_or(0);
                     harvest.deepest_laid = harvest.deepest_laid.max(laid);
-                    *harvest.tally.entry((blocked.clone(), corridor)).or_insert(0) += 1;
+                    *harvest
+                        .tally
+                        .entry((blocked.clone(), corridor))
+                        .or_insert(0) += 1;
                     harvest.last = Some(error);
 
                     // The reservation is the plane as it stood when the search
@@ -14511,8 +15258,7 @@ mod tests {
                     }
 
                     let charged_air = congestion.charge_cells(&charge_outright);
-                    let charged =
-                        congestion.charge(&reservation, corridor.0, corridor.1, &blocked);
+                    let charged = congestion.charge(&reservation, corridor.0, corridor.1, &blocked);
                     let mut promoted: Vec<String> = vec![blocked.clone()];
                     promoted.extend(order.iter().filter(|name| **name != blocked).cloned());
                     let reordered = promoted != order;
@@ -14605,9 +15351,9 @@ mod tests {
                     .filter(|cell| {
                         let is_riser = next.y > at.y && cell.y == at.y;
                         if is_riser {
-                            let foreign = reservation.owner(cell).is_some_and(|by| {
-                                by != owner && by != stair_guard(owner)
-                            });
+                            let foreign = reservation
+                                .owner(cell)
+                                .is_some_and(|by| by != owner && by != stair_guard(owner));
                             foreign || reservation.conductor_owner(cell).is_some()
                         } else {
                             reservation.owner(cell).is_some()
@@ -14629,7 +15375,10 @@ mod tests {
                 {
                     *blamed.entry(next).or_insert(0) += 1;
                 }
-                let below = Anchor { y: next.y - 1, ..next };
+                let below = Anchor {
+                    y: next.y - 1,
+                    ..next
+                };
                 if reservation.conductor_owner(&below).is_some() {
                     *blamed.entry(below).or_insert(0) += 1;
                 }
@@ -14691,9 +15440,10 @@ mod tests {
                 .collect();
             match (head, numbers.as_slice()) {
                 ("nothing", []) => Some(Inflation::Nothing),
-                ("hot", [share, growth]) => {
-                    Some(Inflation::HotShare { share: *share, growth: *growth })
-                }
+                ("hot", [share, growth]) => Some(Inflation::HotShare {
+                    share: *share,
+                    growth: *growth,
+                }),
                 ("proportional", [gain]) => Some(Inflation::Proportional { gain: *gain }),
                 ("uniform", [gain]) => Some(Inflation::Uniform { gain: *gain }),
                 _ => None,
@@ -15009,7 +15759,9 @@ mod tests {
         .split_whitespace()
         .map(|text| Inflation::parse(text).expect("an inflation rule this harness knows"))
         .collect();
-        let iterations: usize = setting("REDA_PROBE_ITERATIONS", "12").parse().expect("a count");
+        let iterations: usize = setting("REDA_PROBE_ITERATIONS", "12")
+            .parse()
+            .expect("a count");
         let rounds: usize = setting("REDA_PROBE_ROUNDS", "64").parse().expect("a count");
         let radius: i32 = setting("REDA_PROBE_RADIUS", "6").parse().expect("a radius");
         let source = match setting("REDA_PROBE_HEAT", "charge").as_str() {
@@ -15090,13 +15842,13 @@ mod tests {
         };
 
         let placements = PortPlacements::default();
-        let placement =
-            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let placement = relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
         let snapped = relax::snap(&placement).expect("snaps");
         let base = candidate_from_snapped(&netlist, &placements, &snapped);
         let anchors = base.anchors.clone();
-        let facings: Vec<geometry::CellFacing> =
-            (0..anchors.len()).map(|node| base.facing_of(node)).collect();
+        let facings: Vec<geometry::CellFacing> = (0..anchors.len())
+            .map(|node| base.facing_of(node))
+            .collect();
 
         let describe = |harvest: &Harvest| -> String {
             match &harvest.routed {
@@ -15104,7 +15856,11 @@ mod tests {
                     Ok(()) => format!(
                         "ROUTED and VERIFIES in {} rounds, {} blocks of wire",
                         harvest.rounds,
-                        routed.routes.iter().map(|route| route.anchors.len()).sum::<usize>()
+                        routed
+                            .routes
+                            .iter()
+                            .map(|route| route.anchors.len())
+                            .sum::<usize>()
                     ),
                     Err(error) => format!("routed, does not verify: {error}"),
                 },
@@ -15283,7 +16039,9 @@ mod tests {
             std::env::var(name).unwrap_or_else(|_| fallback.to_string())
         };
         let wanted = setting("REDA_FED_CIRCUIT", "segment_a");
-        let iterations: usize = setting("REDA_FED_ITERATIONS", "14").parse().expect("a count");
+        let iterations: usize = setting("REDA_FED_ITERATIONS", "14")
+            .parse()
+            .expect("a count");
         // Which order a net's branches are laid in: `declared` is what
         // `lay_net` does today (netlist consumer order), `far` lays the
         // longest branch first while the field is still open, `near` the
@@ -15305,9 +16063,10 @@ mod tests {
             other => panic!("REDA_FED_CIRCUIT names no circuit: {other}"),
         };
         let placements = PortPlacements::default();
-        let placement =
-            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
-        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+        let placement = relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement)
+            .map_err(PlannerError::Relaxation)
+            .expect("snaps");
         let candidate = candidate_from_snapped(&netlist, &placements, &snapped);
 
         let sinks = net_sinks(&netlist);
@@ -15425,7 +16184,9 @@ mod tests {
             std::env::var(name).unwrap_or_else(|_| fallback.to_string())
         };
         let wanted = setting("REDA_REPAIR_CIRCUIT", "segment_a");
-        let iterations: usize = setting("REDA_REPAIR_ITERATIONS", "32").parse().expect("a count");
+        let iterations: usize = setting("REDA_REPAIR_ITERATIONS", "32")
+            .parse()
+            .expect("a count");
 
         let netlist = match wanted.as_str() {
             "full_adder" => build_full_adder_netlist().0,
@@ -15434,9 +16195,10 @@ mod tests {
             other => panic!("REDA_REPAIR_CIRCUIT names no circuit: {other}"),
         };
         let placements = PortPlacements::default();
-        let placement =
-            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
-        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+        let placement = relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement)
+            .map_err(PlannerError::Relaxation)
+            .expect("snaps");
         let mut candidate = candidate_from_snapped(&netlist, &placements, &snapped);
 
         let sinks = net_sinks(&netlist);
@@ -15454,15 +16216,13 @@ mod tests {
         let mut chosen: BTreeMap<String, usize> = BTreeMap::new();
 
         let sort_consumers =
-            |consumers: &mut Vec<(usize, usize)>, source: Anchor, which: usize| match ORDERS
-                [which]
+            |consumers: &mut Vec<(usize, usize)>, source: Anchor, which: usize| match ORDERS[which]
             {
                 "far" => consumers.sort_by_key(|&(gate, _)| {
                     std::cmp::Reverse(manhattan_distance(source, candidate.anchors[gate]))
                 }),
-                "near" => consumers.sort_by_key(|&(gate, _)| {
-                    manhattan_distance(source, candidate.anchors[gate])
-                }),
+                "near" => consumers
+                    .sort_by_key(|&(gate, _)| manhattan_distance(source, candidate.anchors[gate])),
                 _ => {}
             };
 
@@ -15483,8 +16243,7 @@ mod tests {
                 let source = net_source(&candidate, signal)
                     .map_err(|failure| failure.error)
                     .expect("every net has a driver");
-                let mut consumers =
-                    sinks.get(signal).cloned().expect("the order is its keys");
+                let mut consumers = sinks.get(signal).cloned().expect("the order is its keys");
                 let which = chosen.get(signal).copied().unwrap_or(0);
                 sort_consumers(&mut consumers, source, which);
                 let mut reservation = hard.clone();
@@ -15625,9 +16384,10 @@ mod tests {
             other => panic!("REDA_GEN_CIRCUIT names no circuit: {other}"),
         };
         let placements = PortPlacements::default();
-        let placement =
-            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
-        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+        let placement = relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement)
+            .map_err(PlannerError::Relaxation)
+            .expect("snaps");
 
         let sinks = net_sinks(&netlist);
         let order: Vec<String> = sinks.keys().cloned().collect();
@@ -15638,8 +16398,9 @@ mod tests {
         // The mutable realisation state the repair phase edits.
         let mut candidate = candidate_from_snapped(&netlist, &placements, &snapped);
         let mut anchors = candidate.anchors.clone();
-        let mut facings: Vec<geometry::CellFacing> =
-            (0..anchors.len()).map(|node| candidate.facing_of(node)).collect();
+        let mut facings: Vec<geometry::CellFacing> = (0..anchors.len())
+            .map(|node| candidate.facing_of(node))
+            .collect();
         let mut hard = hard_furniture(&candidate, &netlist);
         // 0 = declared, 1 = far, 2 = near, pinned per net once a repair lays.
         let mut chosen: BTreeMap<String, usize> = BTreeMap::new();
@@ -15658,8 +16419,9 @@ mod tests {
                 "far" => consumers.sort_by_key(|&(gate, _)| {
                     std::cmp::Reverse(manhattan_distance(source, anchors[gate]))
                 }),
-                "near" => consumers
-                    .sort_by_key(|&(gate, _)| manhattan_distance(source, anchors[gate])),
+                "near" => {
+                    consumers.sort_by_key(|&(gate, _)| manhattan_distance(source, anchors[gate]))
+                }
                 _ => {}
             }
             consumers
@@ -15738,9 +16500,7 @@ mod tests {
                         eprintln!("  SHARED CELLS SURVIVED THE EXIT: {error}");
                         return;
                     }
-                    eprintln!(
-                        "  ALL LAID AND NOTHING CONTESTED (phase {phase}, iter {iteration})"
-                    );
+                    eprintln!("  ALL LAID AND NOTHING CONTESTED (phase {phase}, iter {iteration})");
                     eprintln!(
                         "  pinned orders: {:?} | turned gates: {}",
                         chosen
@@ -15751,9 +16511,7 @@ mod tests {
                         facings
                             .iter()
                             .enumerate()
-                            .filter(|(node, facing)| {
-                                **facing != snapped[*node].facing
-                            })
+                            .filter(|(node, facing)| { **facing != snapped[*node].facing })
                             .map(|(node, facing)| {
                                 format!(
                                     "{}:{:?}",
@@ -15825,10 +16583,7 @@ mod tests {
                     if let Ok(route) = outcome {
                         table.claim(signal, claim_of(signal, &route, &reservation));
                         chosen.insert(signal.clone(), which);
-                        eprintln!(
-                            "  repair: {signal} lays under order {}",
-                            ORDERS[which]
-                        );
+                        eprintln!("  repair: {signal} lays under order {}", ORDERS[which]);
                         repaired = true;
                         break;
                     }
@@ -15979,20 +16734,17 @@ mod tests {
                         .iter()
                         .find(|(owner, _, node)| {
                             owner.starts_with("primitive:")
-                                && candidate.primitive_nodes[*node].id
-                                    != format!("gate:{signal}")
-                                && candidate.primitive_nodes[*node].id
-                                    != format!("input:{signal}")
+                                && candidate.primitive_nodes[*node].id != format!("gate:{signal}")
+                                && candidate.primitive_nodes[*node].id != format!("input:{signal}")
                         })
                         .map(|(_, _, node)| *node);
                     let own = candidate.primitive_nodes.iter().position(|node| {
-                        node.id == format!("gate:{signal}")
-                            || node.id == format!("input:{signal}")
+                        node.id == format!("gate:{signal}") || node.id == format!("input:{signal}")
                     });
                     if let (Some(foreign), Some(own)) = (foreign, own) {
                         'pairs: for foreign_index in 0..4u8 {
-                            let foreign_facing = geometry::CellFacing::from_index(foreign_index)
-                                .expect("four");
+                            let foreign_facing =
+                                geometry::CellFacing::from_index(foreign_index).expect("four");
                             if foreign_facing == facings[foreign] {
                                 continue;
                             }
@@ -16015,12 +16767,8 @@ mod tests {
                                 let trial_source = net_source(&trial, signal)
                                     .map_err(|failure| failure.error)
                                     .expect("every net has a driver");
-                                let consumers = sorted(
-                                    &consumers_declared,
-                                    trial_source,
-                                    &anchors,
-                                    current,
-                                );
+                                let consumers =
+                                    sorted(&consumers_declared, trial_source, &anchors, current);
                                 let mut reservation = trial_hard.clone();
                                 table.release(signal);
                                 let outcome = {
@@ -16041,10 +16789,7 @@ mod tests {
                                     )
                                 };
                                 if let Ok(route) = outcome {
-                                    table.claim(
-                                        signal,
-                                        claim_of(signal, &route, &reservation),
-                                    );
+                                    table.claim(signal, claim_of(signal, &route, &reservation));
                                     eprintln!(
                                         "  repair: {signal} lays after the PAIR turn: {} \
                                          -> {:?} and its own {} -> {:?}",
@@ -16081,8 +16826,7 @@ mod tests {
                 }
             }
 
-            if !turned_this_phase && frozen.iter().all(|(signal, _)| abandoned.contains(signal))
-            {
+            if !turned_this_phase && frozen.iter().all(|(signal, _)| abandoned.contains(signal)) {
                 eprintln!("  every frozen net is out of knobs -- stopping");
                 break;
             }
@@ -16118,9 +16862,7 @@ mod tests {
         let wanted = setting("REDA_DIV_CIRCUIT", "verilog:seven_segment");
         let netlist = match wanted.as_str() {
             "segment_a" => build_single_segment_netlist(0).0,
-            "seven_segment" => {
-                crate::circuits::seven_segment::build_seven_segment_netlist().0
-            }
+            "seven_segment" => crate::circuits::seven_segment::build_seven_segment_netlist().0,
             "verilog:seven_segment" => {
                 let circuit = crate::circuits::verilog::find("verilog:seven_segment")
                     .expect("the catalog has the decoder");
@@ -16130,9 +16872,10 @@ mod tests {
             other => panic!("REDA_DIV_CIRCUIT names no circuit: {other}"),
         };
         let placements = PortPlacements::default();
-        let placement =
-            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
-        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+        let placement = relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement)
+            .map_err(PlannerError::Relaxation)
+            .expect("snaps");
         let mut candidate = candidate_from_snapped(&netlist, &placements, &snapped);
 
         let started = Instant::now();
@@ -16168,16 +16911,10 @@ mod tests {
                 let message = error.to_string();
                 eprintln!("  does not verify: {message}");
                 // `net \`g1\` never delivers ...` names the route to walk.
-                let Some(net) = message
-                    .split('`')
-                    .nth(1)
-                    .map(|name| name.to_string())
-                else {
+                let Some(net) = message.split('`').nth(1).map(|name| name.to_string()) else {
                     return;
                 };
-                let Some(route) =
-                    candidate.routes.iter().find(|route| route.id == net)
-                else {
+                let Some(route) = candidate.routes.iter().find(|route| route.id == net) else {
                     eprintln!("  no route named {net}");
                     return;
                 };
@@ -16223,8 +16960,10 @@ mod tests {
                                     cells.insert(pos);
                                 }
                             }
-                            let mut sources: Vec<(Position, &crate::redstone::world::block::BlockState)> =
-                                Vec::new();
+                            let mut sources: Vec<(
+                                Position,
+                                &crate::redstone::world::block::BlockState,
+                            )> = Vec::new();
                             for (n, entry) in nets.iter().enumerate() {
                                 if groups.root(n) != root {
                                     continue;
@@ -16252,22 +16991,16 @@ mod tests {
                                     verified.realised.world.get(x, y, z),
                                 ));
                             }
-                            compile::net_signal_strength(
-                                &verified.realised.world,
-                                &cells,
-                                &sources,
-                            )
+                            compile::net_signal_strength(&verified.realised.world, &cells, &sources)
                         }
                     }
                 };
 
-                let mut carried =
-                    crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                let mut carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
                 for (index, anchor) in route.anchors.iter().enumerate() {
                     let kind = route.realisation[index].kind;
                     if kind == crate::redstone::world::block::BlockKind::Repeater {
-                        carried =
-                            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                        carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
                     } else {
                         carried = carried.saturating_sub(1);
                     }
@@ -16282,9 +17015,7 @@ mod tests {
                         .map(|terminal| {
                             format!(
                                 "  <- terminal into {}.in[{}] as {:?}",
-                                terminal.sink.gate,
-                                terminal.sink.input_index,
-                                terminal.kind
+                                terminal.sink.gate, terminal.sink.input_index, terminal.kind
                             )
                         })
                         .unwrap_or_default();
@@ -16327,9 +17058,10 @@ mod tests {
         let netlist = crate::compile::lowering::lower_optimised(&circuit.baked_netlist().0)
             .expect("the decoder lowers");
         let placements = PortPlacements::default();
-        let placement =
-            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
-        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+        let placement = relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement)
+            .map_err(PlannerError::Relaxation)
+            .expect("snaps");
         let candidate = candidate_from_snapped(&netlist, &placements, &snapped);
         let routed = negotiate_charging(
             candidate,
@@ -16347,10 +17079,12 @@ mod tests {
             emit_candidate(&routed, &netlist, candidate_world_size(&routed)).expect("realises");
 
         // Settle the world at the vector.
-        let mut simulator =
-            crate::redstone::simulator::Simulator::new(realised.world.clone());
+        let mut simulator = crate::redstone::simulator::Simulator::new(realised.world.clone());
         simulator.run_until_stable(2000).expect("settles empty");
-        for (input, &bit) in crate::circuits::seven_segment::INPUT_NAMES.iter().zip(&bits) {
+        for (input, &bit) in crate::circuits::seven_segment::INPUT_NAMES
+            .iter()
+            .zip(&bits)
+        {
             let &(x, y, z) = realised
                 .ports
                 .input_positions
@@ -16368,9 +17102,7 @@ mod tests {
         if let Some(gate) = netlist.gates.iter().find(|gate| gate.output == target) {
             interesting.extend(gate.inputs.iter().cloned());
             for input in &gate.inputs {
-                if let Some(feeder) =
-                    netlist.gates.iter().find(|gate| gate.output == *input)
-                {
+                if let Some(feeder) = netlist.gates.iter().find(|gate| gate.output == *input) {
                     interesting.extend(feeder.inputs.iter().cloned());
                 }
             }
@@ -16385,12 +17117,23 @@ mod tests {
                 lamp.kind, lamp.lit, lamp.power
             );
             for (dx, dy, dz) in [
-                (1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, 1, 0), (0, -1, 0),
+                (1, 0, 0),
+                (-1, 0, 0),
+                (0, 0, 1),
+                (0, 0, -1),
+                (0, 1, 0),
+                (0, -1, 0),
             ] {
                 let state = simulator.world().get(x + dx, y + dy, z + dz);
                 eprintln!(
                     "    neighbour ({},{},{}): {:?} facing {:?} power {} lit {}",
-                    x + dx, y + dy, z + dz, state.kind, state.facing, state.power, state.lit
+                    x + dx,
+                    y + dy,
+                    z + dz,
+                    state.kind,
+                    state.facing,
+                    state.power,
+                    state.lit
                 );
             }
         } else {
@@ -16417,13 +17160,7 @@ mod tests {
                     .unwrap_or_default();
                 eprintln!(
                     "    [{index:3}] ({:4},{:2},{:4}) {:?} facing {:?} power {:2} lit {}{terminal}",
-                    anchor.x,
-                    anchor.y,
-                    anchor.z,
-                    state.kind,
-                    state.facing,
-                    state.power,
-                    state.lit
+                    anchor.x, anchor.y, anchor.z, state.kind, state.facing, state.power, state.lit
                 );
             }
         }
@@ -16447,8 +17184,10 @@ mod tests {
         for &(gate, input_index) in &consumers {
             let support = candidate.anchors[gate];
             let facing = candidate.facing_of(gate);
-            let socket =
-                step(support, compile::geometry::input_directions(facing)[input_index]);
+            let socket = step(
+                support,
+                compile::geometry::input_directions(facing)[input_index],
+            );
             let approach = Anchor {
                 x: socket.x + (socket.x - support.x),
                 y: socket.y + (socket.y - support.y),
@@ -16478,8 +17217,10 @@ mod tests {
                 if driver != signal {
                     continue;
                 }
-                let socket =
-                    step(support, compile::geometry::input_directions(facing)[input_index]);
+                let socket = step(
+                    support,
+                    compile::geometry::input_directions(facing)[input_index],
+                );
                 preclaimed.insert(Anchor {
                     x: socket.x + (socket.x - support.x),
                     y: socket.y + (socket.y - support.y),
@@ -16500,7 +17241,10 @@ mod tests {
             .collect();
 
         let chebyshev = |a: Anchor, b: Anchor| -> i32 {
-            (a.x - b.x).abs().max((a.y - b.y).abs()).max((a.z - b.z).abs())
+            (a.x - b.x)
+                .abs()
+                .max((a.y - b.y).abs())
+                .max((a.z - b.z).abs())
         };
         let nearest = own_tree
             .iter()
@@ -16510,9 +17254,9 @@ mod tests {
         // way. What this counts is "the game would join these", not "the
         // plan's lids permit it" -- the point is whether the signal is at
         // the door, and a lid is the plan's own choice.
-        let joined = own_tree.iter().any(|cell| {
-            dust_join_neighbours(*cell, &|_| false).contains(&socket)
-        });
+        let joined = own_tree
+            .iter()
+            .any(|cell| dust_join_neighbours(*cell, &|_| false).contains(&socket));
         let same_gate_inputs = netlist.gates[gate]
             .inputs
             .iter()
@@ -16536,11 +17280,7 @@ mod tests {
             ),
             None => eprintln!(
                 "    {signal} -> {}.in[{input_index}]: socket ({},{},{}) | own tree EMPTY | {}",
-                netlist.gates[gate].output,
-                socket.x,
-                socket.y,
-                socket.z,
-                failure.error
+                netlist.gates[gate].output, socket.x, socket.y, socket.z, failure.error
             ),
         }
 
@@ -16579,7 +17319,10 @@ mod tests {
         // 7x7 window around the corridor's source, at the plane and one up,
         // with its owner and occupancy. `.` is unclaimed.
         for y in [source.y, source.y + 1] {
-            eprintln!("      pocket at y={y} (source ({},{},{})):", source.x, source.y, source.z);
+            eprintln!(
+                "      pocket at y={y} (source ({},{},{})):",
+                source.x, source.y, source.z
+            );
             for z in (source.z - 3)..=(source.z + 3) {
                 let mut row = String::new();
                 for x in (source.x - 3)..=(source.x + 3) {
@@ -16772,7 +17515,11 @@ mod tests {
         let mut previous: BTreeMap<Anchor, Anchor> = BTreeMap::new();
         let mut frontier: BTreeSet<SearchState> = seeds
             .iter()
-            .map(|&anchor| SearchState { estimate: 0, travelled: 0, anchor })
+            .map(|&anchor| SearchState {
+                estimate: 0,
+                travelled: 0,
+                anchor,
+            })
             .collect();
 
         while let Some(state) = frontier.iter().next().copied() {
@@ -16789,16 +17536,18 @@ mod tests {
                 }
                 if !within_bounds(next, min, max)
                     || !anchor_is_free_for(next, pin, goal, support, owner, reservation)
-                    || staircase_clearance(state.anchor, next).into_iter().any(|cell| {
-                        let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
-                            occupied_by != owner && occupied_by != stair_guard(owner)
-                        });
-                        let is_riser = next.y > state.anchor.y && cell.y == state.anchor.y;
-                        if is_riser {
-                            return foreign || reservation.conductor_owner(&cell).is_some();
-                        }
-                        reservation.owner(&cell).is_some()
-                    })
+                    || staircase_clearance(state.anchor, next)
+                        .into_iter()
+                        .any(|cell| {
+                            let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
+                                occupied_by != owner && occupied_by != stair_guard(owner)
+                            });
+                            let is_riser = next.y > state.anchor.y && cell.y == state.anchor.y;
+                            if is_riser {
+                                return foreign || reservation.conductor_owner(&cell).is_some();
+                            }
+                            reservation.owner(&cell).is_some()
+                        })
                 {
                     continue;
                 }
@@ -16807,8 +17556,7 @@ mod tests {
                 // gate plane, so "closer in y" is "coming back down", which is
                 // what that arm means there too.
                 const CLIMB_COST: u64 = 3;
-                let closer_in_y =
-                    (next.y - PLANNER_Y).abs() < (state.anchor.y - PLANNER_Y).abs();
+                let closer_in_y = (next.y - PLANNER_Y).abs() < (state.anchor.y - PLANNER_Y).abs();
                 let step_cost = if next.y == state.anchor.y || closer_in_y {
                     1
                 } else {
@@ -16831,7 +17579,10 @@ mod tests {
             }
         }
 
-        Flood { travelled, previous }
+        Flood {
+            travelled,
+            previous,
+        }
     }
 
     /// The socket a declared input arrives in, and the one cell it may arrive
@@ -16872,8 +17623,16 @@ mod tests {
     /// socket's approach reachable by its own net.
     fn growth_window(seeds: &[Anchor], margin: i32) -> (Anchor, Anchor) {
         const CLIMB: i32 = 3;
-        let mut min = Anchor { x: i32::MAX, y: i32::MAX, z: i32::MAX };
-        let mut max = Anchor { x: i32::MIN, y: i32::MIN, z: i32::MIN };
+        let mut min = Anchor {
+            x: i32::MAX,
+            y: i32::MAX,
+            z: i32::MAX,
+        };
+        let mut max = Anchor {
+            x: i32::MIN,
+            y: i32::MIN,
+            z: i32::MIN,
+        };
         for cell in seeds {
             min = Anchor {
                 x: min.x.min(cell.x),
@@ -17060,15 +17819,22 @@ mod tests {
         /// this above zero and the claim is under test rather than assumed.
         fn escapes(&self, reservation: &Reservation) -> usize {
             let mine = |cell: Anchor| {
-                self.cells.iter().any(|offset| shifted(self.origin, *offset) == cell)
+                self.cells
+                    .iter()
+                    .any(|offset| shifted(self.origin, *offset) == cell)
             };
             let mine_conducts = |cell: Anchor| {
-                self.conductors.iter().any(|offset| shifted(self.origin, *offset) == cell)
+                self.conductors
+                    .iter()
+                    .any(|offset| shifted(self.origin, *offset) == cell)
             };
             neighbours(self.pin)
                 .into_iter()
                 .filter(|&next| {
-                    let below = Anchor { y: next.y - 1, ..next };
+                    let below = Anchor {
+                        y: next.y - 1,
+                        ..next
+                    };
                     next.y >= PLANNER_Y
                         && !reservation.is_taken(&next)
                         && !mine(next)
@@ -17253,7 +18019,14 @@ mod tests {
                 pins: BTreeMap::new(),
                 sinks: net_sinks(netlist),
                 depths: gate_depths(netlist).map_err(|error| error.to_string())?,
-                anchors: vec![Anchor { x: 0, y: PLANNER_Y, z: 0 }; nodes],
+                anchors: vec![
+                    Anchor {
+                        x: 0,
+                        y: PLANNER_Y,
+                        z: 0
+                    };
+                    nodes
+                ],
                 facings: vec![geometry::CellFacing::NORTH; nodes],
                 nodes: vec![None; nodes],
                 placed: vec![false; gates],
@@ -17443,20 +18216,14 @@ mod tests {
                         }
                     }
                     Claim::Approaches(gate) => {
-                        for (input, driver) in
-                            self.netlist.gates[gate].inputs.iter().enumerate()
-                        {
-                            let (_, approach) = socket_and_approach(
-                                self.anchors[gate],
-                                self.facings[gate],
-                                input,
-                            );
+                        for (input, driver) in self.netlist.gates[gate].inputs.iter().enumerate() {
+                            let (_, approach) =
+                                socket_and_approach(self.anchors[gate], self.facings[gate], input);
                             fresh.insert(approach, driver, Occupancy::Wire);
                         }
                     }
                     Claim::Branch(serial) => {
-                        let Some(branch) =
-                            self.laid.iter().find(|laid| laid.serial == serial)
+                        let Some(branch) = self.laid.iter().find(|laid| laid.serial == serial)
                         else {
                             continue;
                         };
@@ -17567,8 +18334,10 @@ mod tests {
             self.log
                 .retain(|claim| !matches!(claim, Claim::Branch(serial) if doomed.contains(serial)));
 
-            let gone: BTreeSet<Anchor> =
-                torn.iter().flat_map(|laid| laid.added.iter().copied()).collect();
+            let gone: BTreeSet<Anchor> = torn
+                .iter()
+                .flat_map(|laid| laid.added.iter().copied())
+                .collect();
             if let Some(tree) = self.trees.get_mut(&signal) {
                 let mut anchors = Vec::with_capacity(tree.anchors.len());
                 let mut realisation = Vec::with_capacity(tree.anchors.len());
@@ -17609,7 +18378,9 @@ mod tests {
                     .join(" ")
             ));
             self.reseat();
-            torn.into_iter().map(|laid| (laid.consumer, laid.input)).collect()
+            torn.into_iter()
+                .map(|laid| (laid.consumer, laid.input))
+                .collect()
         }
 
         /// Put every torn-out branch back, ripping again for whatever refuses
@@ -17629,8 +18400,7 @@ mod tests {
                         if self.ripped >= self.settings.rip || blame.is_empty() {
                             return;
                         }
-                        let name =
-                            format!("{}.in[{input}]", self.netlist.gates[consumer].output);
+                        let name = format!("{}.in[{input}]", self.netlist.gates[consumer].output);
                         let torn = self.rip_youngest(&blame, &name);
                         if torn.is_empty() {
                             return;
@@ -17653,8 +18423,11 @@ mod tests {
             let facing = self.facings[consumer];
             let (socket, approach) = socket_and_approach(anchor, facing, input);
             let mut tree = self.trees.get(&signal).cloned().unwrap_or_default();
-            let seeds: Vec<Anchor> =
-                tree.seeds(pin).into_iter().chain([approach, socket]).collect();
+            let seeds: Vec<Anchor> = tree
+                .seeds(pin)
+                .into_iter()
+                .chain([approach, socket])
+                .collect();
 
             for &margin in &self.settings.windows {
                 let window = growth_window(&seeds, margin);
@@ -17683,7 +18456,9 @@ mod tests {
                     return Ok(());
                 }
             }
-            Err(refusal_heat(pin, approach, &signal, &self.reservation).into_keys().collect())
+            Err(refusal_heat(pin, approach, &signal, &self.reservation)
+                .into_keys()
+                .collect())
         }
 
         /// Land one gate: flood its input nets, rank the places its sockets
@@ -17753,14 +18528,21 @@ mod tests {
                                 .owner(&cell)
                                 .unwrap_or("unclaimed")
                                 .to_string();
-                            (cell, format!("{owner} [{}]", self.what_stands_at(cell)), blame)
+                            (
+                                cell,
+                                format!("{owner} [{}]", self.what_stands_at(cell)),
+                                blame,
+                            )
                         })
                         .collect();
-                        blamed.sort_by(|left, right| {
-                            right.2.cmp(&left.2).then(left.0.cmp(&right.0))
-                        });
+                        blamed
+                            .sort_by(|left, right| right.2.cmp(&left.2).then(left.0.cmp(&right.0)));
                         blamed.truncate(6);
-                        Seal { signal: drivers[input].clone(), pin: pins[input], blamed }
+                        Seal {
+                            signal: drivers[input].clone(),
+                            pin: pins[input],
+                            blamed,
+                        }
                     })
                     .collect();
                 // A sealed net's blame is the whole ring around its pin, not
@@ -17835,11 +18617,8 @@ mod tests {
                             // blames whatever the branch search was refused by,
                             // measured the same way the seal report measures a
                             // pin's ring.
-                            let (_, approach) = socket_and_approach(
-                                landing.anchor,
-                                landing.facing,
-                                refusal.input,
-                            );
+                            let (_, approach) =
+                                socket_and_approach(landing.anchor, landing.facing, refusal.input);
                             blame.extend(
                                 refusal_heat(
                                     pins[refusal.input],
@@ -17903,8 +18682,10 @@ mod tests {
             }
             self.anchors[gate] = anchor;
             self.facings[gate] = facing;
-            self.pins
-                .insert(output, node.output_pin.expect("a gate node records its pin"));
+            self.pins.insert(
+                output,
+                node.output_pin.expect("a gate node records its pin"),
+            );
             self.nodes[gate] = Some(node);
             // Chronological, and in exactly the order `lay` wrote them: body,
             // then the four socket pre-claims, then the branches cheapest-first.
@@ -17943,7 +18724,13 @@ mod tests {
             let arrival: Vec<u64> = (0..drivers.len())
                 .map(|input| routes.get(&input).map_or(0, |path| path.len() as u64))
                 .collect();
-            let landing = Landing { anchor, facing, arrival, pull: 0.0, score: 0.0 };
+            let landing = Landing {
+                anchor,
+                facing,
+                arrival,
+                pull: 0.0,
+                score: 0.0,
+            };
             let mut reservation = self.reservation.clone();
             match self.lay(
                 gate,
@@ -17956,7 +18743,16 @@ mod tests {
                 Some(routes),
             ) {
                 Ok((node, laid)) => {
-                    self.commit(gate, anchor, facing, node, laid, &drivers, trees, reservation);
+                    self.commit(
+                        gate,
+                        anchor,
+                        facing,
+                        node,
+                        laid,
+                        &drivers,
+                        trees,
+                        reservation,
+                    );
                     self.placed[gate] = true;
                     Ok(())
                 }
@@ -17991,9 +18787,9 @@ mod tests {
             // enumerated over the sealed one's handful of cells instead of the
             // open one's thousands. That is also the honest denominator for the
             // wedge funnel, which is the most-constrained net's count.
-            let Some(generator) = (0..arity).min_by_key(|&input| {
-                (fields[input].travelled.len(), input)
-            }) else {
+            let Some(generator) =
+                (0..arity).min_by_key(|&input| (fields[input].travelled.len(), input))
+            else {
                 return (landings, funnel);
             };
 
@@ -18007,8 +18803,7 @@ mod tests {
                 let facing = geometry::CellFacing::from_index(index).expect("0..4 is horizontal");
                 let (body, conductors, pin_offset) =
                     compile::gate_footprint((0, 0, 0), definition, facing);
-                let unit =
-                    step(GROWTH_ORIGIN, geometry::input_directions(facing)[generator]);
+                let unit = step(GROWTH_ORIGIN, geometry::input_directions(facing)[generator]);
 
                 for (&cell, &cost) in &fields[generator].travelled {
                     // A gate stands on the gate plane. Growth chooses where in
@@ -18239,19 +19034,23 @@ mod tests {
 
             let mut laid: Vec<Laid> = Vec::with_capacity(drivers.len());
             for input in cheapest {
-                laid.push(self.branch(
-                    gate,
-                    landing.anchor,
-                    input,
-                    &drivers[input],
-                    pins[input],
-                    sockets[input],
-                    approaches[input],
-                    &mut trees[input],
-                    reservation,
-                    window,
-                    supplied.and_then(|routes| routes.get(&input)).map(Vec::as_slice),
-                )?);
+                laid.push(
+                    self.branch(
+                        gate,
+                        landing.anchor,
+                        input,
+                        &drivers[input],
+                        pins[input],
+                        sockets[input],
+                        approaches[input],
+                        &mut trees[input],
+                        reservation,
+                        window,
+                        supplied
+                            .and_then(|routes| routes.get(&input))
+                            .map(Vec::as_slice),
+                    )?,
+                );
             }
 
             Ok((node, laid))
@@ -18289,11 +19088,22 @@ mod tests {
                 // the grown case on purpose: the strength budget, the terminal
                 // choice and the guard cells are the judges either way.
                 Some(cells) => {
-                    if cells.first().is_none_or(|root| !tree.seeds(pin).contains(root)) {
-                        return Err(LayRefusal { input, why: String::from("the supplied route starts nowhere this net has laid") });
+                    if cells
+                        .first()
+                        .is_none_or(|root| !tree.seeds(pin).contains(root))
+                    {
+                        return Err(LayRefusal {
+                            input,
+                            why: String::from(
+                                "the supplied route starts nowhere this net has laid",
+                            ),
+                        });
                     }
                     if cells.last() != Some(&approach) {
-                        return Err(LayRefusal { input, why: String::from("the supplied route does not end at the approach") });
+                        return Err(LayRefusal {
+                            input,
+                            why: String::from("the supplied route does not end at the approach"),
+                        });
                     }
                     // The flood's own legality, replayed step by step over a
                     // route the flood did not find. Every arm below is
@@ -18367,7 +19177,11 @@ mod tests {
             let root = path[0];
             let fresh = tree.anchors.is_empty();
             let (previous_cell, incoming, cells) = if fresh {
-                (pin, crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH, &path[..])
+                (
+                    pin,
+                    crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+                    &path[..],
+                )
             } else {
                 let carried = *tree
                     .strength
@@ -18414,7 +19228,10 @@ mod tests {
                 added.push(*cell);
             }
 
-            let predecessor = path.get(path.len().saturating_sub(2)).copied().unwrap_or(pin);
+            let predecessor = path
+                .get(path.len().saturating_sub(2))
+                .copied()
+                .unwrap_or(pin);
 
             let consumers = self.sinks.get(signal).map(Vec::as_slice).unwrap_or(&[]);
             let bare_merge =
@@ -18465,8 +19282,10 @@ mod tests {
                 repeaters: trunk_repeaters + branch_repeaters,
             });
 
-            let claimed: Vec<Anchor> =
-                claimed_cells(reservation).difference(&before).copied().collect();
+            let claimed: Vec<Anchor> = claimed_cells(reservation)
+                .difference(&before)
+                .copied()
+                .collect();
             Ok(Laid {
                 serial: 0,
                 signal: signal.to_string(),
@@ -18662,8 +19481,7 @@ mod tests {
         let blocks = (0..realised.world.cells().len())
             .filter(|&flat| {
                 let (x, y, z) = realised.world.decode(flat);
-                realised.world.get(x, y, z).kind
-                    != crate::redstone::world::block::BlockKind::Air
+                realised.world.get(x, y, z).kind != crate::redstone::world::block::BlockKind::Air
             })
             .count();
         eprintln!(
@@ -18723,8 +19541,12 @@ mod tests {
 
         let gates = case.netlist.gates.len();
         let placed = growth.placed.iter().filter(|done| **done).count();
-        let standing: Vec<Anchor> =
-            growth.nodes.iter().flatten().map(|node| node.anchor).collect();
+        let standing: Vec<Anchor> = growth
+            .nodes
+            .iter()
+            .flatten()
+            .map(|node| node.anchor)
+            .collect();
         let (width, depth, area) = anchor_box(&standing);
         let wire: usize = growth.trees.values().map(|tree| tree.anchors.len()).sum();
 
@@ -18849,8 +19671,7 @@ mod tests {
         let blocks = (0..realised.world.cells().len())
             .filter(|&flat| {
                 let (x, y, z) = realised.world.decode(flat);
-                realised.world.get(x, y, z).kind
-                    != crate::redstone::world::block::BlockKind::Air
+                realised.world.get(x, y, z).kind != crate::redstone::world::block::BlockKind::Air
             })
             .count();
         eprintln!(
@@ -18860,7 +19681,10 @@ mod tests {
         );
 
         if !settings.settle {
-            eprintln!("  {}: truth table and settle NOT MEASURED (REDA_GROWTH_SETTLE=0)", case.name);
+            eprintln!(
+                "  {}: truth table and settle NOT MEASURED (REDA_GROWTH_SETTLE=0)",
+                case.name
+            );
             return;
         }
         let started = Instant::now();
@@ -19215,14 +20039,18 @@ mod tests {
 
         let settings = GrowthSettings {
             order: setting("REDA_GROWTH_ORDER", "depth"),
-            lambda: setting("REDA_GROWTH_LAMBDA", "0.5").parse().expect("a weight"),
+            lambda: setting("REDA_GROWTH_LAMBDA", "0.5")
+                .parse()
+                .expect("a weight"),
             windows: setting("REDA_GROWTH_WINDOWS", "8,16,32,64")
                 .split(',')
                 .map(|piece| piece.trim().parse().expect("a margin"))
                 .collect(),
             tries: setting("REDA_GROWTH_TRIES", "8").parse().expect("a count"),
             escape: setting("REDA_GROWTH_ESCAPE", "0").parse().expect("a count"),
-            seed_pitch: setting("REDA_GROWTH_SEED_PITCH", "0").parse().expect("a pitch"),
+            seed_pitch: setting("REDA_GROWTH_SEED_PITCH", "0")
+                .parse()
+                .expect("a pitch"),
             verbose: setting("REDA_GROWTH_VERBOSE", "1") != "0",
             settle: setting("REDA_GROWTH_SETTLE", "1") != "0",
             rip: setting("REDA_GROWTH_RIP", "0").parse().expect("a budget"),
@@ -19261,7 +20089,10 @@ mod tests {
                 name: "seven_segment",
                 netlist: decoder,
                 inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
-                outputs: SEGMENT_NAMES.iter().map(|name| decoder_outputs[name].clone()).collect(),
+                outputs: SEGMENT_NAMES
+                    .iter()
+                    .map(|name| decoder_outputs[name].clone())
+                    .collect(),
                 expected: seven_segment_expected,
             },
         ];
@@ -19294,7 +20125,10 @@ mod tests {
     /// Derived rather than restated: [`neighbours`] is `dust_reach`'s twelve
     /// cells, and this is a filter over it, so a change there is a change here.
     fn plane_neighbours(cell: Anchor) -> Vec<Anchor> {
-        neighbours(cell).into_iter().filter(|next| next.y == cell.y).collect()
+        neighbours(cell)
+            .into_iter()
+            .filter(|next| next.y == cell.y)
+            .collect()
     }
 
     /// Whether a cell is reachable by a net's own wire within `d` steps.
@@ -19408,7 +20242,9 @@ mod tests {
 
         /// Every group but the connectivity ladder.
         fn without_connectivity(&self) -> BTreeSet<satcnf::Group> {
-            (0..self.cnf.group_count()).filter(|&group| group != self.group_reach).collect()
+            (0..self.cnf.group_count())
+                .filter(|&group| group != self.group_reach)
+                .collect()
         }
 
         fn summary(&self) -> String {
@@ -19428,11 +20264,7 @@ mod tests {
                     .join(", "),
                 self.nets
                     .iter()
-                    .map(|net| format!(
-                        "{}{}",
-                        net.depth,
-                        if net.exact { "" } else { "*" }
-                    ))
+                    .map(|net| format!("{}{}", net.depth, if net.exact { "" } else { "*" }))
                     .collect::<Vec<_>>()
                     .join("/"),
             )
@@ -19507,11 +20339,12 @@ mod tests {
         let arity = drivers.len();
 
         let mut cnf = Cnf::new();
-        let group_place =
-            cnf.group(format!("gate {} stands in exactly one place", definition.output));
+        let group_place = cnf.group(format!(
+            "gate {} stands in exactly one place",
+            definition.output
+        ));
         let group_body = cnf.group("a gate's own cells hold no wire");
-        let group_body_clear =
-            cnf.group("a gate's conductors keep foreign wire out (keep_out)");
+        let group_body_clear = cnf.group("a gate's conductors keep foreign wire out (keep_out)");
         let group_one = cnf.group("one net per cell");
         let group_clear = cnf.group("two nets' conductors keep clear of each other (keep_out)");
         let group_reach = cnf.group("a net's wire is connected to what it has already laid");
@@ -19532,8 +20365,11 @@ mod tests {
             let pin = growth.pins[signal];
             let tree = growth.trees.get(signal).cloned().unwrap_or_default();
             let every_seed = tree.seeds(pin);
-            let seeds: BTreeSet<Anchor> =
-                every_seed.iter().copied().filter(|cell| cell.y == PLANNER_Y).collect();
+            let seeds: BTreeSet<Anchor> = every_seed
+                .iter()
+                .copied()
+                .filter(|cell| cell.y == PLANNER_Y)
+                .collect();
             let seeds_off_plane = every_seed.len() - seeds.len();
 
             let mut domain: Vec<Anchor> = Vec::new();
@@ -19551,7 +20387,10 @@ mod tests {
                     }
                     // Its floor arm: laying a floor over a conductor deletes it,
                     // and that holds against this net's own conductors too.
-                    let below = Anchor { y: cell.y - 1, ..cell };
+                    let below = Anchor {
+                        y: cell.y - 1,
+                        ..cell
+                    };
                     if growth.reservation.conductor_owner(&below).is_some() {
                         continue;
                     }
@@ -19572,8 +20411,11 @@ mod tests {
                 }
             }
 
-            let index: BTreeMap<Anchor, usize> =
-                domain.iter().enumerate().map(|(at, &cell)| (cell, at)).collect();
+            let index: BTreeMap<Anchor, usize> = domain
+                .iter()
+                .enumerate()
+                .map(|(at, &cell)| (cell, at))
+                .collect();
 
             // The shortest walk that could possibly reach each cell, through
             // free space alone. A cell nearer than this is provably unreachable,
@@ -19650,8 +20492,8 @@ mod tests {
                 }
                 for steps in net.first[at]..=net.depth {
                     let here = net.reach[at][steps - net.first[at]];
-                    let earlier = (steps > net.first[at])
-                        .then(|| net.reach[at][steps - 1 - net.first[at]]);
+                    let earlier =
+                        (steps > net.first[at]).then(|| net.reach[at][steps - 1 - net.first[at]]);
 
                     // Reaching a cell means occupying it.
                     let mut arm = vec![-here, net.used[at]];
@@ -19691,10 +20533,7 @@ mod tests {
                 }
                 for (at, &cell) in nets[left].domain.iter().enumerate() {
                     if let Some(&other) = nets[right].index.get(&cell) {
-                        cnf.add(
-                            [-nets[left].used[at], -nets[right].used[other]],
-                            group_one,
-                        );
+                        cnf.add([-nets[left].used[at], -nets[right].used[other]], group_one);
                     }
                     for neighbour in keep_out(cell) {
                         if let Some(&other) = nets[right].index.get(&neighbour) {
@@ -19776,10 +20615,14 @@ mod tests {
                     }
 
                     let place = cnf.var();
-                    let body: Vec<Anchor> =
-                        body_offsets.iter().map(|offset| shifted(anchor, *offset)).collect();
-                    let conductors: Vec<Anchor> =
-                        conductor_offsets.iter().map(|offset| shifted(anchor, *offset)).collect();
+                    let body: Vec<Anchor> = body_offsets
+                        .iter()
+                        .map(|offset| shifted(anchor, *offset))
+                        .collect();
+                    let conductors: Vec<Anchor> = conductor_offsets
+                        .iter()
+                        .map(|offset| shifted(anchor, *offset))
+                        .collect();
 
                     for cell in &body {
                         for net in &nets {
@@ -19792,23 +20635,23 @@ mod tests {
                         // A wire may not stand on a gate's conductor: its floor
                         // would be written over it. `anchor_is_free_for`'s below
                         // arm, asked from the gate's side.
-                        let above = Anchor { y: conductor.y + 1, ..*conductor };
+                        let above = Anchor {
+                            y: conductor.y + 1,
+                            ..*conductor
+                        };
                         for net in &nets {
                             if let Some(&at) = net.index.get(&above) {
                                 cnf.add([-place, -net.used[at]], group_body);
                             }
                         }
                         // Asked from the gate's side, so conservative by construction --
-                            // [`keep_out`], the same as `BodyFit`.
-                            for neighbour in keep_out(*conductor) {
+                        // [`keep_out`], the same as `BodyFit`.
+                        for neighbour in keep_out(*conductor) {
                             // `BodyFit`'s own exemption, verbatim: a socket is
                             // meant to have the arriving net's dust one cell out.
-                            let arriving = sockets
-                                .iter()
-                                .enumerate()
-                                .any(|(input, socket)| {
-                                    *conductor == *socket && neighbour == approaches[input]
-                                });
+                            let arriving = sockets.iter().enumerate().any(|(input, socket)| {
+                                *conductor == *socket && neighbour == approaches[input]
+                            });
                             if arriving {
                                 continue;
                             }
@@ -19827,7 +20670,12 @@ mod tests {
                         }
                     }
 
-                    landings.push(SolvedLanding { anchor, facing, approaches, place });
+                    landings.push(SolvedLanding {
+                        anchor,
+                        facing,
+                        approaches,
+                        place,
+                    });
                 }
             }
         }
@@ -19864,7 +20712,10 @@ mod tests {
         window: (Anchor, Anchor),
     ) -> String {
         if cell.y != PLANNER_Y {
-            return format!("it is at y = {}, and this model gives new wire the gate plane only", cell.y);
+            return format!(
+                "it is at y = {}, and this model gives new wire the gate plane only",
+                cell.y
+            );
         }
         if !within_bounds(cell, window.0, window.1) {
             return "it is outside the window".to_string();
@@ -19872,7 +20723,10 @@ mod tests {
         if let Some(owner) = growth.reservation.owner(&cell) {
             return format!("the reservation already gives it to `{owner}`");
         }
-        let below = Anchor { y: cell.y - 1, ..cell };
+        let below = Anchor {
+            y: cell.y - 1,
+            ..cell
+        };
         if let Some(owner) = growth.reservation.conductor_owner(&below) {
             return format!("its floor at y = {} conducts for `{owner}`", below.y);
         }
@@ -20069,7 +20923,11 @@ mod tests {
                         conductor.x,
                         conductor.y,
                         conductor.z,
-                        if router_allows { "ALLOWS" } else { "also refuses" },
+                        if router_allows {
+                            "ALLOWS"
+                        } else {
+                            "also refuses"
+                        },
                         pin.x,
                         pin.y,
                         pin.z,
@@ -20139,7 +20997,10 @@ mod tests {
             .filter(|landing| satcnf::value(assignment, landing.place))
             .collect();
         if chosen.len() != 1 {
-            return Err(format!("{} landings are true; exactly one must be", chosen.len()));
+            return Err(format!(
+                "{} landings are true; exactly one must be",
+                chosen.len()
+            ));
         }
         let landing = chosen[0];
 
@@ -20166,9 +21027,13 @@ mod tests {
             routes.insert(input, path);
         }
 
-        Ok(SolvedWindow { anchor: landing.anchor, facing: landing.facing, routes, stranded })
+        Ok(SolvedWindow {
+            anchor: landing.anchor,
+            facing: landing.facing,
+            routes,
+            stranded,
+        })
     }
-
 
     /// The three rules the single-plane restriction claims to discharge, run
     /// rather than asserted in prose.
@@ -20180,7 +21045,11 @@ mod tests {
     /// suite rather than in a harness, where a change to the router breaks them.
     #[test]
     fn the_flat_restriction_discharges_exactly_the_three_rules_it_claims() {
-        let here = Anchor { x: 20, y: PLANNER_Y, z: 30 };
+        let here = Anchor {
+            x: 20,
+            y: PLANNER_Y,
+            z: 30,
+        };
 
         // 1. A flat step needs no staircase clearance, and a step in y does.
         for next in plane_neighbours(here) {
@@ -20192,19 +21061,53 @@ mod tests {
                 next.z
             );
         }
-        let up = Anchor { x: here.x + 1, y: here.y + 1, z: here.z };
-        let down = Anchor { x: here.x + 1, y: here.y - 1, z: here.z };
-        assert_eq!(staircase_clearance(here, up).len(), 2, "a climb needs a riser and headroom");
-        assert_eq!(staircase_clearance(here, down).len(), 1, "a descent needs its riser empty");
+        let up = Anchor {
+            x: here.x + 1,
+            y: here.y + 1,
+            z: here.z,
+        };
+        let down = Anchor {
+            x: here.x + 1,
+            y: here.y - 1,
+            z: here.z,
+        };
+        assert_eq!(
+            staircase_clearance(here, up).len(),
+            2,
+            "a climb needs a riser and headroom"
+        );
+        assert_eq!(
+            staircase_clearance(here, down).len(),
+            1,
+            "a descent needs its riser empty"
+        );
 
         // 2. A flat walk cannot obstruct itself, however it doubles back.
         let walk = [
             here,
-            Anchor { x: here.x + 1, ..here },
-            Anchor { x: here.x + 1, z: here.z + 1, ..here },
-            Anchor { x: here.x, z: here.z + 1, ..here },
-            Anchor { z: here.z + 2, ..here },
-            Anchor { x: here.x + 1, z: here.z + 2, ..here },
+            Anchor {
+                x: here.x + 1,
+                ..here
+            },
+            Anchor {
+                x: here.x + 1,
+                z: here.z + 1,
+                ..here
+            },
+            Anchor {
+                x: here.x,
+                z: here.z + 1,
+                ..here
+            },
+            Anchor {
+                z: here.z + 2,
+                ..here
+            },
+            Anchor {
+                x: here.x + 1,
+                z: here.z + 2,
+                ..here
+            },
         ];
         let mut walked: BTreeMap<Anchor, Anchor> = BTreeMap::new();
         for pair in walk.windows(2) {
@@ -20228,8 +21131,15 @@ mod tests {
         // later step would land two levels directly above `here`, whose floor
         // fills the cell that climb needed.
         let mut climbed: BTreeMap<Anchor, Anchor> = BTreeMap::new();
-        let stepped_up = Anchor { x: here.x + 1, y: here.y + 1, z: here.z };
-        let two_above = Anchor { y: here.y + 2, ..here };
+        let stepped_up = Anchor {
+            x: here.x + 1,
+            y: here.y + 1,
+            z: here.z,
+        };
+        let two_above = Anchor {
+            y: here.y + 2,
+            ..here
+        };
         climbed.insert(stepped_up, here);
         assert!(
             neighbours(stepped_up).contains(&two_above),
@@ -20243,12 +21153,26 @@ mod tests {
         // Arm two, the blocked drop: the walk already passed through the cell a
         // drop needs to fall past.
         let mut dropped: BTreeMap<Anchor, Anchor> = BTreeMap::new();
-        let overhead = Anchor { x: here.x + 1, y: here.y + 2, z: here.z };
-        let across = Anchor { y: here.y + 2, ..here };
-        let below = Anchor { y: here.y + 1, ..here };
+        let overhead = Anchor {
+            x: here.x + 1,
+            y: here.y + 2,
+            z: here.z,
+        };
+        let across = Anchor {
+            y: here.y + 2,
+            ..here
+        };
+        let below = Anchor {
+            y: here.y + 1,
+            ..here
+        };
         dropped.insert(across, overhead);
         dropped.insert(below, across);
-        let falling = Anchor { x: here.x + 1, y: here.y, z: here.z };
+        let falling = Anchor {
+            x: here.x + 1,
+            y: here.y,
+            z: here.z,
+        };
         assert!(
             neighbours(below).contains(&falling),
             "the control has to use a step dust can take"
@@ -20292,12 +21216,28 @@ mod tests {
     /// what keeps that decision a decision rather than drift.
     #[test]
     fn a_path_may_not_step_directly_above_its_own_cells() {
-        let here = Anchor { x: 20, y: PLANNER_Y, z: 30 };
+        let here = Anchor {
+            x: 20,
+            y: PLANNER_Y,
+            z: 30,
+        };
 
         // The spiral from the cin route: climb east, climb south, flat north.
-        let up_east = Anchor { x: here.x + 1, y: here.y + 1, z: here.z };
-        let up_south = Anchor { x: here.x + 1, y: here.y + 2, z: here.z + 1 };
-        let over_own_dust = Anchor { x: here.x + 1, y: here.y + 2, z: here.z };
+        let up_east = Anchor {
+            x: here.x + 1,
+            y: here.y + 1,
+            z: here.z,
+        };
+        let up_south = Anchor {
+            x: here.x + 1,
+            y: here.y + 2,
+            z: here.z + 1,
+        };
+        let over_own_dust = Anchor {
+            x: here.x + 1,
+            y: here.y + 2,
+            z: here.z,
+        };
         let mut climbed: BTreeMap<Anchor, Anchor> = BTreeMap::new();
         climbed.insert(up_east, here);
         climbed.insert(up_south, up_east);
@@ -20314,10 +21254,26 @@ mod tests {
         // landing sits directly under a cell this path already took. Its dust
         // replaces that cell's committed stone, which is the recorded benign
         // order, not the crush.
-        let start_high = Anchor { x: here.x, y: here.y + 2, z: here.z };
-        let down_east = Anchor { x: here.x + 1, y: here.y + 1, z: here.z };
-        let down_south = Anchor { x: here.x + 1, y: here.y, z: here.z + 1 };
-        let under_own_floor = Anchor { x: here.x + 1, y: here.y, z: here.z };
+        let start_high = Anchor {
+            x: here.x,
+            y: here.y + 2,
+            z: here.z,
+        };
+        let down_east = Anchor {
+            x: here.x + 1,
+            y: here.y + 1,
+            z: here.z,
+        };
+        let down_south = Anchor {
+            x: here.x + 1,
+            y: here.y,
+            z: here.z + 1,
+        };
+        let under_own_floor = Anchor {
+            x: here.x + 1,
+            y: here.y,
+            z: here.z,
+        };
         let mut dropped: BTreeMap<Anchor, Anchor> = BTreeMap::new();
         dropped.insert(down_east, start_high);
         dropped.insert(down_south, down_east);
@@ -20382,7 +21338,8 @@ mod tests {
         margin: i32,
     ) -> (Anchor, Anchor) {
         let definition = &growth.netlist.gates[gate];
-        let (body, _, _) = compile::gate_footprint((anchor.x, anchor.y, anchor.z), definition, facing);
+        let (body, _, _) =
+            compile::gate_footprint((anchor.x, anchor.y, anchor.z), definition, facing);
         let mut cells: Vec<Anchor> = body;
         for route in routes {
             cells.extend(route.iter().copied());
@@ -20492,8 +21449,10 @@ mod tests {
             let walk = &laid.path[..laid.path.len().saturating_sub(1)];
             grown_routes[laid.input] = walk.to_vec();
         }
-        let grown_cells: usize =
-            grown_routes.iter().map(|path| path.len().saturating_sub(1)).sum();
+        let grown_cells: usize = grown_routes
+            .iter()
+            .map(|path| path.len().saturating_sub(1))
+            .sum();
 
         // --- the same state again, with the gate still unplaced ---
         let (mut growth, gate) = growth_paused_before(&case.netlist, growth_settings, gate_name)?;
@@ -20608,7 +21567,12 @@ mod tests {
         let started = Instant::now();
         let outcome = model.cnf.solve(settings.budget);
         let solved = started.elapsed().as_secs_f64();
-        report_solve(&format!("(b) {gate_name} unaided"), &model, &outcome, solved);
+        report_solve(
+            &format!("(b) {gate_name} unaided"),
+            &model,
+            &outcome,
+            solved,
+        );
 
         let (anchor, facing, routes, searched) = match &outcome {
             // UNSAT where the known answer is flat is a contradiction and an
@@ -20699,17 +21663,16 @@ mod tests {
                 // whose socket sits on its driver's pin there is nothing for the
                 // ladder to force, and a test that passes there proves nothing.
                 if solution.routes.values().any(|path| path.len() > 1) {
-                    let relaxed =
-                        model.cnf.solve_groups(&model.without_connectivity(), settings.budget);
+                    let relaxed = model
+                        .cnf
+                        .solve_groups(&model.without_connectivity(), settings.budget);
                     match &relaxed {
                         Outcome::Sat(assignment) => match decode(&model, assignment) {
                             Ok(_) => {
-                                return Err(
-                                    "with the connectivity ladder removed the model still \
+                                return Err("with the connectivity ladder removed the model still \
                                      produced a connected route, so nothing in this encoding is \
                                      forcing connectivity"
-                                        .to_string(),
-                                )
+                                    .to_string())
                             }
                             Err(why) => {
                                 eprintln!("      without the connectivity ladder: {why}")
@@ -20733,10 +21696,14 @@ mod tests {
             }
         };
 
-        let route_cells: usize =
-            routes.values().map(|path| path.len().saturating_sub(1)).sum();
-        let decided: Vec<Anchor> =
-            routes.values().flat_map(|path| path.iter().skip(1).copied()).collect();
+        let route_cells: usize = routes
+            .values()
+            .map(|path| path.len().saturating_sub(1))
+            .sum();
+        let decided: Vec<Anchor> = routes
+            .values()
+            .flat_map(|path| path.iter().skip(1).copied())
+            .collect();
         growth
             .land_solved(gate, anchor, facing, &routes, window)
             .map_err(|why| format!("the answer would not lay: {why}"))?;
@@ -20751,7 +21718,15 @@ mod tests {
         let candidate = growth
             .candidate()
             .ok_or_else(|| "growth built no candidate after the landing".to_string())?;
-        Ok(SatCase { candidate, gate, searched, out_of_scope, decided, route_cells, clearance })
+        Ok(SatCase {
+            candidate,
+            gate,
+            searched,
+            out_of_scope,
+            decided,
+            route_cells,
+            clearance,
+        })
     }
 
     /// **A known UNSAT that turns on clearance alone**, built by adding one
@@ -20845,7 +21820,10 @@ mod tests {
                             .iter()
                             .map(|&group| intruded.group_name(group).to_string())
                             .collect();
-                        if !named.iter().any(|name| name.contains("keep clear of each other")) {
+                        if !named
+                            .iter()
+                            .any(|name| name.contains("keep clear of each other"))
+                        {
                             return Err(format!(
                                 "the clearance case is UNSAT for the wrong reason: {named:?}"
                             ));
@@ -20896,11 +21874,15 @@ mod tests {
 
         let (mut oracle, gate) = growth_paused_before(&case.netlist, growth_settings, gate_name)?;
         let before = oracle.laid.len();
-        oracle.land(gate).map_err(|wedge| format!("growth wedged at {}", wedge.gate))?;
+        oracle
+            .land(gate)
+            .map_err(|wedge| format!("growth wedged at {}", wedge.gate))?;
         let grown_anchor = oracle.anchors[gate];
         let grown_facing = oracle.facings[gate];
-        let grown_routes: Vec<Vec<Anchor>> =
-            oracle.laid[before..].iter().map(|laid| laid.path.clone()).collect();
+        let grown_routes: Vec<Vec<Anchor>> = oracle.laid[before..]
+            .iter()
+            .map(|laid| laid.path.clone())
+            .collect();
 
         let (mut growth, gate) = growth_paused_before(&case.netlist, growth_settings, gate_name)?;
         let window = window_around_answer(
@@ -20917,7 +21899,9 @@ mod tests {
         let signal = growth.netlist.gates[gate].inputs[0].clone();
         let pin = growth.pins[&signal];
         for cell in neighbours(pin) {
-            growth.reservation.insert(cell, "sealant", Occupancy::GateConductor);
+            growth
+                .reservation
+                .insert(cell, "sealant", Occupancy::GateConductor);
         }
         eprintln!(
             "    sealed net {signal}'s pin at ({}, {}, {}) with {} foreign conductor(s)",
@@ -20931,7 +21915,12 @@ mod tests {
         let started = Instant::now();
         let outcome = model.cnf.solve(settings.budget);
         let solved = started.elapsed().as_secs_f64();
-        report_solve(&format!("{gate_name} KNOWN UNSAT"), &model, &outcome, solved);
+        report_solve(
+            &format!("{gate_name} KNOWN UNSAT"),
+            &model,
+            &outcome,
+            solved,
+        );
 
         match outcome {
             Outcome::Unsat => {
@@ -20968,8 +21957,10 @@ mod tests {
             .cnf
             .core(settings.budget)
             .ok_or_else(|| "no core came back from an unsatisfiable model".to_string())?;
-        let named: Vec<String> =
-            core.iter().map(|&group| model.cnf.group_name(group).to_string()).collect();
+        let named: Vec<String> = core
+            .iter()
+            .map(|&group| model.cnf.group_name(group).to_string())
+            .collect();
         for name in &named {
             eprintln!("      core: {name}");
         }
@@ -21175,7 +22166,9 @@ mod tests {
             // clauses before the run was killed. So what the harness says about
             // `g3` is `Unknown` -- a budget, not an answer -- and raising this
             // number is not the way to change that.
-            budget: setting("REDA_SOLVE_BUDGET", "300000").parse().expect("a budget"),
+            budget: setting("REDA_SOLVE_BUDGET", "300000")
+                .parse()
+                .expect("a budget"),
         };
         // Growth's own defaults, so the state being windowed is the one the
         // growth probe reports and not a variant of it.
@@ -21208,9 +22201,17 @@ mod tests {
         );
 
         let chosen: Vec<String> = if settings.gates == "all" {
-            case.netlist.gates.iter().map(|gate| gate.output.clone()).collect()
+            case.netlist
+                .gates
+                .iter()
+                .map(|gate| gate.output.clone())
+                .collect()
         } else {
-            settings.gates.split(',').map(|piece| piece.trim().to_string()).collect()
+            settings
+                .gates
+                .split(',')
+                .map(|piece| piece.trim().to_string())
+                .collect()
         };
 
         eprintln!(
@@ -21263,14 +22264,11 @@ mod tests {
             }
 
             // Rule 6: routes without verifies is worth nothing.
-            let realised = realise_and_verify(
-                &candidate,
-                &case.netlist,
-                candidate_world_size(&candidate),
-            )
-            .unwrap_or_else(|error| {
-                panic!("the landing decided for {gate_name} verifies nothing: {error}")
-            });
+            let realised =
+                realise_and_verify(&candidate, &case.netlist, candidate_world_size(&candidate))
+                    .unwrap_or_else(|error| {
+                        panic!("the landing decided for {gate_name} verifies nothing: {error}")
+                    });
             let blocks = (0..realised.world.cells().len())
                 .filter(|&flat| {
                     let (x, y, z) = realised.world.decode(flat);
@@ -21278,11 +22276,15 @@ mod tests {
                         != crate::redstone::world::block::BlockKind::Air
                 })
                 .count();
-            let (worst, at, transitions) =
-                worst_settle_and_truth(&realised, case.inputs, &case.outputs, case.expected)
-                    .unwrap_or_else(|error| {
-                        panic!("the solved landing for {gate_name} computes the wrong function: {error}")
-                    });
+            let (worst, at, transitions) = worst_settle_and_truth(
+                &realised,
+                case.inputs,
+                &case.outputs,
+                case.expected,
+            )
+            .unwrap_or_else(|error| {
+                panic!("the solved landing for {gate_name} computes the wrong function: {error}")
+            });
             eprintln!(
                 "      VERIFIES, {blocks} blocks | truth table Ok over {transitions} ordered \
                  transitions, worst settle {worst} ticks at {at} | {route_cells} cell(s) of \
@@ -21304,14 +22306,11 @@ mod tests {
             // down. A landing whose socket sits on its driver's pin decides no
             // wire at all, and the fallback says so rather than claiming a
             // perturbation of something the model never chose.
-            let (moved, from_the_answer) = match route
-                .anchors
-                .iter()
-                .position(|cell| decided.contains(cell))
-            {
-                Some(at) => (at, true),
-                None => (route.anchors.len() / 2, false),
-            };
+            let (moved, from_the_answer) =
+                match route.anchors.iter().position(|cell| decided.contains(cell)) {
+                    Some(at) => (at, true),
+                    None => (route.anchors.len() / 2, false),
+                };
             let was = route.anchors[moved];
 
             // **One step is not always a defect, which is a measurement rather
@@ -21327,10 +22326,16 @@ mod tests {
                 .iter_mut()
                 .find(|route| route.id == signal)
                 .expect("the route was found a moment ago")
-                .anchors[moved] = Anchor { x: was.x + 1, ..was };
+                .anchors[moved] = Anchor {
+                x: was.x + 1,
+                ..was
+            };
             let one_step = verify_candidate(&nudged, &case.netlist);
 
-            broken.routes[at].anchors[moved] = Anchor { x: was.x + 8, ..was };
+            broken.routes[at].anchors[moved] = Anchor {
+                x: was.x + 8,
+                ..was
+            };
             match verify_candidate(&broken, &case.netlist) {
                 Ok(()) => panic!(
                     "net {signal}'s cell ({}, {}, {}) moved eight steps in x and every \
@@ -21362,7 +22367,6 @@ mod tests {
                     injected += 1;
                 }
             }
-
         }
 
         // KNOWN UNSAT, on the last gate of the list -- one is enough, and the
@@ -21401,7 +22405,11 @@ mod tests {
              test on {clearance} window(s) ==",
             chosen.len(),
             outside.len(),
-            if outside.is_empty() { "none".to_string() } else { outside.join(" ") },
+            if outside.is_empty() {
+                "none".to_string()
+            } else {
+                outside.join(" ")
+            },
             if undecided.is_empty() {
                 String::new()
             } else {
@@ -21479,7 +22487,10 @@ mod tests {
             escape: 0,
         };
         if fit.allowed(&growth.reservation) {
-            return (false, "it stands -- this landing was not refused".to_string());
+            return (
+                false,
+                "it stands -- this landing was not refused".to_string(),
+            );
         }
         let mut blockers: BTreeSet<Anchor> = BTreeSet::new();
         fit.blockers(&growth.reservation, &mut blockers);
@@ -21489,8 +22500,10 @@ mod tests {
                 "refused with no blocking cell, which can only be the escape budget".to_string(),
             );
         }
-        let body: BTreeSet<Anchor> =
-            body_offsets.iter().map(|offset| shifted(anchor, *offset)).collect();
+        let body: BTreeSet<Anchor> = body_offsets
+            .iter()
+            .map(|offset| shifted(anchor, *offset))
+            .collect();
         let overlaps = blockers.iter().any(|cell| body.contains(cell));
         let said = blockers
             .iter()
@@ -21699,10 +22712,13 @@ mod tests {
             .map(|piece| piece.trim().parse().expect("a margin"))
             .collect();
         let reach_cap: usize = setting("REDA_WEDGE_REACH", "96").parse().expect("a depth");
-        let budget: u64 = setting("REDA_WEDGE_BUDGET", "300000").parse().expect("a budget");
+        let budget: u64 = setting("REDA_WEDGE_BUDGET", "300000")
+            .parse()
+            .expect("a budget");
         let wanted = setting("REDA_WEDGE_CIRCUIT", "all");
-        let control_cap: usize =
-            setting("REDA_WEDGE_CONTROLS", "6").parse().expect("a count");
+        let control_cap: usize = setting("REDA_WEDGE_CONTROLS", "6")
+            .parse()
+            .expect("a count");
         // 8, because 8 is the smallest margin `Growth::land` itself ever
         // searches at (`windows` defaults to `8,16,32,64`). A control run
         // *tighter* than anything growth uses measures the margin and not the
@@ -21711,8 +22727,9 @@ mod tests {
         // in 0.10s with a 65-cell route that lays. That null result is recorded
         // rather than deleted: a margin below growth's own is a different
         // question, and asking it of a control answers nothing about the wedge.
-        let control_margin: i32 =
-            setting("REDA_WEDGE_CONTROL_MARGIN", "8").parse().expect("a margin");
+        let control_margin: i32 = setting("REDA_WEDGE_CONTROL_MARGIN", "8")
+            .parse()
+            .expect("a margin");
 
         // Growth's own defaults, so the state being windowed is the state the
         // growth probe reports and not a variant of it.
@@ -21751,16 +22768,24 @@ mod tests {
         // The growth probe's own record, pinned so a moved baseline fails here
         // rather than being silently measured instead.
         let documented: BTreeMap<&str, (&str, usize)> =
-            [("full_adder", ("g9", 7)), ("segment_a", ("g8", 18))].into_iter().collect();
+            [("full_adder", ("g9", 7)), ("segment_a", ("g8", 18))]
+                .into_iter()
+                .collect();
 
-        let chosen: Vec<&ConditionCircuit> =
-            cases.iter().filter(|case| wanted == "all" || wanted == case.name).collect();
+        let chosen: Vec<&ConditionCircuit> = cases
+            .iter()
+            .filter(|case| wanted == "all" || wanted == case.name)
+            .collect();
         assert!(!chosen.is_empty(), "REDA_WEDGE_CIRCUIT names no circuit");
 
         eprintln!(
             "== the windowed solver on the measured wedges | margins {margins:?} \
              | depth cap {} | budget {budget} ==",
-            if reach_cap == 0 { "exact".to_string() } else { reach_cap.to_string() }
+            if reach_cap == 0 {
+                "exact".to_string()
+            } else {
+                reach_cap.to_string()
+            }
         );
         eprintln!(
             "   everything already laid is FIXED. An UNSAT below is a proof about this \
@@ -21774,7 +22799,10 @@ mod tests {
                 Growth::seeded(&case.netlist, &growth_settings).expect("the seed layout");
             oracle.grow();
             let Some(wedge) = oracle.wedge.as_ref() else {
-                panic!("{} did not wedge, so there is nothing here to attack", case.name)
+                panic!(
+                    "{} did not wedge, so there is nothing here to attack",
+                    case.name
+                )
             };
             let wedged_at = wedge.gate.clone();
             let placed = oracle.placed.iter().filter(|done| **done).count();
@@ -21819,15 +22847,19 @@ mod tests {
                     named
                 }
             };
-            let (growth, gate) =
-                growth_paused_before(&case.netlist, &growth_settings, &target)
-                    .unwrap_or_else(|why| panic!("could not pause before {}: {why}", wedge.gate));
+            let (growth, gate) = growth_paused_before(&case.netlist, &growth_settings, &target)
+                .unwrap_or_else(|why| panic!("could not pause before {}: {why}", wedge.gate));
             let drivers = case.netlist.gates[gate].inputs.clone();
             let seeds: Vec<BTreeSet<Anchor>> = drivers
                 .iter()
                 .map(|signal| {
                     let pin = growth.pins[signal];
-                    growth.trees.get(signal).cloned().unwrap_or_default().seeds(pin)
+                    growth
+                        .trees
+                        .get(signal)
+                        .cloned()
+                        .unwrap_or_default()
+                        .seeds(pin)
                 })
                 .collect();
             let all: Vec<Anchor> = seeds.iter().flatten().copied().collect();
@@ -21848,7 +22880,10 @@ mod tests {
                     pin.x,
                     pin.y,
                     pin.z,
-                    seeds[input].iter().filter(|cell| cell.y == PLANNER_Y).count()
+                    seeds[input]
+                        .iter()
+                        .filter(|cell| cell.y == PLANNER_Y)
+                        .count()
                 );
                 for step_to in plane_neighbours(pin) {
                     eprintln!(
@@ -21945,17 +22980,18 @@ mod tests {
                                     groups.len(),
                                     groups
                                         .iter()
-                                        .map(|&group| format!(
-                                            "`{}`",
-                                            model.cnf.group_name(group)
-                                        ))
+                                        .map(|&group| format!("`{}`", model.cnf.group_name(group)))
                                         .collect::<Vec<_>>()
                                         .join(" + ")
                                 );
                                 answers.push(format!(
                                     "margin {margin}: UNSAT in {solved:.2}s, {} group core{}",
                                     groups.len(),
-                                    if capless { ", cap-independent" } else { ", CAPPED" }
+                                    if capless {
+                                        ", cap-independent"
+                                    } else {
+                                        ", CAPPED"
+                                    }
                                 ));
                             }
                             None => {
@@ -22094,8 +23130,7 @@ mod tests {
                             }
                             Ok(()) => {
                                 fresh.grow_stopping_before(None);
-                                let after =
-                                    fresh.placed.iter().filter(|done| **done).count();
+                                let after = fresh.placed.iter().filter(|done| **done).count();
                                 let gates = case.netlist.gates.len();
                                 let standing: Vec<Anchor> = fresh
                                     .nodes
@@ -22134,9 +23169,7 @@ mod tests {
                                     candidate_world_size(&candidate),
                                 ) {
                                     Err(error) => {
-                                        eprintln!(
-                                            "      COMPLETES AND DOES NOT VERIFY: {error}"
-                                        );
+                                        eprintln!("      COMPLETES AND DOES NOT VERIFY: {error}");
                                         answers.push(format!(
                                             "margin {margin}: SAT, completed, FAILS \
                                              verify_candidate"
@@ -22293,8 +23326,7 @@ mod tests {
                 ) {
                     Ok(()) => {
                         control_laid += 1;
-                        let wired =
-                            solution.routes.values().any(|path| path.len() > 1);
+                        let wired = solution.routes.values().any(|path| path.len() > 1);
                         control_wired += usize::from(wired);
                         eprintln!(
                             "      {control}: SAT in {control_time:.2}s, decoded ({}, {}, {}) \
@@ -22394,19 +23426,19 @@ mod tests {
 
         for (name, netlist) in crate::compile::tests::the_six_condition_netlists() {
             let started = Instant::now();
-            let placed = match relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES)
-            {
-                Ok(placement) => placement,
-                Err(error) => {
-                    // A placement failure is not a routing failure, and no
-                    // budget touches it. `verilog:seven_segment` lands here.
-                    eprintln!(
+            let placed =
+                match relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES) {
+                    Ok(placement) => placement,
+                    Err(error) => {
+                        // A placement failure is not a routing failure, and no
+                        // budget touches it. `verilog:seven_segment` lands here.
+                        eprintln!(
                         "{name}: place ERR after {:.2}s -- no rip-up budget reaches this: {error}",
                         started.elapsed().as_secs_f64()
                     );
-                    continue;
-                }
-            };
+                        continue;
+                    }
+                };
             let snapped = match relax::snap(&placed) {
                 Ok(snapped) => snapped,
                 Err(error) => {
@@ -22727,19 +23759,24 @@ mod tests {
             let mut opens = true;
 
             if let Some(owner) = growth.reservation.owner(&cell) {
-                today = format!(
-                    "OCCUPIED by `{owner}` [{}]",
-                    growth.what_stands_at(cell)
-                );
+                today = format!("OCCUPIED by `{owner}` [{}]", growth.what_stands_at(cell));
                 // A cell another block already stands in is not a clearance
                 // question at all. No relaxation of any keep-out rule puts two
                 // blocks in one cell.
                 derived.push("BLOCK OVERLAP -- outside every clearance rule".to_string());
                 opens = false;
-                steps.push(SealedStep { cell, today, derived, opens });
+                steps.push(SealedStep {
+                    cell,
+                    today,
+                    derived,
+                    opens,
+                });
                 continue;
             }
-            let below = Anchor { y: cell.y - 1, ..cell };
+            let below = Anchor {
+                y: cell.y - 1,
+                ..cell
+            };
             if let Some(owner) = growth.reservation.conductor_owner(&below) {
                 today = format!(
                     "its floor at ({}, {}, {}) conducts for `{owner}`",
@@ -22800,7 +23837,12 @@ mod tests {
             if today.is_empty() {
                 today = "no arm refuses it".to_string();
             }
-            steps.push(SealedStep { cell, today, derived, opens });
+            steps.push(SealedStep {
+                cell,
+                today,
+                derived,
+                opens,
+            });
         }
         steps
     }
@@ -22835,7 +23877,6 @@ mod tests {
         }
         found
     }
-
 
     // ---------------------------------------------------------------
     // 2 -- the 41 extra edges
@@ -23156,7 +24197,6 @@ mod tests {
         }
     }
 
-
     // ---------------------------------------------------------------
     // The run
     // ---------------------------------------------------------------
@@ -23197,11 +24237,7 @@ mod tests {
 
     /// One wedge, measured: which cells seal the pin, what refuses each of them
     /// today, and what the derived range says about the same pair.
-    fn measure_one_wedge(
-        name: &str,
-        netlist: &Netlist,
-        expected: (&str, usize),
-    ) -> SealCounts {
+    fn measure_one_wedge(name: &str, netlist: &Netlist, expected: (&str, usize)) -> SealCounts {
         let settings = wedge_settings();
         let mut oracle = Growth::seeded(netlist, &settings).expect("the seed layout");
         oracle.grow();
@@ -23236,9 +24272,7 @@ mod tests {
 
         let steps = seal_report(&oracle, &states, pin, &signal);
         let in_plane: Vec<&SealedStep> = steps.iter().filter(|step| step.cell.y == pin.y).collect();
-        eprintln!(
-            "   the four in-plane steps out of the pin -- the four cells that seal it:"
-        );
+        eprintln!("   the four in-plane steps out of the pin -- the four cells that seal it:");
         let mut opened_plane = 0usize;
         for step in &in_plane {
             eprintln!(
@@ -23284,7 +24318,11 @@ mod tests {
                 anchor.y,
                 anchor.z,
                 facing.index(),
-                if overlaps { "BLOCK OVERLAP" } else { "clearance only" }
+                if overlaps {
+                    "BLOCK OVERLAP"
+                } else {
+                    "clearance only"
+                }
             );
         }
         eprintln!(
@@ -23474,7 +24512,10 @@ mod tests {
                     );
                     say!(
                         "        across ({}, {}, {}): {}",
-                        edge.across.x, edge.across.y, edge.across.z, verdict.mediator
+                        edge.across.x,
+                        edge.across.y,
+                        edge.across.z,
+                        verdict.mediator
                     );
                 }
             }
@@ -23732,8 +24773,10 @@ mod tests {
         }
 
         // --- 2: the 41 extra edges ----------------------------------
-        eprintln!("
-== THE 41 EXTRA EDGES ==");
+        eprintln!(
+            "
+== THE 41 EXTRA EDGES =="
+        );
         let extras = extras_arithmetic(true);
         eprintln!("   {extras:#?}");
 
@@ -23751,8 +24794,6 @@ mod tests {
             segment_seal.landings
         );
     }
-
-
 
     /// **The decisive number, pinned so it cannot drift unnoticed.**
     ///
@@ -23844,7 +24885,10 @@ mod tests {
             by_net_shipping,
             undecided_source,
         } = counts;
-        assert_eq!(covered, recorded, "every recorded edge is rebuilt and judged");
+        assert_eq!(
+            covered, recorded,
+            "every recorded edge is rebuilt and judged"
+        );
         assert_eq!(
             seen, recorded,
             "the derived two-hop range covers the offset of every recorded extra edge"
@@ -23887,7 +24931,12 @@ mod tests {
 
         let cases: Vec<(&str, Netlist, bool, [usize; 6])> = vec![
             // conductors, today, derived, removed, added, removed-but-unspoken
-            ("and4", build_and4_netlist().0, false, [134, 1608, 1420, 260, 72, 84]),
+            (
+                "and4",
+                build_and4_netlist().0,
+                false,
+                [134, 1608, 1420, 260, 72, 84],
+            ),
             (
                 "full_adder",
                 build_full_adder_netlist().0,
@@ -23950,7 +24999,6 @@ mod tests {
         );
     }
 
-
     // -----------------------------------------------------------------------
     // Negotiated congestion
     //
@@ -23965,14 +25013,14 @@ mod tests {
     /// difference between the two plans, which is what makes any difference
     /// between them attributable.
     fn verilog_and4_both_ways() -> (Netlist, PlanCandidate, PlanCandidate) {
-        let circuit = crate::circuits::verilog::find("verilog:and4")
-            .expect("the catalog ships verilog:and4");
+        let circuit =
+            crate::circuits::verilog::find("verilog:and4").expect("the catalog ships verilog:and4");
         let (gate_level, _) = circuit.baked_netlist();
         // `lower`, not `lower_optimised`: it is what `compile` runs for this
         // circuit and what `every_reference_circuit_records_which_path_produced_it`
         // pins, so this measures the circuit the compiler actually builds.
-        let netlist = crate::compile::lowering::lower(&gate_level)
-            .expect("verilog:and4 must lower");
+        let netlist =
+            crate::compile::lowering::lower(&gate_level).expect("verilog:and4 must lower");
         // Through the switch rather than around it, so this measures the two
         // routers as a caller reaches them and a broken `plan_with_axes` arm
         // cannot pass.
@@ -24053,7 +25101,11 @@ mod tests {
         // Not just this one net: the whole circuit is shorter, so nothing was
         // paid for it elsewhere.
         let cells = |candidate: &PlanCandidate| -> usize {
-            candidate.routes().iter().map(|route| route.anchors().len()).sum()
+            candidate
+                .routes()
+                .iter()
+                .map(|route| route.anchors().len())
+                .sum()
         };
         assert_eq!((cells(&rip_up), cells(&negotiated)), (131, 129));
 
@@ -24084,8 +25136,8 @@ mod tests {
             "if the two routers agreed, nothing below would be evidence of anything"
         );
 
-        let shipped = plan_from_netlist(&netlist, &PortPlacements::default())
-            .expect("verilog:and4 plans");
+        let shipped =
+            plan_from_netlist(&netlist, &PortPlacements::default()).expect("verilog:and4 plans");
         assert_eq!(
             shipped.routes(),
             rip_up.routes(),
@@ -24128,7 +25180,10 @@ mod tests {
                     // foreign net: the wire, and the stone floor under it.
                     reservation.insert(foreign, "theirs", Occupancy::Wire);
                     reservation.insert(
-                        Anchor { y: foreign.y - 1, ..foreign },
+                        Anchor {
+                            y: foreign.y - 1,
+                            ..foreign
+                        },
                         "theirs",
                         Occupancy::Stone,
                     );
@@ -24143,7 +25198,11 @@ mod tests {
                     if free == zone.contains(&foreign) {
                         disagreements.push(format!(
                             "  offset ({dx}, {dy}, {dz}): the zone says {} and the rule says {}",
-                            if zone.contains(&foreign) { "priced" } else { "free" },
+                            if zone.contains(&foreign) {
+                                "priced"
+                            } else {
+                                "free"
+                            },
                             if free { "free" } else { "refused" },
                         ));
                     }
@@ -24167,15 +25226,12 @@ mod tests {
     /// is inside `keep_out` and the sweep refuses it, naming the cell.
     #[test]
     fn a_plan_where_two_nets_stand_within_keep_out_is_refused_by_the_sweep() {
-        let run = |x: i32| -> Vec<Anchor> {
-            (0..6).map(|z| Anchor { x, y: 1, z }).collect()
-        };
+        let run = |x: i32| -> Vec<Anchor> { (0..6).map(|z| Anchor { x, y: 1, z }).collect() };
         let apart = PlanCandidate::new(
             Vec::new(),
             vec![Route::new("a", run(10)), Route::new("b", run(13))],
         );
-        negotiation_left_nothing_shared(&apart)
-            .expect("three cells apart is three cells apart");
+        negotiation_left_nothing_shared(&apart).expect("three cells apart is three cells apart");
 
         let beside = PlanCandidate::new(
             Vec::new(),
@@ -24206,8 +25262,8 @@ mod tests {
     /// back the iteration-0 plan, whose nets run through each other.
     #[test]
     fn a_negotiation_that_has_not_converged_returns_an_error_and_not_a_plan() {
-        let circuit = crate::circuits::verilog::find("verilog:and4")
-            .expect("the catalog ships verilog:and4");
+        let circuit =
+            crate::circuits::verilog::find("verilog:and4").expect("the catalog ships verilog:and4");
         let (gate_level, _) = circuit.baked_netlist();
         let netlist =
             crate::compile::lowering::lower(&gate_level).expect("verilog:and4 must lower");
@@ -24217,9 +25273,18 @@ mod tests {
         let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
 
         let mut trace = Vec::new();
-        let one = negotiate(bare.clone(), &netlist, 1, PresentSchedule::SHIPPING, &mut trace);
+        let one = negotiate(
+            bare.clone(),
+            &netlist,
+            1,
+            PresentSchedule::SHIPPING,
+            &mut trace,
+        );
         assert_eq!(
-            trace.iter().map(|round| round.contested).collect::<Vec<_>>(),
+            trace
+                .iter()
+                .map(|round| round.contested)
+                .collect::<Vec<_>>(),
             vec![8],
             "iteration 0 is priced at zero, so the nets run straight through each other"
         );
@@ -24229,10 +25294,19 @@ mod tests {
         );
 
         let mut trace = Vec::new();
-        negotiate(bare, &netlist, NEGOTIATION_ROUNDS, PresentSchedule::SHIPPING, &mut trace)
-            .expect("four iterations is enough for verilog:and4");
+        negotiate(
+            bare,
+            &netlist,
+            NEGOTIATION_ROUNDS,
+            PresentSchedule::SHIPPING,
+            &mut trace,
+        )
+        .expect("four iterations is enough for verilog:and4");
         assert_eq!(
-            trace.iter().map(|round| round.contested).collect::<Vec<_>>(),
+            trace
+                .iter()
+                .map(|round| round.contested)
+                .collect::<Vec<_>>(),
             vec![8, 5, 6, 0],
             "and the sequence it converges along is the evidence it negotiated at all"
         );
@@ -24343,10 +25417,7 @@ mod tests {
                 name: "full_adder",
                 netlist: adder,
                 inputs: &crate::circuits::full_adder::INPUT_NAMES[..],
-                outputs: vec![
-                    adder_outputs["sum"].clone(),
-                    adder_outputs["cout"].clone(),
-                ],
+                outputs: vec![adder_outputs["sum"].clone(), adder_outputs["cout"].clone()],
                 expected: full_adder_expected,
             },
             ConditionCircuit {
@@ -24388,14 +25459,23 @@ mod tests {
 
             let started = Instant::now();
             let mut trace = Vec::new();
-            let negotiated = negotiate(bare, netlist, NEGOTIATION_ROUNDS, PresentSchedule::SHIPPING, &mut trace);
+            let negotiated = negotiate(
+                bare,
+                netlist,
+                NEGOTIATION_ROUNDS,
+                PresentSchedule::SHIPPING,
+                &mut trace,
+            );
             let negotiated_seconds = started.elapsed().as_secs_f64();
 
             let report = |plan: &Result<PlanCandidate, PlannerError>, seconds: f64| match plan {
                 Err(error) => format!("ERR {seconds:.1}s {error}"),
                 Ok(plan) => {
-                    let cells: usize =
-                        plan.routes().iter().map(|route| route.anchors().len()).sum();
+                    let cells: usize = plan
+                        .routes()
+                        .iter()
+                        .map(|route| route.anchors().len())
+                        .sum();
                     let verdict = match verify_candidate(plan, netlist) {
                         Err(error) => format!("VERIFY REFUSED: {error}"),
                         Ok(()) => {
@@ -24420,6 +25500,7 @@ mod tests {
                             // has shipped circuits where those came apart. Both
                             // columns, always.
                             let compiled = compile::CompiledCircuit {
+                                observations: compile::CircuitObservations::default(),
                                 world: realised.world,
                                 input_positions: realised.ports.input_positions,
                                 output_positions: realised.ports.output_positions,
@@ -24523,8 +25604,13 @@ mod tests {
             .expect("full_adder places");
         let snapped = relax::snap(&placement).expect("full_adder snaps");
         let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
-        let plan = route_negotiated(bare, &netlist, NEGOTIATION_ROUNDS, PresentSchedule::SHIPPING)
-            .expect("full_adder converges in three iterations");
+        let plan = route_negotiated(
+            bare,
+            &netlist,
+            NEGOTIATION_ROUNDS,
+            PresentSchedule::SHIPPING,
+        )
+        .expect("full_adder converges in three iterations");
 
         // The repeater the walk could not see past, named rather than
         // described -- the geometry is still exactly the one the refusal was
@@ -24553,11 +25639,14 @@ mod tests {
         let realised = emit_candidate(&plan, &netlist, candidate_world_size(&plan))
             .expect("a verified plan realises");
         let compiled = compile::CompiledCircuit {
+            observations: compile::CircuitObservations::default(),
             world: realised.world,
             input_positions: realised.ports.input_positions,
             output_positions: realised.ports.output_positions,
             gate_output_positions: realised.ports.gate_output_positions,
-            gate_facings: (0..netlist.gates.len()).map(|g| plan.facing_of(g)).collect(),
+            gate_facings: (0..netlist.gates.len())
+                .map(|g| plan.facing_of(g))
+                .collect(),
             planner_kind: compile::PlannerKind::Unified3d,
             legacy_emission: None,
         };
@@ -24653,7 +25742,11 @@ mod tests {
                 );
             }
             Ok(plan) => {
-                let cells: usize = plan.routes().iter().map(|route| route.anchors().len()).sum();
+                let cells: usize = plan
+                    .routes()
+                    .iter()
+                    .map(|route| route.anchors().len())
+                    .sum();
                 panic!(
                     "segment_a routed under the ring-aware search ({cells} cells): \
                      that is news, not a regression -- measure it (rings, latch oracle, \
@@ -24772,9 +25865,13 @@ mod tests {
                 ("rip-up", RouterKind::RipUp, RIP_UP_ROUNDS),
                 ("negotiated", RouterKind::Negotiated, NEGOTIATION_ROUNDS),
             ] {
-                let plan =
-                    plan_from_netlist_with_router(netlist, &PortPlacements::default(), budget, router)
-                        .unwrap_or_else(|error| panic!("{name} must route through {label}: {error}"));
+                let plan = plan_from_netlist_with_router(
+                    netlist,
+                    &PortPlacements::default(),
+                    budget,
+                    router,
+                )
+                .unwrap_or_else(|error| panic!("{name} must route through {label}: {error}"));
                 let faults = cells_the_rule_would_have_refused(&plan);
                 assert!(
                     faults.is_empty(),
@@ -24871,12 +25968,17 @@ mod tests {
                 .map(|index| (combination >> (inputs.len() - 1 - index)) & 1 == 1)
                 .collect();
             for (position, &bit) in levers.iter().zip(bits.iter()) {
-                let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+                let mut state = simulator
+                    .world()
+                    .get(position.0, position.1, position.2)
+                    .clone();
                 if state.lit == bit {
                     continue;
                 }
                 state.lit = bit;
-                simulator.world_mut().set(position.0, position.1, position.2, state);
+                simulator
+                    .world_mut()
+                    .set(position.0, position.1, position.2, state);
                 let started = simulator.current_tick();
                 simulator
                     .run_until_stable(MAX_TICKS)
@@ -24929,9 +26031,16 @@ mod tests {
         let lowered_verilog = |name: &str, optimised: bool| -> (Netlist, Vec<String>) {
             let circuit = crate::circuits::verilog::find(name).expect("in the catalog");
             let (netlist, labels) = circuit.baked_netlist();
-            let lowered = if optimised { lower_optimised(&netlist) } else { lower(&netlist) }
-                .expect("it lowers");
-            (lowered, labels.into_iter().map(|(_, signal)| signal).collect())
+            let lowered = if optimised {
+                lower_optimised(&netlist)
+            } else {
+                lower(&netlist)
+            }
+            .expect("it lowers");
+            (
+                lowered,
+                labels.into_iter().map(|(_, signal)| signal).collect(),
+            )
         };
         let (verilog_and4, verilog_and4_outputs) = lowered_verilog("verilog:and4", false);
         let (verilog_decoder, verilog_decoder_outputs) =
@@ -24963,7 +26072,10 @@ mod tests {
                 name: "seven_segment",
                 netlist: decoder,
                 inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
-                outputs: SEGMENT_NAMES.iter().map(|name| decoder_outputs[name].clone()).collect(),
+                outputs: SEGMENT_NAMES
+                    .iter()
+                    .map(|name| decoder_outputs[name].clone())
+                    .collect(),
                 expected: seven_segment_expected,
             },
             ConditionCircuit {
@@ -24988,8 +26100,11 @@ mod tests {
             let planned = match plan_from_netlist(&case.netlist, &PortPlacements::default()) {
                 Err(error) => format!("ROUTE ERR {:.1}s: {error}", started.elapsed().as_secs_f64()),
                 Ok(candidate) => {
-                    let cells: usize =
-                        candidate.routes().iter().map(|route| route.anchors().len()).sum();
+                    let cells: usize = candidate
+                        .routes()
+                        .iter()
+                        .map(|route| route.anchors().len())
+                        .sum();
                     let faults = cells_the_rule_would_have_refused(&candidate);
                     let shared = if faults.is_empty() {
                         "no shared cell".to_string()
@@ -25050,7 +26165,11 @@ mod tests {
                 eprintln!(
                     "{label} {id}: {} cells {:?}",
                     route.anchors().len(),
-                    route.anchors().iter().map(|a| (a.x, a.y, a.z)).collect::<Vec<_>>()
+                    route
+                        .anchors()
+                        .iter()
+                        .map(|a| (a.x, a.y, a.z))
+                        .collect::<Vec<_>>()
                 );
             }
             let cells: usize = plan.routes().iter().map(|r| r.anchors().len()).sum();
@@ -25061,7 +26180,6 @@ mod tests {
             );
         }
     }
-
 
     /// Criterion 3, the part the 125-row zone sweep does not answer: a
     /// **staircase**'s mandatory-air cells are a physics rule the negotiated
@@ -25091,12 +26209,17 @@ mod tests {
             for cell in staircase_clearance(from, to) {
                 // The cell itself, taken by a foreign wire.
                 if !zone.contains(&cell) {
-                    escapes.push(format!("{to:?}: clearance cell {cell:?} is outside the zone"));
+                    escapes.push(format!(
+                        "{to:?}: clearance cell {cell:?} is outside the zone"
+                    ));
                 }
                 // And the cell a foreign wire would stand in to lay its floor
                 // into this one -- which is how a route passing overhead seals
                 // a climb without owning anything that conducts.
-                let overhead = Anchor { y: cell.y + 1, ..cell };
+                let overhead = Anchor {
+                    y: cell.y + 1,
+                    ..cell
+                };
                 if !zone.contains(&overhead) {
                     escapes.push(format!(
                         "{to:?}: a wire at {overhead:?} lays its floor into clearance cell                          {cell:?} and is outside the zone"
@@ -25108,11 +26231,12 @@ mod tests {
             escapes.is_empty(),
             "the final guard sweeps `exclusion_zone` only, so anything here is a hole in it:
 {}",
-            escapes.join("
-")
+            escapes.join(
+                "
+"
+            )
         );
     }
-
 
     // =======================================================================
     // ADVERSARIAL VERIFICATION HARNESS (2026-08-18, second reviewer).
@@ -25267,13 +26391,17 @@ mod tests {
                 } else {
                     (q.x, p.y, q.z) // the cell the drop falls past
                 };
-                for (other, cells) in occupied.iter().enumerate().filter_map(|(k, v)| {
-                    if k == index {
-                        None
-                    } else {
-                        Some(v)
-                    }
-                }) {
+                for (other, cells) in
+                    occupied.iter().enumerate().filter_map(
+                        |(k, v)| {
+                            if k == index {
+                                None
+                            } else {
+                                Some(v)
+                            }
+                        },
+                    )
+                {
                     if cells.contains(&must_be_air) {
                         faults.push(format!(
                             "STAIR       {}'s step {:?}->{:?} needs {must_be_air:?} air, {other} fills it",
@@ -25465,7 +26593,13 @@ mod tests {
 
             let mut trace = Vec::new();
             let started = std::time::Instant::now();
-            let outcome = negotiate(bare, netlist, NEGOTIATION_ROUNDS, PresentSchedule::SHIPPING, &mut trace);
+            let outcome = negotiate(
+                bare,
+                netlist,
+                NEGOTIATION_ROUNDS,
+                PresentSchedule::SHIPPING,
+                &mut trace,
+            );
             let contested: Vec<usize> = trace.iter().map(|round| round.contested).collect();
             match outcome {
                 Ok(plan) => {
@@ -25478,11 +26612,8 @@ mod tests {
                         .unwrap_or_else(|| "-".to_string());
                     let cell_faults = review_two_nets_on_one_cell(&plan);
                     let stair_faults = review_foreign_wire_in_a_staircase(&plan);
-                    let shared = format!(
-                        "{} cell / {} stair",
-                        cell_faults.len(),
-                        stair_faults.len()
-                    );
+                    let shared =
+                        format!("{} cell / {} stair", cell_faults.len(), stair_faults.len());
                     for fault in cell_faults.iter().chain(stair_faults.iter()) {
                         eprintln!("      FAULT {fault}");
                     }
@@ -25564,7 +26695,8 @@ mod tests {
                     continue;
                 };
                 let verdict = verify_candidate(&plan, netlist);
-                let reservation = verify_spacing(&plan).expect("spacing holds on any returned plan");
+                let reservation =
+                    verify_spacing(&plan).expect("spacing holds on any returned plan");
                 let nets = verification_nets(&plan, netlist).expect("the nets derive");
                 let realised = emit_candidate(&plan, netlist, candidate_world_size(&plan))
                     .expect("the plan realises");
@@ -25670,7 +26802,10 @@ mod tests {
         for (name, netlist) in [
             ("segment_a", build_single_segment_netlist(0).0),
             ("seven_segment", build_seven_segment_netlist().0),
-            ("verilog:seven_segment", lowered("verilog:seven_segment", true)),
+            (
+                "verilog:seven_segment",
+                lowered("verilog:seven_segment", true),
+            ),
         ] {
             let compiled = compile::compile_legacy(&netlist).expect("legacy compiles everything");
             let seed = seed_from_legacy(&netlist, &compiled).expect("the legacy seed rebuilds");
@@ -25897,11 +27032,7 @@ mod tests {
                         continue;
                     }
                     if own.contains(&above) {
-                        plan_stacks.push((
-                            format!("{} under itself", route.id()),
-                            *anchor,
-                            above,
-                        ));
+                        plan_stacks.push((format!("{} under itself", route.id()), *anchor, above));
                     } else if let Some(other) = owner_of.get(&above) {
                         if other != route.id() {
                             plan_stacks.push((
@@ -25989,11 +27120,31 @@ mod tests {
             }
         };
 
-        let q = Anchor { x: 86, y: 1, z: 109 }; // the lower dust of the dead climb
-        let p = Anchor { x: 87, y: 2, z: 109 }; // the upper dust
-        let lid = Anchor { x: 86, y: 2, z: 109 }; // Q.up() -- the cell the climb rule reads
-        let step_cell = Anchor { x: 87, y: 1, z: 109 }; // P.down() -- the step
-        let over = Anchor { x: 86, y: 3, z: 109 }; // the only cell whose floor is the lid
+        let q = Anchor {
+            x: 86,
+            y: 1,
+            z: 109,
+        }; // the lower dust of the dead climb
+        let p = Anchor {
+            x: 87,
+            y: 2,
+            z: 109,
+        }; // the upper dust
+        let lid = Anchor {
+            x: 86,
+            y: 2,
+            z: 109,
+        }; // Q.up() -- the cell the climb rule reads
+        let step_cell = Anchor {
+            x: 87,
+            y: 1,
+            z: 109,
+        }; // P.down() -- the step
+        let over = Anchor {
+            x: 86,
+            y: 3,
+            z: 109,
+        }; // the only cell whose floor is the lid
 
         // 1. Who holds each cell as a route anchor, at which index. The index
         // is the lay order: `lay_net` appends `path[shared..]` per branch.
@@ -26028,8 +27179,7 @@ mod tests {
 
         // g0 near the climb, in anchor (= lay) order, and its branch ends.
         let g0 = route_named(&plan, "g0");
-        for (index, (anchor, block)) in
-            g0.anchors().iter().zip(g0.realisation().iter()).enumerate()
+        for (index, (anchor, block)) in g0.anchors().iter().zip(g0.realisation().iter()).enumerate()
         {
             if (anchor.x - 86).abs() <= 2 && (anchor.z - 109).abs() <= 2 {
                 eprintln!(
@@ -26065,27 +27215,38 @@ mod tests {
         // own `dust_connections`: every direction out of Q and out of P.
         for (label, cell) in [("Q(86,1,109)", q), ("P(87,2,109)", p)] {
             for direction in HORIZONTAL {
-                let targets: Vec<Position> =
-                    dust_connections(&realised.world, Position::new(cell.x, cell.y, cell.z), direction)
-                        .iter()
-                        .collect();
+                let targets: Vec<Position> = dust_connections(
+                    &realised.world,
+                    Position::new(cell.x, cell.y, cell.z),
+                    direction,
+                )
+                .iter()
+                .collect();
                 eprintln!("dust_connections({label}, {direction:?}) = {targets:?}");
             }
         }
 
         // 4. The simulator, all sixteen vectors: what Q and P carry.
         let compiled = compile::CompiledCircuit {
+            observations: compile::CircuitObservations::default(),
             world: realised.world.clone(),
             input_positions: realised.ports.input_positions.clone(),
             output_positions: realised.ports.output_positions.clone(),
             gate_output_positions: realised.ports.gate_output_positions.clone(),
-            gate_facings: (0..netlist.gates.len()).map(|g| plan.facing_of(g)).collect(),
+            gate_facings: (0..netlist.gates.len())
+                .map(|g| plan.facing_of(g))
+                .collect(),
             planner_kind: compile::PlannerKind::Unified3d,
             legacy_emission: None,
         };
         let levers: Vec<(i32, i32, i32)> = INPUT_NAMES
             .iter()
-            .map(|name| *compiled.input_positions.get(*name).expect("a lever per input"))
+            .map(|name| {
+                *compiled
+                    .input_positions
+                    .get(*name)
+                    .expect("a lever per input")
+            })
             .collect();
         let mut simulator = crate::redstone::simulator::Simulator::new(compiled.world.clone());
         simulator.run_until_stable(2000).expect("settles");
@@ -26138,7 +27299,14 @@ mod tests {
         );
         eprintln!(
             "anchor_is_free_for(over-the-lid (86,3,109), foreign owner) = {}",
-            anchor_is_free_for(over, elsewhere, elsewhere, elsewhere, "somebody_else", &reservation)
+            anchor_is_free_for(
+                over,
+                elsewhere,
+                elsewhere,
+                elsewhere,
+                "somebody_else",
+                &reservation
+            )
         );
     }
 
@@ -26170,7 +27338,10 @@ mod tests {
             ("verilog:and4", lowered("verilog:and4", false)),
             ("segment_a", build_single_segment_netlist(0).0),
             ("seven_segment", build_seven_segment_netlist().0),
-            ("verilog:seven_segment", lowered("verilog:seven_segment", true)),
+            (
+                "verilog:seven_segment",
+                lowered("verilog:seven_segment", true),
+            ),
         ] {
             let compiled = compile::compile(&netlist).expect("every condition circuit compiles");
             let (sx, sy, sz) = compiled.world.size();
@@ -26190,7 +27361,11 @@ mod tests {
                 "{name} [{:?}]: {} dust-on-dust pair(s) in the shipped world{}{}",
                 compiled.planner_kind(),
                 pairs.len(),
-                if pairs.is_empty() { "" } else { ": lower cells " },
+                if pairs.is_empty() {
+                    ""
+                } else {
+                    ": lower cells "
+                },
                 if pairs.is_empty() {
                     String::new()
                 } else {
@@ -26300,11 +27475,31 @@ mod tests {
     /// 2026-08-19, then the arm restored.
     #[test]
     fn the_lid_rule_refuses_the_floor_that_cut_g0s_climb() {
-        let q = Anchor { x: 86, y: 1, z: 109 };
-        let p = Anchor { x: 87, y: 2, z: 109 };
-        let lid = Anchor { x: 86, y: 2, z: 109 };
-        let over = Anchor { x: 86, y: 3, z: 109 };
-        let elsewhere = Anchor { x: -10_000, y: -10_000, z: -10_000 };
+        let q = Anchor {
+            x: 86,
+            y: 1,
+            z: 109,
+        };
+        let p = Anchor {
+            x: 87,
+            y: 2,
+            z: 109,
+        };
+        let lid = Anchor {
+            x: 86,
+            y: 2,
+            z: 109,
+        };
+        let over = Anchor {
+            x: 86,
+            y: 3,
+            z: 109,
+        };
+        let elsewhere = Anchor {
+            x: -10_000,
+            y: -10_000,
+            z: -10_000,
+        };
 
         let mut reservation = Reservation::new();
         reserve_path(&mut reservation, "g0", &[q, p]);
@@ -26329,13 +27524,24 @@ mod tests {
         // there; under negotiation the same relation is priced and gated to
         // zero by `contested`).
         assert!(
-            !anchor_is_free_for(over, elsewhere, elsewhere, elsewhere, "somebody_else", &reservation),
+            !anchor_is_free_for(
+                over,
+                elsewhere,
+                elsewhere,
+                elsewhere,
+                "somebody_else",
+                &reservation
+            ),
             "the lid rule is symmetric across owners"
         );
 
         // Control: one cell west, whose floor is nobody's commitment, stays
         // free -- the arm refuses the lid and nothing else.
-        let control = Anchor { x: 85, y: 3, z: 109 };
+        let control = Anchor {
+            x: 85,
+            y: 3,
+            z: 109,
+        };
         assert!(
             anchor_is_free_for(control, elsewhere, elsewhere, elsewhere, "g0", &reservation),
             "the refusal is the lid's, not the whole storey's"
@@ -26380,7 +27586,14 @@ mod tests {
         let route_of = |cells: Vec<(Anchor, BlockState)>| -> Route {
             let (anchors, blocks): (Vec<Anchor>, Vec<BlockState>) = cells.into_iter().unzip();
             let floors = vec![compile::stone(); anchors.len()];
-            Route::from_legacy("g0".to_string(), anchors, Vec::new(), blocks, floors)
+            Route::from_legacy(
+                "g0".to_string(),
+                anchors,
+                Vec::new(),
+                blocks,
+                floors,
+                Vec::new(),
+            )
         };
         let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
 
@@ -26398,7 +27611,10 @@ mod tests {
         let (repeater, ring) = ring_closed_in(&measured, &Reservation::new())
             .expect("the measured g0 shape is a ring");
         assert_eq!(repeater, at(93, 4, 110));
-        assert!(ring.contains(&at(92, 4, 110)), "the flood reached the input");
+        assert!(
+            ring.contains(&at(92, 4, 110)),
+            "the flood reached the input"
+        );
 
         // Case 2: the same route with the closing cell gone is a tree.
         let open = route_of(vec![
@@ -26476,7 +27692,14 @@ mod tests {
         let route_of = |cells: Vec<(Anchor, BlockState)>| -> Route {
             let (anchors, blocks): (Vec<Anchor>, Vec<BlockState>) = cells.into_iter().unzip();
             let floors = vec![compile::stone(); anchors.len()];
-            Route::from_legacy("g3".to_string(), anchors, Vec::new(), blocks, floors)
+            Route::from_legacy(
+                "g3".to_string(),
+                anchors,
+                Vec::new(),
+                blocks,
+                floors,
+                Vec::new(),
+            )
         };
         let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
 
@@ -26495,7 +27718,10 @@ mod tests {
         let (repeater, ring) = ring_closed_in(&measured, &Reservation::new())
             .expect("the measured riser-fed shape is a ring");
         assert_eq!(repeater, at(56, 1, 120));
-        assert!(ring.contains(&at(56, 1, 121)), "the flood reached the input");
+        assert!(
+            ring.contains(&at(56, 1, 121)),
+            "the flood reached the input"
+        );
 
         // Control 1: without the return run there is no cycle -- the riser
         // edge alone must not invent one.
@@ -26505,7 +27731,11 @@ mod tests {
             (at(56, 2, 119), dust.clone()),
             (at(57, 2, 119), dust.clone()),
         ]);
-        assert_eq!(ring_closed_in(&open, &Reservation::new()), None, "no closure, no ring");
+        assert_eq!(
+            ring_closed_in(&open, &Reservation::new()),
+            None,
+            "no closure, no ring"
+        );
 
         // Control 2: a repeater firing into a cell nothing stands over and
         // nobody committed to stone fires into air, and air drives nothing.
@@ -26555,6 +27785,23 @@ mod tests {
         support1: Anchor,
         prices: &Prices,
     ) -> Result<Route, Box<RoutingFailure>> {
+        lay_through_walled_corridor_with(open, support1, prices, false)
+    }
+
+    fn lay_through_walled_corridor_reference(
+        open: &BTreeSet<Anchor>,
+        support1: Anchor,
+        prices: &Prices,
+    ) -> Result<Route, Box<RoutingFailure>> {
+        lay_through_walled_corridor_with(open, support1, prices, true)
+    }
+
+    fn lay_through_walled_corridor_with(
+        open: &BTreeSet<Anchor>,
+        support1: Anchor,
+        prices: &Prices,
+        reference: bool,
+    ) -> Result<Route, Box<RoutingFailure>> {
         let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
         let trunk_end = 20;
         let netlist = Netlist {
@@ -26596,15 +27843,28 @@ mod tests {
             }
         }
 
-        lay_net(
-            "n",
-            at(0, 1, 0),
-            &as_gate_consumers(&[(0, 0), (1, 0)]),
-            &netlist,
-            &candidate,
-            &mut walled,
-            prices,
-        )
+        let consumers = as_gate_consumers(&[(0, 0), (1, 0)]);
+        if reference {
+            legacy_lay_net_reference(
+                "n",
+                at(0, 1, 0),
+                &consumers,
+                &netlist,
+                &candidate,
+                &mut walled,
+                prices,
+            )
+        } else {
+            lay_net(
+                "n",
+                at(0, 1, 0),
+                &consumers,
+                &netlist,
+                &candidate,
+                &mut walled,
+                prices,
+            )
+        }
     }
 
     /// The corridor's fixed furniture: the trunk, the climb, and whatever
@@ -26639,7 +27899,8 @@ mod tests {
     fn control_corridor() -> (BTreeSet<Anchor>, Anchor) {
         let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
         let mut control_upper: Vec<Anchor> = vec![at(20, 2, 1)];
-        control_upper.extend((16..=20).map(|x| at(x, 2, 2)));
+        control_upper.extend((17..=20).map(|x| at(x, 2, 2)));
+        control_upper.push(at(17, 2, 1)); // turn before the terminal, never through it
         control_upper.push(at(16, 2, 1)); // the descent-join, and the approach
         control_upper.push(at(16, 2, 0)); // its open lid
         (trunk_climb_and(&control_upper), at(16, 2, 3))
@@ -26671,6 +27932,12 @@ mod tests {
             !failure.charge_outright.is_empty(),
             "the refused branch charges the cells that closed the ring, \
              so the next iteration prices this corridor"
+        );
+        let reference = lay_through_walled_corridor_reference(&ring_open, ring_support, &rip_up)
+            .expect_err("the frozen reference also refuses the same ring");
+        assert_eq!(
+            failure.charge_outright, reference.charge_outright,
+            "the typed router must charge only the second branch suffix, exactly like the frozen authority"
         );
 
         // The control corridor: return run two cells over, one open lid at
@@ -26823,7 +28090,11 @@ mod tests {
         outputs: &[String],
         expected: fn(&[bool]) -> Vec<bool>,
     ) {
-        let cells: usize = plan.routes().iter().map(|route| route.anchors().len()).sum();
+        let cells: usize = plan
+            .routes()
+            .iter()
+            .map(|route| route.anchors().len())
+            .sum();
         eprintln!(
             "  routed: {} nets, {cells} route cells",
             plan.routes().len()
@@ -26875,16 +28146,21 @@ mod tests {
         );
 
         let compiled = compile::CompiledCircuit {
+            observations: compile::CircuitObservations::default(),
             world: realised.world.clone(),
             input_positions: realised.ports.input_positions.clone(),
             output_positions: realised.ports.output_positions.clone(),
             gate_output_positions: realised.ports.gate_output_positions.clone(),
-            gate_facings: (0..netlist.gates.len()).map(|g| plan.facing_of(g)).collect(),
+            gate_facings: (0..netlist.gates.len())
+                .map(|g| plan.facing_of(g))
+                .collect(),
             planner_kind: compile::PlannerKind::Unified3d,
             legacy_emission: None,
         };
         match simulated_truth_table(&compiled, inputs, outputs, expected) {
-            Ok(vectors) => eprintln!("  truth table: {vectors}/{vectors} through the real Simulator"),
+            Ok(vectors) => {
+                eprintln!("  truth table: {vectors}/{vectors} through the real Simulator")
+            }
             Err(error) => eprintln!("  truth table: **WRONG** -- {error}"),
         }
         match worst_settle_game_ticks(&compiled, inputs) {
@@ -26936,7 +28212,10 @@ mod tests {
             );
             eprintln!(
                 "  contested per iteration {:?}",
-                trace.iter().map(|round| round.contested).collect::<Vec<_>>()
+                trace
+                    .iter()
+                    .map(|round| round.contested)
+                    .collect::<Vec<_>>()
             );
             eprintln!(
                 "  post-lay ring rule fired {} time(s)",
@@ -27079,7 +28358,10 @@ mod tests {
         );
         eprintln!(
             "  contested per iteration {:?}",
-            trace.iter().map(|round| round.contested).collect::<Vec<_>>()
+            trace
+                .iter()
+                .map(|round| round.contested)
+                .collect::<Vec<_>>()
         );
         eprintln!(
             "  post-lay ring rule fired {} time(s)",
@@ -27241,20 +28523,28 @@ mod tests {
                 transitions += 1;
                 let mut simulator = Simulator::new(compiled.world.clone());
                 for (position, &bit) in levers.iter().zip(bits_of(from).iter()) {
-                    let mut state =
-                        simulator.world().get(position.0, position.1, position.2).clone();
+                    let mut state = simulator
+                        .world()
+                        .get(position.0, position.1, position.2)
+                        .clone();
                     state.lit = bit;
-                    simulator.world_mut().set(position.0, position.1, position.2, state);
+                    simulator
+                        .world_mut()
+                        .set(position.0, position.1, position.2, state);
                 }
                 simulator
                     .run_until_stable(MAX_TICKS)
                     .map_err(|error| format!("did not settle at from={from:b}: {error:?}"))?;
                 let to_bits = bits_of(to);
                 for (position, &bit) in levers.iter().zip(to_bits.iter()) {
-                    let mut state =
-                        simulator.world().get(position.0, position.1, position.2).clone();
+                    let mut state = simulator
+                        .world()
+                        .get(position.0, position.1, position.2)
+                        .clone();
                     state.lit = bit;
-                    simulator.world_mut().set(position.0, position.1, position.2, state);
+                    simulator
+                        .world_mut()
+                        .set(position.0, position.1, position.2, state);
                 }
                 let ticks = simulator
                     .run_until_stable(MAX_TICKS)
@@ -27265,7 +28555,10 @@ mod tests {
                 }
                 let want = expected(&to_bits);
                 for (index, position) in sinks.iter().enumerate() {
-                    let got = simulator.world().get(position.0, position.1, position.2).lit;
+                    let got = simulator
+                        .world()
+                        .get(position.0, position.1, position.2)
+                        .lit;
                     if got != want[index] {
                         wrong += 1;
                         first_wrong.get_or_insert(format!(
@@ -27281,7 +28574,12 @@ mod tests {
             None => Ok((
                 worst,
                 transitions,
-                format!("{:0w$b} -> {:0w$b}", worst_at.0, worst_at.1, w = inputs.len()),
+                format!(
+                    "{:0w$b} -> {:0w$b}",
+                    worst_at.0,
+                    worst_at.1,
+                    w = inputs.len()
+                ),
             )),
         }
     }
@@ -27307,10 +28605,15 @@ mod tests {
         };
         use std::time::Instant;
 
-        let only: Option<Vec<String>> = std::env::var("REDA_SETTLE_CIRCUITS")
-            .ok()
-            .map(|list| list.split(',').map(|name| name.trim().to_string()).collect());
-        let wanted = |name: &str| only.as_ref().is_none_or(|list| list.iter().any(|n| n == name));
+        let only: Option<Vec<String>> = std::env::var("REDA_SETTLE_CIRCUITS").ok().map(|list| {
+            list.split(',')
+                .map(|name| name.trim().to_string())
+                .collect()
+        });
+        let wanted = |name: &str| {
+            only.as_ref()
+                .is_none_or(|list| list.iter().any(|n| n == name))
+        };
 
         let lowered = |name: &str| -> (Netlist, Vec<String>) {
             let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
@@ -27329,8 +28632,7 @@ mod tests {
             )
         };
         let (verilog_and4, verilog_and4_outputs) = lowered("verilog:and4");
-        let (verilog_decoder, verilog_decoder_outputs) =
-            lowered_optimised("verilog:seven_segment");
+        let (verilog_decoder, verilog_decoder_outputs) = lowered_optimised("verilog:seven_segment");
         let (and4, and4_output) = build_and4_netlist();
         let (adder, adder_outputs) = build_full_adder_netlist();
         let (segment_a, segment_a_output) = build_single_segment_netlist(0);
@@ -27393,17 +28695,14 @@ mod tests {
             if !wanted(case.name) {
                 continue;
             }
-            let placement = match relaxed_placement(
-                &case.netlist,
-                &PortPlacements::default(),
-                SHIPPING_AXES,
-            ) {
-                Err(error) => {
-                    eprintln!("  {}: NO PLACEMENT -- {error}", case.name);
-                    continue;
-                }
-                Ok(placement) => placement,
-            };
+            let placement =
+                match relaxed_placement(&case.netlist, &PortPlacements::default(), SHIPPING_AXES) {
+                    Err(error) => {
+                        eprintln!("  {}: NO PLACEMENT -- {error}", case.name);
+                        continue;
+                    }
+                    Ok(placement) => placement,
+                };
             let snapped = relax::snap(&placement).expect("and snaps");
             let bare = candidate_from_snapped(&case.netlist, &PortPlacements::default(), &snapped);
             let mut trace = Vec::new();
@@ -27427,11 +28726,14 @@ mod tests {
             let realised = emit_candidate(&plan, &case.netlist, candidate_world_size(&plan))
                 .expect("a verified plan realises");
             let compiled = compile::CompiledCircuit {
+                observations: compile::CircuitObservations::default(),
                 world: realised.world.clone(),
                 input_positions: realised.ports.input_positions.clone(),
                 output_positions: realised.ports.output_positions.clone(),
                 gate_output_positions: realised.ports.gate_output_positions.clone(),
-                gate_facings: (0..case.netlist.gates.len()).map(|g| plan.facing_of(g)).collect(),
+                gate_facings: (0..case.netlist.gates.len())
+                    .map(|g| plan.facing_of(g))
+                    .collect(),
                 planner_kind: compile::PlannerKind::Unified3d,
                 legacy_emission: None,
             };

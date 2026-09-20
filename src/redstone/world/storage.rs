@@ -57,7 +57,10 @@ pub struct World {
 impl World {
     /// 建立全空氣的世界。
     pub fn new(size_x: i32, size_y: i32, size_z: i32) -> Self {
-        assert!(size_x > 0 && size_y > 0 && size_z > 0, "world size must be positive");
+        assert!(
+            size_x > 0 && size_y > 0 && size_z > 0,
+            "world size must be positive"
+        );
         let mut palette = Palette::new();
         let air_index = palette.intern(BlockState::air());
         let count = (size_x as usize) * (size_y as usize) * (size_z as usize);
@@ -135,7 +138,10 @@ impl World {
                     }
                 }
                 if new_kind != BlockKind::Air {
-                    self.positions_by_kind.entry(new_kind).or_default().insert(i);
+                    self.positions_by_kind
+                        .entry(new_kind)
+                        .or_default()
+                        .insert(i);
                 }
             }
         }
@@ -170,7 +176,11 @@ impl World {
     /// 空氣一律回傳空迭代器（見 `positions_by_kind` 的說明：空氣沒有被
     /// 追蹤）。
     pub fn positions_of(&self, kind: BlockKind) -> impl Iterator<Item = usize> + '_ {
-        self.positions_by_kind.get(&kind).into_iter().flatten().copied()
+        self.positions_by_kind
+            .get(&kind)
+            .into_iter()
+            .flatten()
+            .copied()
     }
 
     /// 把扁平索引還原成座標。跟 `index` 互為反函數。
@@ -292,7 +302,11 @@ mod tests {
     #[test]
     fn positions_of_never_reports_air() {
         let w = World::new(4, 4, 4);
-        assert_eq!(w.positions_of(BlockKind::Air).count(), 0, "air is never tracked");
+        assert_eq!(
+            w.positions_of(BlockKind::Air).count(),
+            0,
+            "air is never tracked"
+        );
     }
 
     #[test]
@@ -380,6 +394,10 @@ mod tests {
         let w = World::from_parts(2, 1, 1, palette, vec![stone_idx, air_idx]);
 
         let flats: Vec<usize> = w.positions_of(BlockKind::Solid).collect();
-        assert_eq!(flats, vec![0], "only the stone cell should be tracked, not the air one");
+        assert_eq!(
+            flats,
+            vec![0],
+            "only the stone cell should be tracked, not the air one"
+        );
     }
 }

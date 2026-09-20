@@ -204,11 +204,7 @@ pub struct ForeignReader {
 
 impl std::fmt::Display for ForeignReader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} reaches {:?}",
-            self.from_domain, self.read_cell
-        )?;
+        write!(f, "{} reaches {:?}", self.from_domain, self.read_cell)?;
         match &self.read_cell_net {
             Some(owner) => write!(f, " (owned by {owner})")?,
             None => write!(f, " (owned by no route)")?,
@@ -539,7 +535,14 @@ fn reach_of(world: &World, seeds: &[Position]) -> Reach {
             // exactly what Table 4 catches missing one of.
             for direction in HORIZONTAL {
                 for next in dust_connections(world, pos, direction).iter() {
-                    visit(&mut reach, &mut queue, next, Mechanism::DustToDust, pos, None);
+                    visit(
+                        &mut reach,
+                        &mut queue,
+                        next,
+                        Mechanism::DustToDust,
+                        pos,
+                        None,
+                    );
                 }
                 // The reverse edge: any dust cell whose own `dust_connections`
                 // in the opposite direction lands on `pos`. Those are exactly
@@ -735,7 +738,10 @@ fn readers_of(
                             format!("gate {}'s torch", netlist.gates[gate].output),
                             ReaderKind::GateSupport(gate),
                         ),
-                        None => ("an unattributed torch".to_string(), ReaderKind::UnattributedTorch),
+                        None => (
+                            "an unattributed torch".to_string(),
+                            ReaderKind::UnattributedTorch,
+                        ),
                     };
                     add(
                         support,

@@ -24,6 +24,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use super::fragment_synth::identity::GateIndex;
+use super::fragment_synth::topology::merge_isolation_mask;
 use super::topology::{
     GateKind, Library, LibraryEntry, Primitive, StatefulPrimitiveRole, StatefulTopology,
     TemplateNode,
@@ -466,10 +468,9 @@ fn instantiate_stateful(
 /// Torch node regardless of which branch is bare or isolated -- a concept
 /// that does not even apply to `Nor`. For a merge, whether a branch is bare
 /// or isolated *is* the whole decision, and it is made once, per branch, via
-/// [`branch_is_bare`] -- the exact same fanout rule `compile::merge_branch_
-/// is_bare` uses (a branch is bare iff its own producer signal drives
-/// nothing besides this merge), restated over `Netlist` directly since this
-/// module never builds `compile`'s own `Net` structures. A bare branch gets
+/// [`merge_isolation_mask`] -- the exact same fanout rule the fragment
+/// synthesizer uses (a branch is bare iff its own producer signal drives
+/// nothing besides this merge). A bare branch gets
 /// no node and no edge of its own at all: its producer's own contribution
 /// set is spliced directly into this merge's own `output_of` entry, which is
 /// the entire realisation (see `or_bare_entry`'s own doc comment: "no
@@ -481,35 +482,6 @@ fn instantiate_stateful(
 /// between a shared producer and the junction.
 pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, ExpandError> {
     expand_with_selection(netlist, library, &EntrySelection::new())
-}
-
-/// signal name -> every gate index it feeds an input of, repeated once per
-/// input if it feeds the same gate more than once.
-fn consumers_of(netlist: &Netlist) -> HashMap<&str, Vec<usize>> {
-    let mut consumers: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (g, gate) in netlist.gates.iter().enumerate() {
-        for input in &gate.inputs {
-            consumers.entry(input.as_str()).or_default().push(g);
-        }
-    }
-    consumers
-}
-
-/// The fanout rule, stated once: a merge branch is **bare** iff its own
-/// producer signal drives nothing besides this merge.
-///
-/// A bare branch may join the junction directly. A branch that is not bare
-/// needs an [`TemplateNode::IsolatingRepeater`] between the shared producer
-/// and the junction, or the other consumer reads whatever the merge's *other*
-/// branches are driving.
-fn branch_is_bare_given(
-    consumers_of: &HashMap<&str, Vec<usize>>,
-    signal: &str,
-    into_gate: usize,
-) -> bool {
-    consumers_of
-        .get(signal)
-        .is_some_and(|gates| gates.iter().all(|&g| g == into_gate))
 }
 
 /// Every merge branch that needs an isolating repeater, as
@@ -527,14 +499,18 @@ fn branch_is_bare_given(
 /// junction's two sockets are both dust and the world holds **no repeater at
 /// all**, where the emitter puts one in the shared branch's socket.
 pub(crate) fn shared_merge_branches(netlist: &Netlist) -> Vec<(usize, usize)> {
-    let consumers = consumers_of(netlist);
     let mut shared = Vec::new();
     for (g, gate) in netlist.gates.iter().enumerate() {
         if !gate.is_merge() {
             continue;
         }
-        for (index, input) in gate.inputs.iter().enumerate() {
-            if !branch_is_bare_given(&consumers, input, g) {
+        let mask = merge_isolation_mask(
+            netlist,
+            GateIndex(u32::try_from(g).expect("gate indexes fit in u32")),
+        )
+        .expect("an enumerated merge has a valid isolation mask");
+        for index in 0..gate.inputs.len() {
+            if mask.contains(index) {
                 shared.push((g, index));
             }
         }
@@ -580,14 +556,6 @@ fn expand_with_selection(
     for (g, gate) in netlist.gates.iter().enumerate() {
         producer_of.insert(gate.output.as_str(), g);
     }
-
-    // signal name -> every gate index it feeds an input of (repeated once
-    // per input, if it feeds the same gate more than once) -- `branch_is_
-    // bare`'s whole basis, and nothing else in this function needs it.
-    let consumers_of = consumers_of(netlist);
-    let branch_is_bare = |signal: &str, into_gate: usize| {
-        branch_is_bare_given(&consumers_of, signal, into_gate)
-    };
 
     let order = netlist
         .combinational_order()
@@ -642,6 +610,11 @@ fn expand_with_selection(
                 gate.inputs[1].clone(),
             ));
         } else if gate.is_merge() {
+            let isolation_mask = merge_isolation_mask(
+                netlist,
+                GateIndex(u32::try_from(g).expect("gate indexes fit in u32")),
+            )
+            .expect("an enumerated merge has a valid isolation mask");
             let selected = requested_entry.and_then(|entry| library.entry_at(gate.kind, entry));
             if let Some(entry) = requested_entry {
                 if selected.is_none() {
@@ -653,7 +626,7 @@ fn expand_with_selection(
             }
             let force_bare = selected.is_some_and(|entry| entry.template.nodes.is_empty());
             let force_isolated = selected.is_some_and(|entry| !entry.template.nodes.is_empty());
-            if force_bare && gate.inputs.iter().any(|input| !branch_is_bare(input, g)) {
+            if force_bare && isolation_mask.bits() != 0 {
                 return Err(ExpandError::IllegalLibraryEntry {
                     gate: gate.output.clone(),
                     entry: requested_entry.expect("bare entry was requested"),
@@ -668,7 +641,7 @@ fn expand_with_selection(
                 let producer = resolve_producer(input_name, &lever_of, &producer_of, &output_of)
                     .ok_or_else(|| ExpandError::UndrivenSignal(input_name.clone()))?;
 
-                if !force_isolated && branch_is_bare(input_name, g) {
+                if !force_isolated && !isolation_mask.contains(index) {
                     contributions.extend(producer);
                 } else {
                     let role = TemplateNode::IsolatingRepeater(index);
@@ -810,6 +783,54 @@ mod tests {
             inputs: vec![data.to_string(), clock.to_string()],
             output: output.to_string(),
             kind: GateKind::DffPosedge,
+        }
+    }
+
+    #[test]
+    fn merge_isolation_mask_matches_legacy_all_bare_mixed_and_all_isolated_expansion() {
+        let fixtures = [
+            (
+                Netlist {
+                    inputs: vec!["a".to_string(), "b".to_string()],
+                    outputs: vec!["m".to_string()],
+                    gates: vec![merge("m", &["a", "b"])],
+                },
+                0b00,
+                0,
+            ),
+            (
+                Netlist {
+                    inputs: vec!["a".to_string(), "b".to_string()],
+                    outputs: vec!["m".to_string(), "other".to_string()],
+                    gates: vec![merge("m", &["a", "b"]), gate("other", &["a"])],
+                },
+                0b01,
+                1,
+            ),
+            (
+                Netlist {
+                    inputs: vec!["a".to_string(), "b".to_string()],
+                    outputs: vec!["m".to_string(), "oa".to_string(), "ob".to_string()],
+                    gates: vec![
+                        merge("m", &["a", "b"]),
+                        gate("oa", &["a"]),
+                        gate("ob", &["b"]),
+                    ],
+                },
+                0b11,
+                2,
+            ),
+        ];
+
+        for (netlist, expected_bits, expected_owned_repeaters) in fixtures {
+            let mask = merge_isolation_mask(&netlist, GateIndex(0)).unwrap();
+            let graph = expand(&netlist, &Library::default_library()).unwrap();
+
+            assert_eq!(mask.bits(), expected_bits);
+            assert_eq!(graph.gate_nodes[0].len(), expected_owned_repeaters);
+            assert!(graph.gate_nodes[0]
+                .iter()
+                .all(|&node| graph.nodes[node].primitive == Primitive::Repeater));
         }
     }
 

@@ -89,7 +89,13 @@ pub struct Resettle {
 /// from files -- no bookkeeping state survives except the blocks themselves.
 pub fn fully_redirtied(world: &World) -> World {
     let (size_x, size_y, size_z) = world.size();
-    World::from_parts(size_x, size_y, size_z, world.palette().clone(), world.cells().to_vec())
+    World::from_parts(
+        size_x,
+        size_y,
+        size_z,
+        world.palette().clone(),
+        world.cells().to_vec(),
+    )
 }
 
 /// Fully re-settle `world` until a whole re-dirty-and-settle pass changes
@@ -168,7 +174,11 @@ pub fn resettle_differential(
         }
     }
 
-    Ok(Resettle { diffs, world: oracle, passes })
+    Ok(Resettle {
+        diffs,
+        world: oracle,
+        passes,
+    })
 }
 
 #[cfg(test)]
@@ -206,7 +216,9 @@ mod tests {
             world.set(x, 1, 0, dust());
         }
         let mut simulator = Simulator::new(world);
-        simulator.run_until_stable(50).expect("a straight wire settles");
+        simulator
+            .run_until_stable(50)
+            .expect("a straight wire settles");
         simulator.world().clone()
     }
 
@@ -230,7 +242,11 @@ mod tests {
     fn a_manufactured_stale_cell_is_reported_with_both_values() {
         let mut world = settled_wire();
         // (3,1,0) really carries 13. Record a lie in the snapshot.
-        assert_eq!(world.get(3, 1, 0).power, 13, "the rig must be what it claims");
+        assert_eq!(
+            world.get(3, 1, 0).power,
+            13,
+            "the rig must be what it claims"
+        );
         let mut lied = world.get(3, 1, 0).clone();
         lied.power = 0;
         world.set(3, 1, 0, lied);
@@ -288,12 +304,27 @@ mod tests {
         world.set(2, 0, 0, stone());
         world.set(2, 1, 0, dust()); // M
         world.set(2, 2, 0, dust()); // U, directly above M -- the measured shape
-        world.set(3, 2, 0, named("minecraft:redstone_block", BlockKind::RedstoneBlock));
+        world.set(
+            3,
+            2,
+            0,
+            named("minecraft:redstone_block", BlockKind::RedstoneBlock),
+        );
 
         let mut simulator = Simulator::new(world);
-        simulator.run_until_stable(50).expect("it settles with the lever on");
-        assert_eq!(simulator.world().get(1, 1, 0).power, 15, "L beside the lit lever");
-        assert_eq!(simulator.world().get(2, 2, 0).power, 15, "U beside the redstone block");
+        simulator
+            .run_until_stable(50)
+            .expect("it settles with the lever on");
+        assert_eq!(
+            simulator.world().get(1, 1, 0).power,
+            15,
+            "L beside the lit lever"
+        );
+        assert_eq!(
+            simulator.world().get(2, 2, 0).power,
+            15,
+            "U beside the redstone block"
+        );
 
         // Flip the lever off. Only the lever's cell is dirty; the seeding
         // finds L and M; the flood must follow the incoming descent edge up
@@ -301,7 +332,9 @@ mod tests {
         let mut off = simulator.world().get(0, 1, 0).clone();
         off.lit = false;
         simulator.world_mut().set(0, 1, 0, off);
-        simulator.run_until_stable(50).expect("it settles with the lever off");
+        simulator
+            .run_until_stable(50)
+            .expect("it settles with the lever off");
 
         let settled = simulator.world().clone();
         assert_eq!(
@@ -315,7 +348,11 @@ mod tests {
             "L's only remaining source is U, one descent step away -- 0 here \
              is the old stale write-back"
         );
-        assert_eq!(settled.get(2, 1, 0).power, 13, "M, one more step along the run");
+        assert_eq!(
+            settled.get(2, 1, 0).power,
+            13,
+            "M, one more step along the run"
+        );
 
         // And the settle is a true fixed point: the differential is empty.
         let result = resettle_differential(&settled, 50).expect("the oracle settles");
@@ -330,7 +367,10 @@ mod tests {
     fn the_oracle_reaches_a_fixpoint_and_says_how_fast() {
         let world = settled_wire();
         let (oracle, passes) = resettle_to_fixpoint(&world, 50, 8).expect("it settles");
-        assert!(passes <= 2, "a healthy wire must fixpoint immediately, took {passes}");
+        assert!(
+            passes <= 2,
+            "a healthy wire must fixpoint immediately, took {passes}"
+        );
         assert!(worlds_agree(&world, &oracle));
     }
 }

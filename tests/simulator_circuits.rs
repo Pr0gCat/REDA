@@ -93,7 +93,10 @@ fn a_torch_inverts() {
 
     // 輸入 0 -> 輸出 1
     assert!(
-        simulator.world().get(torch_pos.x, torch_pos.y, torch_pos.z).lit,
+        simulator
+            .world()
+            .get(torch_pos.x, torch_pos.y, torch_pos.z)
+            .lit,
         "lever off -> support unpowered -> torch lit (output 1)"
     );
 
@@ -101,7 +104,10 @@ fn a_torch_inverts() {
 
     // 輸入 1 -> 輸出 0
     assert!(
-        !simulator.world().get(torch_pos.x, torch_pos.y, torch_pos.z).lit,
+        !simulator
+            .world()
+            .get(torch_pos.x, torch_pos.y, torch_pos.z)
+            .lit,
         "lever on -> support powered -> torch off (output 0)"
     );
 }
@@ -137,7 +143,10 @@ struct NorGate {
 
 fn build_nor_gate(world: &mut World, center: Position, input_count: usize) -> NorGate {
     let directions = [Facing::West, Facing::East, Facing::South];
-    assert!(input_count <= directions.len(), "only 3 free sides available for inputs");
+    assert!(
+        input_count <= directions.len(),
+        "only 3 free sides available for inputs"
+    );
 
     world.set(center.x, center.y, center.z, stone());
 
@@ -165,11 +174,17 @@ fn build_nor_gate(world: &mut World, center: Position, input_count: usize) -> No
         wall_torch(Facing::North),
     );
 
-    NorGate { levers, output_torch }
+    NorGate {
+        levers,
+        output_torch,
+    }
 }
 
 fn read_torch(simulator: &Simulator, position: Position) -> bool {
-    simulator.world().get(position.x, position.y, position.z).lit
+    simulator
+        .world()
+        .get(position.x, position.y, position.z)
+        .lit
 }
 
 #[test]
@@ -399,7 +414,10 @@ fn signal_strength_falls_off_over_distance_in_a_real_circuit() {
 
     for x in 1..=15 {
         let power = simulator.world().get(x, 1, 0).power;
-        assert!(power > 0, "dust at x={x} should still carry signal, got {power}");
+        assert!(
+            power > 0,
+            "dust at x={x} should still carry signal, got {power}"
+        );
     }
     assert_eq!(
         simulator.world().get(16, 1, 0).power,

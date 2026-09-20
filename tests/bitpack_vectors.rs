@@ -11,7 +11,11 @@ fn two_bit_entries_pack_32_per_long() {
     // 2 bits × 32 = 64 bits = 剛好一個 long
     let values: Vec<u32> = (0..32).map(|i| i % 4).collect();
     let packed = pack(&values, 2);
-    assert_eq!(packed.len(), 1, "32 two-bit entries fit in exactly one long");
+    assert_eq!(
+        packed.len(),
+        1,
+        "32 two-bit entries fit in exactly one long"
+    );
     assert_eq!(unpack(&packed, 2, 32), values);
 }
 
@@ -52,8 +56,7 @@ fn raw_long_layout_pins_the_cross_long_convention() {
     let packed = pack(&values, 5);
 
     assert_eq!(
-        packed[0] as u64,
-        0xF000_0000_0000_0000u64,
+        packed[0] as u64, 0xF000_0000_0000_0000u64,
         "long[0] 的高 4 bit 必須裝著 31 的低 4 bit —— 若為 0 表示實作改成了非跨界慣例"
     );
     assert_eq!(

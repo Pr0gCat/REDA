@@ -250,7 +250,6 @@ pub fn load_bytes(bytes: &[u8]) -> Result<World, FormatError> {
 }
 
 fn from_file(file: LitematicFile) -> Result<World, FormatError> {
-
     if file.version < MIN_SUPPORTED_VERSION || file.version > MAX_SUPPORTED_VERSION {
         return Err(FormatError::UnsupportedVersion(file.version));
     }
