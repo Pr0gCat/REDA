@@ -169,6 +169,16 @@ fn stone() -> BlockState {
     state
 }
 
+fn compose(first: &ChildResult, second: &ChildResult) -> World {
+    assert_separated(first, second);
+    let mut world = merge(&first.world, &second.world);
+    assert_portal(&first.world, &second.world, &world);
+    assert!(world.index(PORTAL.0, PORTAL.1, PORTAL.2).is_some());
+    world.set(PORTAL.0, PORTAL.1, PORTAL.2, stone());
+    assert_eq!(world.get(PORTAL.0, PORTAL.1, PORTAL.2), &stone());
+    world
+}
+
 #[test]
 fn two_parallel_children_compose_through_one_parent_portal() {
     let one = child("a", "m", ROOT_IN, Facing::North, PORTAL, Facing::South);
@@ -206,13 +216,12 @@ fn two_parallel_children_compose_through_one_parent_portal() {
         second.world.get(PORTAL.0, PORTAL.1, PORTAL.2).kind,
         BlockKind::Air
     );
-    assert_separated(&first, &second);
-
-    let mut world = merge(&first.world, &second.world);
-    assert_portal(&first.world, &second.world, &world);
-    assert!(world.index(PORTAL.0, PORTAL.1, PORTAL.2).is_some());
-    world.set(PORTAL.0, PORTAL.1, PORTAL.2, stone());
-    assert_eq!(world.get(PORTAL.0, PORTAL.1, PORTAL.2), &stone());
+    let mut world = compose(&first, &second);
+    assert_eq!(
+        cells(&world),
+        cells(&compose(&sequential[0], &sequential[1])),
+        "one-worker and two-worker root compositions must be identical"
+    );
     probe_caller_cell(&mut world, ROOT_OUT);
 
     let mut simulator = Simulator::new(world);
