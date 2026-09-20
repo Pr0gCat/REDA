@@ -3,6 +3,7 @@
 //! Independent deterministic sparse-seed construction.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
@@ -378,6 +379,36 @@ fn route_schedule_repair_limit(instance_count: usize, max_seed_backtracks: u64) 
         .min(max_seed_backtracks)
 }
 
+/// Diagnostics only (`REDA_TRACE_SEED_REPAIRS`): mirrors the partition
+/// `SeedRepairBudget::try_charge` uses. Layout repairs move an owner; every
+/// other repair only reorders or guards the route schedule.
+fn is_layout_repair(repair: &LayoutRepair) -> bool {
+    match repair {
+        LayoutRepair::SeparateOwners { .. } => true,
+        LayoutRepair::ExclusiveGuardedTrack { .. }
+        | LayoutRepair::EarlyTreeSinkAndEscape { .. }
+        | LayoutRepair::RouteBefore { .. } => false,
+    }
+}
+
+/// Diagnostics only: splits one attempt's wall time into
+/// [placement/materialisation, routing, verify/emit/certify] from the phase
+/// boundaries `build_attempt` reached before returning. An attempt that
+/// stopped early charges its remainder to the phase it stopped in.
+fn attempt_phase_durations(start: Instant, marks: &[Instant], end: Instant) -> [Duration; 3] {
+    let mut phases = [Duration::ZERO; 3];
+    let mut last = start;
+    for (phase, slot) in phases.iter_mut().enumerate() {
+        let boundary = marks.get(phase).copied().unwrap_or(end);
+        *slot = boundary.saturating_duration_since(last);
+        last = boundary;
+        if marks.len() <= phase {
+            break;
+        }
+    }
+    phases
+}
+
 impl SeedRepairBudget {
     fn new(
         layout_attempt_limit: u64,
@@ -538,36 +569,101 @@ impl SparseSeedBuilder {
             route_schedule_repair_limit,
             services.search_config.max_seed_backtracks,
         );
+        // Trace-only bookkeeping; nothing below reads it back.
+        let trace = std::env::var_os("REDA_TRACE_SEED_REPAIRS").is_some();
+        let (mut schedule_repairs, mut layout_repairs) = (0u64, 0u64);
+        let mut phase_totals = [Duration::ZERO; 3];
+        let mut marks = Vec::new();
         loop {
             attempts_used = attempts_used.saturating_add(1);
-            match Self::build_attempt(
+            marks.clear();
+            let started = trace.then(Instant::now);
+            let outcome = Self::build_attempt(
                 input,
                 services,
                 variant,
                 instances.clone(),
                 &repairs.iter().copied().collect::<Vec<_>>(),
-            ) {
-                Ok(certified) => return Ok(certified),
-                Err(SeedError::Repairable(refusal)) => {
-                    let repair = next_layout_repair(&refusal, &repairs)?;
-                    if std::env::var_os("REDA_TRACE_SEED_REPAIRS").is_some() {
+                trace.then_some(&mut marks),
+            );
+            let elapsed = started.map(|started| {
+                let phases = attempt_phase_durations(started, &marks, Instant::now());
+                for (total, phase) in phase_totals.iter_mut().zip(phases) {
+                    *total = total.saturating_add(phase);
+                }
+                format!(
+                    "elapsed={:?} (prepare={:?} routing={:?} post_route={:?})",
+                    phases.iter().sum::<Duration>(),
+                    phases[0],
+                    phases[1],
+                    phases[2]
+                )
+            });
+            let summary = |outcome: &str| {
+                eprintln!(
+                    "seed repairs summary: outcome={outcome}; attempts={attempts_used}; schedule_repairs={schedule_repairs}; layout_repairs={layout_repairs}; total={:?} (prepare={:?} routing={:?} post_route={:?})",
+                    phase_totals.iter().sum::<Duration>(),
+                    phase_totals[0],
+                    phase_totals[1],
+                    phase_totals[2]
+                );
+            };
+            match outcome {
+                Ok(certified) => {
+                    if trace {
                         eprintln!(
-                            "seed attempt {attempts_used}: refusal={refusal:?}; repair={repair:?}"
+                            "seed attempt {attempts_used}: certified; {}",
+                            elapsed.as_deref().unwrap_or_default()
+                        );
+                        summary("certified");
+                    }
+                    return Ok(certified);
+                }
+                Err(SeedError::Repairable(refusal)) => {
+                    let repair = match next_layout_repair(&refusal, &repairs) {
+                        Ok(repair) => repair,
+                        Err(error) => {
+                            if trace {
+                                eprintln!(
+                                    "seed attempt {attempts_used}: no repair for {refusal:?}; {}",
+                                    elapsed.as_deref().unwrap_or_default()
+                                );
+                                summary("no-repair");
+                            }
+                            return Err(error);
+                        }
+                    };
+                    if trace {
+                        eprintln!(
+                            "seed attempt {attempts_used}: refusal={refusal:?}; repair={repair:?}; {}",
+                            elapsed.as_deref().unwrap_or_default()
                         );
                     }
                     if repairs.contains(&repair) || !repair_budget.try_charge(&repair) {
+                        if trace {
+                            summary("exhausted");
+                        }
                         return Err(SeedError::SeedExhausted {
                             attempts_used,
                             final_refusal: refusal,
                         });
                     }
+                    if trace {
+                        if is_layout_repair(&repair) {
+                            layout_repairs = layout_repairs.saturating_add(1);
+                        } else {
+                            schedule_repairs = schedule_repairs.saturating_add(1);
+                        }
+                    }
                     repairs.insert(repair);
                 }
                 Err(error) => {
-                    if std::env::var_os("REDA_TRACE_SEED_REPAIRS").is_some() {
+                    if trace {
                         eprintln!(
-                            "seed attempt {attempts_used}: terminal={error:?}; repairs={repairs:?}"
+                            "seed attempt {attempts_used}: terminal={error:?}; repairs={repairs:?}; {}",
+                            elapsed.as_deref().unwrap_or_default()
                         );
+                        summary("terminal");
                     }
                     return Err(error);
                 }
@@ -581,6 +677,7 @@ impl SparseSeedBuilder {
         variant: &SeedVariant,
         instances: InstanceGraph,
         repairs: &[LayoutRepair],
+        mut phase_marks: Option<&mut Vec<Instant>>,
     ) -> Result<CertifiedCandidate, SeedError> {
         let mut candidate =
             ExpandedPhysicalCandidate::empty(instances, input.pins.cloned().unwrap_or_default());
@@ -624,6 +721,9 @@ impl SparseSeedBuilder {
             &mut targets,
         )?;
 
+        if let Some(marks) = phase_marks.as_deref_mut() {
+            marks.push(Instant::now());
+        }
         let mut reservations = reservations_for_components(&candidate)?;
         reserve_route_endpoints(&mut reservations, &candidate, &sources, &targets)?;
         if let Err(error) = route_all(
@@ -652,6 +752,9 @@ impl SparseSeedBuilder {
             placement_plan.frame.forward,
         )? {
             return Err(SeedError::Repairable(SeedRepairRefusal::Routing(failure)));
+        }
+        if let Some(marks) = phase_marks.as_deref_mut() {
+            marks.push(Instant::now());
         }
         candidate.validate_shape()?;
         candidate.validate_physical_ownership()?;
@@ -3790,6 +3893,62 @@ mod tests {
     }
 
     #[test]
+    fn trace_repair_classification_and_phase_split_match_the_budget_and_the_marks() {
+        let a = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let b = PhysicalEndpointId::DeclaredOutput(PortId(0));
+        let separation = LayoutRepair::SeparateOwners {
+            source_owner: LayoutOwner::Boundary(a),
+            sink_owner: LayoutOwner::Boundary(b),
+            axis: SeparationAxis::Lateral,
+            ordinal: 0,
+        };
+        for repair in [
+            LayoutRepair::ExclusiveGuardedTrack { source: a },
+            LayoutRepair::EarlyTreeSinkAndEscape { source: a, sink: b },
+            LayoutRepair::RouteBefore {
+                source: a,
+                blocker: b,
+            },
+            separation,
+        ] {
+            // The trace partition must agree with the budget's: a layout
+            // repair consumes a layout attempt, anything else a schedule slot.
+            let mut budget = SeedRepairBudget::new(4, 4, 8);
+            assert!(budget.try_charge(&repair));
+            assert_eq!(
+                is_layout_repair(&repair),
+                budget.layout_attempts_used == 2 && budget.route_schedule_repairs_used == 0,
+                "{repair:?}"
+            );
+        }
+
+        let start = Instant::now();
+        let ms = |n| start + Duration::from_millis(n);
+        assert_eq!(
+            attempt_phase_durations(start, &[ms(1), ms(21)], ms(321)),
+            [
+                Duration::from_millis(1),
+                Duration::from_millis(20),
+                Duration::from_millis(300)
+            ]
+        );
+        assert_eq!(
+            attempt_phase_durations(start, &[ms(1)], ms(11)),
+            [
+                Duration::from_millis(1),
+                Duration::from_millis(10),
+                Duration::ZERO
+            ],
+            "a routing refusal charges the remainder to routing"
+        );
+        assert_eq!(
+            attempt_phase_durations(start, &[], ms(5)),
+            [Duration::from_millis(5), Duration::ZERO, Duration::ZERO],
+            "a placement failure charges everything to placement"
+        );
+    }
+
+    #[test]
     fn route_schedule_repair_limit_is_capped_by_max_seed_backtracks_not_the_layout_cap() {
         // Default (huge) `max_seed_backtracks`: the instance-derived 16..128
         // window is unconstrained, so a large instance count still reaches
@@ -6072,6 +6231,7 @@ mod tests {
                 &SeedVariant::default(),
                 instances,
                 repairs,
+                None,
             );
             let requests = router.requests.borrow();
             requests
