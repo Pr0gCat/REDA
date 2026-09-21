@@ -8,6 +8,7 @@ pub mod config;
 mod fragment;
 pub mod identity;
 pub mod instance_graph;
+mod leaf;
 pub mod legacy_adapter;
 pub mod manifest;
 pub(crate) mod partition;
