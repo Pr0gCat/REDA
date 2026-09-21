@@ -9,6 +9,7 @@ pub mod identity;
 pub mod instance_graph;
 pub mod legacy_adapter;
 pub mod manifest;
+pub(crate) mod partition;
 pub(crate) mod placement;
 pub mod realise;
 pub(crate) mod route_schedule;
