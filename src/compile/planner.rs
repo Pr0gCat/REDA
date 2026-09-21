@@ -3652,6 +3652,29 @@ pub(crate) fn starting_layout(
     Ok(anchors)
 }
 
+/// The far corner of the box the seed layout needs: the largest anchor
+/// [`starting_layout`] chooses, plus one grid pitch in `x` and `z` so every
+/// seeded cell's footprint sits inside it.  Relaxation and routing may still
+/// leave the box; it is an envelope for allocation, not a clamp on search.
+pub(crate) fn seed_extent(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+) -> Result<Anchor, PlannerError> {
+    let far = starting_layout(netlist, placements)?.into_iter().fold(
+        Anchor { x: 0, y: 0, z: 0 },
+        |far, anchor| Anchor {
+            x: far.x.max(anchor.x),
+            y: far.y.max(anchor.y),
+            z: far.z.max(anchor.z),
+        },
+    );
+    Ok(Anchor {
+        x: far.x.saturating_add(COLUMN_PITCH),
+        y: far.y,
+        z: far.z.saturating_add(ROW_PITCH),
+    })
+}
+
 /// Which end of the circuit each pinned port is, or the refusal that says the
 /// netlist never declared it.
 ///

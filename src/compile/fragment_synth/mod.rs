@@ -1,3 +1,4 @@
+mod allocation;
 mod api;
 pub mod benchmark;
 pub mod candidate;
