@@ -11,6 +11,7 @@ pub mod instance_graph;
 mod leaf;
 pub mod legacy_adapter;
 pub mod manifest;
+mod parent;
 pub(crate) mod partition;
 pub(crate) mod placement;
 pub mod realise;
