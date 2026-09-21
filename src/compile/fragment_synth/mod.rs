@@ -15,6 +15,7 @@ pub(crate) mod partition;
 pub(crate) mod placement;
 pub mod realise;
 pub(crate) mod route_schedule;
+mod schedule;
 mod search;
 pub(crate) mod seed;
 pub(crate) mod services;
