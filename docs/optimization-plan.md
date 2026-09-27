@@ -653,6 +653,14 @@
   - `SignalContract.delay_budget_ticks` 是預留給逐訊號預算的欄位，但現在每片 leaf、每個訊號都填同一個上限值。
 - **目標**：在生成任何 leaf 之前，由 root 先做一次全域時序規劃，把結果寫進每片 leaf 的契約；leaf 生成時遵守它。分三階段，每一階段都以附加候選的形式進 Q1 清單，今天的產物仍在清單內。
 - **T3a 關鍵旗標（原本的 T3）**
+  - **狀態（09-27）：已實作，做法比原案更進一步。**
+    - root 端：`critical_crossings`（`F/packed_recursive.rs`）在切好的葉上算最長路徑，每跨一次葉加 `CROSSING_PENALTY_GATES = 8` 個 gate 的罰分，找出關鍵路徑跨過的邊界訊號、起點輸入和終點輸出。
+    - leaf 端：`PlacementGuide`（`F/placement.rs`）。開啟時，每一欄裡的關鍵 instance（葉內 zero-slack 鏈上、前一個關鍵 driver 已擺好的；或關鍵邊界輸入的讀者）都改用「對齊前一個關鍵 driver／輸入埠」的橫向位置排序和合法化，再把整欄平移，讓最優先的那一個剛好對準。關鍵邊界輸出的埠改放在它的 driver 旁邊。
+    - 候選：未釘選清單最後附加「fabric timed [4,6]」和（寬切法不同時）「fabric wide timed [4,6]」。關閉時 placement 和原本逐位元相同。
+  - **實測（4 核容器）**
+    - segment_a：出貨 fabric wide timed，**66 ticks / 3,627 blocks**（原本 80 / 4,183，legacy 72 / 6,416），ticks gate 轉綠。一般切法的 timed 版本也從 124 / 9,305 改善到 100 / 7,737。
+    - 為什麼有效：T0 顯示原本兩個 14 ticks 的跳，是關鍵路徑上的下一個 gate 被擺到橫向 59、65 格外。只對齊每欄一個 instance 的第一版是 74 ticks（關鍵路徑換到另一條分支）；改成每欄所有關鍵 instance 都對齊後是 66。
+    - seven_segment：timed 版本是 162 / 17,783，比 untimed 的 142 / 15,261 差，dominance 維持 142。它唯一那次跨越的 70 ticks 中，28 是幹線 repeater，兩片葉相隔約 130 格 seam，主要是 D1 的範圍。
   1. 用 root netlist 算 gate level 的 arrival／required／slack，每跨一次 leaf 邊界加一個固定的跨越罰分，得到 `critical_boundary: BTreeSet<String>`。
   2. 經 `synthesise_free_leaf` 傳進 `SeedPlacementRequest`。
   3. 在 1331 行把這些邊界邊也當作 critical。在 `colour_intervals` 裡，critical 的 track 排最前，並貼近消費 gate 的重心。

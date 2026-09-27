@@ -790,12 +790,12 @@ mod tests {
     #[test]
     fn the_shipping_case_fingerprint_is_byte_compatible_with_the_pre_deletion_descriptor() {
         const TWO_GATE_CHAIN_CASE: &str =
-            "0c80c240e098050a5f258c42fccdff998e7fc3ed9ba424b935b85047f77ae103";
-        const AND4_CASE: &str = "5b09ead4e98af2a09368fdfadd85441f088875ccc27e5227909714c9e8e1f90d";
+            "cdca4b255b2b0c0150fa6f1f7844e20a79360b8313bde32f24bdaba1dbecd599";
+        const AND4_CASE: &str = "cab9fc56c00b42c57f7d0993ced2479fb08bfccd6e75ee51a52d2236494bcd20";
         /// The chain on the caller row the contract honours: `a` at
         /// (1,1,4) facing south, `y` at (4,1,4) facing north.
         const PINNED_TWO_GATE_CHAIN_CASE: &str =
-            "17c21e046eece7a8859b51c48eb2a6d169ae4e447bafa5f5ae5c6a82cce01b18";
+            "5c9202cf0ca5ace0559c3f83dc267c90b0c784f87f566ce8c0c1fc1509055b62";
 
         let chain = two_gate_chain();
         let (and4, _) = build_and4_netlist();

@@ -462,12 +462,17 @@ fn describe_pending_routes(
 /// list ends with the wide fabric candidate at [`WIDE_LEAF_GATES`]. A direct
 /// root leaf is chosen the same way from the planner's refresh reserve and
 /// exact refresh placement.
+///
+/// v3: the unpinned list ends with fabric candidates whose leaves are placed
+/// for timing (`PlacementGuide` in `placement`): the root's critical
+/// crossings from `critical_crossings` in `packed_recursive`, and each leaf's
+/// own zero-slack chain, anchored straight.
 pub(crate) fn producer_revision() -> Fingerprint {
     canonical_fingerprint(
         format!(
-            "recursive-contract-producer-v2:terminal-gates={TERMINAL_GATES}:\
+            "recursive-contract-producer-v3:terminal-gates={TERMINAL_GATES}:\
              wide-leaf-gates={WIDE_LEAF_GATES}:selection=dominance:\
-             direct-leaf-refresh=reserve,exact"
+             direct-leaf-refresh=reserve,exact:leaf-timing=critical-anchors"
         )
         .as_bytes(),
     )
