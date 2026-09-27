@@ -587,6 +587,7 @@
   - segment_a 做成單一片 46-gate 葉（k=0）實測 80 ticks（lead 8 + 葉內 66 + tail 6），仍高於 legacy 的 72。見 T6。
 
 #### T0 量測管線：每跳歸因
+- **狀態（09-27）：進行中**，作為 T3 的前置。
 - **問題**
   - `attribution.rs:236-257` 仍假設靜態分割。
   - `TrunkSummary`（`F/attribution.rs:44-52`）沒有 sink 身分。
@@ -643,17 +644,33 @@
     - 所以 T2 只有兩條路：做到 blocks 不增加；或走開放問題 1 的 §2 例外，排到第一位當基準。
     - 09-27 已決定（6.1、6.4 (b)）：走例外時，今天的產物仍在清單內即可，並附 M1 報告。T3、T4 也一樣。
 
-#### T3 關鍵邊界訊號在 leaf 內對齊
+#### T3 全域時序預算契約（09-27 由「關鍵邊界訊號在 leaf 內對齊」擴充）
 - **問題**
+  - 每片 leaf 生成時只拿到自己那塊 netlist，加上一個所有 leaf 都相同的通用契約（`F/packed_recursive.rs:160-166`：極性為正、強度 15、`delay_budget_ticks` 是整個電路的上限值）。
+  - leaf 不知道哪個邊界訊號在全域關鍵路徑上、它的下一站在哪、自己該分到多少時間。分而治之的組裝成本（見 §3.C 的跨越成本）大半來自這裡。
   - placer 只替 leaf 內部零 slack 的邊加權 ×4（`F/placement.rs:1327-1331`），邊界的 `PrimaryInput`／`DeclaredOutput` 一律不算 critical。
   - `colour_intervals`（1231-1243 行）分配 track 時不看消費端，所以邊界 interface 的 z 和讀它的 gate 無關。
-- **做法**
-  1. 用 root netlist 算 `critical_boundary: BTreeSet<String>`（gate level slack，每次跨越加罰分），約 20 行。
+  - `SignalContract.delay_budget_ticks` 是預留給逐訊號預算的欄位，但現在每片 leaf、每個訊號都填同一個上限值。
+- **目標**：在生成任何 leaf 之前，由 root 先做一次全域時序規劃，把結果寫進每片 leaf 的契約；leaf 生成時遵守它。分三階段，每一階段都以附加候選的形式進 Q1 清單，今天的產物仍在清單內。
+- **T3a 關鍵旗標（原本的 T3）**
+  1. 用 root netlist 算 gate level 的 arrival／required／slack，每跨一次 leaf 邊界加一個固定的跨越罰分，得到 `critical_boundary: BTreeSet<String>`。
   2. 經 `synthesise_free_leaf` 傳進 `SeedPlacementRequest`。
   3. 在 1331 行把這些邊界邊也當作 critical。在 `colour_intervals` 裡，critical 的 track 排最前，並貼近消費 gate 的重心。
-- **成功標準**：每次關鍵跨越的剩餘量 ≤ 12 ticks（今天 22–26），seven_segment 再少 ≥ 15 ticks，leaf blocks 變化 ±3%。
-- **風險**：`interleaved_shifts`（`F/packed_node.rs:1818`）依 interface z 算的 seam 會跟著改變。
-- **工作量**：M｜**依賴**：T0；T2 可選。
+  - 成功標準：每次關鍵跨越的剩餘量 ≤ 12 ticks（今天 22–26），seven_segment 再少 ≥ 15 ticks，leaf blocks 變化 ±3%。
+- **T3b 逐訊號預算與出入位置**
+  1. 契約改成逐訊號：每個邊界訊號有自己的 `delay_budget_ticks`（由全域 slack 分配）和建議的出入面與位置（由 packing 的 dataflow 順序推得：下一站在哪片 leaf、哪個方向）。
+  2. leaf 的 placer 和 router 以預算當約束；做不到就回報 typed refusal，由候選清單的其他候選接手。
+  - 成功標準：每條關鍵邊界訊號的葉內腿實測不超過預算；seven_segment 的跨越成本 C 從 70 降到 ≤ 40。
+- **T3c 固定輪數的量測修正**
+  1. 做完一次後用 T0 量實際的關鍵路徑，依結果調整預算和出入位置，再重做。
+  2. 輪數固定（例如 2 輪），不看時間，保持決定性；每一輪的產物都是候選。
+  3. 這正是 `F/api.rs:94-100`「The budget buys nothing」那個 budget 可以買的東西：`SynthesisBudget` 決定輪數。
+  - 成功標準：第二輪不比第一輪差（由 dominance 保證）；在 seven_segment 上至少一輪有改善。
+- **風險**
+  - `interleaved_shifts`（`F/packed_node.rs:1818`）依 interface z 算的 seam 會跟著改變。
+  - 預算太緊時 leaf 會拒絕，候選變少；靠附加候選的形式兜底。
+  - 全域 slack 用的是靜態估計，和實測可能不一致；T3c 的量測修正就是為了補這個。
+- **工作量**：T3a M，T3b L，T3c M｜**依賴**：T0（必要，量每一跳）；T5 對 T3b 有幫助（leaf 回報 pin-to-pin 延遲）；T2 可選。
 
 #### T4 fabric 關鍵幹線優先選 spine 列（先量再做）
 - **問題**：spine 列從 `row_base = 1`（`F/parent.rs:872`）起，用 left-edge 演算法堆疊（`F/fabric.rs:215-256`），trunk 依名稱排序（`F/parent.rs:505`、`709`）。

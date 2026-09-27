@@ -241,6 +241,55 @@ impl AcceptanceEvaluator {
         Ok(case)
     }
 
+    /// The worst transition of `name`'s manifest on `compiled`, with every
+    /// net's arrival: the same drivers, probes, warm start and manifest
+    /// [`Self::evaluate_world`] measures, so its settle is the acceptance
+    /// ticks by construction. The first transition reaching the worst settle
+    /// is the one returned.
+    pub fn worst_transition_timing(
+        &self,
+        name: &str,
+        compiled: &CompiledCircuit,
+    ) -> Result<crate::timing::TransitionResult, String> {
+        let fixture = self
+            .fixture(name)
+            .ok_or_else(|| format!("unknown benchmark fixture `{name}`"))?;
+        let manifest = fixture.transition_manifest();
+        let (drivers, warm) = {
+            let mut world = compiled.world.clone();
+            let drivers = install_drivers(&mut world, compiled, fixture)?;
+            install_probes(&mut world, fixture)?;
+            let mut settling = Simulator::new(world);
+            settling
+                .run_until_stable(MAX_TRANSITION_GAME_TICKS)
+                .map_err(|error| format!("{} did not initially settle: {error:?}", fixture.name))?;
+            let mut warm = settling.world().clone();
+            warm.take_dirty();
+            (drivers, warm)
+        };
+        let mut worst: Option<crate::timing::TransitionResult> = None;
+        for transition in manifest.transitions() {
+            let mut simulator = Simulator::from_recomputed_world(warm.clone());
+            drive(&mut simulator, &drivers, &transition.from);
+            simulator
+                .run_until_stable(MAX_TRANSITION_GAME_TICKS)
+                .map_err(|error| format!("{} did not settle: {error:?}", fixture.name))?;
+            simulator.attach_observer(crate::timing::watch_all_nets(compiled));
+            let result =
+                crate::timing::measure_transition(&mut simulator, MAX_TRANSITION_GAME_TICKS, |sim| {
+                    drive(sim, &drivers, &transition.to)
+                })
+                .map_err(|error| format!("{} did not settle: {error:?}", fixture.name))?;
+            if worst
+                .as_ref()
+                .is_none_or(|worst| result.settle_game_ticks > worst.settle_game_ticks)
+            {
+                worst = Some(result);
+            }
+        }
+        worst.ok_or_else(|| format!("`{name}` has an empty transition manifest"))
+    }
+
     pub fn capture_legacy(&self, baseline_commit: String) -> Result<BenchmarkBaseline, String> {
         let mut cases = Vec::with_capacity(self.fixtures.len());
         for fixture in &self.fixtures {

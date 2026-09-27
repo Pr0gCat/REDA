@@ -280,10 +280,106 @@ pub fn attribute_path(
     arrivals: &BTreeMap<String, u64>,
     settle: u64,
 ) -> Result<PathAttribution, AttributionError> {
+    attribute_path_with(netlist, &production_leaf_chunks(netlist)?, path, arrivals, settle)
+}
+
+/// Every gate output's leaf chunk in what the producer actually built: the
+/// leaves its diagnostics record, or -- for a product with none, the direct
+/// root leaf -- the whole netlist as one leaf under its root identity. A gate
+/// no leaf, or two leaves, claims is a typed refusal.
+pub fn leaf_owner(
+    netlist: &Netlist,
+    diagnostics: Option<&RecursiveDiagnostics>,
+) -> Result<BTreeMap<String, ChunkId>, AttributionError> {
+    let mut owner = BTreeMap::new();
+    match diagnostics.filter(|diagnostics| !diagnostics.leaves.is_empty()) {
+        Some(diagnostics) => {
+            for leaf in &diagnostics.leaves {
+                for gate in &leaf.gates {
+                    if owner.insert(gate.clone(), leaf.chunk.clone()).is_some() {
+                        return Err(AttributionError::UnpartitionedGate {
+                            signal: gate.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        None => {
+            let root = root_chunk_id(netlist)?;
+            for gate in &netlist.gates {
+                owner.insert(gate.output.clone(), root.clone());
+            }
+        }
+    }
+    if let Some(gate) = netlist.gates.iter().find(|gate| !owner.contains_key(&gate.output)) {
+        return Err(AttributionError::UnpartitionedGate {
+            signal: gate.output.clone(),
+        });
+    }
+    Ok(owner)
+}
+
+/// The critical path of one measured transition, read backwards off the
+/// arrivals: from the declared output that settled last, each step goes to
+/// the input of the current gate that changed last, until a primary input or
+/// a gate none of whose inputs changed.
+///
+/// A gate's last change is caused by its last-changing input, so this is the
+/// path the measurement itself took, with no timing model in between. Ties
+/// go to the earlier declared output and the earlier gate input, so the path
+/// is the same on every run.
+pub fn last_change_path(
+    netlist: &Netlist,
+    arrivals: &BTreeMap<String, u64>,
+) -> Result<Vec<String>, AttributionError> {
+    let (mut current, mut at) = netlist
+        .outputs
+        .iter()
+        .filter_map(|output| arrivals.get(output).map(|&tick| (output.clone(), tick)))
+        .fold(None, |best: Option<(String, u64)>, (output, tick)| match best {
+            Some((_, best_tick)) if best_tick >= tick => best,
+            _ => Some((output, tick)),
+        })
+        .ok_or(AttributionError::PathTooShort)?;
+    let mut path = vec![current.clone()];
+    while let Some(gate) = netlist.gates.iter().find(|gate| gate.output == current) {
+        let Some((input, tick)) = gate
+            .inputs
+            .iter()
+            .filter_map(|input| arrivals.get(input).map(|&tick| (input, tick)))
+            .filter(|&(_, tick)| tick <= at)
+            .fold(None, |best: Option<(&String, u64)>, (input, tick)| match best {
+                Some((_, best_tick)) if best_tick >= tick => best,
+                _ => Some((input, tick)),
+            })
+        else {
+            break;
+        };
+        if path.len() > netlist.gates.len() {
+            return Err(AttributionError::UnknownSignal {
+                signal: input.clone(),
+            });
+        }
+        path.push(input.clone());
+        current = input.clone();
+        at = tick;
+    }
+    path.reverse();
+    Ok(path)
+}
+
+/// [`attribute_path`] against an explicit leaf ownership, such as
+/// [`leaf_owner`] reads off a shipped product.
+pub fn attribute_path_with(
+    netlist: &Netlist,
+    owner: &BTreeMap<String, ChunkId>,
+    path: &[String],
+    arrivals: &BTreeMap<String, u64>,
+    settle: u64,
+) -> Result<PathAttribution, AttributionError> {
     if path.len() < 2 {
         return Err(AttributionError::PathTooShort);
     }
-    let owner = production_leaf_chunks(netlist)?;
     let is_input = |signal: &str| netlist.inputs.iter().any(|input| input == signal);
     let is_gate = |signal: &str| netlist.gates.iter().any(|gate| gate.output == signal);
     let chunk_of = |signal: &str| -> Result<ChunkId, AttributionError> {
@@ -387,12 +483,16 @@ pub fn attribute_transition(
     path: &[String],
     transition: &TransitionResult,
 ) -> Result<PathAttribution, AttributionError> {
-    let arrivals = transition
+    attribute_path(netlist, path, &arrivals_of(transition), transition.settle_game_ticks)
+}
+
+/// Every net's arrival on one measured transition, relative to its start.
+pub fn arrivals_of(transition: &TransitionResult) -> BTreeMap<String, u64> {
+    transition
         .nets
         .iter()
         .filter_map(|(name, timing)| timing.arrival_tick().map(|tick| (name.clone(), tick)))
-        .collect();
-    attribute_path(netlist, path, &arrivals, transition.settle_game_ticks)
+        .collect()
 }
 
 #[cfg(test)]
@@ -796,5 +896,76 @@ mod tests {
         assert_eq!(ok.intra_ticks, 2);
         assert_eq!(ok.tail_ticks, 8);
         assert!(ok.reconciles());
+    }
+
+    /// The path the measurement took: from the output that settled last,
+    /// each step to the input that changed last, ties to the earlier one.
+    #[test]
+    fn last_change_path_follows_the_latest_input_back_to_a_primary_input() {
+        let net = Netlist {
+            inputs: vec!["a".to_owned(), "b".to_owned()],
+            outputs: vec!["y".to_owned(), "z".to_owned()],
+            gates: vec![
+                Gate::nor("p", &["a"]),
+                Gate::nor("q", &["b"]),
+                Gate::nor("y", &["p", "q"]),
+                Gate::nor("z", &["p"]),
+            ],
+        };
+        let arrivals: BTreeMap<String, u64> =
+            [("a", 0), ("b", 1), ("p", 2), ("q", 5), ("y", 7), ("z", 4)]
+                .into_iter()
+                .map(|(name, tick)| (name.to_owned(), tick))
+                .collect();
+        assert_eq!(last_change_path(&net, &arrivals).unwrap(), ["b", "q", "y"]);
+
+        // Equal arrivals: the earlier declared output, then the earlier input.
+        let tied: BTreeMap<String, u64> =
+            [("a", 0), ("b", 0), ("p", 2), ("q", 2), ("y", 4), ("z", 4)]
+                .into_iter()
+                .map(|(name, tick)| (name.to_owned(), tick))
+                .collect();
+        assert_eq!(last_change_path(&net, &tied).unwrap(), ["a", "p", "y"]);
+
+        // No output changed: nothing to read.
+        assert!(matches!(
+            last_change_path(&net, &BTreeMap::new()),
+            Err(AttributionError::PathTooShort)
+        ));
+    }
+
+    /// A product's own leaves decide ownership; with none, the whole netlist
+    /// is one leaf under its root identity.
+    #[test]
+    fn leaf_owner_reads_the_shipped_leaves_or_the_whole_root() {
+        let net = chain(3);
+        let root = root_chunk_id(&net).unwrap();
+        let direct = leaf_owner(&net, None).unwrap();
+        assert!(direct.values().all(|chunk| *chunk == root));
+        assert_eq!(direct.len(), 3);
+
+        let halves = partition(&net, &root, 2).unwrap();
+        let diagnostics = RecursiveDiagnostics {
+            leaves: halves
+                .iter()
+                .map(|chunk| LeafDiagnostic {
+                    chunk: chunk.id.clone(),
+                    gates: chunk.netlist.gates.iter().map(|gate| gate.output.clone()).collect(),
+                })
+                .collect(),
+            root_trunks: Vec::new(),
+            candidates: Vec::new(),
+            chosen: None,
+        };
+        let owned = leaf_owner(&net, Some(&diagnostics)).unwrap();
+        assert_eq!(owned["s1"], halves[0].id);
+        assert_eq!(owned["s3"], halves[1].id);
+
+        let mut missing = diagnostics.clone();
+        missing.leaves.pop();
+        assert!(matches!(
+            leaf_owner(&net, Some(&missing)),
+            Err(AttributionError::UnpartitionedGate { .. })
+        ));
     }
 }
