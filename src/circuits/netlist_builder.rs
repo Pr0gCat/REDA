@@ -121,6 +121,38 @@ impl NetlistBuilder {
         output
     }
 
+    /// A name from the same sequence [`NetlistBuilder::fresh_name`] uses,
+    /// with no gate pushed yet. The Verilog frontend's hold mux needs this:
+    /// a register's D input may read the register's own not-yet-built
+    /// output, so the output name has to exist before [`NetlistBuilder::cell_named`]
+    /// can build the gate it names.
+    pub(crate) fn reserve_name(&mut self) -> String {
+        self.fresh_name()
+    }
+
+    /// [`NetlistBuilder::cell`], but with a caller-chosen `name`/`output`
+    /// instead of a generated one -- the counterpart to
+    /// [`NetlistBuilder::reserve_name`] that actually builds the gate.
+    pub(crate) fn cell_named(&mut self, name: &str, kind: GateKind, inputs: &[String]) -> String {
+        assert!(
+            !kind.is_realisable(),
+            "use nor_named()/merge_named() for a realisable kind, not cell_named()"
+        );
+        assert_eq!(
+            inputs.len(),
+            kind.arity(),
+            "{kind:?} takes {} input(s)",
+            kind.arity()
+        );
+        self.gates.push(Gate {
+            name: name.to_string(),
+            inputs: inputs.to_vec(),
+            output: name.to_string(),
+            kind,
+        });
+        name.to_string()
+    }
+
     /// A new NOR gate; `inputs.len()` must be in 1..=3.
     pub(crate) fn nor(&mut self, inputs: &[String]) -> String {
         let output = self.fresh_name();

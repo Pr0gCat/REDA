@@ -191,6 +191,31 @@
   }
   #topo-wrap.dragging { cursor: grabbing; }
   #topo-canvas { width: 100%; height: 100%; display: block; }
+  #verilog-code {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 14px;
+    height: 76vh;
+    resize: vertical;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #101113;
+    color: var(--text);
+    font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+    tab-size: 4;
+    white-space: pre;
+  }
+  .pipeline-note { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  #signal-wrap {
+    height: 76vh;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #101113;
+  }
+  #signal-canvas { min-width: 100%; }
 </style>
 </head>
 <body>
@@ -202,6 +227,8 @@
     <button id="view-2d-btn" data-active="true">2D Slice</button>
     <button id="view-3d-btn" data-active="false">3D View</button>
     <button id="view-topo-btn" data-active="false">Topology</button>
+    <button id="view-verilog-btn" data-active="false">Verilog</button>
+    <button id="view-signals-btn" data-active="false">Signals</button>
   </div>
 </header>
 <main>
@@ -386,6 +413,20 @@
       </div>
       <div id="topo-hover-readout">&nbsp;</div>
     </div>
+
+    <div class="panel hidden" data-view="verilog" style="margin-bottom:6px;">
+      <h2 id="verilog-caption">Verilog</h2>
+      <p class="pipeline-note">The exact Verilog source synthesized into this circuit.</p>
+      <textarea id="verilog-code" spellcheck="false" autocomplete="off" autocapitalize="off" readonly></textarea>
+    </div>
+
+    <div class="panel hidden" data-view="signals" style="margin-bottom:6px;">
+      <h2>I/O signals</h2>
+      <p class="pipeline-note">One sample is recorded after each input change, Step, Run to stable, and Reset. Step records one tick; Run records the final settled state.</p>
+      <div id="signal-wrap">
+        <canvas id="signal-canvas" width="10" height="10"></canvas>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -408,7 +449,7 @@ import { OrbitControls } from './vendor/examples/jsm/controls/OrbitControls.js';
 // are vendored and pinned, so they are imported normally and stay cached.
 const bust = `?v=${Date.now()}`;
 const wasm = await import(`./pkg/reda_viewer.js${bust}`);
-const { list_circuits, Session, Axis } = wasm;
+const { verilog_source, Session, Axis } = wasm;
 
 await wasm.default(new URL(`./pkg/reda_viewer_bg.wasm${bust}`, import.meta.url));
 
@@ -471,6 +512,17 @@ const topoInnerLegend = document.getElementById('topo-inner-legend');
 const topoCellHistogram = document.getElementById('topo-cell-histogram');
 const topoCaption = document.getElementById('topo-caption');
 
+// Verilog view DOM handles
+const viewVerilogBtn = document.getElementById('view-verilog-btn');
+const verilogCaption = document.getElementById('verilog-caption');
+const verilogCode = document.getElementById('verilog-code');
+
+// I/O signal view DOM handles
+const viewSignalsBtn = document.getElementById('view-signals-btn');
+const signalWrap = document.getElementById('signal-wrap');
+const signalCanvas = document.getElementById('signal-canvas');
+const signalCtx = signalCanvas.getContext('2d');
+
 // Offscreen 1px-per-cell canvas the visible canvas is scaled up from.
 const offscreen = document.createElement('canvas');
 const offCtx = offscreen.getContext('2d');
@@ -494,6 +546,7 @@ let currentScreenW = 0; // canvas pixel width, in cells (post screen mapping)
 let currentScreenH = 0; // canvas pixel height, in cells (post screen mapping)
 let outputSliceCache = new Map(); // y -> Uint8Array, cleared each refreshOutputs()
 let worstSettleTicks = null; // worst run_until_stable() result since this circuit was (re)loaded
+let signalHistory = [];
 
 // ---------------------------------------------------------------------
 // Colour helpers
@@ -509,10 +562,9 @@ function parseColour(hex) {
   return [r, g, b, a];
 }
 
-/** Redstone dust: scale brightness by strength (0-15) so a live wire reads
- * dark red when unpowered and full bright red at strength 15. */
-function tintDust(rgba, strength) {
-  const factor = 0.18 + 0.82 * (strength / 15);
+/** Scale brightness by strength (0-15). */
+function tintByStrength(rgba, strength, minimum = 0.18) {
+  const factor = minimum + (1 - minimum) * (strength / 15);
   return [
     Math.round(rgba[0] * factor),
     Math.round(rgba[1] * factor),
@@ -522,11 +574,13 @@ function tintDust(rgba, strength) {
 }
 
 const REDSTONE_WIRE_ID = 4; // BlockKind::RedstoneWire, see viewer/src/lib.rs ALL_BLOCK_KINDS
+const REDSTONE_LAMP_ID = 11;
 
 function colourForCell(kindId, strength) {
   const entry = legendMap.get(kindId);
   if (!entry) return [255, 0, 255, 255]; // unknown id -- should never happen if legend() is complete
-  if (kindId === REDSTONE_WIRE_ID) return tintDust(entry.rgba, strength);
+  if (kindId === REDSTONE_WIRE_ID) return tintByStrength(entry.rgba, strength);
+  if (kindId === REDSTONE_LAMP_ID && strength === 0) return tintByStrength(entry.rgba, 0, 0.45);
   return entry.rgba;
 }
 
@@ -628,6 +682,115 @@ function screenAxisLabels(axisName) {
 }
 
 // ---------------------------------------------------------------------
+// Port markers
+// ---------------------------------------------------------------------
+
+// Every input and output is marked in the slice and the 3D view with an arrow
+// along the way its signal crosses the port (`Pin::flow`, which `port_flow` in
+// src/lib.rs reads off the world) and an IN/OUT tag with its name. The tag
+// sits outside the circuit: behind an input's arrow, ahead of an output's.
+const PORT_COLOURS = { in: '#3ecf6e', out: '#ff9a3c' };
+// Opaque, not translucent: the slice overlay is redrawn over itself on scroll.
+const PORT_COLOURS_ELSEWHERE = { in: '#1d6a38', out: '#8a5523' };
+const FLOW_VECTORS = {
+  North: [0, 0, -1], South: [0, 0, 1], East: [1, 0, 0],
+  West: [-1, 0, 0], Up: [0, 1, 0], Down: [0, -1, 0],
+};
+
+function portMarkers() {
+  const ports = [
+    ...pinout.inputs.map((pin) => ({ pin, role: 'in' })),
+    ...pinout.outputs.map((pin) => ({ pin, role: 'out' })),
+  ];
+  return ports.map(({ pin, role }) => ({
+    role,
+    at: [pin.x, pin.y, pin.z],
+    flow: FLOW_VECTORS[pin.flow] || null,
+    flowName: pin.flow ? pin.flow.toLowerCase() : null,
+    text: `${role.toUpperCase()} ${pin.name}`,
+  }));
+}
+
+/** Screen cell of a world coordinate in the slice currently shown. */
+function sliceScreenOf([x, y, z]) {
+  const [outer, inner] = { X: [y, z], Y: [x, z], Z: [x, y] }[currentAxisName];
+  return toScreen(currentAxisName, outer, inner, currentGeom);
+}
+
+/** Every port, projected onto the slice: bright where the slice cuts the
+ * port's own cell, dark and dashed where it only lies above or below it. */
+function drawPortMarkers() {
+  if (!currentBytes) return;
+  const cellSize = Number(zoomSlider.value);
+  const axis = { X: 0, Y: 1, Z: 2 }[currentAxisName];
+  const index = Number(indexSlider.value);
+  const half = Math.max(cellSize * 1.25, 10);
+  const head = Math.max(cellSize * 0.6, 6);
+  const fontPx = Math.max(11, Math.round(cellSize * 0.8));
+  ctx.save();
+  ctx.font = `bold ${fontPx}px ui-monospace, monospace`;
+  ctx.lineWidth = Math.max(2, cellSize / 6);
+  for (const port of portMarkers()) {
+    const inSlice = port.at[axis] === index;
+    const colour = (inSlice ? PORT_COLOURS : PORT_COLOURS_ELSEWHERE)[port.role];
+    ctx.strokeStyle = colour;
+    ctx.fillStyle = colour;
+    ctx.setLineDash(inSlice ? [] : [4, 3]);
+    const here = sliceScreenOf(port.at);
+    const cx = (here.col + 0.5) * cellSize;
+    const cy = (here.row + 0.5) * cellSize;
+    const box = Math.max(cellSize, 6);
+    ctx.strokeRect(cx - box / 2, cy - box / 2, box, box);
+
+    let dx = 0;
+    let dy = 0;
+    if (port.flow) {
+      const ahead = sliceScreenOf(port.at.map((v, i) => v + port.flow[i]));
+      dx = ahead.col - here.col;
+      dy = ahead.row - here.row;
+    }
+    let label = port.text;
+    if (dx || dy) {
+      const tipX = cx + dx * half;
+      const tipY = cy + dy * half;
+      ctx.beginPath();
+      ctx.moveTo(cx - dx * half, cy - dy * half);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX - dx * head - dy * head * 0.6, tipY - dy * head - dx * head * 0.6);
+      ctx.lineTo(tipX - dx * head + dy * head * 0.6, tipY - dy * head + dx * head * 0.6);
+      ctx.closePath();
+      ctx.fill();
+    } else if (port.flowName) {
+      // The signal crosses the slice plane itself: say which way in words.
+      label += ` (${port.flowName})`;
+    }
+
+    // The tag goes outside the circuit, clear of the arrow.
+    const side = port.role === 'in' ? -1 : 1;
+    const gap = half + 4;
+    const tx = dx || dy ? cx + side * dx * gap : cx + box / 2 + 4;
+    const ty = dx || dy ? cy + side * dy * gap : cy;
+    const width = ctx.measureText(label).width + 8;
+    const height = fontPx + 6;
+    const left = side * dx > 0 || !(dx || dy) ? tx : side * dx < 0 ? tx - width : tx - width / 2;
+    const top = side * dy > 0 ? ty : side * dy < 0 ? ty - height : ty - height / 2;
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(16,17,19,0.9)';
+    ctx.fillRect(left, top, width, height);
+    ctx.strokeRect(left, top, width, height);
+    ctx.fillStyle = colour;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, left + 4, top + height / 2);
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------
 // Circuit lifecycle
 // ---------------------------------------------------------------------
 
@@ -636,25 +799,45 @@ function setStatus(message, isError) {
   statusEl.classList.toggle('error', !!isError);
 }
 
-// Pre-baked `compile_grown` circuits: generation takes minutes natively, so
-// the page fetches what `build_circuit --grown` wrote instead of compiling.
-// File stems mirror build_circuit's own sanitisation (`:` -> `_`).
-const GROWN = {
-  'grown:segment_a': 'segment_a.grown',
-  'grown:verilog:seven_segment': 'verilog_seven_segment.grown',
+// Pre-baked circuits from the recursive fragment synthesiser: the page
+// fetches what `build_circuit --synth` wrote instead of compiling. File stems
+// mirror build_circuit's own sanitisation (`:` -> `_`). The decoder is the
+// pinned glyph (baked/verilog_seven_segment.synth.pins.json).
+const SYNTH = {
+  'synth:and4': 'and4.synth',
+  'synth:verilog:and4': 'verilog_and4.synth',
+  'synth:full_adder': 'full_adder.synth',
+  'synth:segment_a': 'segment_a.synth',
+  'synth:verilog:seven_segment': 'verilog_seven_segment.synth',
 };
+
+// Shows a catalog circuit's Verilog source, read-only -- not editable, and
+// not a live view of anything in `session`.
+function refreshVerilog(name) {
+  const source = verilog_source(name);
+  verilogCaption.textContent = `Verilog — ${name.replace(/^synth:/, '')}`;
+  verilogCode.value = source || '// No Verilog source is registered for this circuit.';
+}
 
 async function loadCircuit(name) {
   try {
-    if (GROWN[name]) {
+    if (name.startsWith('debug:')) {
+      // A diagnostic world dump (e.g. REDA_DUMP_FAILED_TRUNK): no netlist,
+      // so no levers or lamps -- look at it in the slice and 3D views.
+      setStatus(`Loading debug world ${name}…`);
+      const resp = await fetch(`baked/debug/${name.slice('debug:'.length)}.litematic`);
+      if (!resp.ok) throw new Error(`debug world missing (${resp.status})`);
+      session = Session.from_debug_world(name, new Uint8Array(await resp.arrayBuffer()));
+      setStatus('');
+    } else if (SYNTH[name]) {
       setStatus(`Loading baked ${name}…`);
-      const stem = GROWN[name];
+      const stem = SYNTH[name];
       const [worldResp, pinoutResp] = await Promise.all([
         fetch(`baked/${stem}.litematic`),
         fetch(`baked/${stem}.pinout.json`),
       ]);
       if (!worldResp.ok || !pinoutResp.ok) {
-        throw new Error(`baked files missing (${worldResp.status}/${pinoutResp.status}) -- run: cargo run --release --bin build_circuit -- --grown <name>`);
+        throw new Error(`baked files missing (${worldResp.status}/${pinoutResp.status}) -- run: cargo run --release --bin build_circuit -- <name> --synth`);
       }
       const worldBytes = new Uint8Array(await worldResp.arrayBuffer());
       const pinoutJson = await pinoutResp.json();
@@ -667,6 +850,7 @@ async function loadCircuit(name) {
     setStatus(`Failed to build ${name}: ${e}`, true);
     return;
   }
+  refreshVerilog(name);
   size = Array.from(session.size());
 
   const rawPinout = session.pinout();
@@ -690,7 +874,8 @@ async function loadCircuit(name) {
   resetSettleDisplay();
   syncAxisRange(true);
   refreshOutputs();
-  build3DGeometry();
+  resetSignalHistory();
+  build3DGeometry(true);
   buildTopology();
 }
 
@@ -755,7 +940,7 @@ function buildLeverUI() {
 
     const label = document.createElement('span');
     label.innerHTML = `<span class="pin-name">${pin.name}</span> `
-      + `<span class="pin-coord">(${pin.x}, ${pin.y}, ${pin.z})</span>`;
+      + `<span class="pin-coord">(${pin.x}, ${pin.y}, ${pin.z})${pin.flow ? ` → ${pin.flow.toLowerCase()}` : ''}</span>`;
 
     const btn = document.createElement('button');
     const on = leverState.get(pin.name);
@@ -795,6 +980,7 @@ function toggleLever(name, btn) {
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();
+  recordSignalSample();
   if (pin.pinned) {
     build3DGeometry();
   } else {
@@ -819,7 +1005,7 @@ function buildOutputUI() {
 
     const label = document.createElement('span');
     label.innerHTML = `<span class="pin-name">${pin.name}</span> `
-      + `<span class="pin-coord">(${pin.x}, ${pin.y}, ${pin.z})</span>`;
+      + `<span class="pin-coord">(${pin.x}, ${pin.y}, ${pin.z})${pin.flow ? ` → ${pin.flow.toLowerCase()}` : ''}</span>`;
 
     const badge = document.createElement('span');
     badge.className = 'output-badge';
@@ -858,6 +1044,115 @@ function refreshOutputs() {
     badge.dataset.on = String(on);
     badge.textContent = on ? 'ON' : 'OFF';
   }
+}
+
+// ---------------------------------------------------------------------
+// I/O signal history
+// ---------------------------------------------------------------------
+
+const SIGNAL_HISTORY_LIMIT = 256;
+
+function currentSignalValues() {
+  const values = [];
+  for (const pin of pinout.inputs) {
+    values.push(leverState.get(pin.name) ? 15 : 0);
+  }
+  outputSliceCache.clear();
+  for (const pin of pinout.outputs) {
+    values.push(readCell(pin.x, pin.y, pin.z).strength);
+  }
+  return values;
+}
+
+function recordSignalSample() {
+  if (!session) return;
+  signalHistory.push({ tick: session.tick_count(), values: currentSignalValues() });
+  if (signalHistory.length > SIGNAL_HISTORY_LIMIT) signalHistory.shift();
+  drawSignals();
+}
+
+function resetSignalHistory() {
+  signalHistory = [];
+  recordSignalSample();
+}
+
+function drawSignals() {
+  const signals = [
+    ...pinout.inputs.map((pin) => ({ name: pin.name, role: 'in' })),
+    ...pinout.outputs.map((pin) => ({ name: pin.name, role: 'out' })),
+  ];
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(signalWrap.clientWidth, 520);
+  const rowHeight = 54;
+  const headerHeight = 34;
+  const labelWidth = 110;
+  const height = Math.max(signalWrap.clientHeight, headerHeight + signals.length * rowHeight + 20);
+  signalCanvas.width = Math.round(width * dpr);
+  signalCanvas.height = Math.round(height * dpr);
+  signalCanvas.style.width = `${width}px`;
+  signalCanvas.style.height = `${height}px`;
+  signalCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  signalCtx.clearRect(0, 0, width, height);
+
+  signalCtx.font = '12px ui-monospace, SFMono-Regular, Consolas, monospace';
+  signalCtx.textBaseline = 'middle';
+  signalCtx.strokeStyle = 'rgba(255,255,255,0.10)';
+  signalCtx.fillStyle = '#9a9a9a';
+
+  const plotLeft = labelWidth;
+  const plotRight = width - 16;
+  const sampleX = (index) => signalHistory.length < 2
+    ? plotLeft
+    : plotLeft + index * (plotRight - plotLeft) / (signalHistory.length - 1);
+
+  for (let i = 0; i < signalHistory.length; i++) {
+    const x = sampleX(i);
+    signalCtx.beginPath();
+    signalCtx.moveTo(x, headerHeight - 8);
+    signalCtx.lineTo(x, headerHeight + signals.length * rowHeight);
+    signalCtx.stroke();
+    if (i === 0 || i === signalHistory.length - 1 || i % Math.ceil(signalHistory.length / 8) === 0) {
+      signalCtx.fillText(`t${signalHistory[i].tick}`, x + 3, 12);
+    }
+  }
+
+  for (let row = 0; row < signals.length; row++) {
+    const top = headerHeight + row * rowHeight;
+    const lowY = top + rowHeight - 12;
+    const highY = top + 12;
+    const signal = signals[row];
+    signalCtx.fillStyle = signal.role === 'in' ? '#4da3ff' : '#52d17c';
+    signalCtx.fillText(`${signal.role}  ${signal.name}`, 10, top + rowHeight / 2);
+    signalCtx.strokeStyle = 'rgba(255,255,255,0.08)';
+    signalCtx.beginPath();
+    signalCtx.moveTo(plotLeft, lowY);
+    signalCtx.lineTo(plotRight, lowY);
+    signalCtx.stroke();
+
+    signalCtx.strokeStyle = signal.role === 'in' ? '#4da3ff' : '#52d17c';
+    signalCtx.lineWidth = 2;
+    signalCtx.beginPath();
+    signalHistory.forEach((sample, index) => {
+      const x = sampleX(index);
+      const y = sample.values[row] > 0 ? highY : lowY;
+      if (index === 0) signalCtx.moveTo(x, y);
+      else {
+        const previousY = sample.values[row] > 0 ? highY : lowY;
+        signalCtx.lineTo(x, previousY);
+      }
+      if (index + 1 < signalHistory.length) {
+        const nextY = signalHistory[index + 1].values[row] > 0 ? highY : lowY;
+        signalCtx.lineTo(sampleX(index + 1), y);
+        signalCtx.lineTo(sampleX(index + 1), nextY);
+      }
+    });
+    signalCtx.stroke();
+
+    const latest = signalHistory.at(-1)?.values[row] ?? 0;
+    signalCtx.fillStyle = signal.role === 'in' ? '#4da3ff' : '#52d17c';
+    signalCtx.fillText(String(latest), plotRight - 18, top + rowHeight / 2);
+  }
+  signalCtx.lineWidth = 1;
 }
 
 // ---------------------------------------------------------------------
@@ -1336,6 +1631,9 @@ function ensureThreeInitialized() {
   controls3d = new OrbitControls(camera3d, renderer3d.domElement);
   controls3d.enableDamping = true;
   controls3d.dampingFactor = 0.08;
+  // Wheel toward what is under the cursor, so a port tag at one end of a long
+  // circuit can be reached without panning first.
+  controls3d.zoomToCursor = true;
 
   // No lights: instances use MeshBasicMaterial (unlit), deliberately, so a
   // rendered colour is exactly legend()'s colour with no lighting model or
@@ -1355,6 +1653,7 @@ function ensureThreeInitialized() {
       resizeTopoCanvas();
       drawTopology();
     }
+    if (currentView === 'signals') drawSignals();
   });
 
   function animate() {
@@ -1423,7 +1722,7 @@ function decodeGeometry(bytes) {
  * instead of one mesh for everything -- `seven_segment`'s 19,050 cells stay
  * split across at most a handful of meshes (cube/dust/repeater/etc), each
  * still cheap to raycast and render, rather than one mesh per block. */
-function build3DGeometry() {
+function build3DGeometry(refitCamera = false) {
   ensureThreeInitialized();
 
   for (const { mesh } of instancedMeshes) scene3d.remove(mesh);
@@ -1478,10 +1777,88 @@ function build3DGeometry() {
     meshEntryByObject.set(mesh, entry);
   }
 
+  buildPortMarkers3d();
   setupClipRanges(); // also lays out every instance's matrix via applyClip()
   update3DStrengths();
-  frameCamera();
+  if (refitCamera) frameCamera();
   threeHint.classList.add('hidden');
+}
+
+let portGroup3d = null;
+
+/** A screen-sized IN/OUT tag: `sizeAttenuation: false` keeps it readable
+ * however far the camera pulls back, and `depthTest: false` keeps it visible
+ * through the blocks in front of it. */
+function portLabelSprite(text, colour) {
+  const font = 'bold 28px ui-monospace, monospace';
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.font = font;
+  const width = Math.ceil(probe.measureText(text).width) + 20;
+  const height = 40;
+  const label = document.createElement('canvas');
+  label.width = width;
+  label.height = height;
+  const c = label.getContext('2d');
+  c.fillStyle = 'rgba(16,17,19,0.88)';
+  c.fillRect(0, 0, width, height);
+  c.strokeStyle = colour;
+  c.lineWidth = 3;
+  c.strokeRect(1.5, 1.5, width - 3, height - 3);
+  c.font = font;
+  c.fillStyle = colour;
+  c.textBaseline = 'middle';
+  c.fillText(text, 10, height / 2 + 1);
+  const texture = new THREE.CanvasTexture(label);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, sizeAttenuation: false });
+  const sprite = new THREE.Sprite(material);
+  const screenHeight = 0.03;
+  sprite.scale.set(screenHeight * width / height, screenHeight, 1);
+  sprite.renderOrder = 10;
+  return sprite;
+}
+
+/** One arrow and one tag per port, rebuilt with the rest of the geometry. */
+function buildPortMarkers3d() {
+  if (portGroup3d) {
+    scene3d.remove(portGroup3d);
+    // Materials and textures only: ArrowHelper shares its geometry.
+    portGroup3d.traverse((object) => {
+      object.material?.map?.dispose();
+      object.material?.dispose();
+    });
+  }
+  portGroup3d = new THREE.Group();
+  const [sx, sy, sz] = size;
+  const length = Math.max(3, Math.hypot(sx, sy, sz) / 40);
+  for (const port of portMarkers()) {
+    const marker = new THREE.Group();
+    marker.userData.at = port.at;
+    const centre = new THREE.Vector3(port.at[0] + 0.5, port.at[1] + 0.5, port.at[2] + 0.5);
+    const direction = port.flow ? new THREE.Vector3(...port.flow) : null;
+    if (direction) {
+      const arrow = new THREE.ArrowHelper(
+        direction,
+        centre.clone().addScaledVector(direction, -length / 2),
+        length,
+        new THREE.Color(PORT_COLOURS[port.role]),
+        length * 0.35,
+        length * 0.2,
+      );
+      for (const part of [arrow.line, arrow.cone]) {
+        part.material.depthTest = false;
+        part.renderOrder = 9;
+      }
+      marker.add(arrow);
+    }
+    const sprite = portLabelSprite(port.text, PORT_COLOURS[port.role]);
+    sprite.position.copy(centre);
+    if (direction) sprite.position.addScaledVector(direction, (port.role === 'in' ? -1 : 1) * length * 0.9);
+    sprite.position.y += length * 0.4;
+    marker.add(sprite);
+    portGroup3d.add(marker);
+  }
+  scene3d.add(portGroup3d);
 }
 
 /** Recolour every instance from `Session::strengths()`, in lockstep with
@@ -1572,6 +1949,10 @@ function applyClip() {
       mesh.setMatrixAt(i, scratchMatrix);
     }
     mesh.instanceMatrix.needsUpdate = true;
+  }
+  for (const marker of portGroup3d?.children ?? []) {
+    const [x, y, z] = marker.userData.at;
+    marker.visible = x >= xMin && x <= xMax && y >= yMin && y <= yMax && z >= zMin && z <= zMax;
   }
 }
 
@@ -3354,19 +3735,25 @@ topoRelayoutBtn.addEventListener('click', () => {
   drawTopology();
 });
 
-/** Switch which of the 2D/3D/Topology panels are visible. All three views
+/** Switch which viewer panel is visible. Every view
  * read the same `Session`; nothing here touches the simulator, so toggling
  * never resets it. */
 function setView(view) {
   currentView = view;
   const is3d = view === '3d';
   const isTopo = view === 'topo';
+  const isVerilog = view === 'verilog';
+  const isSignals = view === 'signals';
   view2dBtn.dataset.active = String(view === '2d');
   view3dBtn.dataset.active = String(is3d);
   viewTopoBtn.dataset.active = String(isTopo);
+  viewVerilogBtn.dataset.active = String(isVerilog);
+  viewSignalsBtn.dataset.active = String(isSignals);
   for (const el of document.querySelectorAll('[data-view="2d"]')) el.classList.toggle('hidden', view !== '2d');
   for (const el of document.querySelectorAll('[data-view="3d"]')) el.classList.toggle('hidden', !is3d);
   for (const el of document.querySelectorAll('[data-view="topo"]')) el.classList.toggle('hidden', !isTopo);
+  for (const el of document.querySelectorAll('[data-view="verilog"]')) el.classList.toggle('hidden', !isVerilog);
+  for (const el of document.querySelectorAll('[data-view="signals"]')) el.classList.toggle('hidden', !isSignals);
   if (is3d) {
     ensureThreeInitialized();
     resizeThree();
@@ -3379,11 +3766,14 @@ function setView(view) {
     }
     drawTopology();
   }
+  if (isSignals) drawSignals();
 }
 
 view2dBtn.addEventListener('click', () => setView('2d'));
 view3dBtn.addEventListener('click', () => setView('3d'));
 viewTopoBtn.addEventListener('click', () => setView('topo'));
+viewVerilogBtn.addEventListener('click', () => setView('verilog'));
+viewSignalsBtn.addEventListener('click', () => setView('signals'));
 
 // ---------------------------------------------------------------------
 // Slice fetch + axis/index UI sync
@@ -3475,6 +3865,11 @@ function drawBase() {
  * Iterates in screen space and looks up the underlying data cell via
  * `toData` -- the inverse of the mapping `drawBase` used to place it. */
 function drawOverlay() {
+  drawGridOverlay();
+  drawPortMarkers();
+}
+
+function drawGridOverlay() {
   if (!currentBytes) return;
   const cellSize = Number(zoomSlider.value);
   if (cellSize < 6) return; // too small for grid lines or numbers to help
@@ -3568,11 +3963,27 @@ canvas.addEventListener('mouseleave', () => {
 // Wire up controls
 // ---------------------------------------------------------------------
 
-for (const name of [...list_circuits(), ...Object.keys(GROWN)]) {
+// Only the latest synthesiser output is listed; the legacy compilers'
+// circuits stay reachable through list_circuits() for tests, not the page.
+for (const name of Object.keys(SYNTH)) {
   const opt = document.createElement('option');
   opt.value = name;
   opt.textContent = name;
   circuitSelect.appendChild(opt);
+}
+// Diagnostic world dumps, listed by stem in baked/debug/index.json when present.
+try {
+  const resp = await fetch('baked/debug/index.json');
+  if (resp.ok) {
+    for (const stem of await resp.json()) {
+      const opt = document.createElement('option');
+      opt.value = `debug:${stem}`;
+      opt.textContent = `debug:${stem}`;
+      circuitSelect.appendChild(opt);
+    }
+  }
+} catch (_) {
+  // No dumps: nothing to list.
 }
 
 circuitSelect.addEventListener('change', () => loadCircuit(circuitSelect.value));
@@ -3602,6 +4013,7 @@ stepBtn.addEventListener('click', () => {
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();
+  recordSignalSample();
   update3DStrengths();
 });
 
@@ -3617,6 +4029,7 @@ runBtn.addEventListener('click', () => {
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();
+  recordSignalSample();
   update3DStrengths();
 });
 
@@ -3635,6 +4048,7 @@ resetBtn.addEventListener('click', () => {
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();
+  resetSignalHistory();
   // reset() restores the fixture-installed world, whose non-air cells can
   // differ from the currently driven pinned inputs. Rebuild geometry, not
   // just its colours.

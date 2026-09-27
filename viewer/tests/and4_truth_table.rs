@@ -93,7 +93,11 @@ fn the_and4_session_matches_its_truth_table_through_the_wasm_api() {
     let size = session.size();
     assert_eq!(size.len(), 3);
     let size = (size[0], size[1], size[2]);
-    assert_eq!(size, compiled.world.size(), "Session::size() must match the compiled world");
+    assert_eq!(
+        size,
+        compiled.world.size(),
+        "Session::size() must match the compiled world"
+    );
 
     let mut mismatches = Vec::new();
     for combination in 0u8..16 {
@@ -104,11 +108,13 @@ fn the_and4_session_matches_its_truth_table_through_the_wasm_api() {
             combination & 1,
         ];
         for (&name, &bit) in INPUT_NAMES.iter().zip(bits.iter()) {
-            session.set_lever(name, bit == 1).unwrap_or_else(|_| {
-                panic!("`{name}` must be a valid input for and4")
-            });
+            session
+                .set_lever(name, bit == 1)
+                .unwrap_or_else(|_| panic!("`{name}` must be a valid input for and4"));
         }
-        session.run_until_stable().expect("and4 must settle after every input change");
+        session
+            .run_until_stable()
+            .expect("and4 must settle after every input change");
 
         let expected = bits.iter().all(|&bit| bit == 1);
 
@@ -123,7 +129,9 @@ fn the_and4_session_matches_its_truth_table_through_the_wasm_api() {
         let actual = strength > 0;
 
         if actual != expected {
-            mismatches.push(format!("inputs={bits:?}: expected {expected}, got {actual}"));
+            mismatches.push(format!(
+                "inputs={bits:?}: expected {expected}, got {actual}"
+            ));
         }
     }
 
@@ -138,9 +146,16 @@ fn the_and4_session_matches_its_truth_table_through_the_wasm_api() {
 #[test]
 fn run_until_stable_reports_zero_ticks_once_already_settled() {
     let mut session = Session::new("and4").unwrap();
-    session.run_until_stable().expect("and4 must settle from its initial state");
-    let ticks = session.run_until_stable().expect("a second run must not error");
-    assert_eq!(ticks, 0, "an already-settled circuit must take zero more ticks to resettle");
+    session
+        .run_until_stable()
+        .expect("and4 must settle from its initial state");
+    let ticks = session
+        .run_until_stable()
+        .expect("a second run must not error");
+    assert_eq!(
+        ticks, 0,
+        "an already-settled circuit must take zero more ticks to resettle"
+    );
 }
 
 #[test]
@@ -171,7 +186,10 @@ fn stepping_manually_eventually_reaches_the_same_state_as_run_until_stable() {
             saw_a_change = true;
         }
     }
-    assert!(saw_a_change, "stepping and4 through a lever flip must eventually report a change");
+    assert!(
+        saw_a_change,
+        "stepping and4 through a lever flip must eventually report a change"
+    );
 
     let axis = Axis::Z;
     let size = session.size();
@@ -180,7 +198,10 @@ fn stepping_manually_eventually_reaches_the_same_state_as_run_until_stable() {
         .slice(axis, output_position.2)
         .expect("output_position.2 must be in range for and4's world");
     let (_, strength) = cell_bytes(&bytes, axis, size, output_position);
-    assert!(strength > 0, "and4 with every lever stepped on must settle to a lit output");
+    assert!(
+        strength > 0,
+        "and4 with every lever stepped on must settle to a lit output"
+    );
 }
 
 #[test]
@@ -197,7 +218,9 @@ fn reset_rebuilds_the_circuit_exactly_like_a_fresh_session() {
         "settling and4 from all-off to all-on must take more ticks than a fresh build alone"
     );
 
-    session.reset().expect("reset must rebuild and4 without error");
+    session
+        .reset()
+        .expect("reset must rebuild and4 without error");
     assert_eq!(
         session.tick_count(),
         baseline_ticks,
@@ -228,9 +251,14 @@ fn slice_agrees_with_world_get_on_every_axis() {
     let pattern = [true, false, true, true];
     for (&name, &on) in INPUT_NAMES.iter().zip(pattern.iter()) {
         let position = input_positions[name];
-        let mut state = ground_truth.world().get(position.0, position.1, position.2).clone();
+        let mut state = ground_truth
+            .world()
+            .get(position.0, position.1, position.2)
+            .clone();
         state.lit = on;
-        ground_truth.world_mut().set(position.0, position.1, position.2, state);
+        ground_truth
+            .world_mut()
+            .set(position.0, position.1, position.2, state);
     }
     ground_truth
         .run_until_stable(MAX_TICKS)
@@ -256,7 +284,9 @@ fn slice_agrees_with_world_get_on_every_axis() {
     for (&name, &on) in INPUT_NAMES.iter().zip(pattern.iter()) {
         session.set_lever(name, on).unwrap();
     }
-    session.run_until_stable().expect("and4 must settle through the wasm API too");
+    session
+        .run_until_stable()
+        .expect("and4 must settle through the wasm API too");
 
     let mut mismatches = Vec::new();
     for coord in sample_coords {

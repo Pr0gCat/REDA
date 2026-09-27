@@ -9,10 +9,49 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use serde::Serialize;
 
 use crate::redstone::simulator::position::Position;
+
+/// `scheduled_positions` 專用的雜湊器。
+///
+/// 那個集合只被 `insert`、`contains`、`remove` 碰過 —— 從來不走訪 ——
+/// 所以換雜湊器動不到任何順序：分桶順序、優先權順序、插入順序都由
+/// `pending` 的 `BTreeMap` 與 `Vec` 決定，跟這裡無關。它也沒有任何外人
+/// 碰得到，不需要 `RandomState` 的 SipHash 去防誰。
+///
+/// `Position` 的 `Hash` 是 derive 出來的，會依序送進 `x`、`y`、`z` 三個
+/// `write_i32`，所以這裡每一筆都要疊進狀態裡 —— 只留最後一筆的話，同一
+/// 個 `z` 的所有座標就會全部撞在一起。`finish` 再把高位折回低位，因為
+/// 乘法把熵推到高位，而雜湊表的分桶讀的是低位。無種子，所以同一份輸入
+/// 每次跑都是同一個結果。
+#[derive(Default)]
+struct PositionHasher(u64);
+
+/// 2^64 / φ —— Fibonacci hashing 用的奇數乘子。
+const POSITION_HASH_MULTIPLIER: u64 = 0x9E37_79B9_7F4A_7C15;
+
+impl Hasher for PositionHasher {
+    fn finish(&self) -> u64 {
+        self.0 ^ (self.0 >> 32)
+    }
+
+    fn write_i32(&mut self, value: i32) {
+        self.0 = (self.0 ^ u64::from(value as u32)).wrapping_mul(POSITION_HASH_MULTIPLIER);
+    }
+
+    /// 用不到 —— `Position` 只有三個 `i32` —— 但 `Hasher` 必須有它，而且
+    /// 萬一哪天真的走到這裡，也不能安靜地什麼都不雜湊。
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(POSITION_HASH_MULTIPLIER);
+        }
+    }
+}
+
+type PositionSet = HashSet<Position, BuildHasherDefault<PositionHasher>>;
 
 /// Minecraft 的四級 scheduled tick 優先權。
 ///
@@ -116,7 +155,7 @@ pub struct ScheduledTick {
 pub struct TickQueue {
     current_tick: u64,
     pending: BTreeMap<u64, Vec<ScheduledTick>>,
-    scheduled_positions: HashSet<Position>,
+    scheduled_positions: PositionSet,
     pending_count: usize,
 }
 
@@ -125,7 +164,7 @@ impl TickQueue {
         TickQueue {
             current_tick: 0,
             pending: BTreeMap::new(),
-            scheduled_positions: HashSet::new(),
+            scheduled_positions: PositionSet::default(),
             pending_count: 0,
         }
     }
@@ -194,6 +233,23 @@ impl TickQueue {
         self.pending_count -= due.len();
 
         due
+    }
+
+    /// 前 `limit` 筆待處理的排程，依 game tick、桶內插入順序。
+    ///
+    /// **只給失敗路徑用的**：回報 `Diverged` 時要說出「還卡著什麼」，除此
+    /// 之外沒有呼叫端，熱路徑一次也不會走到這裡（它會配置一個 `Vec`）。
+    ///
+    /// 順序是佇列**存放**的順序，不是 `advance` 執行的順序 —— `advance`
+    /// 會再依優先權穩定排序一次。診斷要的是「佇列裡有什麼」，不是「下一
+    /// 個跑誰」，而存放順序不用碰任何排序就完全確定。
+    pub fn peek_pending(&self, limit: usize) -> Vec<ScheduledTick> {
+        self.pending
+            .values()
+            .flatten()
+            .take(limit)
+            .copied()
+            .collect()
     }
 
     /// 還有沒有待處理的排程。

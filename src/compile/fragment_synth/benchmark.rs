@@ -11,7 +11,7 @@ use crate::circuits::{and4, full_adder, seven_segment, verilog};
 use crate::compile::fragment_synth::certification::QualityKey;
 use crate::compile::fragment_synth::manifest::TransitionManifest;
 use crate::compile::fragment_synth::{
-    compile_fragment_synth, ProposalTrace, SynthesisBudget, SynthesisInput,
+    compile_fragment_synth, ProposalTrace, SynthesisBudget, SynthesisInput, SynthesisResult,
 };
 use crate::compile::geometry::Anchor;
 use crate::compile::metrics::{
@@ -170,15 +170,41 @@ impl AcceptanceEvaluator {
         }
         let sinks = validate_output_identities(compiled, fixture)?;
 
-        let mut worst = 0;
-        for transition in manifest.transitions() {
+        // Drivers, probes and the circuit's own initial settle are the same
+        // work for every transition -- nothing about them depends on which
+        // vector comes next -- so they happen once and each transition opens on
+        // a copy of the result.
+        //
+        // What a transition does *not* inherit is the simulator state the
+        // initial settle built up: its tick counter and its per-torch change
+        // history both start from zero again. That is sound for what this
+        // measures. The settle ends at a fixpoint, so the world a transition
+        // opens on is the same one it opened on before; the ticks it reports
+        // are counted per `run_until_stable` call, not from the epoch; and
+        // torch burnout is a rolling 60-tick window, so history from a settle
+        // that has already converged can only make a torch burn out sooner
+        // than its own transition would. Carrying it forward would let a
+        // circuit's startup charge a transition for work that was not its. The settle's own writes left the world's dirty
+        // set full; the strengths they asked for are already in it, so the set
+        // is dropped and each transition loads the copy with
+        // `from_recomputed_world` rather than recomputing what is already
+        // there.
+        let (drivers, warm) = {
             let mut world = compiled.world.clone();
             let drivers = install_drivers(&mut world, compiled, fixture)?;
             install_probes(&mut world, fixture)?;
-            let mut simulator = Simulator::new(world);
-            simulator
+            let mut settling = Simulator::new(world);
+            settling
                 .run_until_stable(MAX_TRANSITION_GAME_TICKS)
                 .map_err(|error| format!("{} did not initially settle: {error:?}", fixture.name))?;
+            let mut warm = settling.world().clone();
+            warm.take_dirty();
+            (drivers, warm)
+        };
+
+        let mut worst = 0;
+        for transition in manifest.transitions() {
+            let mut simulator = Simulator::from_recomputed_world(warm.clone());
 
             drive(&mut simulator, &drivers, &transition.from);
             simulator
@@ -276,7 +302,7 @@ pub struct FragmentAcceptanceCase {
 }
 
 impl FragmentAcceptanceCase {
-    fn passed(&self) -> bool {
+    pub fn passed(&self) -> bool {
         self.compiled_and_certified
             && self.no_tick_regression
             && self.no_block_regression
@@ -328,125 +354,199 @@ pub fn deterministic_budget_orders(
         .collect()
 }
 
+/// Every fixture the evaluator carries, each through [`evaluate_fragment_case`],
+/// and whether all of them passed.
 pub fn evaluate_fragment_budget(
     evaluator: &AcceptanceEvaluator,
     baseline: &BenchmarkBaseline,
     budget: u64,
 ) -> FragmentBudgetRun {
-    let mut cases = Vec::with_capacity(evaluator.fixtures.len());
-    for fixture in &evaluator.fixtures {
-        let baseline_case = baseline
-            .cases
-            .iter()
-            .find(|case| case.name == fixture.name)
-            .cloned()
-            .unwrap_or_else(|| fixture.blank_case());
-        let result = compile_fragment_synth(
-            SynthesisInput {
-                lowered: &fixture.lowered_netlist,
-                source_provenance: None,
-                pins: Some(&fixture.placements),
-            },
-            SynthesisBudget::Evaluations(budget),
-        );
-        let case = match result {
-            Err(error) => FragmentAcceptanceCase {
-                name: fixture.name.clone(),
-                budget,
-                compiled_and_certified: false,
-                error: Some(error.to_string()),
-                baseline: baseline_case,
-                measured: None,
-                quality: None,
-                evaluations_used: None,
-                case_fingerprint: None,
-                candidate_fingerprint: None,
-                trace: Vec::new(),
-                new_coverage: false,
-                no_tick_regression: false,
-                no_block_regression: false,
-                pinned_ten_percent_tick_improvement: None,
-                strict_block_improvement: None,
-            },
-            Ok(result) => match evaluator.evaluate_world(&fixture.name, &result.compiled) {
-                Err(error) => FragmentAcceptanceCase {
-                    name: fixture.name.clone(),
-                    budget,
-                    compiled_and_certified: false,
-                    error: Some(error),
-                    baseline: baseline_case,
-                    measured: None,
-                    quality: Some(result.metrics.quality),
-                    evaluations_used: Some(result.evaluations_used),
-                    case_fingerprint: Some(result.case_fingerprint.as_str().to_string()),
-                    candidate_fingerprint: Some(result.candidate_fingerprint),
-                    trace: result.trace,
-                    new_coverage: false,
-                    no_tick_regression: false,
-                    no_block_regression: false,
-                    pinned_ten_percent_tick_improvement: None,
-                    strict_block_improvement: None,
-                },
-                Ok(measured) => {
-                    let new_coverage = !baseline_case.certified;
-                    let baseline_ticks = baseline_case.max_observed_settle_game_ticks_on_manifest;
-                    let measured_ticks = measured.max_observed_settle_game_ticks_on_manifest;
-                    let baseline_blocks = baseline_case
-                        .physical
-                        .as_ref()
-                        .map(|physical| physical.non_air_blocks);
-                    let measured_blocks = measured
-                        .physical
-                        .as_ref()
-                        .map(|physical| physical.non_air_blocks);
-                    let no_tick_regression = baseline_ticks
-                        .zip(measured_ticks)
-                        .is_none_or(|(old, new)| new <= old);
-                    let no_block_regression = baseline_blocks
-                        .zip(measured_blocks)
-                        .is_none_or(|(old, new)| new <= old);
-                    let is_pinned = fixture.name == "pinned:verilog:seven_segment";
-                    let pinned_ten_percent_tick_improvement = is_pinned.then(|| {
-                        baseline_ticks
-                            .zip(measured_ticks)
-                            .is_some_and(|(old, new)| {
-                                10_u128 * u128::from(new) <= 9_u128 * u128::from(old)
-                            })
-                    });
-                    let strict_block_improvement = is_pinned.then(|| {
-                        baseline_blocks
-                            .zip(measured_blocks)
-                            .is_some_and(|(old, new)| new < old)
-                    });
-                    FragmentAcceptanceCase {
-                        name: fixture.name.clone(),
-                        budget,
-                        compiled_and_certified: true,
-                        error: None,
-                        baseline: baseline_case,
-                        measured: Some(measured),
-                        quality: Some(result.metrics.quality),
-                        evaluations_used: Some(result.evaluations_used),
-                        case_fingerprint: Some(result.case_fingerprint.as_str().to_string()),
-                        candidate_fingerprint: Some(result.candidate_fingerprint),
-                        trace: result.trace,
-                        new_coverage,
-                        no_tick_regression,
-                        no_block_regression,
-                        pinned_ten_percent_tick_improvement,
-                        strict_block_improvement,
-                    }
-                }
-            },
-        };
-        cases.push(case);
-    }
+    let cases = evaluator
+        .fixtures
+        .iter()
+        .map(|fixture| evaluate_fragment_case(evaluator, baseline, fixture, budget))
+        .collect::<Vec<_>>();
     let passed = cases.iter().all(FragmentAcceptanceCase::passed);
     FragmentBudgetRun {
         budget,
         cases,
         passed,
     }
+}
+
+/// One fixture compiled at `budget` through the public entry, measured on
+/// its own manifest, and judged against its baseline case.
+///
+/// The one place a case is scored: the corpus run above maps every fixture
+/// through this, and a per-case gate runs exactly this for one name, so both
+/// judge by the same [`FragmentAcceptanceCase::passed`].
+pub fn evaluate_fragment_case(
+    evaluator: &AcceptanceEvaluator,
+    baseline: &BenchmarkBaseline,
+    fixture: &BenchmarkFixture,
+    budget: u64,
+) -> FragmentAcceptanceCase {
+    evaluate_fragment_case_with_world(evaluator, baseline, fixture, budget).0
+}
+
+/// [`evaluate_fragment_case`], handing back the circuit it compiled as well.
+///
+/// `Some` whenever the compile succeeded, whether or not the measurement then
+/// did, so a gate that wants to look at the world -- where a pinned port was
+/// reported, what stands in the caller's cell -- reads the very circuit that
+/// was scored rather than compiling a second one. The circuit is moved out of
+/// the synthesis result, not cloned; the case keeps everything else.
+pub fn evaluate_fragment_case_with_world(
+    evaluator: &AcceptanceEvaluator,
+    baseline: &BenchmarkBaseline,
+    fixture: &BenchmarkFixture,
+    budget: u64,
+) -> (FragmentAcceptanceCase, Option<CompiledCircuit>) {
+    let baseline_case = baseline
+        .cases
+        .iter()
+        .find(|case| case.name == fixture.name)
+        .cloned()
+        .unwrap_or_else(|| fixture.blank_case());
+    let result = compile_fragment_synth(
+        SynthesisInput {
+            lowered: &fixture.lowered_netlist,
+            source_provenance: None,
+            pins: Some(&fixture.placements),
+        },
+        SynthesisBudget::Evaluations(budget),
+    );
+    let SynthesisResult {
+        compiled,
+        metrics,
+        trace,
+        evaluations_used,
+        case_fingerprint,
+        candidate_fingerprint,
+        ..
+    } = match result {
+        Ok(result) => result,
+        Err(error) => {
+            return (
+                FragmentAcceptanceCase {
+                    name: fixture.name.clone(),
+                    budget,
+                    compiled_and_certified: false,
+                    error: Some(error.to_string()),
+                    baseline: baseline_case,
+                    measured: None,
+                    quality: None,
+                    evaluations_used: None,
+                    case_fingerprint: None,
+                    candidate_fingerprint: None,
+                    trace: Vec::new(),
+                    new_coverage: false,
+                    no_tick_regression: false,
+                    no_block_regression: false,
+                    pinned_ten_percent_tick_improvement: None,
+                    strict_block_improvement: None,
+                },
+                None,
+            )
+        }
+    };
+    let case = match evaluator.evaluate_world(&fixture.name, &compiled) {
+        Err(error) => FragmentAcceptanceCase {
+            name: fixture.name.clone(),
+            budget,
+            compiled_and_certified: false,
+            error: Some(error),
+            baseline: baseline_case,
+            measured: None,
+            quality: Some(metrics.quality),
+            evaluations_used: Some(evaluations_used),
+            case_fingerprint: Some(case_fingerprint.as_str().to_string()),
+            candidate_fingerprint: Some(candidate_fingerprint),
+            trace,
+            new_coverage: false,
+            no_tick_regression: false,
+            no_block_regression: false,
+            pinned_ten_percent_tick_improvement: None,
+            strict_block_improvement: None,
+        },
+        Ok(measured) => {
+            let new_coverage = !baseline_case.certified;
+            let baseline_ticks = baseline_case.max_observed_settle_game_ticks_on_manifest;
+            let measured_ticks = measured.max_observed_settle_game_ticks_on_manifest;
+            let baseline_blocks = baseline_case
+                .physical
+                .as_ref()
+                .map(|physical| physical.non_air_blocks);
+            let measured_blocks = measured
+                .physical
+                .as_ref()
+                .map(|physical| physical.non_air_blocks);
+            let no_tick_regression = baseline_ticks
+                .zip(measured_ticks)
+                .is_none_or(|(old, new)| new <= old);
+            let no_block_regression = baseline_blocks
+                .zip(measured_blocks)
+                .is_none_or(|(old, new)| new <= old);
+            let is_pinned = fixture.name == "pinned:verilog:seven_segment";
+            let (pinned_ten_percent_tick_improvement, strict_block_improvement) =
+                pinned_improvement_predicates(
+                    is_pinned,
+                    baseline_case.certified,
+                    baseline_ticks,
+                    measured_ticks,
+                    baseline_blocks,
+                    measured_blocks,
+                );
+            FragmentAcceptanceCase {
+                name: fixture.name.clone(),
+                budget,
+                compiled_and_certified: true,
+                error: None,
+                baseline: baseline_case,
+                measured: Some(measured),
+                quality: Some(metrics.quality),
+                evaluations_used: Some(evaluations_used),
+                case_fingerprint: Some(case_fingerprint.as_str().to_string()),
+                candidate_fingerprint: Some(candidate_fingerprint),
+                trace,
+                new_coverage,
+                no_tick_regression,
+                no_block_regression,
+                pinned_ten_percent_tick_improvement,
+                strict_block_improvement,
+            }
+        }
+    };
+    (case, Some(compiled))
+}
+
+fn pinned_improvement_predicates(
+    is_pinned: bool,
+    baseline_certified: bool,
+    baseline_ticks: Option<u64>,
+    measured_ticks: Option<u64>,
+    baseline_blocks: Option<u64>,
+    measured_blocks: Option<u64>,
+) -> (Option<bool>, Option<bool>) {
+    let ticks = if is_pinned && baseline_certified {
+        Some(
+            baseline_ticks
+                .zip(measured_ticks)
+                .is_some_and(|(old, new)| 10_u128 * u128::from(new) <= 9_u128 * u128::from(old)),
+        )
+    } else {
+        None
+    };
+    let blocks = if is_pinned && baseline_certified {
+        Some(
+            baseline_blocks
+                .zip(measured_blocks)
+                .is_some_and(|(old, new)| new < old),
+        )
+    } else {
+        None
+    };
+    (ticks, blocks)
 }
 
 pub fn build_acceptance_report(
@@ -791,18 +891,14 @@ pub fn legacy_benchmark_evaluator() -> Result<AcceptanceEvaluator, String> {
     let (decoder_netlist, decoder_outputs) = seven_segment::build_seven_segment_netlist();
 
     let verilog_and4 = verilog::find("verilog:and4").expect("the catalog ships verilog:and4");
-    let (verilog_and4_gate_level, verilog_and4_labels) = verilog_and4
-        .synthesize()
-        .map_err(|error| error.to_string())?;
+    let (verilog_and4_gate_level, verilog_and4_labels) = verilog_and4.baked_netlist();
     let verilog_and4_lowered =
         compile::lowering::lower(&verilog_and4_gate_level).map_err(|error| error.to_string())?;
     let verilog_and4_outputs = labels_in_order(&verilog_and4_labels, &[and4::OUTPUT_NAME])?;
 
     let verilog_decoder =
         verilog::find("verilog:seven_segment").expect("the catalog ships verilog:seven_segment");
-    let (verilog_decoder_gate_level, verilog_decoder_labels) = verilog_decoder
-        .synthesize()
-        .map_err(|error| error.to_string())?;
+    let (verilog_decoder_gate_level, verilog_decoder_labels) = verilog_decoder.baked_netlist();
     let verilog_decoder_lowered = compile::lowering::lower_optimised(&verilog_decoder_gate_level)
         .map_err(|error| error.to_string())?;
     let verilog_decoder_outputs =
@@ -818,7 +914,7 @@ pub fn legacy_benchmark_evaluator() -> Result<AcceptanceEvaluator, String> {
             Anchor {
                 x: 76 + 12 * index as i32,
                 y: 1,
-                z: 120,
+                z: 144,
             },
             Facing::North,
         );
@@ -887,15 +983,122 @@ pub fn legacy_benchmark_evaluator() -> Result<AcceptanceEvaluator, String> {
     ]))
 }
 
+/// Acceptance corpus that never invokes Yosys.
+///
+/// The two Verilog entries intentionally use their checked-in baked gate-level
+/// netlists and the same lowering choice as the production acceptance corpus:
+/// plain `lower` for `verilog:and4`, and `lower_optimised` for the decoder.
+pub fn baked_benchmark_evaluator() -> Result<AcceptanceEvaluator, String> {
+    let (and4_netlist, and4_output) = and4::build_and4_netlist();
+    let (adder_netlist, adder_outputs) = full_adder::build_full_adder_netlist();
+    let (segment_netlist, segment_output) = seven_segment::build_single_segment_netlist(0);
+    let (decoder_netlist, decoder_outputs) = seven_segment::build_seven_segment_netlist();
+
+    let verilog_and4 = verilog::find("verilog:and4").expect("the catalog ships verilog:and4");
+    let (verilog_and4_gate_level, verilog_and4_labels) = verilog_and4.baked_netlist();
+    let verilog_and4_lowered =
+        compile::lowering::lower(&verilog_and4_gate_level).map_err(|error| error.to_string())?;
+    let verilog_and4_outputs = labels_in_order(&verilog_and4_labels, &[and4::OUTPUT_NAME])?;
+
+    let verilog_decoder =
+        verilog::find("verilog:seven_segment").expect("the catalog ships verilog:seven_segment");
+    let (verilog_decoder_gate_level, verilog_decoder_labels) = verilog_decoder.baked_netlist();
+    let verilog_decoder_lowered = compile::lowering::lower_optimised(&verilog_decoder_gate_level)
+        .map_err(|error| error.to_string())?;
+    let verilog_decoder_outputs =
+        labels_in_order(&verilog_decoder_labels, &seven_segment::SEGMENT_NAMES)?;
+
+    let mut pinned_decoder_ports = PortPlacements::default();
+    for ((_, at, toward), output) in pinned_glyph().iter().zip(&verilog_decoder_outputs) {
+        pinned_decoder_ports.pin(output.signal.clone(), *at, *toward);
+    }
+    for (index, name) in seven_segment::INPUT_NAMES.iter().enumerate() {
+        pinned_decoder_ports.pin(
+            *name,
+            Anchor {
+                x: 76 + 12 * index as i32,
+                y: 1,
+                z: 144,
+            },
+            Facing::North,
+        );
+    }
+
+    let inputs = |names: &[&str]| names.iter().map(|name| (*name).to_string()).collect();
+    let decoder_output_signals = seven_segment::SEGMENT_NAMES
+        .iter()
+        .map(|name| BenchmarkOutput::new(*name, &decoder_outputs[*name]))
+        .collect();
+    let adder_output_signals = full_adder::OUTPUT_NAMES
+        .iter()
+        .map(|name| BenchmarkOutput::new(*name, &adder_outputs[name]))
+        .collect();
+
+    Ok(AcceptanceEvaluator::new(vec![
+        BenchmarkFixture::new(
+            "and4",
+            and4_netlist,
+            inputs(&and4::INPUT_NAMES),
+            vec![BenchmarkOutput::new(and4::OUTPUT_NAME, and4_output)],
+            and4_expected,
+            PortPlacements::default(),
+        ),
+        BenchmarkFixture::new(
+            "verilog:and4",
+            verilog_and4_lowered,
+            inputs(&and4::INPUT_NAMES),
+            verilog_and4_outputs,
+            and4_expected,
+            PortPlacements::default(),
+        ),
+        BenchmarkFixture::new(
+            "full_adder",
+            adder_netlist,
+            inputs(&full_adder::INPUT_NAMES),
+            adder_output_signals,
+            full_adder_expected,
+            PortPlacements::default(),
+        ),
+        BenchmarkFixture::new(
+            "segment_a",
+            segment_netlist,
+            inputs(&seven_segment::INPUT_NAMES),
+            vec![BenchmarkOutput::new("a", segment_output)],
+            segment_a_expected,
+            PortPlacements::default(),
+        ),
+        BenchmarkFixture::new(
+            "seven_segment",
+            decoder_netlist,
+            inputs(&seven_segment::INPUT_NAMES),
+            decoder_output_signals,
+            seven_segment_expected,
+            PortPlacements::default(),
+        ),
+        BenchmarkFixture::new(
+            "pinned:verilog:seven_segment",
+            verilog_decoder_lowered,
+            inputs(&seven_segment::INPUT_NAMES),
+            verilog_decoder_outputs,
+            seven_segment_expected,
+            pinned_decoder_ports,
+        )
+        .with_explicit_legacy_new_coverage(),
+    ]))
+}
+
+/// The decoder's display: one wall at `z = 24` standing up in the x-y plane,
+/// every segment facing north toward whoever reads it and fed from behind.
+/// Seen from the north, `b` and `c` are on the reader's right (west).
 fn pinned_glyph() -> [(&'static str, Anchor, Facing); 7] {
     [
-        ("a", Anchor { x: 76, y: 1, z: 24 }, Facing::North),
-        ("b", Anchor { x: 84, y: 1, z: 32 }, Facing::East),
-        ("c", Anchor { x: 84, y: 1, z: 48 }, Facing::East),
-        ("d", Anchor { x: 76, y: 1, z: 56 }, Facing::South),
-        ("e", Anchor { x: 68, y: 1, z: 48 }, Facing::West),
-        ("f", Anchor { x: 68, y: 1, z: 32 }, Facing::West),
-        ("g", Anchor { x: 76, y: 1, z: 40 }, Facing::West),
+        ("a", Anchor { x: 76, y: 13, z: 24 }, Facing::North),
+        ("b", Anchor { x: 68, y: 10, z: 24 }, Facing::North),
+        ("c", Anchor { x: 68, y: 4, z: 24 }, Facing::North),
+        ("d", Anchor { x: 76, y: 1, z: 24 }, Facing::North),
+        ("e", Anchor { x: 84, y: 4, z: 24 }, Facing::North),
+        ("f", Anchor { x: 84, y: 10, z: 24 }, Facing::North),
+        ("g", Anchor { x: 76, y: 7, z: 24 }, Facing::North),
     ]
 }
 
@@ -1358,6 +1561,14 @@ fn atomic_publish(source: &Path, destination: &Path, replace: bool) -> std::io::
     }
 }
 
+#[cfg(not(any(unix, windows)))]
+fn atomic_publish(_source: &Path, _destination: &Path, _replace: bool) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic file publication is not supported on this platform",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -1366,10 +1577,14 @@ mod tests {
     use super::{
         canonical_netlist_bytes, canonical_netlist_fingerprint, canonical_pin_manifest_bytes,
         canonical_pin_manifest_fingerprint, canonical_world_bytes, canonical_world_fingerprint,
-        stage_baseline_json, verified_capture_commit, write_baseline_json, AcceptanceEvaluator,
-        BenchmarkBaseline, BenchmarkFixture, BenchmarkOutput,
+        check_outputs, drive, install_drivers, install_probes, legacy_benchmark_evaluator,
+        physical_metrics, pinned_improvement_predicates, stage_baseline_json,
+        validate_output_identities, verified_capture_commit, write_baseline_json,
+        AcceptanceEvaluator, BenchmarkBaseline, BenchmarkCase, BenchmarkFixture, BenchmarkOutput,
+        Simulator, MAX_TRANSITION_GAME_TICKS,
     };
     use crate::circuits::and4;
+    use crate::compile::fragment_synth::allocation::{root_placement, RootAccess};
     use crate::compile::fragment_synth::manifest::TransitionManifest;
     use crate::compile::geometry::Anchor;
     use crate::compile::metrics::canonical_fingerprint;
@@ -1378,6 +1593,7 @@ mod tests {
         cell_library_revision, physical_verifier_revision, simulator_revision,
     };
     use crate::compile::topology::Library;
+    use crate::compile::CompiledCircuit;
     use crate::compile::{compile_legacy, Gate, Netlist};
     use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
     use crate::redstone::world::storage::World;
@@ -1518,6 +1734,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn pinned_new_coverage_leaves_improvement_predicates_unset() {
+        assert_eq!(
+            pinned_improvement_predicates(true, false, Some(100), Some(90), Some(100), Some(99)),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn pinned_certified_null_baseline_fails_missing_improvement_metrics() {
+        assert_eq!(
+            pinned_improvement_predicates(true, true, None, Some(90), None, Some(99)),
+            (Some(false), Some(false))
+        );
+    }
+
+    #[test]
+    fn pinned_numeric_baseline_enforces_both_improvements() {
+        assert_eq!(
+            pinned_improvement_predicates(true, true, Some(100), Some(90), Some(100), Some(99)),
+            (Some(true), Some(true))
+        );
+        assert_eq!(
+            pinned_improvement_predicates(true, true, Some(100), Some(91), Some(100), Some(100)),
+            (Some(false), Some(false))
+        );
+    }
+
     fn tiny_fixture(expected: fn(&[bool]) -> Vec<bool>) -> BenchmarkFixture {
         BenchmarkFixture::new(
             "not",
@@ -1531,6 +1775,106 @@ mod tests {
             expected,
             Default::default(),
         )
+    }
+
+    /// `evaluate_world` as it stood before the warm-up: drivers, probes and the
+    /// initial settle repeated inside every transition.
+    ///
+    /// Test-only, and written from the same pieces, so what it proves is that
+    /// doing that work once is the only difference.
+    fn evaluate_world_cold(
+        evaluator: &AcceptanceEvaluator,
+        name: &str,
+        compiled: &CompiledCircuit,
+    ) -> Result<BenchmarkCase, String> {
+        let fixture = evaluator
+            .fixture(name)
+            .ok_or_else(|| format!("unknown benchmark fixture `{name}`"))?;
+        let manifest = fixture.transition_manifest();
+        if manifest.transitions().is_empty() {
+            return Err(format!("`{name}` has an empty transition manifest"));
+        }
+        let sinks = validate_output_identities(compiled, fixture)?;
+
+        let mut worst = 0;
+        for transition in manifest.transitions() {
+            let mut world = compiled.world.clone();
+            let drivers = install_drivers(&mut world, compiled, fixture)?;
+            install_probes(&mut world, fixture)?;
+            let mut simulator = Simulator::new(world);
+            simulator
+                .run_until_stable(MAX_TRANSITION_GAME_TICKS)
+                .map_err(|error| format!("{} did not initially settle: {error:?}", fixture.name))?;
+
+            drive(&mut simulator, &drivers, &transition.from);
+            simulator
+                .run_until_stable(MAX_TRANSITION_GAME_TICKS)
+                .map_err(|error| {
+                    format!(
+                        "{} did not settle at from={:?}: {error:?}",
+                        fixture.name, transition.from
+                    )
+                })?;
+            check_outputs(fixture, simulator.world(), &sinks, &transition.from)?;
+
+            drive(&mut simulator, &drivers, &transition.to);
+            let ticks = simulator
+                .run_until_stable(MAX_TRANSITION_GAME_TICKS)
+                .map_err(|error| {
+                    format!(
+                        "{} did not settle at to={:?}: {error:?}",
+                        fixture.name, transition.to
+                    )
+                })?;
+            check_outputs(fixture, simulator.world(), &sinks, &transition.to)?;
+            worst = worst.max(ticks);
+        }
+
+        let mut case = fixture.blank_case();
+        case.generated_world_fingerprint = Some(canonical_world_fingerprint(&compiled.world));
+        case.certified = true;
+        case.physical = Some(physical_metrics(
+            &compiled.world,
+            fixture.lowered_netlist.gates.len() as u64,
+        ));
+        case.max_observed_settle_game_ticks_on_manifest = Some(worst);
+        Ok(case)
+    }
+
+    #[test]
+    fn warming_the_evaluator_once_certifies_exactly_what_repeating_it_did() {
+        let tiny = AcceptanceEvaluator::new(vec![tiny_fixture(|bits| vec![!bits[0]])]);
+        let tiny_compiled = compile_legacy(tiny.fixture("not").unwrap().lowered_netlist())
+            .expect("the minimal fixture compiles");
+        // One inverter settles in a handful of ticks and has one torch. `and4`
+        // is the smallest baked fixture with a real startup: many torches
+        // resolving over many ticks before any vector is driven, and a
+        // four-input manifest that drives every ordered pair. If dropping the
+        // initial settle's tick counter or its torch history could move a
+        // measurement, it would move one here.
+        let corpus = legacy_benchmark_evaluator().expect("the baked corpus builds");
+        let and4_compiled = compile_legacy(corpus.fixture("and4").unwrap().lowered_netlist())
+            .expect("the and4 fixture compiles");
+
+        for (evaluator, name, compiled) in [
+            (&tiny, "not", &tiny_compiled),
+            (&corpus, "and4", &and4_compiled),
+        ] {
+            let cold = evaluate_world_cold(evaluator, name, compiled)
+                .unwrap_or_else(|error| panic!("{name} cold path: {error}"));
+            let warm = evaluator
+                .evaluate_world(name, compiled)
+                .unwrap_or_else(|error| panic!("{name} warm path: {error}"));
+
+            // The whole case: worst settle ticks, both fingerprints, the
+            // physical metrics and the certified flag, not a summary of them.
+            assert_eq!(cold, warm, "{name}");
+            assert!(
+                cold.max_observed_settle_game_ticks_on_manifest.unwrap() > 0,
+                "{name} never ticks, so the comparison proves nothing about the settle"
+            );
+            assert!(cold.transition_count > 1, "{name}");
+        }
     }
 
     #[test]
@@ -2014,5 +2358,38 @@ mod tests {
         );
         assert_eq!(baseline.simulator_revision, simulator_revision());
         assert_eq!(baseline.verifier_revision, physical_verifier_revision());
+    }
+
+    /// The glyph is the case the caller-row contract could never hold: seven
+    /// outputs on five rows facing four ways, and inputs whose handover is in
+    /// front of them rather than behind.  It lands, and every pin stays exactly
+    /// where the caller put it.
+    #[test]
+    fn the_pinned_glyph_lands_and_keeps_every_pin() {
+        let evaluator = super::legacy_benchmark_evaluator().unwrap();
+        let fixture = evaluator.fixture("pinned:verilog:seven_segment").unwrap();
+        let pins = fixture.placements();
+        let placement = root_placement(fixture.lowered_netlist(), Some(pins)).unwrap();
+        let RootAccess::Landed { region } = placement.access else {
+            panic!("the glyph cannot fold onto one caller row");
+        };
+        // The body starts behind every cell a pin reaches, and the access
+        // region joins the pins to it.
+        assert!(region.max.z <= placement.caller_row_z);
+        for (signal, pin) in pins.iter() {
+            assert!(
+                pin.at.z <= placement.caller_row_z,
+                "{signal} at {:?} is not in front of the body",
+                pin.at
+            );
+            assert!(region.contains(pin.at), "{signal} is outside the access");
+        }
+        for (_, at, toward) in super::pinned_glyph() {
+            let held = pins
+                .iter()
+                .find(|(_, pin)| pin.at == at)
+                .expect("every glyph cell is still pinned");
+            assert_eq!(held.1.toward, toward);
+        }
     }
 }

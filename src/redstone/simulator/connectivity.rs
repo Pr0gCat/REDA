@@ -14,7 +14,7 @@
 //!
 //! 往上與往下兩條的方向不對稱，是最容易寫錯的地方，所以規則集中在這個檔案。
 
-use crate::redstone::rules::taxonomy::{accepts_dust_connection, flags_of};
+use crate::redstone::rules::taxonomy::accepts_dust_connection;
 use crate::redstone::simulator::position::{Position, HORIZONTAL};
 use crate::redstone::world::block::{BlockKind, Facing};
 use crate::redstone::world::storage::World;
@@ -26,7 +26,7 @@ fn is_dust(world: &World, pos: Position) -> bool {
 
 /// 某格是不是導體。
 fn is_conductive(world: &World, pos: Position) -> bool {
-    flags_of(world.get(pos.x, pos.y, pos.z)).is_conductive()
+    world.flags_at(pos.x, pos.y, pos.z).is_conductive()
 }
 
 /// 某格頂面是不是完整實心方形面 —— 紅石粉爬升/下降時，水平鄰居撐不撐得住它。
@@ -36,7 +36,7 @@ fn is_conductive(world: &World, pos: Position) -> bool {
 /// 都放不上去（`java_1_20::SUPPORTS_NOTHING` 已經把它排除在外）。爬升／
 /// 下降規則問的是「站不站得住」，不是「導不導電」。
 fn supports_dust_step(world: &World, pos: Position) -> bool {
-    flags_of(world.get(pos.x, pos.y, pos.z)).can_carry_dust()
+    world.flags_at(pos.x, pos.y, pos.z).can_carry_dust()
 }
 
 /// 一個方向上的連接目標，最多兩個。

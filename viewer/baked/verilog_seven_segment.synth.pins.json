@@ -1,0 +1,17 @@
+{
+  "inputs": {
+    "d3": { "at": [76, 1, 144], "toward": "north" },
+    "d2": { "at": [88, 1, 144], "toward": "north" },
+    "d1": { "at": [100, 1, 144], "toward": "north" },
+    "d0": { "at": [112, 1, 144], "toward": "north" }
+  },
+  "outputs": {
+    "a": { "at": [76, 13, 24], "toward": "north" },
+    "b": { "at": [68, 10, 24], "toward": "north" },
+    "c": { "at": [68, 4, 24], "toward": "north" },
+    "d": { "at": [76, 1, 24], "toward": "north" },
+    "e": { "at": [84, 4, 24], "toward": "north" },
+    "f": { "at": [84, 10, 24], "toward": "north" },
+    "g": { "at": [76, 7, 24], "toward": "north" }
+  }
+}

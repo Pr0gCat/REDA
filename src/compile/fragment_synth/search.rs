@@ -1,7 +1,10 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
 use crate::compile::fragment_synth::certification::CertifiedCandidate;
 use crate::compile::fragment_synth::certification::QualityKey;
 #[cfg(test)]
@@ -54,11 +57,19 @@ pub struct ProposalTrace {
     pub accepted: bool,
 }
 
+// Everything below that drives a *proposal loop* -- the candidate trait, the
+// clock, the stream, the summary and `run_budgeted_proposals` itself -- is
+// test-only. The one shipping producer, the recursive contract, has no
+// proposal loop; the loop survives for the legacy whole-circuit seed's unit
+// tests. The public trace and budget types above stay in production because
+// `SynthesisResult` reports them.
+#[cfg(test)]
 pub(crate) trait SearchCandidate {
     fn candidate_fingerprint(&self) -> &Fingerprint;
     fn quality(&self) -> QualityKey;
 }
 
+#[cfg(test)]
 impl SearchCandidate for CertifiedCandidate {
     fn candidate_fingerprint(&self) -> &Fingerprint {
         &self.metrics().candidate_fingerprint
@@ -87,6 +98,7 @@ impl SearchCandidate for SearchSeed {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct SearchSummary<T> {
     pub best: T,
@@ -95,10 +107,12 @@ pub(crate) struct SearchSummary<T> {
     pub stop_reason: StopReason,
 }
 
+#[cfg(test)]
 pub(crate) trait MonotonicClock {
     fn elapsed(&self) -> Duration;
 }
 
+#[cfg(test)]
 pub(crate) struct ProposalEvaluation<T> {
     pub fragment_fingerprint: Fingerprint,
     pub choice_fingerprint: Fingerprint,
@@ -107,8 +121,8 @@ pub(crate) struct ProposalEvaluation<T> {
     pub certified: Option<T>,
 }
 
+#[cfg(test)]
 impl<T: SearchCandidate> ProposalEvaluation<T> {
-    #[cfg(test)]
     fn certified(candidate: T) -> Self {
         let fragment_fingerprint = canonical_fingerprint(
             format!(
@@ -134,14 +148,17 @@ impl<T: SearchCandidate> ProposalEvaluation<T> {
     }
 }
 
+#[cfg(test)]
 pub(crate) trait ProposalStream<T: SearchCandidate> {
     fn next(&mut self, proposal_index: u64, incumbent: &T) -> Option<ProposalEvaluation<T>>;
 }
 
+#[cfg(test)]
 pub(crate) struct SystemMonotonicClock {
     started: Instant,
 }
 
+#[cfg(test)]
 impl SystemMonotonicClock {
     pub(crate) fn start() -> Self {
         Self {
@@ -150,6 +167,7 @@ impl SystemMonotonicClock {
     }
 }
 
+#[cfg(test)]
 impl MonotonicClock for SystemMonotonicClock {
     fn elapsed(&self) -> Duration {
         self.started.elapsed()
@@ -204,6 +222,7 @@ impl<T: SearchCandidate> ProposalStream<T> for DeterministicNoOpProposalStream {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn run_budgeted_proposals<T: SearchCandidate>(
     mut best: T,
     budget: SynthesisBudget,

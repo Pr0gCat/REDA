@@ -310,49 +310,24 @@ type CheckedPin = (PortPin, PortRole, Anchor, Anchor);
 
 fn checked_seven_segment_pin_contract() -> BTreeMap<String, CheckedPin> {
     let output_names = ["g18", "g21", "g25", "g17", "g27", "g28", "g30"];
-    let outputs = [
+    // The display wall: every segment on z = 24 facing north toward its
+    // reader, fed from behind -- handover at z = 25, net cell at z = 26.
+    let wall = |x, y| {
         (
-            Anchor { x: 76, y: 1, z: 24 },
+            Anchor { x, y, z: 24 },
             Facing::North,
-            Anchor { x: 76, y: 1, z: 25 },
-            Anchor { x: 76, y: 1, z: 26 },
-        ),
-        (
-            Anchor { x: 84, y: 1, z: 32 },
-            Facing::East,
-            Anchor { x: 83, y: 1, z: 32 },
-            Anchor { x: 82, y: 1, z: 32 },
-        ),
-        (
-            Anchor { x: 84, y: 1, z: 48 },
-            Facing::East,
-            Anchor { x: 83, y: 1, z: 48 },
-            Anchor { x: 82, y: 1, z: 48 },
-        ),
-        (
-            Anchor { x: 76, y: 1, z: 56 },
-            Facing::South,
-            Anchor { x: 76, y: 1, z: 55 },
-            Anchor { x: 76, y: 1, z: 54 },
-        ),
-        (
-            Anchor { x: 68, y: 1, z: 48 },
-            Facing::West,
-            Anchor { x: 69, y: 1, z: 48 },
-            Anchor { x: 70, y: 1, z: 48 },
-        ),
-        (
-            Anchor { x: 68, y: 1, z: 32 },
-            Facing::West,
-            Anchor { x: 69, y: 1, z: 32 },
-            Anchor { x: 70, y: 1, z: 32 },
-        ),
-        (
-            Anchor { x: 76, y: 1, z: 40 },
-            Facing::West,
-            Anchor { x: 77, y: 1, z: 40 },
-            Anchor { x: 78, y: 1, z: 40 },
-        ),
+            Anchor { x, y, z: 25 },
+            Anchor { x, y, z: 26 },
+        )
+    };
+    let outputs = [
+        wall(76, 13),
+        wall(68, 10),
+        wall(68, 4),
+        wall(76, 1),
+        wall(84, 4),
+        wall(84, 10),
+        wall(76, 7),
     ];
     let inputs = [
         (
@@ -360,17 +335,17 @@ fn checked_seven_segment_pin_contract() -> BTreeMap<String, CheckedPin> {
             Anchor {
                 x: 76,
                 y: 1,
-                z: 120,
+                z: 144,
             },
             Anchor {
                 x: 76,
                 y: 1,
-                z: 119,
+                z: 143,
             },
             Anchor {
                 x: 76,
                 y: 1,
-                z: 118,
+                z: 142,
             },
         ),
         (
@@ -378,17 +353,17 @@ fn checked_seven_segment_pin_contract() -> BTreeMap<String, CheckedPin> {
             Anchor {
                 x: 88,
                 y: 1,
-                z: 120,
+                z: 144,
             },
             Anchor {
                 x: 88,
                 y: 1,
-                z: 119,
+                z: 143,
             },
             Anchor {
                 x: 88,
                 y: 1,
-                z: 118,
+                z: 142,
             },
         ),
         (
@@ -396,17 +371,17 @@ fn checked_seven_segment_pin_contract() -> BTreeMap<String, CheckedPin> {
             Anchor {
                 x: 100,
                 y: 1,
-                z: 120,
+                z: 144,
             },
             Anchor {
                 x: 100,
                 y: 1,
-                z: 119,
+                z: 143,
             },
             Anchor {
                 x: 100,
                 y: 1,
-                z: 118,
+                z: 142,
             },
         ),
         (
@@ -414,17 +389,17 @@ fn checked_seven_segment_pin_contract() -> BTreeMap<String, CheckedPin> {
             Anchor {
                 x: 112,
                 y: 1,
-                z: 120,
+                z: 144,
             },
             Anchor {
                 x: 112,
                 y: 1,
-                z: 119,
+                z: 143,
             },
             Anchor {
                 x: 112,
                 y: 1,
-                z: 118,
+                z: 142,
             },
         ),
     ];
@@ -546,13 +521,25 @@ fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
     }
 
     let (size_x, size_y, size_z) = result.compiled.world.size();
-    for z in 120..size_z {
+    for z in 144..size_z {
         for y in 0..size_y {
             for x in 0..size_x {
                 assert_eq!(
                     result.compiled.world.get(x, y, z).kind,
                     BlockKind::Air,
                     "internal or boundary block escaped the inputs' inward half-space at ({x}, {y}, {z})"
+                );
+            }
+        }
+    }
+    // Nothing stands on the reader's side of the display wall either.
+    for z in 0..=24 {
+        for y in 0..size_y {
+            for x in 0..size_x {
+                assert_eq!(
+                    result.compiled.world.get(x, y, z).kind,
+                    BlockKind::Air,
+                    "a block stands in front of the display wall at ({x}, {y}, {z})"
                 );
             }
         }

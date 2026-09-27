@@ -102,7 +102,7 @@ impl LegacyCandidateAdapter {
         seed: &planner::PlanCandidate,
         world: &World,
     ) -> Result<AdaptedLegacyCandidate, LegacyAdapterError> {
-        let instances = InstanceGraph::one_to_one(netlist, &Library::default_library())?;
+        let instances = InstanceGraph::one_to_one_legacy(netlist, &Library::default_library())?;
         let mut pins = PortPlacements::default();
         for node in seed.primitive_nodes() {
             let (name, toward) = match node.realisation {

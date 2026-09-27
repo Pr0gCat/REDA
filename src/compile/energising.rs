@@ -50,6 +50,17 @@
 //! into `anchor_is_free_for` is a separate change with its own measurements;
 //! see `planner::keep_out_against`'s doc comment for the two that stopped the
 //! last attempt.
+//!
+//! That still holds with a packed child's halo in production. The halo does not
+//! read these tables: `fragment_synth::leaf::two_hop_coupling_offsets` derives
+//! a **superset** of [`Range::conservative`] from the *shape* of the two-hop
+//! relation alone -- hop 1 lands on a cardinal neighbour, hop 2 on a cardinal
+//! step out of one, so the union over every kind and facing is the ball at L1
+//! distance 1 or 2, whatever the marks say. It is wider than what was measured
+//! and needs no artifact at run time. `leaf::tests::
+//! the_production_authority_covers_every_measured_range` holds it against
+//! these tables, so a re-measurement that found a wider range than the shape
+//! allows would fail here rather than pass silently.
 
 use std::collections::BTreeSet;
 

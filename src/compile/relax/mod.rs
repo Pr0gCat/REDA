@@ -81,6 +81,7 @@ pub(crate) mod project_for_test {
             welds: Vec::new(),
             nodes: vec![vec![0], vec![1]],
             anchor_body: vec![0, 1],
+            lower_bound: None,
         }
     }
 }
@@ -1523,6 +1524,7 @@ mod tests {
             welds: Vec::new(),
             nodes: vec![vec![0], vec![1]],
             anchor_body: vec![0, 1],
+            lower_bound: None,
         };
         let manhattan = |vector: [f64; 3]| vector[0].abs() + vector[1].abs() + vector[2].abs();
 
@@ -1925,6 +1927,7 @@ mod tests {
             welds: Vec::new(),
             nodes: vec![vec![0], vec![1]],
             anchor_body: vec![0, 1],
+            lower_bound: None,
         };
         assert_eq!(
             attach_offset(Attach::Port(PortKind::RepeaterRear), &bodies.bodies[0]),

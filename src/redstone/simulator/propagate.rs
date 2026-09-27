@@ -6,17 +6,65 @@
 //! 所以同一個電路擺在任何座標結果都相同。這是 Alternate Current 的思路。
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{BuildHasherDefault, Hasher};
 
 use serde::Serialize;
 
 use crate::redstone::rules::taxonomy::{
-    flags_of, power_emitted_by, power_emitted_toward, BlockPower, PowerOutput,
+    power_emitted_by, power_emitted_toward, BlockPower, PowerOutput,
 };
 use crate::redstone::simulator::connectivity::{dust_connections, dust_powers_block_toward};
 use crate::redstone::simulator::position::{Position, ALL_SIX, HORIZONTAL};
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::block::Facing;
 use crate::redstone::world::storage::World;
+
+/// A hasher for this module's flat-index keys.
+///
+/// The maps below are keyed by `World` flat indices -- one `usize` per cell --
+/// and nothing about them needs hashing to resist anything: they are local,
+/// they live for one recomputation, and no caller ever sees them. The default
+/// `RandomState` charges SipHash for every lookup in the hottest loop in the
+/// simulator to defend a map no adversary can reach.
+///
+/// One multiply by an odd constant is a bijection over `u64`, so distinct
+/// indices stay distinct, and it moves the entropy of small sequential indices
+/// into the high bits the table reads for its tags; the shift-xor folds some of
+/// it back down for the low bits the bucket index uses. Seedless, so a run is
+/// reproducible, and `Default` is the only way to build one -- which is what
+/// `BuildHasherDefault` needs.
+#[derive(Default)]
+struct FlatHasher(u64);
+
+/// 2^64 / φ -- the odd multiplier Fibonacci hashing uses.
+const FLAT_HASH_MULTIPLIER: u64 = 0x9E37_79B9_7F4A_7C15;
+
+impl Hasher for FlatHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    /// Overwrites the state rather than folding into it, which is only sound
+    /// because the aliases below hard-code `usize` keys: one key is one call,
+    /// so there is never a previous value to carry.
+    fn write_usize(&mut self, value: usize) {
+        let mixed = (value as u64).wrapping_mul(FLAT_HASH_MULTIPLIER);
+        self.0 = mixed ^ (mixed >> 32);
+    }
+
+    /// Never used -- every key here is a `usize` -- but a `Hasher` has to have
+    /// it, and it must not silently hash nothing if one ever is not.
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            let mixed = (self.0 ^ u64::from(byte)).wrapping_mul(FLAT_HASH_MULTIPLIER);
+            self.0 = mixed ^ (mixed >> 32);
+        }
+    }
+}
+
+type FlatBuildHasher = BuildHasherDefault<FlatHasher>;
+type FlatSet = HashSet<usize, FlatBuildHasher>;
+type FlatMap<V> = HashMap<usize, V, FlatBuildHasher>;
 
 /// 紅石訊號的最大強度。
 pub const MAX_SIGNAL_STRENGTH: u8 = 15;
@@ -80,11 +128,14 @@ fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
 
     let active_dust = active_dust_networks(world, &dirty);
 
+    // `target` 以扁平索引為鍵；佇列只帶位置，因為它要做的就是拿位置去問
+    // `dust_connections`。
     let mut queue: VecDeque<(Position, u8)> = VecDeque::new();
-    let mut target: HashMap<Position, u8> = HashMap::with_capacity(active_dust.len());
+    let mut target: FlatMap<u8> =
+        FlatMap::with_capacity_and_hasher(active_dust.len(), FlatBuildHasher::default());
 
     // 每格紅石粉的初始強度：來自相鄰的非紅石粉訊號源
-    for &pos in &active_dust {
+    for &(flat, pos) in &active_dust {
         let mut best = 0u8;
 
         // 直接驅動紅石粉的元件（紅石塊、拉桿、中繼器正前方…）
@@ -118,7 +169,7 @@ fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
         }
 
         if best > 0 {
-            target.insert(pos, best);
+            target.insert(flat, best);
             queue.push_back((pos, best));
         }
     }
@@ -131,9 +182,13 @@ fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
         let next_strength = strength - 1;
         for facing in HORIZONTAL {
             for neighbour in dust_connections(world, pos, facing).iter() {
-                let current = target.get(&neighbour).copied().unwrap_or(0);
+                // 同樣地，連接目標必定是世界裡擺著紅石粉的格子。
+                let neighbour_flat = world
+                    .index(neighbour.x, neighbour.y, neighbour.z)
+                    .expect("a dust connection target is a cell in the world");
+                let current = target.get(&neighbour_flat).copied().unwrap_or(0);
                 if next_strength > current {
-                    target.insert(neighbour, next_strength);
+                    target.insert(neighbour_flat, next_strength);
                     queue.push_back((neighbour, next_strength));
                 }
             }
@@ -142,8 +197,8 @@ fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
 
     // 寫回，收集改變的位置
     let mut changed = Vec::new();
-    for &pos in &active_dust {
-        let want = target.get(&pos).copied().unwrap_or(0);
+    for &(flat, pos) in &active_dust {
+        let want = target.get(&flat).copied().unwrap_or(0);
         let state = world.get(pos.x, pos.y, pos.z);
         if state.power != want {
             let mut updated = state.clone();
@@ -155,6 +210,45 @@ fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
 
     changed
 }
+
+/// 一個髒格的 2 跳鄰域，去重後的 25 個位移。
+///
+/// 原本是每個髒格都跑一次巢狀展開：origin、6 個鄰居、再 36 個鄰居的鄰居
+/// —— 43 筆輸出、四次配置，而其中只有 25 個位置是相異的（L1 半徑 2 的
+/// 球）。順序就是原本那 43 筆裡每個位置**第一次**出現的順序，所以種子被
+/// 探到的先後、進而 `active` 的順序，跟展開版一模一樣：重複的那 18 筆在
+/// 舊版裡本來就只有第一次會有作用（是粉的話第二次被 `visited` 擋掉，不是
+/// 粉的話兩次都不會有結果）。
+///
+/// `two_hop_offsets_are_the_old_expansion_deduped` 就是拿舊的展開重跑一次
+/// 再去重，逐筆比對這張表。
+const TWO_HOP_OFFSETS: [(i32, i32, i32); 25] = [
+    (0, 0, 0),
+    (0, 0, -1),
+    (0, 0, 1),
+    (1, 0, 0),
+    (-1, 0, 0),
+    (0, 1, 0),
+    (0, -1, 0),
+    (0, 0, -2),
+    (1, 0, -1),
+    (-1, 0, -1),
+    (0, 1, -1),
+    (0, -1, -1),
+    (0, 0, 2),
+    (1, 0, 1),
+    (-1, 0, 1),
+    (0, 1, 1),
+    (0, -1, 1),
+    (2, 0, 0),
+    (1, 1, 0),
+    (1, -1, 0),
+    (-2, 0, 0),
+    (-1, 1, 0),
+    (-1, -1, 0),
+    (0, 2, 0),
+    (0, -2, 0),
+];
 
 /// 從「這次可能受影響」的髒格清單，找出真正需要重算的紅石粉。
 ///
@@ -193,30 +287,25 @@ fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
 /// five-block shapes). Closing the flood over incoming edges makes the active
 /// set closed under "is fed by" as well as "feeds", which is what the
 /// write-back loop's unconditional zeroing assumes.
-fn active_dust_networks(world: &World, dirty: &[usize]) -> Vec<Position> {
-    let mut visited: HashSet<Position> = HashSet::new();
-    let mut active: Vec<Position> = Vec::new();
+fn active_dust_networks(world: &World, dirty: &[usize]) -> Vec<(usize, Position)> {
+    let mut visited: FlatSet = FlatSet::default();
+    let mut active: Vec<(usize, Position)> = Vec::new();
 
     for &flat in dirty {
         let (x, y, z) = world.decode(flat);
         let origin = Position::new(x, y, z);
 
         // 2 跳鄰域：origin 本身、它的 6 個鄰居、以及鄰居的鄰居。
-        let mut frontier = vec![origin];
-        let mut within_two_hops = vec![origin];
-        for _ in 0..2 {
-            let mut next = Vec::with_capacity(frontier.len() * ALL_SIX.len());
-            for &p in &frontier {
-                for facing in ALL_SIX {
-                    next.push(p.offset(facing));
-                }
-            }
-            within_two_hops.extend_from_slice(&next);
-            frontier = next;
-        }
-
-        for seed in within_two_hops {
-            if visited.contains(&seed) {
+        for (dx, dy, dz) in TWO_HOP_OFFSETS {
+            let seed = Position::new(origin.x + dx, origin.y + dy, origin.z + dz);
+            // 展開到世界外面的位置在這裡直接跳過。這不是新的判斷：
+            // `World::get` 對範圍外一律回傳空氣，空氣永遠不是紅石粉，
+            // 所以底下那個 `RedstoneWire` 檢查本來就會把它們濾掉 ——
+            // 只是改用扁平索引之後，範圍外的位置根本沒有索引可用。
+            let Some(seed_flat) = world.index(seed.x, seed.y, seed.z) else {
+                continue;
+            };
+            if visited.contains(&seed_flat) {
                 continue;
             }
             if world.get(seed.x, seed.y, seed.z).kind != BlockKind::RedstoneWire {
@@ -224,14 +313,19 @@ fn active_dust_networks(world: &World, dirty: &[usize]) -> Vec<Position> {
             }
 
             // 種子找到了，沿著連接關係洪水填滿整個網路
-            visited.insert(seed);
-            active.push(seed);
+            visited.insert(seed_flat);
+            active.push((seed_flat, seed));
             let mut stack = vec![seed];
             while let Some(pos) = stack.pop() {
                 for facing in HORIZONTAL {
                     for neighbour in dust_connections(world, pos, facing).iter() {
-                        if visited.insert(neighbour) {
-                            active.push(neighbour);
+                        // `dust_connections` 只回傳真的擺著紅石粉的格子，
+                        // 所以一定在範圍內。
+                        let flat = world
+                            .index(neighbour.x, neighbour.y, neighbour.z)
+                            .expect("a dust connection target is a cell in the world");
+                        if visited.insert(flat) {
+                            active.push((flat, neighbour));
                             stack.push(neighbour);
                         }
                     }
@@ -252,12 +346,15 @@ fn active_dust_networks(world: &World, dirty: &[usize]) -> Vec<Position> {
                         if world.get(feeder.x, feeder.y, feeder.z).kind != BlockKind::RedstoneWire {
                             continue;
                         }
+                        let flat = world
+                            .index(feeder.x, feeder.y, feeder.z)
+                            .expect("a feeder was just read as dust, so it is in the world");
                         if dust_connections(world, feeder, facing.opposite())
                             .iter()
                             .any(|target| target == pos)
-                            && visited.insert(feeder)
+                            && visited.insert(flat)
                         {
-                            active.push(feeder);
+                            active.push((flat, feeder));
                             stack.push(feeder);
                         }
                     }
@@ -315,8 +412,7 @@ pub fn dust_power_toward(world: &World, pos: Position, direction: Facing) -> Pow
 ///
 /// 回傳 `(BlockPower::None, 0)` 表示沒有充能。
 pub fn block_signal_at(world: &World, pos: Position) -> (BlockPower, u8) {
-    let state = world.get(pos.x, pos.y, pos.z);
-    if !flags_of(state).is_conductive() {
+    if !world.flags_at(pos.x, pos.y, pos.z).is_conductive() {
         return (BlockPower::None, 0);
     }
 
@@ -634,6 +730,126 @@ mod tests {
             0,
             "a torch must not power its support block, so dust reachable only through that block stays dark"
         );
+    }
+
+    /// The const table is the old nested expansion, deduped on first
+    /// occurrence -- rebuilt here rather than trusted.
+    #[test]
+    fn two_hop_offsets_are_the_old_expansion_deduped() {
+        let origin = Position::new(0, 0, 0);
+        let mut frontier = vec![origin];
+        let mut emitted = vec![origin];
+        for _ in 0..2 {
+            let mut next = Vec::new();
+            for &p in &frontier {
+                for facing in ALL_SIX {
+                    next.push(p.offset(facing));
+                }
+            }
+            emitted.extend_from_slice(&next);
+            frontier = next;
+        }
+        assert_eq!(emitted.len(), 43, "1 + 6 + 36 emissions");
+
+        let mut seen = HashSet::new();
+        let first_occurrences: Vec<Position> =
+            emitted.into_iter().filter(|p| seen.insert(*p)).collect();
+        let table: Vec<Position> = TWO_HOP_OFFSETS
+            .iter()
+            .map(|(dx, dy, dz)| Position::new(*dx, *dy, *dz))
+            .collect();
+        assert_eq!(first_occurrences, table);
+    }
+
+    /// The same edits in any order must leave the same world and change the
+    /// same cells.
+    ///
+    /// `World::take_dirty` hands the recomputation its dirty cells out of a
+    /// `HashSet`, so their order is already whatever the allocator and the
+    /// random seed made it that run: nothing downstream may depend on it. The
+    /// maps inside are keyed by flat index and hashed by a seedless hasher, and
+    /// neither is ever iterated -- this is what says so out loud, against
+    /// permutations chosen here rather than whichever one the set happened to
+    /// hand over.
+    #[test]
+    fn the_order_the_dirty_cells_arrive_in_changes_nothing() {
+        // Two runs, a branch joining them and a source.
+        let edits: Vec<(i32, i32, i32, BlockState)> = {
+            let mut edits = Vec::new();
+            for x in 1..=6 {
+                edits.push((x, 0, 0, stone()));
+                edits.push((x, 1, 0, dust()));
+                edits.push((x, 0, 2, stone()));
+                edits.push((x, 1, 2, dust()));
+            }
+            for z in 0..=2 {
+                edits.push((6, 0, z, stone()));
+                edits.push((6, 1, z, dust()));
+            }
+            edits.push((0, 1, 0, redstone_block()));
+            edits
+        };
+        let built = || {
+            let mut world = World::new(20, 3, 5);
+            for (x, y, z, state) in &edits {
+                world.set(*x, *y, *z, state.clone());
+            }
+            world
+        };
+
+        // The active set is a property of the world and the dirty cells, not of
+        // the order they are handed over in. Permutations picked here, so the
+        // test does not depend on a `HashSet`'s mood.
+        let mut world = built();
+        let mut dirty = world.take_dirty();
+        dirty.sort_unstable();
+        let active_of = |world: &World, dirty: &[usize]| {
+            let mut flats: Vec<usize> = active_dust_networks(world, dirty)
+                .into_iter()
+                .map(|(flat, _)| flat)
+                .collect();
+            flats.sort_unstable();
+            flats
+        };
+        let ascending = active_of(&world, &dirty);
+        assert!(!ascending.is_empty(), "the fixture must have live dust");
+        dirty.reverse();
+        assert_eq!(ascending, active_of(&world, &dirty), "reversed");
+        let third = dirty.len() / 3;
+        dirty.rotate_left(third);
+        assert_eq!(ascending, active_of(&world, &dirty), "rotated");
+
+        // And the fixpoint itself, through the whole recomputation, with the
+        // edits themselves applied in both orders.
+        let settle = |order: &[(i32, i32, i32, BlockState)]| {
+            let mut world = World::new(20, 3, 5);
+            for (x, y, z, state) in order {
+                world.set(*x, *y, *z, state.clone());
+            }
+            let mut changed = recompute_dust_strengths(&mut world);
+            changed.sort_by_key(|at| (at.y, at.z, at.x));
+            let powers: Vec<u8> = (0..5)
+                .flat_map(|z| (0..20).map(move |x| (x, z)))
+                .map(|(x, z)| world.get(x, 1, z).power)
+                .collect();
+            (changed, powers)
+        };
+        let forward = settle(&edits);
+        let mut reversed = edits.clone();
+        reversed.reverse();
+        let backward = settle(&reversed);
+
+        assert!(
+            forward.1.iter().any(|power| *power > 0),
+            "the fixture must actually carry a signal"
+        );
+        assert_eq!(forward.0, backward.0, "a different set of cells changed");
+        assert_eq!(forward.1, backward.1, "a different fixpoint was reached");
+
+        // Running it again from the settled state is still a fixpoint.
+        let mut world = built();
+        recompute_dust_strengths(&mut world);
+        assert!(recompute_dust_strengths(&mut world).is_empty());
     }
 
     #[test]

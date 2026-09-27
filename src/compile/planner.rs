@@ -23,7 +23,7 @@ use crate::redstone::world::storage::World;
 
 pub use crate::compile::geometry::Anchor;
 pub use crate::compile::routing::{
-    terminal_style, RouteTerminalKind, TerminalApproach, TerminalStyle,
+    terminal_style, LowerBound, RouteTerminalKind, TerminalApproach, TerminalStyle,
 };
 
 /// What a node becomes when a candidate is turned back into blocks.
@@ -36,6 +36,8 @@ pub use crate::compile::routing::{
 pub enum NodeRealisation {
     Primitive(Primitive),
     WireMerge,
+    /// The fixed, internally-routed Design H positive-edge DFF macro.
+    DffPosedge,
     /// A pinned input's terminal. The anchor is the **caller's** cell and
     /// ships empty; REDA's reader -- one repeater, normalizing whatever the
     /// caller offers to full strength -- stands in the single neighbour
@@ -280,6 +282,9 @@ pub struct PlanCandidate {
     variant_indices: Vec<u8>,
     topology_entries: BTreeMap<usize, usize>,
     legacy_emission: Option<LegacyEmission>,
+    /// The caller's [`LowerBound`], carried from the [`PortPlacements`] this
+    /// candidate was planned under so the router honours it too.
+    lower_bound: Option<LowerBound>,
 }
 
 impl PartialEq for PlanCandidate {
@@ -289,6 +294,7 @@ impl PartialEq for PlanCandidate {
             && self.routes == other.routes
             && self.variant_indices == other.variant_indices
             && self.topology_entries == other.topology_entries
+            && self.lower_bound == other.lower_bound
     }
 }
 
@@ -305,6 +311,7 @@ impl PlanCandidate {
             variant_indices,
             topology_entries: BTreeMap::new(),
             legacy_emission: None,
+            lower_bound: None,
         }
     }
 
@@ -323,6 +330,7 @@ impl PlanCandidate {
             variant_indices,
             topology_entries: BTreeMap::new(),
             legacy_emission: None,
+            lower_bound: None,
         }
     }
 
@@ -350,6 +358,11 @@ impl PlanCandidate {
         candidate
     }
 
+    /// The caller's lower bound this candidate was planned under, if any.
+    pub fn lower_bound(&self) -> Option<LowerBound> {
+        self.lower_bound
+    }
+
     pub(crate) fn from_legacy(
         anchors: Vec<Anchor>,
         primitive_nodes: Vec<PrimitiveNode>,
@@ -364,6 +377,7 @@ impl PlanCandidate {
             variant_indices,
             topology_entries: BTreeMap::new(),
             legacy_emission: Some(legacy_emission),
+            lower_bound: None,
         }
     }
 
@@ -505,6 +519,10 @@ pub enum PinRefusal {
     /// The one cell this pin's handover may occupy could not be reached. The
     /// caller over-constrained the board, and this pin is what did it.
     UnreachableHandover { cell: Anchor },
+    /// This pin's handover or net cell lies below the caller's own
+    /// [`LowerBound`]: the contract forbids REDA hardware on that row or
+    /// column, and this pin asks for some.
+    BelowLowerBound { cell: Anchor, bound: LowerBound },
 }
 
 impl std::fmt::Display for PinRefusal {
@@ -540,6 +558,13 @@ impl std::fmt::Display for PinRefusal {
                 f,
                 "its handover cell {} cannot be reached -- the board is over-constrained here",
                 cell(c)
+            ),
+            Self::BelowLowerBound { cell: c, bound } => write!(
+                f,
+                "its cell {} lies below the caller's lower bound x >= {}, z >= {}",
+                cell(c),
+                bound.x,
+                bound.z
             ),
         }
     }
@@ -840,6 +865,20 @@ pub fn emit_primitives(
                         .gate_output_positions
                         .insert(gate.output.clone(), (torch.x, torch.y, torch.z));
                     gate_pin.push(pin);
+                }
+                (NodeRealisation::DffPosedge, false)
+                    if gate.kind == crate::compile::topology::GateKind::DffPosedge =>
+                {
+                    let cell = compile::place_dff_gate(&mut world, origin, facing);
+                    ports.gate_output_positions.insert(
+                        gate.output.clone(),
+                        (
+                            cell.output_component.x,
+                            cell.output_component.y,
+                            cell.output_component.z,
+                        ),
+                    );
+                    gate_pin.push(cell.output_pin);
                 }
                 (realisation, _) => {
                     return Err(PlannerError::UnrealisableNode {
@@ -1288,7 +1327,7 @@ impl PlanCandidate {
         // and `compile_planned` routes through `route_in_order`. It dates from
         // `6dfbe56`, the commit that introduced `Occupancy` and left this one
         // call site writing the old flat `Solid`.
-        let mut reservation = reserve_primitives(&self.primitive_nodes);
+        let mut reservation = reserve_primitives(&self.primitive_nodes, self.lower_bound);
         // Anything with an anchor but no node -- nothing builds one today, and
         // it stays because an unclaimed anchor is worse than an inert one.
         for (index, anchor) in self.anchors.iter().copied().enumerate() {
@@ -1314,6 +1353,55 @@ impl PlanCandidate {
             .position(|node| node.id == format!("gate:{gate}"))
     }
 
+    /// Physical support, terminal socket, and straight-line approach for a
+    /// declared gate input. Ordinary gates use the support-adjacent sockets;
+    /// Design H exposes D at M_DATA's rear and C at its clock support.
+    fn input_connection(&self, gate: &str, input_index: usize) -> Option<(Anchor, Anchor, Anchor)> {
+        let node = self.node_index_for_gate(gate)?;
+        self.input_connection_at(node, input_index)
+    }
+
+    fn input_connection_at(
+        &self,
+        node: usize,
+        input_index: usize,
+    ) -> Option<(Anchor, Anchor, Anchor)> {
+        let anchor = self.anchors[node];
+        let facing = self.facing_of(node);
+        let offset = |local: (i32, i32, i32)| {
+            let (x, y, z) = compile::geometry::rotate(local, facing);
+            Anchor {
+                x: anchor.x + x,
+                y: anchor.y + y,
+                z: anchor.z + z,
+            }
+        };
+        let (support, socket) = if self
+            .primitive_nodes
+            .get(node)
+            .is_some_and(|primitive| primitive.realisation == NodeRealisation::DffPosedge)
+        {
+            match input_index {
+                0 => (offset((0, 0, 0)), offset((0, 0, 1))),
+                1 => (offset((2, 0, 0)), offset((3, 0, 0))),
+                _ => return None,
+            }
+        } else {
+            let support = anchor;
+            let socket = step(
+                support,
+                compile::geometry::input_directions(facing)[input_index],
+            );
+            (support, socket)
+        };
+        let approach = Anchor {
+            x: socket.x + socket.x - support.x,
+            y: socket.y + socket.y - support.y,
+            z: socket.z + socket.z - support.z,
+        };
+        Some((support, socket, approach))
+    }
+
     /// The cell a declared sink's route has to arrive in: `support`'s socket
     /// for the declared input this sink feeds.
     ///
@@ -1327,6 +1415,9 @@ impl PlanCandidate {
     /// because [`PlanCandidate::route_endpoints`] has already remapped it for
     /// the primitive it is moving, and that remapping should exist once.
     fn declared_socket(&self, support: Anchor, sink: &RouteSink) -> Anchor {
+        if let Some((_, socket, _)) = self.input_connection(&sink.gate, sink.input_index) {
+            return socket;
+        }
         let facing = self
             .node_index_for_gate(&sink.gate)
             .map(|node| self.facing_of(node))
@@ -1396,7 +1487,10 @@ impl PlanCandidate {
                 .terminals
                 .iter()
                 .map(|terminal| {
-                    let support = match self.node_for_gate(&terminal.sink.gate) {
+                    let support = match self
+                        .input_connection(&terminal.sink.gate, terminal.sink.input_index)
+                        .map(|(support, _, _)| support)
+                    {
                         // Already moved with its node, as above.
                         Some(anchor) => anchor,
                         None if moved_primitive < self.anchors.len()
@@ -1420,6 +1514,7 @@ impl PlanCandidate {
         })
     }
 
+    #[cfg(test)]
     fn node_for_gate(&self, gate: &str) -> Option<Anchor> {
         self.primitive_nodes
             .iter()
@@ -1866,8 +1961,8 @@ impl Prices<'_> {
     /// The search-time tree rule this router runs under.
     ///
     /// [`Prices::RipUp`] is **always** [`OwnJoinPolicy::Off`]: the shipping
-    /// router's search is byte-identical to what it was before the rule
-    /// existed, which is what keeps the four pinned block counts still.
+    /// router still uses the production distance-only search, while routing
+    /// applies the mode-specific legacy vertical-edge cost correction.
     fn own_join(&self) -> OwnJoinPolicy {
         match self {
             Prices::RipUp(_) => OwnJoinPolicy::Off,
@@ -1919,7 +2014,8 @@ impl Prices<'_> {
 ///
 /// [`Off`](OwnJoinPolicy::Off) is the old behaviour, kept callable so the
 /// forever-refusal it produces stays reproducible in the tree (rule 4), and
-/// because the rip-up router MUST run under it -- byte-identical, pinned.
+/// because the rip-up router MUST run under it to preserve the legacy
+/// own-join semantics used by pinned compatibility tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OwnJoinPolicy {
     /// No search-time rule: own cells are steppable and joinable everywhere,
@@ -2411,8 +2507,9 @@ fn keep_out_against(anchor: Anchor, reservation: &Reservation) -> Vec<Anchor> {
 /// written every anchor as `Solid`, and `Reservation::insert` cannot upgrade
 /// what is already there. The two disagreed about every support and every
 /// lever in the tree. Neither copy was wrong to read; the pair was.
-fn reserve_primitives(nodes: &[PrimitiveNode]) -> Reservation {
+fn reserve_primitives(nodes: &[PrimitiveNode], lower_bound: Option<LowerBound>) -> Reservation {
     let mut reservation = Reservation::new();
+    reservation.lower_bound = lower_bound;
     for (index, node) in nodes.iter().enumerate() {
         let owner = format!("primitive:{index}");
         for &cell in node.occupied() {
@@ -2664,6 +2761,10 @@ pub enum Occupancy {
 #[derive(Debug, Default, Clone)]
 pub struct Reservation {
     cells: BTreeMap<Anchor, (String, Occupancy)>,
+    /// The caller's [`LowerBound`], handed to the typed router as a keep-out
+    /// on every excluded cell. Recorded here rather than expanded into
+    /// `cells`, because the half-space has no edge to enumerate up to.
+    lower_bound: Option<LowerBound>,
 }
 
 impl Reservation {
@@ -2870,6 +2971,10 @@ impl PortPin {
 #[derive(Debug, Default, Clone)]
 pub struct PortPlacements {
     fixed: BTreeMap<String, PortPin>,
+    /// The caller's [`LowerBound`], if the caller owns the rows and columns
+    /// its pins sit on. A contract, like a pin: placement lifts every free
+    /// body above it and routing refuses every cell below it.
+    lower_bound: Option<LowerBound>,
 }
 
 impl PortPlacements {
@@ -2878,6 +2983,19 @@ impl PortPlacements {
     pub fn pin(&mut self, port: impl Into<String>, at: Anchor, toward: Facing) -> &mut Self {
         self.fixed.insert(port.into(), PortPin { at, toward });
         self
+    }
+
+    /// Declare that every cell with `x < bound.x` or `z < bound.z` is the
+    /// caller's. A pinned port's own cell may still sit there -- that is the
+    /// caller row the pins are on -- but its handover and net cell may not,
+    /// and neither may anything the planner places or routes.
+    pub fn bound_below(&mut self, bound: LowerBound) -> &mut Self {
+        self.lower_bound = Some(bound);
+        self
+    }
+
+    pub fn lower_bound(&self) -> Option<LowerBound> {
+        self.lower_bound
     }
 
     pub fn get(&self, port: &str) -> Option<PortPin> {
@@ -3408,6 +3526,49 @@ fn candidate_from_snapped(
         }
     }
 
+    // A primary input feeding Design H can sit on the macro's mandatory
+    // approach cell after relaxation. Routing would then replace its lever
+    // with wire. Put that lever one cell farther out and face its pin inward.
+    for (gate, definition) in netlist.gates.iter().enumerate() {
+        if definition.kind != crate::compile::topology::GateKind::DffPosedge {
+            continue;
+        }
+        for (input_index, signal) in definition.inputs.iter().enumerate() {
+            if placements.get(signal).is_some() {
+                continue;
+            }
+            let Some(primary) = netlist.inputs.iter().position(|input| input == signal) else {
+                continue;
+            };
+            let local_home = match input_index {
+                0 => (0, 0, 3),
+                1 => (5, 0, 0),
+                _ => continue,
+            };
+            let (x, y, z) = geometry::rotate(local_home, facings[gate]);
+            let node = netlist.gates.len() + primary;
+            anchors[node] = Anchor {
+                x: anchors[gate].x + x,
+                y: anchors[gate].y + y,
+                z: anchors[gate].z + z,
+            };
+            facings[node] = match geometry::turn(
+                if input_index == 0 {
+                    Facing::North
+                } else {
+                    Facing::West
+                },
+                facings[gate],
+            ) {
+                Facing::North => geometry::CellFacing::NORTH,
+                Facing::South => geometry::CellFacing::SOUTH,
+                Facing::East => geometry::CellFacing::EAST,
+                Facing::West => geometry::CellFacing::WEST,
+                Facing::Up | Facing::Down => unreachable!("Design H is horizontal"),
+            };
+        }
+    }
+
     candidate_from_anchors_and_facings(netlist, placements, anchors, facings)
 }
 
@@ -3436,7 +3597,9 @@ fn candidate_from_anchors_and_facings(
         primitive_nodes.push(PrimitiveNode {
             id: format!("gate:{}", gate.output),
             anchor,
-            realisation: if gate.is_merge() {
+            realisation: if gate.kind == crate::compile::topology::GateKind::DffPosedge {
+                NodeRealisation::DffPosedge
+            } else if gate.is_merge() {
                 NodeRealisation::WireMerge
             } else {
                 NodeRealisation::Primitive(Primitive::Torch)
@@ -3503,7 +3666,9 @@ fn candidate_from_anchors_and_facings(
         node += 1;
     }
 
-    PlanCandidate::with_facings(anchors, primitive_nodes, Vec::new(), facings)
+    let mut candidate = PlanCandidate::with_facings(anchors, primitive_nodes, Vec::new(), facings);
+    candidate.lower_bound = placements.lower_bound();
+    candidate
 }
 
 /// Gates in rows by depth, one signal per column, primary inputs one row past
@@ -3652,6 +3817,29 @@ pub(crate) fn starting_layout(
     Ok(anchors)
 }
 
+/// The far corner of the box the seed layout needs: the largest anchor
+/// [`starting_layout`] chooses, plus one grid pitch in `x` and `z` so every
+/// seeded cell's footprint sits inside it.  Relaxation and routing may still
+/// leave the box; it is an envelope for allocation, not a clamp on search.
+pub(crate) fn seed_extent(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+) -> Result<Anchor, PlannerError> {
+    let far = starting_layout(netlist, placements)?.into_iter().fold(
+        Anchor { x: 0, y: 0, z: 0 },
+        |far, anchor| Anchor {
+            x: far.x.max(anchor.x),
+            y: far.y.max(anchor.y),
+            z: far.z.max(anchor.z),
+        },
+    );
+    Ok(Anchor {
+        x: far.x.saturating_add(COLUMN_PITCH),
+        y: far.y,
+        z: far.z.saturating_add(ROW_PITCH),
+    })
+}
+
 /// Which end of the circuit each pinned port is, or the refusal that says the
 /// netlist never declared it.
 ///
@@ -3728,6 +3916,20 @@ pub(crate) fn validate_port_placements(
                     pin,
                     PinRefusal::OutsideEveryGrowableWorld { cell },
                 ));
+            }
+        }
+        // The caller's own cell may sit on the caller's row; the handover and
+        // the net cell are REDA's and have to be inside the bound, or the pin
+        // asks for hardware on a row the same contract forbids.
+        if let Some(bound) = placements.lower_bound() {
+            for cell in [pin.handover(*role), pin.net_cell(*role)] {
+                if bound.excludes(cell) {
+                    return Err(invalid(
+                        port,
+                        pin,
+                        PinRefusal::BelowLowerBound { cell, bound },
+                    ));
+                }
             }
         }
     }
@@ -4075,18 +4277,12 @@ fn preclaim_socket_approaches(
     candidate: &PlanCandidate,
     netlist: &Netlist,
 ) {
-    for (gate, definition) in netlist.gates.iter().enumerate() {
-        let support = candidate.anchors[gate];
-        let facing = candidate.facing_of(gate);
+    for definition in &netlist.gates {
         for (input_index, driver) in definition.inputs.iter().enumerate() {
-            let socket = step(
-                support,
-                compile::geometry::input_directions(facing)[input_index],
-            );
-            let approach = Anchor {
-                x: socket.x + (socket.x - support.x),
-                y: socket.y + (socket.y - support.y),
-                z: socket.z + (socket.z - support.z),
+            let Some((_, _, approach)) =
+                candidate.input_connection(&definition.output, input_index)
+            else {
+                continue;
             };
             reservation.insert(approach, driver, Occupancy::Wire);
         }
@@ -4455,17 +4651,9 @@ fn legacy_lay_net_reference(
         // for a route whose sink the netlist never declared.
         let (socket, approaches) = match consumer {
             NetConsumer::Gate { gate, input_index } => {
-                let support = candidate.anchors[*gate];
-                let facing = candidate.facing_of(*gate);
-                let socket = step(
-                    support,
-                    compile::geometry::input_directions(facing)[*input_index],
-                );
-                let approach = Anchor {
-                    x: socket.x + (socket.x - support.x),
-                    y: socket.y + (socket.y - support.y),
-                    z: socket.z + (socket.z - support.z),
-                };
+                let (_, socket, approach) = candidate
+                    .input_connection_at(*gate, *input_index)
+                    .expect("a declared gate input has a physical landing");
                 (socket, vec![approach])
             }
             NetConsumer::Terminal {
@@ -4643,7 +4831,9 @@ fn legacy_lay_net_reference(
         match consumer {
             NetConsumer::Gate { gate, input_index } => {
                 let (gate, input_index) = (*gate, *input_index);
-                let support = candidate.anchors[gate];
+                let (support, _, _) = candidate
+                    .input_connection_at(gate, input_index)
+                    .expect("a declared gate input has a physical landing");
 
                 // A branch whose every sink is the same wire merge joins that
                 // merge's own dust, not a gate's support block: dust meets dust
@@ -5083,6 +5273,9 @@ fn typed_reservations(
         };
         typed.reserve(at, typed_owner, kind);
     }
+    if let Some(bound) = reservation.lower_bound {
+        typed.claim_below(bound);
+    }
     typed
 }
 
@@ -5123,6 +5316,32 @@ fn typed_legacy_request_parts(
     netlist: &Netlist,
     candidate: &PlanCandidate,
 ) -> (RouteEndpoint, NonEmptyRouteSinks) {
+    // THE PINNED-OUTPUT FANOUT RULE. A net that is *also* a pinned declared
+    // output has a sink the caller reads through a diode -- the handover
+    // repeater, which reports whatever its rear cell carries. Every other cell
+    // of the net behind that rear is ordinary dust, and dust conducts both
+    // ways, so the whole trunk is inside the promise the pin makes.
+    //
+    // A gate sink landed as bare dust breaks that promise. The dust sits
+    // against the gate's support block, and that block is shared with the
+    // gate's *other* inputs; one of them strongly powering it drives this
+    // net's terminal dust to 15 (coupling mechanism 3), which travels back up
+    // the shared trunk and out to the handover. Measured in `seven_segment`
+    // compiled through recursive contracts: in the chunk
+    // `g4 = NOR(g0), g26 = NOR(g4, g1, g2)` with `g4` pinned out, `g1`'s
+    // terminal repeater into `g26`'s support lit `g4`'s handover while `g4`'s
+    // own torch was dark -- the certified world reported `g45` low where the
+    // netlist says high.
+    //
+    // A diode at the gate sink is the isolation that makes the fanout one-way
+    // again, and it is asked for only on nets that carry a pinned output: an
+    // unpinned net's gate sinks keep the dust terminal the approach earns.
+    // `Repeater` and not `Exact`, because the *diode* is the requirement; which
+    // repeater kind satisfies it stays the router's decision, the way it is for
+    // every other automatically terminated sink.
+    let feeds_pinned_output = consumers
+        .iter()
+        .any(|consumer| matches!(consumer, NetConsumer::Terminal { .. }));
     let mut sinks = Vec::with_capacity(consumers.len());
     let mut first_approach = None;
     for (ordinal, consumer) in consumers.iter().enumerate() {
@@ -5132,16 +5351,9 @@ fn typed_legacy_request_parts(
         };
         let typed = match consumer {
             NetConsumer::Gate { gate, input_index } => {
-                let support = candidate.anchors[*gate];
-                let socket = step(
-                    support,
-                    compile::geometry::input_directions(candidate.facing_of(*gate))[*input_index],
-                );
-                let approach = Anchor {
-                    x: socket.x + (socket.x - support.x),
-                    y: socket.y + (socket.y - support.y),
-                    z: socket.z + (socket.z - support.z),
-                };
+                let (support, socket, approach) = candidate
+                    .input_connection_at(*gate, *input_index)
+                    .expect("a declared gate input has a physical landing");
                 first_approach.get_or_insert(approach);
                 let connection = ConnectionId::External {
                     instance: InstanceId(*gate as u32),
@@ -5155,6 +5367,8 @@ fn typed_legacy_request_parts(
                     TerminalRequirement::Exact(RouteTerminalKind::BareMergeRepeater)
                 } else if netlist.gates[*gate].is_merge() {
                     TerminalRequirement::Exact(RouteTerminalKind::RepeaterIntoSupport)
+                } else if feeds_pinned_output {
+                    TerminalRequirement::Repeater
                 } else {
                     TerminalRequirement::Automatic
                 };
@@ -5220,7 +5434,7 @@ fn route_in_order(
     order: &[String],
     congestion: &Congestion,
 ) -> Result<PlanCandidate, Box<RoutingFailure>> {
-    let mut reservation = reserve_primitives(&candidate.primitive_nodes);
+    let mut reservation = reserve_primitives(&candidate.primitive_nodes, candidate.lower_bound);
 
     let sinks = net_consumers(netlist, &candidate);
 
@@ -5635,7 +5849,7 @@ impl Negotiation {
 /// Every iteration starts from this and every net sees it whole. See the
 /// FORBIDDEN list at the head of this section.
 fn hard_furniture(candidate: &PlanCandidate, netlist: &Netlist) -> Reservation {
-    let mut reservation = reserve_primitives(&candidate.primitive_nodes);
+    let mut reservation = reserve_primitives(&candidate.primitive_nodes, candidate.lower_bound);
     preclaim_socket_approaches(&mut reservation, candidate, netlist);
     preclaim_terminal_guards(&mut reservation, candidate, netlist);
     preclaim_pinned_cell_halos(&mut reservation, candidate);
@@ -5666,18 +5880,12 @@ fn preclaim_terminal_guards(
     candidate: &PlanCandidate,
     netlist: &Netlist,
 ) {
-    for (gate, definition) in netlist.gates.iter().enumerate() {
-        let support = candidate.anchors[gate];
-        let facing = candidate.facing_of(gate);
+    for definition in &netlist.gates {
         for input_index in 0..definition.inputs.len() {
-            let socket = step(
-                support,
-                compile::geometry::input_directions(facing)[input_index],
-            );
-            let approach = Anchor {
-                x: socket.x + (socket.x - support.x),
-                y: socket.y + (socket.y - support.y),
-                z: socket.z + (socket.z - support.z),
+            let Some((support, socket, approach)) =
+                candidate.input_connection(&definition.output, input_index)
+            else {
+                continue;
             };
             let guard = format!("terminal:{}.in[{input_index}]", definition.output);
             for neighbour in horizontal_neighbours(socket) {
@@ -6466,6 +6674,12 @@ pub(crate) fn candidate_world_size(candidate: &PlanCandidate) -> (i32, i32, i32)
     };
     for node in &candidate.primitive_nodes {
         extend(&node.anchor);
+        for cell in node.footprint.iter().chain(&node.conductors) {
+            extend(cell);
+        }
+        if let Some(pin) = &node.output_pin {
+            extend(pin);
+        }
     }
     for route in &candidate.routes {
         for anchor in &route.anchors {
@@ -8039,7 +8253,7 @@ mod tests {
         order: &[String],
         congestion: &Congestion,
     ) -> Result<PlanCandidate, Box<RoutingFailure>> {
-        let mut reservation = reserve_primitives(&candidate.primitive_nodes);
+        let mut reservation = reserve_primitives(&candidate.primitive_nodes, candidate.lower_bound);
         let sinks = net_consumers(netlist, &candidate);
         preclaim_socket_approaches(&mut reservation, &candidate, netlist);
         preclaim_pinned_cell_halos(&mut reservation, &candidate);
@@ -12711,6 +12925,229 @@ mod tests {
         assert_eq!(vectors, 4);
     }
 
+    /// The pins of the `seven_segment` chunk both tests below use: the three
+    /// boundary inputs, then the two boundary outputs, on one caller row.
+    fn shared_pinned_output_pins() -> PortPlacements {
+        let mut placements = PortPlacements::default();
+        placements.pin("g0", Anchor { x: 2, y: 1, z: 0 }, Facing::South);
+        placements.pin("g1", Anchor { x: 5, y: 1, z: 0 }, Facing::South);
+        placements.pin("g2", Anchor { x: 8, y: 1, z: 0 }, Facing::South);
+        placements.pin("g26", Anchor { x: 11, y: 1, z: 0 }, Facing::North);
+        placements.pin("g4", Anchor { x: 14, y: 1, z: 0 }, Facing::North);
+        placements
+    }
+
+    /// The netlist both tests below use: one chunk of `seven_segment` compiled
+    /// through recursive contracts, where the fanout defect was measured.
+    fn shared_pinned_output_netlist() -> Netlist {
+        Netlist {
+            inputs: vec!["g0".to_string(), "g1".to_string(), "g2".to_string()],
+            outputs: vec!["g26".to_string(), "g4".to_string()],
+            gates: vec![
+                Gate::nor("g4", &["g0"]),
+                Gate::nor("g26", &["g4", "g1", "g2"]),
+            ],
+        }
+    }
+
+    /// A pinned output that also feeds a gate inside the same circuit reports
+    /// its own gate and nothing else, on every vector.
+    ///
+    /// The net has two sinks: the handover repeater the caller reads, and a
+    /// gate input that lands against that gate's support block. The support is
+    /// shared with the gate's *other* inputs, so when one of them strongly
+    /// powers it, a bare dust terminal on this net is driven to 15 from the
+    /// block (coupling mechanism 3) and carries that back along the trunk the
+    /// two sinks share, straight into the handover -- which then reports the
+    /// output high with its own torch dark.
+    ///
+    /// `g4 = NOR(g0)`, `g26 = NOR(g4, g1, g2)`, `g4` both an internal input of
+    /// `g26` and a pinned chunk output. Before the fanout rule in
+    /// [`typed_legacy_request_parts`], two of the eight vectors read `g4` high
+    /// while `g4` was low -- `g0 = g1 = true`, either value of `g2`, the rows
+    /// where `g1`'s terminal repeater is the thing holding `g26`'s support up.
+    /// The whole decoder failed certification on it (`g45` low where the
+    /// netlist says high).
+    ///
+    /// The sibling assertion is not decoration. This world can only fail when
+    /// something *strongly* powers the shared support, and on this layout that
+    /// something is `g1`'s own terminal repeater. Were a later placement to
+    /// earn `g1` a dust terminal instead, every vector would pass with the rule
+    /// deleted -- so the shape that makes the vectors mean anything is asserted
+    /// before they are swept.
+    #[test]
+    fn a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate() {
+        let netlist = shared_pinned_output_netlist();
+        let placements = shared_pinned_output_pins();
+
+        // `g1` is `g26`'s input 1, and `g4` is its input 0: the two land on
+        // the same support block, which is the coupling this test is about.
+        let candidate = plan_from_netlist(&netlist, &placements).expect("the chunk plans");
+        let (shared_support, _, _) = candidate
+            .input_connection_at(1, 1)
+            .expect("`g26`'s second input has a physical landing");
+        assert_eq!(
+            candidate
+                .input_connection_at(1, 0)
+                .expect("`g26`'s first input has a physical landing")
+                .0,
+            shared_support,
+            "the pinned net and its sibling share one support block"
+        );
+        let sibling_drives_support = candidate
+            .routes()
+            .iter()
+            .filter(|route| route.id() == "g1")
+            .flat_map(|route| route.terminals())
+            .any(|terminal| {
+                terminal.sink.gate == "g26"
+                    && terminal.sink.input_index == 1
+                    && terminal.kind == RouteTerminalKind::RepeaterIntoSupport
+            });
+        assert!(
+            sibling_drives_support,
+            "`g1` still lands as a repeater into the shared support -- without \
+             that, the vectors below cannot see the defect at all"
+        );
+
+        let compiled = crate::compile::compile_planned(&netlist, &placements)
+            .unwrap_or_else(|error| panic!("the chunk compiles: {error}"));
+        let vectors = simulated_truth_table_driving_pins(
+            &compiled,
+            &["g0", "g1", "g2"],
+            &netlist.outputs,
+            |bits| {
+                let g4 = !bits[0];
+                vec![!(g4 || bits[1] || bits[2]), g4]
+            },
+            &placements,
+        )
+        .expect("the pinned output reports its own gate on every vector");
+        assert_eq!(vectors, 8);
+    }
+
+    /// The contract the world above rests on, asked of the router request
+    /// itself: every gate sink on a net that also carries a pinned output is
+    /// a diode, whatever the approach geometry would otherwise earn.
+    ///
+    /// Stated here as well as in the simulation because the simulation can
+    /// only fail when the placer happens to lay the collinear dust approach
+    /// that `terminal_style` rewards; this is the rule, and it holds for any
+    /// layout.
+    #[test]
+    fn a_gate_sink_sharing_a_net_with_a_pinned_output_asks_for_a_repeater() {
+        let netlist = shared_pinned_output_netlist();
+        let placements = shared_pinned_output_pins();
+
+        let candidate = plan_from_netlist(&netlist, &placements).expect("the circuit plans");
+        let consumers = net_consumers(&netlist, &candidate);
+        let Ok(source) = net_source(&candidate, "g4") else {
+            panic!("the driving gate has an output cell");
+        };
+        let (_endpoint, sinks) = typed_legacy_request_parts(
+            RouteId(0),
+            "g4",
+            source,
+            &consumers["g4"],
+            &netlist,
+            &candidate,
+        );
+        let shared = sinks
+            .as_slice()
+            .iter()
+            .filter_map(|sink| match &sink.terminal {
+                TerminalContract::Sink {
+                    target: RouteTarget::Connection(_),
+                    requirement,
+                    ..
+                } => Some(*requirement),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shared,
+            vec![TerminalRequirement::Repeater],
+            "`g4` reaches one gate input, and it may not land there as bare dust"
+        );
+        assert!(
+            sinks.as_slice().iter().any(|sink| matches!(
+                &sink.terminal,
+                TerminalContract::Sink {
+                    target: RouteTarget::DeclaredOutput(_),
+                    ..
+                }
+            )),
+            "the same net carries the pinned output that makes the rule apply"
+        );
+    }
+
+    /// The rule is about the *net*, not about what kind of thing reads it, so
+    /// a pinned output feeding a sequential macro is covered by the same
+    /// sentence -- and a DFF is exactly where a silent one-way failure would be
+    /// hardest to see, because its D input is sampled on one edge and the wrong
+    /// reading would surface a clock later, somewhere else.
+    ///
+    /// Contract and compile, not simulation: the diode the rule asks for is a
+    /// property of the request, and Design H's own timing is the subject of the
+    /// stateful tests in [`crate::compile`], not of this one.
+    #[test]
+    fn a_pinned_output_feeding_a_dff_asks_for_a_repeater_too() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "clk".to_string()],
+            outputs: vec!["d".to_string(), "q".to_string()],
+            gates: vec![
+                Gate::nor("d", &["a"]),
+                Gate {
+                    name: "q".to_string(),
+                    inputs: vec!["d".to_string(), "clk".to_string()],
+                    output: "q".to_string(),
+                    kind: crate::compile::topology::GateKind::DffPosedge,
+                },
+            ],
+        };
+        let mut placements = PortPlacements::default();
+        placements.pin("a", Anchor { x: 2, y: 1, z: 0 }, Facing::South);
+        placements.pin("clk", Anchor { x: 5, y: 1, z: 0 }, Facing::South);
+        placements.pin("d", Anchor { x: 8, y: 1, z: 0 }, Facing::North);
+        placements.pin("q", Anchor { x: 11, y: 1, z: 0 }, Facing::North);
+
+        let candidate =
+            plan_from_netlist(&netlist, &placements).expect("the sequential chunk plans");
+        let consumers = net_consumers(&netlist, &candidate);
+        let Ok(source) = net_source(&candidate, "d") else {
+            panic!("the driving gate has an output cell");
+        };
+        let (_endpoint, sinks) = typed_legacy_request_parts(
+            RouteId(0),
+            "d",
+            source,
+            &consumers["d"],
+            &netlist,
+            &candidate,
+        );
+        let into_dff = sinks
+            .as_slice()
+            .iter()
+            .filter_map(|sink| match &sink.terminal {
+                TerminalContract::Sink {
+                    target: RouteTarget::Connection(_),
+                    requirement,
+                    ..
+                } => Some(*requirement),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            into_dff,
+            vec![TerminalRequirement::Repeater],
+            "`d` reaches the DFF's D socket, and it may not land there as bare dust"
+        );
+
+        crate::compile::compile_planned(&netlist, &placements).unwrap_or_else(|error| {
+            panic!("and the isolated sequential chunk still compiles: {error}")
+        });
+    }
+
     /// A fixture is borrowed, never built.
     ///
     /// Every cell the harness fills belongs to the caller, so when the vectors
@@ -13816,7 +14253,8 @@ mod tests {
         let candidate =
             plan_from_netlist(&netlist, &PortPlacements::default()).expect("full_adder routes");
 
-        let mut reservation = reserve_primitives(candidate.primitive_nodes());
+        let mut reservation =
+            reserve_primitives(candidate.primitive_nodes(), candidate.lower_bound());
         for route in candidate.routes() {
             reserve_path(&mut reservation, &route.id, &route.anchors);
         }
@@ -13896,7 +14334,8 @@ mod tests {
                     }
                 };
 
-            let mut reservation = reserve_primitives(candidate.primitive_nodes());
+            let mut reservation =
+                reserve_primitives(candidate.primitive_nodes(), candidate.lower_bound());
             for route in candidate.routes() {
                 reserve_path(&mut reservation, &route.id, &route.anchors);
             }

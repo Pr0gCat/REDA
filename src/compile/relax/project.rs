@@ -563,7 +563,12 @@ pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<()
     // once for the whole call rather than rescanned per pair.
     let welded = welded_partners(graph);
     for _ in 0..PROJECTION_ROUNDS {
-        let mut moved = false;
+        // The caller's bound first, so every pair below is judged on cells
+        // that are already inside it; `separate` never pushes toward it --
+        // the bodies on the caller's side are pinned terminals, which hold
+        // -- so a lift here is not undone by the pairs, only by a weld, and
+        // the next round lifts the welded pair whole.
+        let mut moved = lift_above_bound(graph);
         // Recomputed once per round, not once per pair. The snapshot is what
         // every *decision* in this round is taken against -- which pairs are
         // violating, by how much, and along which axis -- so no pair is judged
@@ -630,6 +635,56 @@ pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<()
         Some(violation) => Err(violation),
         None => Ok(()),
     }
+}
+
+/// Lift every free node whose cells would fall below the graph's
+/// [`LowerBound`](crate::compile::planner::LowerBound), node by node and
+/// rigidly, along `x` and `z`.
+///
+/// Node by node, because a welded repeater's position is its junction's plus
+/// a fixed offset: lifting one body of the pair and not the other is a move
+/// [`satisfy`] undoes at the end of the round. A node whose bodies are all
+/// lifted together keeps every weld it had.
+///
+/// The counterpart of the `y` clamp in [`separate`], for the two axes the
+/// caller can own. The ground has no caller, so it is a constant there; a
+/// row and a column are a contract, so they arrive on the graph. A pinned
+/// node is left where it was pinned -- a terminal's caller cell sits *on*
+/// the caller row, which is the whole reason the bound exists.
+///
+/// [`SETTLED`] is the tolerance, as everywhere in this module: a cell that
+/// is short of the bound by less than it rounds onto the bound, since the
+/// bound is an integer and [`snap`](crate::compile::relax::snap) rounds to
+/// nearest.
+fn lift_above_bound(graph: &mut BodyGraph) -> bool {
+    let Some(bound) = graph.lower_bound else {
+        return false;
+    };
+    let mut moved = false;
+    for node in 0..graph.nodes.len() {
+        let bodies = graph.nodes[node].clone();
+        if bodies.iter().any(|&body| graph.bodies[body].pinned) {
+            continue;
+        }
+        let mut lift_x = 0.0f64;
+        let mut lift_z = 0.0f64;
+        for &body in &bodies {
+            let position = graph.bodies[body].position;
+            for cell in cells(&graph.bodies[body]) {
+                lift_x = lift_x.max(f64::from(bound.x) - (position[0] + f64::from(cell.offset.0)));
+                lift_z = lift_z.max(f64::from(bound.z) - (position[2] + f64::from(cell.offset.2)));
+            }
+        }
+        if lift_x <= SETTLED && lift_z <= SETTLED {
+            continue;
+        }
+        for &body in &bodies {
+            graph.bodies[body].position[0] += lift_x;
+            graph.bodies[body].position[2] += lift_z;
+        }
+        moved = true;
+    }
+    moved
 }
 
 /// Move one pair `cost` apart along `axis`.
@@ -784,6 +839,7 @@ mod tests {
             welds,
             nodes: (0..count).map(|index| vec![index]).collect(),
             anchor_body: (0..count).collect(),
+            lower_bound: None,
         }
     }
 

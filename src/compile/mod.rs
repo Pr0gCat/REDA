@@ -67,6 +67,7 @@ pub mod emission;
 #[cfg(test)]
 pub mod energising;
 pub mod equivalence;
+pub mod evaluation;
 pub mod fragment_synth;
 pub mod geometry;
 pub mod lowering;
@@ -402,6 +403,75 @@ pub(crate) fn repeater(direction: Facing) -> BlockState {
     state.delay = 1;
     state.lit = true;
     state
+}
+
+/// The fixed Design H positive-edge DFF used by the physical planner.
+///
+/// Coordinates are stated for a north-facing cell and rotated as a unit.
+/// `origin` is M_DATA. D enters its rear; C drives a support block which
+/// feeds M_LOCK and the complementary-clock wall torch. S_DATA's front is Q.
+pub(crate) struct DffCell {
+    pub input_supports: [Position; 2],
+    pub input_sockets: [Position; 2],
+    pub output_component: Position,
+    pub output_pin: Position,
+}
+
+pub(crate) fn place_dff_gate(
+    world: &mut World,
+    origin: (i32, i32, i32),
+    facing: geometry::CellFacing,
+) -> DffCell {
+    let origin = Position::new(origin.0, origin.1, origin.2);
+    let at = |offset: (i32, i32, i32)| {
+        let (x, y, z) = geometry::rotate(offset, facing);
+        Position::new(origin.x + x, origin.y + y, origin.z + z)
+    };
+    let turned = |direction| geometry::turn(direction, facing);
+
+    let m_data = at((0, 0, 0));
+    let s_data = at((0, 0, -1));
+    let m_lock = at((1, 0, 0));
+    let s_lock = at((1, 0, -1));
+    let clock_support = at((2, 0, 0));
+    let clock_torch = at((2, 0, -1));
+    let d_socket = at((0, 0, 1));
+    let clock_socket = at((3, 0, 0));
+    let q_pin = at((0, 0, -2));
+
+    for repeater_pos in [m_data, s_data, m_lock, s_lock] {
+        world.set(repeater_pos.x, repeater_pos.y - 1, repeater_pos.z, stone());
+    }
+    world.set(
+        m_data.x,
+        m_data.y,
+        m_data.z,
+        repeater(turned(Facing::North)),
+    );
+    world.set(
+        s_data.x,
+        s_data.y,
+        s_data.z,
+        repeater(turned(Facing::North)),
+    );
+    world.set(m_lock.x, m_lock.y, m_lock.z, repeater(turned(Facing::West)));
+    world.set(s_lock.x, s_lock.y, s_lock.z, repeater(turned(Facing::West)));
+    world.set(clock_support.x, clock_support.y, clock_support.z, stone());
+    world.set(
+        clock_torch.x,
+        clock_torch.y,
+        clock_torch.z,
+        wall_torch(turned(Facing::North)),
+    );
+    ensure_floor(world, q_pin);
+    world.set(q_pin.x, q_pin.y, q_pin.z, dust());
+
+    DffCell {
+        input_supports: [m_data, clock_support],
+        input_sockets: [d_socket, clock_socket],
+        output_component: s_data,
+        output_pin: q_pin,
+    }
 }
 
 /// 把一個 n 輸入的 NOR 閘畫進世界：一個支撐塊，加上貼在它輸出面的輸出火把。
@@ -1647,6 +1717,20 @@ impl CircuitObservations {
             reason: error.to_string(),
         })?;
         Ok(Self::from_expanded(&adapted.candidate))
+    }
+}
+
+fn observations_from_plan(
+    netlist: &Netlist,
+    plan: &planner::PlanCandidate,
+    world: &World,
+) -> Result<CircuitObservations, CompileError> {
+    if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
+        // The fragment-synthesis adapter is deliberately combinational-only;
+        // stateful physical observations will be added with its own topology.
+        Ok(CircuitObservations::default())
+    } else {
+        CircuitObservations::from_plan(netlist, plan, world)
     }
 }
 
@@ -6277,7 +6361,7 @@ fn verify_torch_merge(
         .collect();
 
     for (g, gate) in netlist.gates.iter().enumerate() {
-        if gate.is_merge() {
+        if gate.is_merge() || gate.kind.is_sequential() {
             // A declared merge is a bare wire join: no torch, no support,
             // nothing gate-shaped to check here at all. Whether the join
             // is legitimate -- no foreign net touching it -- is exactly
@@ -7095,7 +7179,7 @@ fn verify_signal_strength(
         for &(gate, _input_index) in net.sinks.iter().flatten() {
             // A merge gate has no torch or support to check strength
             // against at all -- see this function's own doc comment.
-            if netlist.gates[gate].is_merge() {
+            if netlist.gates[gate].is_merge() || netlist.gates[gate].kind.is_sequential() {
                 continue;
             }
             let &(tx, ty, tz) = gate_output_positions
@@ -7467,6 +7551,16 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     // itself; see that test.
     let _ = checked_topological_order(netlist)?;
 
+    // The legacy emitter has no stateful cell. Never turn a planner failure
+    // into a silently combinational circuit by sending a DFF through it.
+    if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
+        return compile_planned_within(
+            netlist,
+            &planner::PortPlacements::default(),
+            planner::RIP_UP_ROUNDS,
+        );
+    }
+
     // The policy, and it is exactly this so it is predictable:
     //
     // 1. Try the planner: relaxation places, A* with a **bounded** rip-up
@@ -7565,8 +7659,13 @@ fn planner_can_express(netlist: &Netlist) -> bool {
 /// exists **is** the acyclicity check, and `build_floorplan` needs the order
 /// itself.
 fn checked_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileError> {
+    let library = topology::Library::default_library();
     for gate in &netlist.gates {
-        let realisable = gate.kind.is_realisable() && gate.kind.accepts_arity(gate.inputs.len());
+        let supported_stateful = gate.kind.is_sequential()
+            && library.stateful_entry(gate.kind).is_some()
+            && gate.kind.accepts_arity(gate.inputs.len());
+        let realisable = (gate.kind.is_realisable() && gate.kind.accepts_arity(gate.inputs.len()))
+            || supported_stateful;
         if !realisable {
             return Err(CompileError::NotRealisable {
                 gate: gate.output.clone(),
@@ -7588,7 +7687,7 @@ fn checked_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileErr
     }
 
     netlist
-        .topological_order()
+        .combinational_order()
         .ok_or(CompileError::CyclicNetlist)
 }
 
@@ -7608,6 +7707,12 @@ fn checked_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileErr
 /// Stamps `PlannerKind::Legacy`, which nothing constructed before today.
 pub fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let order = checked_topological_order(netlist)?;
+    if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
+        return Err(CompileError::CandidateMetadataViolation {
+            item: "stateful netlist".to_string(),
+            reason: "the legacy emitter has no stateful macro".to_string(),
+        });
+    }
 
     let mut producer_of: HashMap<&str, usize> = HashMap::new();
     for (index, gate) in netlist.gates.iter().enumerate() {
@@ -7771,7 +7876,7 @@ pub fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError
 
     let seed = planner::seed_from_legacy_parts(netlist, &legacy_emission).map_err(planner_error)?;
     let realised = planner::realise_and_verify(&seed, netlist, size).map_err(planner_error)?;
-    let observations = CircuitObservations::from_plan(netlist, &seed, &realised.world)?;
+    let observations = observations_from_plan(netlist, &seed, &realised.world)?;
 
     Ok(CompiledCircuit {
         observations,
@@ -7867,7 +7972,7 @@ pub fn compile_grown(
         .collect();
     let size = planner::candidate_world_size(&candidate);
     let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
-    let observations = CircuitObservations::from_plan(netlist, &candidate, &realised.world)?;
+    let observations = observations_from_plan(netlist, &candidate, &realised.world)?;
 
     Ok(CompiledCircuit {
         observations,
@@ -7905,7 +8010,7 @@ fn compile_planned_within(
         .collect();
     let size = planner::candidate_world_size(&candidate);
     let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
-    let observations = CircuitObservations::from_plan(netlist, &candidate, &realised.world)?;
+    let observations = observations_from_plan(netlist, &candidate, &realised.world)?;
 
     Ok(CompiledCircuit {
         observations,
@@ -7971,6 +8076,44 @@ pub(crate) fn gate_footprint(
     gate: &Gate,
     facing: geometry::CellFacing,
 ) -> (Vec<Anchor>, Vec<Anchor>, Anchor) {
+    if gate.kind == topology::GateKind::DffPosedge {
+        let mut scratch = World::new(64, 8, 64);
+        let shifted = (32, 2, 32);
+        let cell = place_dff_gate(&mut scratch, shifted, facing);
+        let translate = |position: Position| Anchor {
+            x: origin.0 + position.x - shifted.0,
+            y: origin.1 + position.y - shifted.1,
+            z: origin.2 + position.z - shifted.2,
+        };
+        let mut cells = Vec::new();
+        let mut conductors = Vec::new();
+        for flat in 0..scratch.cells().len() {
+            let (x, y, z) = scratch.decode(flat);
+            let state = scratch.get(x, y, z);
+            if state.kind == BlockKind::Air {
+                continue;
+            }
+            let anchor = translate(Position::new(x, y, z));
+            cells.push(anchor);
+            if state.kind != BlockKind::Solid {
+                conductors.push(anchor);
+            }
+        }
+        // The clock support carries C, and both empty sockets are reserved
+        // electrical landings even though the router writes their blocks.
+        conductors.push(translate(cell.input_supports[1]));
+        for socket in cell.input_sockets {
+            let socket = translate(socket);
+            cells.push(socket);
+            conductors.push(socket);
+        }
+        cells.sort_unstable();
+        cells.dedup();
+        conductors.sort_unstable();
+        conductors.dedup();
+        return (cells, conductors, translate(cell.output_pin));
+    }
+
     let mut scratch = World::new(64, 8, 64);
     let shifted = (32, 1, 32);
     let cell = if gate.is_merge() {
@@ -8399,6 +8542,25 @@ mod tests {
         assert_eq!(GateKind::DffPosedge.wire_name(), "dff_p");
         assert!(GateKind::DffPosedge.accepts_arity(2));
         assert!(!GateKind::DffPosedge.accepts_arity(1));
+        assert!(
+            compile(&through_dff).is_ok(),
+            "feedback crossing a DFF compiles"
+        );
+
+        let malformed = Netlist {
+            inputs: vec!["d".to_string()],
+            outputs: vec!["q".to_string()],
+            gates: vec![Gate {
+                name: "q".to_string(),
+                inputs: vec!["d".to_string()],
+                output: "q".to_string(),
+                kind: GateKind::DffPosedge,
+            }],
+        };
+        assert!(matches!(
+            compile(&malformed),
+            Err(CompileError::NotRealisable { .. })
+        ));
 
         let pure_loop = Netlist {
             inputs: Vec::new(),
@@ -8407,6 +8569,113 @@ mod tests {
         };
 
         assert_eq!(pure_loop.combinational_order(), None);
+        assert!(matches!(
+            compile(&pure_loop),
+            Err(CompileError::CyclicNetlist)
+        ));
+    }
+
+    #[test]
+    fn design_h_captures_only_on_rising_edges_in_every_rotation() {
+        use crate::compile::geometry::CellFacing;
+
+        for index in 0..4 {
+            let facing = CellFacing::from_index(index).expect("four horizontal rotations");
+            let mut world = World::new(20, 5, 20);
+            let cell = place_dff_gate(&mut world, (8, 1, 8), facing);
+            for socket in cell.input_sockets {
+                ensure_floor(&mut world, socket);
+                world.set(socket.x, socket.y, socket.z, lever(false));
+            }
+
+            let mut simulator = Simulator::new(world);
+            simulator
+                .run_until_stable(200)
+                .expect("initial DFF settles");
+            let mut set = |input: usize, on: bool| {
+                let at = cell.input_sockets[input];
+                let mut state = simulator.world().get(at.x, at.y, at.z).clone();
+                state.lit = on;
+                simulator.world_mut().set(at.x, at.y, at.z, state);
+                simulator
+                    .run_until_stable(200)
+                    .expect("DFF transition settles");
+                simulator
+                    .world()
+                    .get(
+                        cell.output_component.x,
+                        cell.output_component.y,
+                        cell.output_component.z,
+                    )
+                    .lit
+            };
+
+            assert!(!set(1, true), "C rising captures D=0, rotation {index}");
+            assert!(
+                !set(1, false),
+                "C falling does not capture, rotation {index}"
+            );
+            assert!(
+                !set(0, true),
+                "D cannot feed through while C=0, rotation {index}"
+            );
+            assert!(set(1, true), "C rising captures D=1, rotation {index}");
+            assert!(
+                set(0, false),
+                "D cannot feed through while C=1, rotation {index}"
+            );
+            assert!(
+                set(1, false),
+                "C falling does not capture, rotation {index}"
+            );
+            assert!(
+                !set(1, true),
+                "next C rising captures D=0, rotation {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn compile_places_and_runs_a_dff_without_legacy_fallback() {
+        let netlist = Netlist {
+            inputs: vec!["d".to_string(), "clk".to_string()],
+            outputs: vec!["q".to_string()],
+            gates: vec![Gate {
+                name: "q".to_string(),
+                inputs: vec!["d".to_string(), "clk".to_string()],
+                output: "q".to_string(),
+                kind: GateKind::DffPosedge,
+            }],
+        };
+
+        let compiled = compile(&netlist).expect("stateful planner compiles Design H");
+        assert_eq!(compiled.planner_kind(), PlannerKind::Unified3d);
+        assert!(count_kind(&compiled.world, BlockKind::Repeater) >= 4);
+        assert!(count_kind(&compiled.world, BlockKind::WallTorch) >= 1);
+
+        let d = compiled.input_positions["d"];
+        let clk = compiled.input_positions["clk"];
+        let q = compiled.gate_output_positions["q"];
+        let mut simulator = Simulator::new(compiled.world);
+        simulator
+            .run_until_stable(500)
+            .expect("compiled DFF settles");
+        let mut set = |at: (i32, i32, i32), on: bool| {
+            let mut state = simulator.world().get(at.0, at.1, at.2).clone();
+            state.lit = on;
+            simulator.world_mut().set(at.0, at.1, at.2, state);
+            simulator
+                .run_until_stable(500)
+                .expect("compiled DFF transition settles");
+            simulator.world().get(q.0, q.1, q.2).lit
+        };
+        assert!(!set(clk, true));
+        assert!(!set(clk, false));
+        assert!(!set(d, true));
+        assert!(set(clk, true));
+        assert!(set(d, false));
+        assert!(set(clk, false));
+        assert!(!set(clk, true));
     }
 
     /// The connectivity invariant, built directly rather than hoped for:

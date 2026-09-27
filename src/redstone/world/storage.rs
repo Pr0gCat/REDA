@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use crate::redstone::rules::taxonomy::BlockFlags;
 use crate::redstone::world::block::{BlockKind, BlockState};
 use crate::redstone::world::palette::Palette;
 
@@ -103,6 +104,21 @@ impl World {
                 .get(self.air_index)
                 .expect("air must be in palette"),
         }
+    }
+
+    /// 這一格的分類旗標。
+    ///
+    /// 跟 `flags_of(self.get(x, y, z))` 是同一個答案，只是照 palette 索引
+    /// 取現成的，不用再照方塊名字查一次字串集合。超出範圍時跟 `get`
+    /// 一樣當成空氣。
+    pub fn flags_at(&self, x: i32, y: i32, z: i32) -> BlockFlags {
+        let index = match self.index(x, y, z) {
+            Some(i) => self.cells[i],
+            None => self.air_index,
+        };
+        self.palette
+            .flags(index)
+            .expect("palette index out of range")
     }
 
     /// 寫入一格。超出範圍時靜默忽略。
