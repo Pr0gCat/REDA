@@ -507,6 +507,12 @@ pub(crate) fn pick(keys: &[Option<QualityKey>]) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
+/// One packed-root candidate: its label, and how to build and adapt it.
+type Candidate<'a> = (
+    String,
+    Box<dyn FnOnce() -> Result<RecursiveProduct, RecursiveError> + 'a>,
+);
+
 /// Build every candidate in `candidates`, in order, and ship the one [`pick`]
 /// chooses.
 ///
@@ -514,9 +520,7 @@ pub(crate) fn pick(keys: &[Option<QualityKey>]) -> Option<usize> {
 /// another, so what each one builds is exactly what it builds alone. Every
 /// outcome is recorded on the shipped product's diagnostics. `Err` carries
 /// every refusal, in list order, when nothing certified.
-fn ship_best(
-    candidates: Vec<(String, Box<dyn FnOnce() -> Result<RecursiveProduct, RecursiveError> + '_>)>,
-) -> Result<RecursiveProduct, Vec<RecursiveError>> {
+fn ship_best(candidates: Vec<Candidate<'_>>) -> Result<RecursiveProduct, Vec<RecursiveError>> {
     let mut labels = Vec::with_capacity(candidates.len());
     let mut outcomes = Vec::with_capacity(candidates.len());
     for (label, build) in candidates {
@@ -608,6 +612,8 @@ fn compile_root_leaf(
 /// The direct root leaf, planned with the planner's refresh reserve, or with
 /// exact refresh placement when `exact`
 /// ([`crate::compile::routing::with_exact_refresh`]).
+// ponytail: unboxed like `compile_root_leaf`; see `compile_with_cutoff`.
+#[allow(clippy::result_large_err)]
 fn root_leaf_candidate(
     lowered: &Netlist,
     pins: &RootPins<'_>,
@@ -881,6 +887,10 @@ fn compile_with_workers(
 /// exactly what the standard grid always built.
 const LEAF_LADDERS: [&[i32]; 2] = [&LEAF_PITCHES, &[STANDARD_PITCH]];
 
+// ponytail: the candidate closures return `RecursiveError` unboxed, like
+// every other fallible step here; boxing the large error types is S4's job
+// in `docs/optimization-plan.md`, done once for the whole module.
+#[allow(clippy::result_large_err)]
 fn compile_with_cutoff(
     lowered: &Netlist,
     pins: Option<&PortPlacements>,
@@ -934,8 +944,7 @@ fn compile_with_cutoff(
          -> Result<RecursiveProduct, RecursiveError> {
             Ok(adapt_packed_root(lowered, &product?, None, search, workers)?)
         };
-        type Build<'a> = Box<dyn FnOnce() -> Result<RecursiveProduct, RecursiveError> + 'a>;
-        let mut candidates: Vec<(String, Build<'_>)> = Vec::new();
+        let mut candidates: Vec<Candidate<'_>> = Vec::new();
         for pitches in LEAF_LADDERS {
             let (root, certification) = (&root, &certification);
             candidates.push((
@@ -1021,8 +1030,7 @@ fn compile_with_cutoff(
          -> Result<RecursiveProduct, RecursiveError> {
             Ok(adapt_packed_root(lowered, &product?, supplied, search, workers)?)
         };
-        type Build<'a> = Box<dyn FnOnce() -> Result<RecursiveProduct, RecursiveError> + 'a>;
-        let mut candidates: Vec<(String, Build<'_>)> = Vec::new();
+        let mut candidates: Vec<Candidate<'_>> = Vec::new();
         for pitches in LEAF_LADDERS {
             let (root, certification) = (&root, &certification);
             candidates.push((

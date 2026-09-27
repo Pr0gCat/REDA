@@ -383,15 +383,11 @@ fn leaf_chunks(
 
 /// Whether the wide cut builds leaves the production cut does not. When it
 /// does not, the wide fabric candidate would rebuild the production one.
-pub(crate) fn wide_cut_differs(
-    netlist: &Netlist,
-    parent: &ChunkId,
-) -> Result<bool, PackedRecursiveError> {
+pub(crate) fn wide_cut_differs(netlist: &Netlist, parent: &ChunkId) -> Result<bool, PartitionError> {
     let chunk = node_chunk_id(netlist, parent)?;
-    let ids = |cut| -> Result<Vec<ChunkId>, PartitionError> {
-        Ok(leaf_chunks(netlist, &chunk, cut)?.into_iter().map(|leaf| leaf.id).collect())
-    };
-    Ok(ids(LeafCut::WIDE)? != ids(LeafCut::PRODUCTION)?)
+    let wide = leaf_chunks(netlist, &chunk, LeafCut::WIDE)?;
+    let production = leaf_chunks(netlist, &chunk, LeafCut::PRODUCTION)?;
+    Ok(wide.iter().map(|leaf| &leaf.id).ne(production.iter().map(|leaf| &leaf.id)))
 }
 
 /// Every leaf `cut` makes of `netlist`, built in parallel in chunk order.
