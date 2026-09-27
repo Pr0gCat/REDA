@@ -5,7 +5,9 @@
 > 原始紀錄放在 scratchpad `/private/tmp/claude-501/-Users-seith-Desktop-REDA--claude-worktrees-caveman-full-3b51d3/afa6a9f0-76f5-41fd-a860-f7be868bf89d/scratchpad/`（`plan-time/`、`density/`、`tick-probe/`、`wall/`、`plan-lib.log`、`plan-clippy.log`、`ign.log`）。這些檔案不在 repo 裡，session 結束後可能會消失。
 > Mac 的出貨 worker 數是 `min(10, MAX_RECURSIVE_WORKERS=8) = 8`（`F/recursive.rs:77`、`457-460`）。當時的 rustc 版本沒有記錄，repo 也沒有 `rust-toolchain.toml`。
 >
-> **2026-09-27 更新**：§6 的 7 個開放問題都補上了研究結論與建議。各節內文中已被量測推翻或過時的敘述，直接改寫並標上「（09-27 更正）」。
+> **2026-09-27 更新**：§6 的開放問題中，第 3 題由使用者直接決定，其餘 6 題補上了研究結論與建議。
+> - 各節內文中被量測推翻或過時的敘述，大多保留原文，在旁邊或下方標「（09-27 更正）」。
+> - 新增的內容標「（09-27 補充）」「（09-27 實測）」或「09-27 新增」。
 > - 這一輪量測在 Linux x86_64、4 核、rustc 1.94.1 的雲端容器上做（出貨 worker 數 4），程式碼是 `d8f3af0`（與 `cc43241` 的差異只有本文件）。
 > - 部分計時是在其他建置同時執行時量的，只能當粗略參考。產物的逐位元比對和 certify 結果不受機器影響。
 > - 原始紀錄同樣放在 session scratchpad，session 結束後可能會消失。
@@ -20,7 +22,7 @@
 | verilog:and4 | 14 / 290 | 22 / 480 | — / 8,836 | 0.06 s | planner 直接葉 | 過 |
 | full_adder | 54 / 1,094 | 46 / 1,784 | 18,725 / 39,750 | 0.31 s | planner 直接葉 | **ticks 紅** |
 | segment_a | 124 / 9,305 | 72 / 6,416 | 391,680（272×18×80）/ 149,604 | 118.4 s | lid fabric `[4,6]` | **紅** |
-| seven_segment | 198 / 21,847 | 98 / 16,244 | 707,850（325×18×121）/ 329,814（09-27 補量，2.15 倍） | 161.4 s | lid fabric `[6]`（第 4 個嘗試） | **紅** |
+| seven_segment | 198 / 21,847 | 98 / 16,244 | 707,850（325×18×121，09-27 補量，legacy 的 2.15 倍）/ 329,814 | 161.4 s | lid fabric `[6]`（第 4 個嘗試） | **紅** |
 | pinned:verilog:seven_segment | 190 / 20,410 | baseline 未認證 | 非空氣 bbox 431×20×119 = 1,025,780 | 36.7 s | pinned fabric `[4,6]` | 過（gate 只要求 certify，見 `F/benchmark.rs:523-548`） |
 
 ### 1.2 已經穩固的部分
@@ -41,10 +43,10 @@
 3. **時間**
    - seven_segment 需要 161 s，逼近「單次約三分鐘」的上限（`docs/recursive-synthesis-claude-handoff-2026-09-24.md:20`）。
      - （09-27 更正）這只在 10 核 Mac 上成立。同一個 commit 在 4 核 x86_64 上，seven_segment 要 236.6 s（1 worker 時 315.5 s），segment_a 要 160.9 s（3 次中位數；1 worker 194.0 s），pinned 要 46.9 s。
-     - 180 s 的出處是交接文件給 agent 的迭代規則，不是產品需求，見開放問題 7。
+     - 180 s 這個數字出自交接文件給 agent 的迭代規則，不是明訂的合併門檻。不過設計規格確實把「每次要等好幾分鐘」當成產品問題（`docs/superpowers/specs/2026-08-05-redstone-eda-design.md:937`），見開放問題 7。
    - nested packed 一次都沒出貨，卻佔掉約 55% 的時間。每個 producer 都從頭重建葉。
-   - 10 核只用到 1.2–1.9 倍。4 核上是 121%（segment_a）、163%（seven_segment）、175%（pinned）。
-     - seven_segment 在 4 worker 時的 user CPU 比 1 worker 多 22%（384.8 s vs 314.6 s），多出來的是 `run_indexed` 的投機性工作。
+   - 10 核只用到 1.2–1.9 倍。4 核上是 1.21 倍（segment_a）、1.63 倍（seven_segment）、1.75 倍（pinned）。
+     - seven_segment 在 4 worker 時的 user CPU 比 1 worker 多 22%（384.8 s vs 314.6 s）。推測多出來的是 `run_indexed` 已認領、排在第一個終止結果之後的投機性工作（`F/certification.rs:743-752`），未證實。
 4. **選擇**
    - 第一個 certify 的就出貨。`QualityKey`（`F/certification.rs:37-43`）從來沒被拿來比較。
    - 相關程式碼：`F/api.rs:94-100` 自己寫著「The budget buys nothing」；proposal loop 只在 test 裡（`F/search.rs:60-67`）。
@@ -61,8 +63,10 @@
    - `docs/handoff-2026-09-24/` 有 2.4 MB 的過期檔案。
    - 共用的 target dir 會拿到舊 binary。bake 沒有腳本。
      - （09-27 補充）問題比這更廣：連 `cargo test` 都可能跑到別的 checkout 編出來的 lib，見 S3。
-   - 在 Linux 上，`TMPDIR` 位於 `/tmp` 底下時，`verilog:*` 會失敗，所以 `check.sh` 在一般 Linux 機器上會紅，見 S3。
-   - 沒有 CI：repo 裡沒有 `.github/`，GitHub Actions 的 workflow 數是 0。唯一的 gate 是手動執行 `check.sh`。
+   - （09-27 補充）在 Linux 上，`TMPDIR` 位於 `/tmp` 底下（含未設定）時，走即時 Yosys 的路徑會失敗：`build_circuit verilog:*`，以及 `tests/verilog_frontend.rs:485` 的 `the_baked_netlists_match_fresh_synthesis`。
+     - gate 的 `verilog:and4` 用 baked netlist，不受影響。
+     - 這個失敗目前可能是潛在的：lib 有 6 個失敗時，`cargo test` 預設大概跑不到那個檔案（依 cargo 預設的 fail-fast 推論，未重跑確認）。lib 轉綠後，`check.sh` 會在一般 Linux 上因此變紅，見 S3。
+   - （09-27 補充）沒有 CI：repo 裡沒有 `.github/`，GitHub Actions 的 workflow 數是 0。唯一的 gate 是手動執行 `check.sh`。
    - viewer 看大世界時取景很差。
 
 ## 2. 原則與不變的限制
@@ -78,7 +82,7 @@
    - 不用 wall-clock 預算做選擇或截斷。`SynthesisBudget::Time`（型別在 `F/search.rs:15-18`）不能進入 acceptance。
    - 計時只能出現在報告裡。
 5. pinned 規則：電路放在 pins 的平面矩形內，可以往上疊，也可以往沒有 pin 的面長出去。不可以在輸入的後面，也不可以在輸出的前面。由 `tests/build_circuit_pins.rs` 的掃描負責檢查。
-   - （09-27 更正）那個掃描只涵蓋 decoder 一個案例，而且半平面是寫死的（`tests/build_circuit_pins.rs:524` 的 `z in 144..`、`536` 的 `z in 0..=24`）。沒有通用的掃描，`docs/fabric-plan.md` 提過的 `pinned_fabric_stays_inside_its_room_or_open_sides` 也從沒加進來（grep 0 筆）。見開放問題 2 的建議。
+   - （09-27 更正）那個掃描只涵蓋 decoder 一個案例，而且半平面是寫死的（`tests/build_circuit_pins.rs:524` 的 `z in 144..`、`536` 的 `z in 0..=24`）。沒有通用的掃描，`docs/fabric-plan.md` 提過的 `pinned_fabric_stays_inside_its_room_or_open_sides` 也從沒加進來（grep 0 筆）。見 D4.R0 第 4 步。
 6. baseline JSON（`baseline_commit` afe577d）不改，acceptance 標準不降。三個紅燈 gate（`F/benchmark.rs:484-489`）保持紅燈，直到品質工作完成。
 
 **工作規則**
@@ -86,14 +90,15 @@
 - 加速類項目的產物必須逐位元不變。比對方式是 `canonical_world_fingerprint`（`F/benchmark.rs:1190`）。
 - 會改變產物的項目：
   - 今天的產物必在候選清單內，而且清單順序等於今天的嘗試順序。
-    - 例外（待開放問題 1 決定）：刻意用一項指標換另一項的 PR（例如 T2–T4 以少量 blocks 換 ticks、D4.1 以 ticks 換體積），可以把新做法排到清單第一位當基準，並附上 M1 報告證明沒有 gate 由綠轉紅。
+    - （09-27 建議）例外（待開放問題 1 決定）：刻意用一項指標換另一項的 PR（例如 T2–T4 以少量 blocks 換 ticks、D4.1 以 ticks 換體積），可以把新做法排到清單第一位當基準，並附上 M1 報告證明沒有 gate 由綠轉紅。
   - 升 `producer_revision`（`F/recursive.rs:446-450`）。
   - 重新烤 `viewer/baked/`。
   - commit 附上 M1 報告的 3 次中位數。
 - 新的幾何（z 向 pad、疊層、N/S 面、PITCH 2）要先有 `tests/fabric_kernels.rs` 的 kernel 測試。C3 的真實遊戲環境就緒後，還要附上真實遊戲的結果。
-  - C3 已暫緩（使用者 2026-09-27 決定），期間不要求真實遊戲結果。
+  - （09-27 補充）C3 已暫緩（使用者 2026-09-27 決定），期間不要求真實遊戲結果。
 - 每案單次執行不超過 180 s，超過就不合併。
   - （09-27 更正）這個數字取自交接文件 `:20` 給 agent 的迭代規則（「單次實際測試約三分鐘上限」），而且沒有指定機器。同一個 commit 在 4 核 x86_64 上，seven_segment 就要 236.6 s。
+  - 在開放問題 7 決定之前，這條規則照舊。
   - 建議改為只報告、不擋合併，秒數目標綁定參考機（10 核 Mac、8 worker、3 次中位數），見開放問題 7。
 
 ---
@@ -212,8 +217,8 @@
   - seven_segment 出貨的是第 4 個嘗試。
   - （09-27 更正）原本這裡寫「segment_a 的 nested `[6]` 從來沒被試過；舊量測約 6,566 blocks、102–108 ticks，兩項都比今天的 fabric 好」，這已經過時。
     - 那組數字來自合併前 2026-09-24 交接時的樹（交接文件 `:50`、`:173`）。
-    - 在 `d8f3af0` 上，nested `[6]` 在 1、4、8 worker 都被拒：child `f6450e12…` 的 seed repair 做了 27 次仍失敗。
-  - （09-27 實測）每個候選單獨建出來的結果（4 核容器）：
+    - 在 `d8f3af0` 上，nested `[6]` 在 1、4 worker 都被拒：child `f6450e12…` 的 seed repair 做了 27 次仍失敗。（要求 8 個 worker 的那次，在 4 核上被 `CertificationWorkers::bounded` 壓成 4，`F/certification.rs:684-689`。）
+  - （09-27 實測）每個候選單獨建出來的結果（4 核容器；格子內是 ticks / blocks / 體積）：
 
     | 案例 | 候選 1 | 候選 2 | 候選 3 | 候選 4 |
     |---|---|---|---|---|
@@ -229,6 +234,7 @@
   - 固定的候選清單，不隨 budget、時間或 worker 數變化：
     - 未釘選，gates > `TERMINAL_GATES`（`F/recursive.rs:76`）：`[nested [4,6], fabric [4,6], nested [6], fabric [6]]`。
     - 釘選：`[pinned packed [4,6], pinned fabric [4,6], pinned packed [6], pinned fabric [6]]`。四個都失敗才走 allocation（`F/recursive.rs:896` 起，S1 會處理它的去留；開放問題 2 建議先收窄成只剩 CallerRow，見 D4 的 D4.R0）。
+      - （09-27 補充）另外，`pinned_floors_short` 命中時一個候選都不試，直接走 allocation（`F/recursive.rs:838-847`）。
     - 若開放問題 4 採用寬葉，未釘選清單的最後再附加兩個候選，見 T6。
     - 直接葉不動。
     - seam 形狀不另列候選：`tightest` 失敗時已經會退回 full strip（`F/packed_node.rs:874-885`）。
@@ -247,7 +253,7 @@
 - **成功標準**
   - 6 案出貨的 ticks 和 blocks 都不比今天差。這由構造保證，因為今天的產物就在清單裡，而且只有 dominance 才換。
     - （09-27 補充）這個保證是相對於「第一個認證成功的候選」，不是相對於昨天的產物。若日後某個排在前面的候選開始能 certify（例如 D3 之後的 nested `[4,6]`），基準就會移動。
-    - 所以要加一個測試，把每案的基準 index 釘住：segment_a 1、pinned 1、seven_segment 3。
+    - 所以要加一個測試，把每案的基準 index（0 起算）釘住：segment_a 1、pinned 1、seven_segment 3，也就是上表的候選 2、2、4。
     - 另外要注意：今天第一個成功的 producer 若在 `adapt_packed_root` 出錯，整個 compile 會經由 `?` 中止（`F/recursive.rs:803-805` 等處）。Q1 之後 adapter 錯誤會變成 `r[i]=Err`，改由後面的候選出貨。
   - 沒有任何 `no_tick_regression` 或 `no_block_regression` 由 true 變 false；目前綠燈的 and4、verilog:and4、pinned 保持綠燈。
   - `pick` 有單元測試。至少涵蓋：
@@ -258,13 +264,14 @@
     - ticks 和 blocks 相同時，體積小的勝。
     - 完全相同時 index 小的勝。
     - 全部 Err 時回傳最後一個 index。
-    - 上表三組實測向量，預期選 1、1、3。
+    - 上表三組實測向量：依表中順序（segment_a、seven_segment、pinned），預期選 index 1、3、1（0 起算，即候選 2、4、2）。
+    - 性質測試：對任意 legacy (L_t, L_b)，`pick` 選出的產物在每個 gate 判斷式上都不差於基準。
   - 新增 `candidate_selection_is_worker_invariant`。
   - 和 P1–P3a 合起來的 wall：seven_segment ≤ 110 s，segment_a ≤ 75 s，pinned ≤ 30 s。user time 不超過今天的 1.5 倍。
     - （09-27 補充）這些秒數要在參考機上量（開放問題 7）。pinned ≤ 30 s 看起來偏緊：4 核容器上單是 pinned fabric `[6]` 就要 70.3 s。
 - **風險**
   - dominance 可能讓只在一項上明顯更好的候選出不了貨。這是刻意的保守選擇，見開放問題 1。
-  - 在今天的樹上 Q1 對 6 案沒有任何收益，卻要把四個候選都跑完。pinned 今天 45 s，四個候選串行在 4 核容器上是 21.3 + 24.0 + 65.7 + 70.3 s。
+  - 在今天的樹上 Q1 對 6 案沒有任何收益，卻要把四個候選都跑完。pinned 在 4 核容器上今天約 45 s（開放問題 7 的 3 次中位數是 46.9 s），四個候選串行則是 21.3 + 24.0 + 65.7 + 70.3 s。
     - 若開放問題 4 的寬葉候選被採用，Q1 就有收益，見 T6。
   - 沒有 P1 的話，成本是 2–4 倍。
 - **工作量**：M｜**依賴**：M1、P1 必要；P2、P3a 建議先做。這項取代「把 fabric 排到 nested 前面」的調順序做法，也取代原本的 D3.0。
@@ -402,6 +409,7 @@
      - 全部失敗才對 `⌈s0/4⌉` 呼叫 `build_leaf_finer`，保留 typed refusal（相關測試在 `F/packed_recursive.rs:1661`、`1747`、`2032`）。
 - **成功標準**
   - seven_segment 葉片 ≤ 5 片，blocks ≤ 19,700，ticks ≤ 198。
+    - （09-27 更正）「≤ 5 片」是以 8 片為前提，今天出貨的已經是 4 片，這條自動成立，量不到 D2 的效果。改成：葉片少於今天的 4 片（D2 的貪婪目標是 3×28）。
   - 每案仍 ≤ 180 s（取代舊稿的「≤ 2 倍今天」）。
   - segment_a 不變差。C5 sweep 通過。
 - **（09-27 補充）與開放問題 4 的關係**
@@ -462,7 +470,7 @@
        - `short` 在建任何 child 之前就觸發，所以它只能報估計值，要標明是下界。
     3. 344/gate 的估計不能單獨造成拒絕。改成不高於所有實測葉的值，並用 corpus 測試守住。
        - 不要改成只進 trace：那樣封閉房間的 decoder 要 193.9 s 才會拒絕（grain 32→1 兩個 ladder），超過 180 s。
-       - 驗證者算過：用約 96/gate 時，47×96 = 4,512 > 29×105 = 3,045，仍能快速拒絕。
+       - 核對時算過：用約 96/gate 時，47×96 = 4,512 > 29×105 = 3,045，封閉房間的 decoder 仍能快速拒絕。
     4. 加一個通用的 pinned 規則掃描（任何有 caller 那面的半平面外不得有方塊，邊界定義和 `PinnedRoom::fed` 一致），套到每個 pinned 測試產物上。
     5. 升 `producer_revision`：對部分輸入，行為會從「回傳世界」變成「回傳錯誤」。
   - 標準：6 案的 `canonical_world_fingerprint` 不變（case fingerprint 會隨 `producer_revision` 改變）；`F/recursive.rs:1692` 照常通過；short_room 類輸入回傳結構化錯誤，不再出貨違規世界。
@@ -490,7 +498,9 @@
     1. `StripShape` 加 `floors`，依 dataflow 順序把連續的葉分到 F 層。`fabric_strip`（`F/packed_node.rs:1867-1894`）的 y 位移為 `floor·(最高 child + 3) − low.y`。
     2. `fabric_reach` 的 lid 取最頂層。
     3. F 取最小值，使每層長度 ≤ max(開放軸寬度, 最寬葉加 comb)，上限 `F_MAX = 3`。依 `[F, F−1, …, 1]` 嘗試，1 就是今天的產物。
-       - （09-27 補充）這個順序把今天的產物放在最後，不符合 §2「清單順序等於今天的嘗試順序」。要嘛把它當成 §2 例外（開放問題 1），要嘛改成附加候選。D4.1 的標準本來就接受 ticks 從 190 升到 209，dominance 不會自動選它。
+       - （09-27 補充）這個順序把今天的產物放在最後，不符合 §2「清單順序等於今天的嘗試順序」。
+       - D4.1 的標準接受 ticks 從 190 升到 209，當附加候選時 dominance 永遠不會選它。所以它只能走開放問題 1 的 §2 例外（排到第一位當基準）。
+       - 這和開放問題 4 (b)「今天的產物留在原位置」的條件要一起決定。
     4. 下層 pad 不能穿過上層 halo，由 `plan_clash` 擋。
   - 標準：
     - decoder 的 `pinned_overhang` 比今天少 ≥ 40%，體積 ≤ 0.8M，blocks ≤ 20,410，ticks ≤ 209（Phase 2 要回到 ≤ 190）。量完後定下 `PINNED_OVERHANG_LIMIT` 的值。
@@ -515,10 +525,10 @@
     - `MIN_LEAF_AREA_PER_GATE = 344`（`F/packed_node.rs:1611`）是用 pitch 6 量的，pitch 4 只要 199。這會讓 `pinned_floors_short`（1908-1915 行）誤判，提前轉去 allocation。
   - 做法：`short` 時先試 F+1，到 `F_MAX` 才減半。344 改為 199，或像 `pinned_space`（1922-1954 行）那樣用實建的 footprint 推導。
     - （09-27 更正）199 也未必是下界：decoder 在 grain 1 時實建是 9,553 格（`[4,6]`，203/gate）和 15,137 格（`[6]`，322/gate）；chain(34) 有一個放得進 196×18 的 layout（104/gate，只有 placed、沒有實建驗證，待重測）。
-    - 下界要從實建的 footprint 推導，或用 corpus 測試守住的常數，見 D4.R0 第 3 步。
+    - 每 gate 面積下界改由 D4.R0 第 3 步處理（Phase 1b 裡 D4.R0 在 D4.3 之前），D4.3 不再改成 199。
     - `short` 的預先檢查也要把 `F_MAX` 層算進去（需要的面積 > 房間面積 × `F_MAX` 才算不夠），並讓拒絕在 180 s 內完成。
   - 標準：pinned 測試通過（`F/packed_node.rs:2470` 更新期望值），封閉房間改走疊層。
-  - 風險：344 改成 199 會讓原本被提早拒絕的房間進入完整嘗試，失敗成本變高。
+  - 風險：344 改成 199 會讓原本被提早拒絕的房間進入完整嘗試，失敗成本變高。（09-27：改由 D4.R0 調低下界後，這個風險移到 D4.R0。）
   - 依賴：D4.1；開放問題 4 的決定。
 - **D4.4 強制 overhang 上限**（S）
   - 問題：D4.0 只量不擋，本體仍可無上限延伸。
@@ -606,6 +616,9 @@
     - fabric `[4,6]` node 被拒，fabric `[6]` 做出 4 片 `[30,11,11,32]`，162 ticks / 21,725 blocks，4 核上 591 s。
   - 在 32 grain 下，cone order 的 4×21 靜態也只到 k=2。T6 的對半切寬葉候選（142 / 15,261）兩項都比它好，所以 T2 對 seven_segment 的優先度應該降低。
   - 照上面的寫法，T2 會就地換掉今天的切法。要合規，必須改成附加在 Q1 清單後面的候選（同 D2）。
+    - 但 T2 的標準容許 blocks 多 2%，附加候選在 dominance 下只要 blocks 多一格就不會被選。
+    - 所以 T2 只有兩條路：做到 blocks 不增加；或走開放問題 1 的 §2 例外，排到第一位當基準。
+    - 後者和開放問題 4 (b)「今天的產物留在原位置」衝突，兩題要一起拍板。T3、T4 也一樣。
 
 #### T3 關鍵邊界訊號在 leaf 內對齊
 - **問題**
@@ -642,7 +655,7 @@
 #### T6 寬葉候選（09-27 新增，待開放問題 4 決定）
 - **問題**
   - seven_segment 出貨的 4×21 切法有 3 次跨越，佔 138 ticks。
-  - 超過 32 gates 的葉從沒試過。grain 在 git 歷史裡一直是 32。
+  - 超過 32 gates 的 seed 葉（free leaf）沒有任何量測紀錄。直接葉 planner 在 46、84 gates 試過並被拒（`F/recursive.rs:66-68`）。`TERMINAL_GATES` 從引入起一直是 32。
 - **實測**（4 核容器，scratch 副本，沒有改 repo）
   - 每個世界都走真正的 `adapt_packed_root` → `certify_root_world` → `evaluate_world`。對照組重現了今天的 198 / 21,847。
 
@@ -661,7 +674,7 @@
     - 42-gate 葉：峰值 154,665–239,683，最高到上限的 91%，每次建置撞 2–11 次，全部由既有的 seed repair 吸收。上限沒有提高。
 - **做法**
   - 不動 `TERMINAL_GATES=32`（`F/recursive.rs:76`）。它同時是直接葉 planner 的門檻、pinned grain 迴圈的起點、歸因的 grain，而且併在 `producer_revision` 裡。
-  - 新增具名常數 `WIDE_LEAF_GATES = 48`，併進 `producer_revision`（v2）。不做成環境變數或設定欄位（`PackedGrain` 的文件明言 grain 不是旋鈕，`F/packed_recursive.rs:64-67`）。
+  - 新增具名常數 `WIDE_LEAF_GATES = 48`，併進 `producer_revision`。若和 Q1 分開落地要再升一版（Q1 升到 v2，D4.R0 也會升一次）。不做成環境變數或設定欄位（`PackedGrain` 的文件明言 grain 不是旋鈕，`F/packed_recursive.rs:64-67`）。
   - 在 Q1 未釘選清單的最後附加兩個候選：
     - 「fabric 對半切 `[4,6]`」：root 在 `split_of(n)` 切一刀，每半各一片葉。只在 32 < ⌈n/2⌉ ≤ 48（n = 65–96）時啟用。
     - 「fabric 單葉 `[4,6]`」：整個 root 一片葉。只在 32 < n ≤ 48 時啟用。
@@ -673,7 +686,10 @@
   - M1、M2 報告每片葉的 queue 峰值，讓餘裕的變化看得見。
 - **風險**
   - **時間是最大的問題。** Q1 下每個候選分到 `max(1, workers/n)` 個 worker；在 Mac 上 8 worker、6 個候選，每個也只有 1 個 worker，兩片 42-gate 葉只能串行建。
-    - 依實測的葉時間（139–156 s 加 293–311 s）除以粗估的 2.4 倍機器差，推估 Mac 上約 185–240 s，超過 180 s。
+    - Mac 上的時間只能推估，推法不同結果不同，但每一種都超過 180 s：
+      - 串行的葉時間是 432–467 s（139–156 s 加 293–311 s）。除以 2.4 倍機器差再加約 6 s 收尾，是 186–201 s。1 worker 全程 581 s 除以 2.4，約 240 s。
+      - 但 2.4 倍只由 fabric `[6]` 一步、在有負載的容器上推得。開放問題 7 在閒置時量到，4 核容器 1 worker 對 Mac 8 worker 只慢 1.64 倍（segment_a）到 1.95 倍（seven_segment），單核差距不會比這更大。照這個上限推，Mac 上至少約 220–285 s。
+    - 另外，T6 會超過 Q1「user time 不超過今天 1.5 倍」的標準：對半切候選光是葉就串行 432–467 s，今天 seven_segment 全部的 user time 是 384.8 s。
     - P1 幫不上忙（沒有其他候選會建這兩個 chunk），P2 也需要每個候選至少 2 個 worker。
     - 所以合併前要有 Mac 實測 ≤ 180 s，再加上以下其中一項：
       - 一條不隨 worker 數改變的靜態規則，把多餘的 worker 分給寬葉候選。
@@ -735,6 +751,8 @@
        - `dff.v`（Yosys；Linux 上 `TMPDIR` 要在 `/tmp` 以外，見 S3）。
        - pinned 的 `compile_planned` DFF 案例（`planner.rs:13146`）。
      - DFF 另外加 simulator 對 Evaluator 的追蹤，輸入要包含「同一時鐘相位內多次切換 D」。Support 為 0 不代表 DFF 世界是對的，見 C8。
+       - 今天 single DFF、`dff.v`、shift4 在這種輸入下就會錯（C8）。所以這條追蹤先以 `#[ignore = "known: C8"]` 或只報告的方式加入，等 C8 修好才轉成 gate。
+       - 否則 C1 會因為既有的 DFF 問題而紅，違反開放問題 6「C1 不以 DFF 修正為前提」。
      - 同時把 5 個 legacy 世界的 fingerprint 全部釘住（今天只有 and4 有，`F/benchmark.rs:2189-2193`），並斷言 Support 0 違規（含 lever 與 y=0）。5 個 `compile_legacy` 合計約 0.6 s。
        - lever 檢查沿用 `tests/reference_circuits.rs:593` 的 `lever_support_position` 和 621 行的 `face_is_supported`。
   4. 逐一讀過再重錄：
@@ -777,7 +795,7 @@
 
 #### C3 真實 Minecraft 驗證
 - **狀態：暫緩**（使用者 2026-09-27 決定）。
-  - 暫緩期間，§2「改變 fingerprint 要附真實遊戲結果」的合併規則不啟用，改由開放問題 7 建議的出貨 fingerprint fixture，加上 simulator 檢查把關。
+  - 暫緩期間，下面第 7 步「改變 fingerprint 要附真實遊戲結果」和 §2「新幾何要附真實遊戲結果」的規則都不啟用，改由 simulator 檢查把關；若開放問題 7 採用出貨 fingerprint fixture，再加上它。
   - 雲端容器目前只有 Java 21，而且網路政策擋掉了 Mojang 的下載點（`piston-meta.mojang.com`、`piston-data.mojang.com`）。
 - **問題**
   - 規格記錄過兩次「全綠卻整個電路死掉」（`docs/superpowers/specs/2026-08-07-minecraft-conformance.md:8-13`）。
@@ -819,7 +837,7 @@
   3. harness 加 `--paste` 模式：用檔案裡的狀態一次放完，模擬 Litematica 貼上。`mc_dump` 的 BLOCK 行加屬性欄。
 - **成功標準**：
   - 6 個世界經 `settled_for_export` 後，再 `Simulator::new` 加 `step()` 一次，changed 為 0。
-  - `--paste` 模式在 26.2 上 6/6 通過。
+  - `--paste` 模式在 26.2 上 6/6 通過。（09-27：隨 C3 暫緩；只做第 1、2 步時，只要求上一條。）
 - **風險**：形狀規則寫錯會弄壞原本能用的檔案，必須用 `--paste` 驗證。
 - **工作量**：M｜**依賴**：第 3 步依賴 C3（隨 C3 暫緩）。第 1、2 步可以先做。
 
@@ -887,13 +905,13 @@
     - single DFF 2/32 錯。
     - `dff.v` 1/32 錯。
     - shift4 8/128 錯。
-    - 現有的 7 步追蹤從不在同一相位切換 D 兩次，所以測試都是綠的。原因還沒查。
+    - 現有的 7 步追蹤從不在同一相位切換 D 兩次，所以測試都是綠的。不一致的根因還沒查。
 - **不建議現在做**：在 `compile()` 失敗後改走 `compile_grown` 的 fallback。
   - 它能做出 reg4_en 和 counter4（C1 之後 Support 0），但 grown 版 reg4_en 在 C1 之後 128 次取樣錯 1 次（C1 之前 0/128）。counter4 的 grown 世界沒有做功能檢查。
   - 那等於把「出貨壞世界」帶回來。
   - 它也是交接規則說的 whole-circuit fallback。
   - `compile_grown` 的文件自己說它不是 `compile()` 的預設（`src/compile/mod.rs:7926-7928`），在 segment_a 上曾跑 315 s 與 1,802 s。
-- **做法**：先把多次切換的追蹤加進 C1 的 DFF 掃描（成為功能 gate），查清不一致的根因。等有功能 gate，並在較大的時序設計上量過有上限的成本之後，再評估 fallback。
+- **做法**：C1 先以 ignored 或只報告的方式加入多次切換的追蹤（見 C1 第 3 步），這裡查清不一致的根因並修好，再把追蹤轉成功能 gate。等功能 gate 就緒，並在較大的時序設計上確認 fallback 的成本有上限之後，再評估 fallback。
 - **工作量**：M｜**依賴**：C1。
 
 ---
@@ -907,14 +925,14 @@
 - **做法**（在 Q1 之後，依 `candidates` 報告決定）
   1. 移除 allocation。前提有兩個：D4.4 已上線，且使用者同意超出上限時回傳 typed refusal（開放問題 2）。
      - allocation 會把本體放到所有 pin 的南側（`F/allocation.rs:888`），違反 pinned 規則。
-       - （09-27 更正）只有 `RootAccess::Landed` 才違反。`CallerRow`（一排 pin、輸入朝南、輸出朝北）本身合規，而且是 pin 列在 z=0、z=1 時唯一的救法。
+       - （09-27 更正）違反的是 `RootAccess::Landed`：實測的違規都是南面有 caller 的 `Landed`；南面沒有 caller 的 `Landed` 沒有量過。`CallerRow`（一排 pin、輸入朝南、輸出朝北）本身合規，而且是 pin 列在 z=0、z=1 時唯一實測到的救法。
        - 刪除前，要嘛讓 pinned producer 接受 z < 2 的 pin 列，要嘛加一個 typed refusal（「`--synth` 的 pin 列必須在 z ≥ 2」）。見 D4.R0。
      - 把 `SignalContract`（`F/allocation.rs:199`）、`RootPort`（369）、`Prism`（163）、`root_placement`（558）、`normalise_root_pins`（619）移到 `contract.rs`。
      - 先把 `split_of`（`F/recursive.rs:1013-1015`）移到 `partition.rs`：`F/packed_recursive.rs:344`、`454`、`497` 和 `F/attribution.rs:249` 都在用，D2、T2 也建立在它上面。
      - 然後刪除 `allocate*`、`schedule.rs`、`F/parent.rs:2677` 的 `compose`、`compile_with_cutoff` 裡的 allocation fallback（`F/recursive.rs:896-994`），以及 `F/recursive.rs:996-1550` 裡 `split_of` 以外的部分。
      - 刪除只測 allocation 的測試（`F/recursive.rs:1692`、`1755`、`2214`、`3020`、`3041`）。
        - （09-27 更正）實測只有 1692 會走到 `compile_with_cutoff` 的 allocation fallback。它的註解「Pins three cells apart leave no rectangle a layout fits」（1702 行）也不對：`place()` 在 (13,8) 成功，是每個 layout 都在 z=-2 碰到 NegativeCanvas。
-       - 1755、2069、2108 走 pinned packed。2214 走 pinned fabric。3021 呼叫 unpinned 的 `compile()`。只有 3042 直接呼叫 `solve_subtree`/`compose`。
+       - 以 `fn` 所在行為準（上面列的 2214、3020、3041 是 attribute 行）：1755、2069、2108 走 pinned packed。2215 走 pinned fabric。3021 呼叫 unpinned 的 `compile()`。只有 3042 直接呼叫 `solve_subtree`/`compose`。
        - 刪除清單要照這個重列；1692 要改寫成 CallerRow 或 z<2 refusal 的測試。
      - （09-27 補充）順便修正過時的程式碼註解：`F/api.rs:101-104`（「a pinned root above it is allocated and composed」）和 `F/recursive.rs:776-783`（「continues down the allocating path untouched」）。pinned root 今天會先試 pinned packed 和 pinned fabric（847-893 行）。
      - `F/certification.rs:224-249` 的測試改用 fabric 產物。
@@ -945,7 +963,7 @@
     - dep-info 裡記的是相對路徑，cargo 會把別的 checkout 編的產物當成最新的。
     - 所以連 `cargo test` 都可能跑到別的 checkout 的程式碼。09-27 平行實驗時真的發生過：
       - 測試過濾器配到 0 個測試。
-      - 套了 C1 patch 的快照測試仍看到 3 格 dust-on-dust。
+      - 套了 C1 patch 的快照測試 `a_route_lays_dust_on_its_own_committed_stone` 仍數到 3 格 dust 疊在自己已提交的石頭上（patch 生效時應為 0）。
       - 當時改用自訂 profile（`--profile q5probe`，寫到 `target/q5probe/`），或每個 checkout 各自的 `CARGO_TARGET_DIR`（`cp -a` 一份 `release/` 重用依賴），才解決。
   - （09-27 補充）在 Linux 上，`TMPDIR` 位於 `/tmp` 底下時，`verilog:*` 會失敗（「Can't open log file `/tmp/reda-verilog-…/out.json.yosys.log`」）。
     - 原因：yowasp_runtime 把自己 `mkdtemp` 的目錄掛成 WASI 的 `/tmp`（`yowasp_runtime/__init__.py:96-97`），遮住了 reda 用 `std::env::temp_dir()` 建的工作目錄（`src/frontend/mod.rs:388`）。
@@ -1033,26 +1051,26 @@
 | Phase | 內容 | 退出條件 |
 |---|---|---|
 | **0 量測與加速**（產物逐位元不變） | S3 → M1、M2、T0、C5 → P1 → P2 → P3a | 6 案和 decoder 的 fingerprint 不變；3 次中位數：seven_segment ≤ 90 s、segment_a ≤ 65 s、pinned ≤ 22 s；報告行完整；T0 加總 assert 通過；1/2/N sweep 綠；M2 回答了 P3c、P5、P6 的三個問題 |
-| **1a 選擇與 unpinned 密度**（D2 需要開放問題 4 的決定） | Q1 → T6（若開放問題 4 採用）→ P4a → D1.1 → D1.2 → D2 → D1.3；D3.x 依 Q1 報告決定（09-27：目前不成立） | 6 案都 certify，ticks 和 blocks 都不比今天差；seven_segment blocks ≤ 19,700（目標 16–18k）且 ticks ≤ 198；segment_a ≤ 9,305 blocks 且 ≤ 124 ticks，並以 Q1 報告的最佳候選為準（若 nested 勝出，目標 ≤ 7,000 blocks 且 ≤ 110 ticks）；每案 ≤ 180 s；`producer_revision` v2；viewer 重烤。（09-27）若採用 T6：seven_segment ≤ 142 / ≤ 15,261，segment_a ≤ 80 / ≤ 4,183，兩個 blocks gate 轉綠；D2 的優先度重新評估 |
-| **1b pinned room**（D4.3 需要開放問題 4 的決定） | D4.R0 → D4.0 → D4.1 → D4.3 → D4.2 → D4.4 | decoder `pinned_overhang ≤ PINNED_OVERHANG_LIMIT`（D4.1 後定值），體積 ≤ 0.8M，blocks ≤ 20,410，ticks ≤ 209；矩形內 torch > 0；規則掃描通過。（09-27）pinned 放不下時回傳結構化錯誤，不再出貨違規世界 |
+| **1a 選擇與 unpinned 密度**（D2 需要開放問題 4 的決定） | Q1 → T6（若開放問題 4 採用；合併前要有 Mac 實測 ≤ 180 s，還要分 worker 的靜態規則，或提前做 Phase 3 的 P5 或 S1，見 T6 風險）→ P4a → D1.1 → D1.2 → D2 → D1.3；D3.x 依 Q1 報告決定（09-27：目前不成立） | 6 案都 certify，ticks 和 blocks 都不比今天差；seven_segment blocks ≤ 19,700（目標 16–18k）且 ticks ≤ 198；segment_a ≤ 9,305 blocks 且 ≤ 124 ticks，並以 Q1 報告的最佳候選為準（若 nested 勝出，目標 ≤ 7,000 blocks 且 ≤ 110 ticks；09-27：nested 候選今天全被拒，這個分支暫不適用）；每案 ≤ 180 s；`producer_revision` v2；viewer 重烤。（09-27）若採用 T6：seven_segment ≤ 142 / ≤ 15,261，segment_a ≤ 80 / ≤ 4,183，兩個 blocks gate 轉綠；D2 的優先度重新評估 |
+| **1b pinned room**（D4.R0、D4.4 需要開放問題 2 的決定；D4.3 需要開放問題 4 的決定） | D4.R0 → D4.0 → D4.1 → D4.3 → D4.2 → D4.4 | decoder `pinned_overhang ≤ PINNED_OVERHANG_LIMIT`（D4.1 後定值），體積 ≤ 0.8M，blocks ≤ 20,410，ticks ≤ 209；矩形內 torch > 0；規則掃描通過。（09-27）pinned 放不下時回傳結構化錯誤，不再出貨違規世界 |
 | **2 延遲** | T1 → T2 → T3 → T4；T5 視觸發條件 | full_adder ≤ 46 且 ≤ 1,784（gate 綠）；seven_segment ≤ 140；segment_a ≤ 105；pinned ≤ 190；blocks +2% 以內。（09-27）若採用 T6：seven_segment 追蹤目標約 112–115（T3 把葉內的腿壓到 ≤ 12 ticks），segment_a ≤ 80；T2 的優先度降低 |
 | **正確性**（從 Phase 0 起並行） | C0 → C1 → C8 → C2 → C3（暫緩）→ C4（第 1、2 步）→ C7 | lib 0 failed，`tests/fragment_synth_baseline.rs:56` 轉綠；Support 在所有 compile 路徑（含 `compile_planned` 與 DFF）上 0 違規；5 個 legacy fingerprint 釘住；26.2 探針與 6/6 真實遊戲向量隨 C3 暫緩 |
-| **3 收斂與清理** | S1 → C6；P4 跟在 D1 之後；P5、P6 依 M2；S2、S4、S5、S6 無依賴，可隨時插進去 | `check.sh` 只剩品質紅燈（品質工作完成後全綠）；clippy 0；只剩兩個 producer |
+| **3 收斂與清理** | S1 → C6；P4 跟在 D1 之後；P5、P6 依 M2；S2、S4、S5、S6 無依賴，可隨時插進去 | `check.sh` 只剩品質紅燈（品質工作完成後全綠）。（09-27 更正）seven_segment 的 ticks gate 預期長期紅燈，segment_a 的 ticks gate 目前也沒有項目能到 ≤ 72（最好是 T6 的 80），所以不會全綠，見開放問題 4；clippy 0；只剩兩個 producer |
 
-- （09-27 補充）上表所有秒數，都指參考機（10 核 Mac、8 worker、`--exact --test-threads=1`、開始前 1 分鐘 load < 1.0、3 次中位數）上的量測。其他機器只報告，不當退出條件，見開放問題 7。
+- （09-27 建議，待開放問題 7 決定）上表所有秒數，建議都指參考機（10 核 Mac、8 worker、`--exact --test-threads=1`、開始前 1 分鐘 load < 1.0、3 次中位數）上的量測，其他機器只報告、不當退出條件。決定之前，§2 的 180 s 規則照舊。
 
 **品質目標總表**（ticks / blocks；各欄的收益不可直接相加）
 
 | case | legacy | 今天 | Phase 1 後 | Phase 2 後 | 若葉 ≥ 42 gates 或走直接葉 |
 |---|---|---|---|---|---|
 | seven_segment | 98 / 16,244 | 198 / 21,847 | ≤ 198 / ≤ 19,700 | ≤ 140 | ~~≈ 92（k=1，勉強過）~~ 實測 142 / 15,261（k=1，09-27） |
-| segment_a | 72 / 6,416 | 124 / 9,305 | ≤ 110 / ≤ 7,000 | ≤ 105 | ~~≤ 72（k=0）~~ 實測 80 / 4,183（單一 46-gate 葉，k=0，09-27） |
+| segment_a | 72 / 6,416 | 124 / 9,305 | ~~≤ 110 / ≤ 7,000~~ ≤ 124 / ≤ 9,305（09-27 更正：原值假設 nested 勝出，但 nested 今天全被拒；若採用 T6 則 ≤ 80 / ≤ 4,183） | ≤ 105 | ~~≤ 72（k=0）~~ 實測 80 / 4,183（單一 46-gate 葉，k=0，09-27） |
 | full_adder | 46 / 1,784 | 54 / 1,094 | 不變 | ≤ 46 / ≤ 1,784 | — |
 | pinned decoder | — | 190 / 20,410 | ≤ 209 / ≤ 20,410 | ≤ 190 | — |
 
 - （09-27 更正）最後一欄原本的推估假設「葉內」時間和跨越成本 C 不隨葉變大，實測兩者都會增加，見 §3.C 的預算模型與 T6。
   - `flat_leaves` 一律先對半切 root（`F/packed_recursive.rs:344`），所以沒有任何 grain 值能做出 segment_a 的單葉，k=0 需要 T6 的專用候選。
-  - seven_segment 的 98 ticks 在可預見的範圍內不會達到，ticks gate 預期長期維持紅燈，見開放問題 4。
+  - seven_segment 的 98 ticks 在可預見的範圍內不會達到，ticks gate 預期長期維持紅燈。segment_a 的 72 ticks 也沒有項目能達到。見開放問題 4。
 
 ## 5. 不做的事與已排除的方案
 
@@ -1076,80 +1094,85 @@
 | hypergraph 切割 | 精確均衡時贏不了拓撲切片，收益小 |
 | 另寫獨立的規則檢查器、Paper 或 Fabric mod | 會複製同樣的假設；vanilla 加既有 harness 才是 ground truth |
 | viewer 正交相機 | 不需要；等真的有問題再加。（09-27：原本同一列的「預設每個 worktree 各自一個 target」已經出過問題，建議翻案，見 S3） |
-| Q1 改用純 `QualityKey` 字典序（09-27 新增） | 可能為了少 1 tick 接受任意多的 blocks，讓綠燈 gate 翻紅（20 萬組隨機模擬：綠轉紅 8,530 次，dominance 0 次）；`compile_fragment_synth` 是公開入口，不能讀 baseline 來把關。見開放問題 1 |
-| 直接把 `TERMINAL_GATES` 調到 42 或 48（09-27 新增） | 它同時管直接葉的 planner 門檻（planner 在 46、84 gates 會拒絕）；會取代今天的產物而不是新增候選；`PackedGrain` 文件明言 grain 不是旋鈕。改用 T6 的附加候選 |
-| DFF 的 `compile()` 失敗時改走 `compile_grown`（09-27 新增，暫不做） | grown 版 reg4_en 在 C1 後 128 次取樣錯 1 次，等於帶回「出貨壞世界」；也是 whole-circuit fallback。等 C8 的功能 gate 就緒再評估 |
+| Q1 改用純 `QualityKey` 字典序（09-27 新增，建議不做，待開放問題 1 決定） | 可能為了少 1 tick 接受任意多的 blocks，讓綠燈的 blocks gate 翻紅（20 萬組隨機模擬：綠轉紅 8,530 次，dominance 0 次）；`compile_fragment_synth` 是公開入口，不能讀 baseline 來把關。見開放問題 1 |
+| 直接把 `TERMINAL_GATES` 調到 42 或 48（09-27 新增，建議不做，待開放問題 4 決定） | 它同時管直接葉的 planner 門檻（planner 在 46、84 gates 會拒絕）；會取代今天的產物而不是新增候選；`PackedGrain` 文件明言 grain 不是旋鈕。改用 T6 的附加候選 |
+| DFF 的 `compile()` 失敗時改走 `compile_grown`（09-27 新增，建議暫不做，待開放問題 6 決定） | grown 版 reg4_en 在 C1 後 128 次取樣錯 1 次，等於帶回「出貨壞世界」；也是 whole-circuit fallback。等 C8 的功能 gate 就緒再評估 |
 | 以 wall-clock 180 s 當硬合併 gate（09-27 新增，待開放問題 7） | 同一個 commit、逐位元相同的產物，4 核 x86_64 比 10 核 Mac 慢 1.28–1.47 倍，seven_segment 在 4 核上就是 236.6 s；結果取決於硬體，不是程式碼 |
 | 現在就做 N/S fabric、node 級快取 | YAGNI；前者在 D4.2 需要時做，後者等 M2 證明需要 |
 | PITCH 2、拿掉 E 層（原 D1.4） | 延後：PITCH 2（`F/fabric.rs:40`）估計再省 92 欄，但要改 L1≥3 規則並先在 vanilla 驗證 K1/K2；D1.3 若讓所有 pad 都走 Across，E 層就沒用了，高度可從 20 降到 17。兩者都等 D1.3 量測和 C3 之後再決定 |
 
 ## 6. 開放問題
 
-> 2026-09-27：每一題都經過研究、實測，並由另一個人逐條核對證據、試著推翻。下面的「建議」是研究結論，還不是決定。除了第 3 題已由使用者決定之外，其他都待拍板。
+> 2026-09-27：第 1、2、4–7 題都經過研究、實測，再由獨立的第二輪審查逐條核對證據、試著推翻；第 3 題由使用者直接決定。下面的「建議」是研究結論，還不是決定，都待拍板。
 > 量測環境見文件開頭。
 
-### 1. Q1 的選擇規則（建議：維持 dominance）
+### 6.1 Q1 的選擇規則（建議：維持 dominance）
 
 - **原問題**：預設用 dominance / keep-better（`docs/fabric-plan.md:234-239`）：先出貨今天的產物，只有另一個候選 ticks 和 blocks 都不差時才換，字典序只在這些候選之間排序。要不要改成純 `QualityKey` 字典序（ticks 優先）？字典序可能挑到 ticks 較好但 blocks 超過 baseline 的候選，讓 gate 翻紅。
 - **建議**：維持 dominance，照 §3.A Q1 寫的 `pick` 實作。不加容忍帶。
   - 將來若要加，做成 `SearchConfig` 裡的整數千分比欄位（會進 case fingerprint），只套用在 ticks 嚴格較少的候選，預設 0。
 - **依據**
   - 今天兩種規則在 6 案選出的產物逐位元相同（見 Q1 的實測表），現在決定不會影響任何東西。
-  - gate 的形式都是 `新 ≤ legacy`，是單調的：只要出貨產物在 ticks 和 blocks 上都不比基準差，任何 gate 都不可能由綠轉紅。
+  - gate 的形式都是 `新 ≤ legacy`，是單調的：只要出貨產物在 ticks 和 blocks 上都不比基準差，這兩項 gate 就不可能由綠轉紅。
+    - 前提有兩個，目前都沒有測試：certificate 的 `QualityKey` 等於 benchmark 量到的值（5 個候選都成立）；`evaluate_world` 能裝上 driver 和 probe（否則 `compiled_and_certified` 為 false，`F/benchmark.rs:453-471`）。`pick` 的性質測試要涵蓋這兩點。
     - 20 萬組隨機清單模擬：dominance 綠轉紅 0 次，純字典序 8,530 次。
-  - `compile_fragment_synth` 是公開入口（`src/compile/mod.rs:101` 再匯出，`build_circuit --synth` 對任意 netlist 呼叫），baseline JSON 只有測試會讀。選擇規則本身就是唯一的把關。
+  - `compile_fragment_synth` 是公開入口（`src/compile/mod.rs:101` 再匯出，`build_circuit --synth` 對任意 netlist 呼叫）。函式庫的 compile 路徑不讀 baseline JSON，讀它的只有測試和 `src/bin/fragment_acceptance.rs:49`（路徑由參數給）。選擇規則本身就是唯一的把關。
   - 「Pareto 前緣加字典序破同分」就是純字典序；「字典序限制在 blocks ≤ 基準」就是 dominance。唯一真正的參數是 blocks 上限要設在基準之上多少。
   - 目前沒有任何適用 Q1 的案例有綠燈的數值 gate，所以要等 Phase 1、2 讓某個案例接近 legacy 線之後，規則的差別才會顯現。
 - **待決定**
   - 同意 dominance。
   - 同意 §2 工作規則的例外：刻意用一項指標換另一項的 PR（T2–T4 以少量 blocks 換 ticks、D4.1 以 ticks 換體積），可以把新做法排到候選清單第一位當基準，升 `producer_revision`，並附上 M1 報告證明沒有 gate 由綠轉紅。
+    - 這個例外和 6.4 (b)「今天的產物留在原位置」衝突，兩題要一起決定，見 6.4。
   - 若寧可讓編譯器自動做這種取捨，就改選容忍帶並定出千分比，但要接受 gate 可能由綠轉紅。
 
-### 2. pinned 房間放不下時（建議：回傳結構化錯誤，暫留 CallerRow）
+### 6.2 pinned 房間放不下時（建議：回傳結構化錯誤，暫留 CallerRow）
 
 - **原問題**：回傳 typed refusal，還是保留今天的 allocation fallback？allocation 會違反 pinned 規則（`F/allocation.rs:888`）。S1 刪除 allocation 和 D4.4 強制上限都需要這個決定。
   - （09-27 補充）實際上 fallback 不只在「房間太小」時觸發，而是任何 pinned producer 失敗都會觸發（例如 pin 列在 z ≤ 1 時的 NegativeCanvas，`F/parent.rs` 約 1806 行），而 `short` 命中時甚至不試任何 producer 就直接走 allocation（`F/recursive.rs:838-847`）。
 - **建議**：分三步。
   1. 先做 D4.R0：只在 `RootAccess::CallerRow` 時保留 allocation，其他情況回傳結構化錯誤（房間大小、封閉的面、需要的面積），並升 `producer_revision`。
-  2. 照原計畫做 D4 系列。D4.R0 落地後，D4.4 超限的 `PinnedRegionTooSmall` 會直接成為使用者看到的錯誤。
+  2. 照原計畫做 D4 系列。D4.R0 落地後，D4.4 超限的 `PinnedRegionTooSmall` 不會再掉進 allocation；但它仍會先觸發 grain 減半（`F/packed_recursive.rs:287-302`），所以 D4.3 的預檢要讓這個拒絕夠快。
   3. S1 時整個刪掉 allocation。刪之前先處理 z < 2 的 pin 列。
 - **依據**
-  - 在 `Landed` 的情況下，allocation 就是違規：short_room 有 96%、wide_short_room 有 97% 的方塊蓋在輸入後方，而且都通過 certify，沒有任何警告。
+  - 實測的 `Landed` 案例（南面有 caller）裡，allocation 都違規：short_room 有 96%、wide_short_room 有 97% 的方塊蓋在輸入後方，而且都通過 certify，沒有任何警告。南面沒有 caller 的 `Landed`（例如 `F/recursive.rs:2298-2309` 的 split_row）沒有量過。
   - 當安全網也不管用：真正的 decoder 強制走 allocation，60 s 後 certify 失敗，錯誤訊息對使用者沒有幫助。
   - 沒有任何出貨產物用到它：6 案和 baked 世界都不會走到。lib 測試只有 `F/recursive.rs:1692` 走到，而那是 z=0 的 CallerRow。
   - pinned producer 已有的 typed refusal 被它蓋掉了，只在設了 `REDA_TRACE_PINNED` 時才看得到。
-  - 若保留 fallback，D4.4 會比不做還糟：超限時先 grain 減半，再掉進 allocation。
-  - 交接規則（`:15`、`:17`）傾向移除，但它點名的是 whole-circuit seed，不是 allocation，所以仍需要你拍板。這也會推翻 `docs/fabric-plan.md` 第 12 項「最後退回 allocation」的原設計。
+  - 若保留 fallback，D4.4 的 typed refusal 到不了使用者：超限時先 grain 減半（`F/packed_recursive.rs:287-302`），再掉進 allocation。所以 D4.R0 要先落地。
+  - 交接規則（`:15`、`:17`）傾向移除，但它點名的是 whole-circuit seed，不是 allocation，所以仍需要使用者拍板。這也會推翻 `docs/fabric-plan.md` 第 12 項「最後退回 allocation」的原設計。
 - **待決定**
   - 同意 pinned 放不下時回傳結構化錯誤，而不是出貨蓋在 pin 外面或後面的世界（建議：同意）。
   - pin 列太靠近世界邊緣（z = 0 或 1）時二選一：
     - (a) 暫時保留 allocation 處理單排 CallerRow（合規；今天唯一的救法），到 S1 為止。
     - (b) 現在就拿掉，z < 2 的 pin 列直接拒絕。
 
-### 3. 真實遊戲環境（已決定：暫緩）
+### 6.3 真實遊戲環境（已決定：暫緩）
 
 - **原問題**：能否在 Mac 裝 JDK 25 加 vanilla 26.2 並自己同意 EULA？C3、C4 驗證和「改變 fingerprint 要附真實遊戲結果」的合併規則都卡在這裡。
 - **決定**：使用者 2026-09-27 決定，先不做真實 Minecraft 測試。
 - **影響**
   - C3 暫緩。C4 只做第 1、2 步。
-  - §2 的「附真實遊戲結果」規則不啟用，改由第 7 題建議的出貨 fingerprint fixture，加上 simulator 檢查（含 C1 的 DFF 追蹤、C2）把關。
+  - C3 第 7 步「改變 fingerprint 要附真實遊戲結果」和 §2「新幾何要附真實遊戲結果」的規則都不啟用，改由 simulator 檢查（含 C1 的 DFF 追蹤、C2）把關；若第 7 題採用出貨 fingerprint fixture，再加上它。
 - **之後恢復時的兩條路**
   - Mac 本機：照 `docs/minecraft-server.md`，26.2 伺服器用自帶的 JDK 25；`eula=true` 必須由使用者本人寫。
   - 雲端容器：目前只有 Java 21，而且網路政策擋掉了 `piston-meta.mojang.com`、`piston-data.mojang.com`，要先在環境設定裡開放這兩個網域。
 
-### 4. seven_segment 的 98 ticks 與大葉（建議：大葉當附加候選，98 接受長期紅燈）
+### 6.4 seven_segment 的 98 ticks 與大葉（建議：大葉當附加候選，98 接受長期紅燈）
 
 - **原問題**：seven_segment 要追平 98 ticks，需要 ≥ 42-gate 的葉（k=1），超過今天的 32 grain。要允許更大的葉（會提高撞 A\* 上限的風險），還是接受 seven_segment 的 ticks gate 長期紅燈？另外，交接規則寫了「不藉調 partition/grain 避開問題」，D2 和 T2 屬於品質優化，是否同意納入？
 - **建議**
   - (a) 允許大葉，但只以 T6 的兩個附加候選的形式加入：新增常數 `WIDE_LEAF_GATES=48`，不動 `TERMINAL_GATES=32`，由 Q1 的 dominance 選擇。
-  - (b) D2、T2 只有在改寫成附加候選時才合乎交接規則。具體條件：
+  - (b) D2、T2 只有在改寫成附加候選時才合乎交接規則；照計畫原本「就地取代」的寫法不合規，D4.1 和 D4.3 也適用同樣的檢查。具體條件：
     - 今天的產物留在清單的原位置。
     - 參數是程式裡的固定常數。
     - 對所有電路用同一套規則。
     - A\* 上限、router 和 root certify 都不變。
     - 每個被拒的候選都出現在 Q1 的 `candidates` 報告裡。
-    - 照計畫原本「就地取代」的寫法則不合規。D4.1 和 D4.3 也適用同樣的檢查。
-  - (c) 接受 seven_segment 的 98 ticks gate 長期紅燈（硬限制 6 不允許改 gate）。改追蹤不擋合併的目標：
+  - (b) 和 6.1 的 §2 例外有衝突，要一起決定：
+    - T2（blocks +2%）、T3、T4、D4.1（ticks 190→209）都是拿一項換另一項。當附加候選時，dominance 永遠不會選它們。
+    - 它們要出貨，只能走 6.1 的例外（排到第一位當基準），而那違反上面「今天的產物留在原位置」這條。
+    - 可行的收斂方式：把「原位置」放寬成「今天的產物仍在清單內」，並要求走例外的 PR 附 M1 報告證明沒有 gate 由綠轉紅。
+  - (c) 接受 seven_segment 的 98 ticks gate 長期紅燈（硬限制 6 不允許改 gate）。segment_a 的 72 ticks 也沒有項目能達到（T6 單葉是 80）。改追蹤不擋合併的目標：
     - Phase 1（T6）：seven_segment ≤ 142 / ≤ 15,261，segment_a ≤ 80 / ≤ 4,183。
     - Phase 2：若 T3 能把葉內的腿壓到 ≤ 12 ticks，seven_segment 約 112–115。
 - **依據**
@@ -1157,13 +1180,13 @@
   - 撞 A\* 上限的風險是真的，但只花時間：42-gate 葉 queue 峰值到上限的 91%，全部由既有的 seed repair 吸收；84-gate 單葉 695 s 後被拒，自動退回 42+42。
   - 98 不實際：k=1 時實測葉內 54、跨越 70 ticks，要到 98 需要 C ≤ 26，比今天那條幹線本身（約 28 ticks）還短；k=0（84 單葉）被拒。
   - 「k=1 需要 ≥ 42-gate 葉」在結構上不成立（32/30/22 就能 k=1），但那個切法實測失敗（162 / 21,725，591 s），見 T2。
-  - 交接規則讀上下文，是在 seven_segment 還無法 certify 時寫的，每一處明確禁止調 grain 的地方（`:9`、`:209`、`:262`）都綁在 g19 階梯 bug 上；`:19` 則和「不改 baseline、不降 acceptance」放在同一條。附加、固定、報告所有拒絕的候選不會隱藏任何東西，符合它的精神。
+  - 從上下文看，交接規則是在 seven_segment 還無法 certify 時寫的，每一處明確禁止調 grain 的地方（`:9`、`:209`、`:262`）都綁在 g19 階梯 bug 上；`:19` 則和「不改 baseline、不降 acceptance」放在同一條。附加、固定、報告所有拒絕的候選不會隱藏任何東西，符合它的精神。
 - **待決定**
   - 要不要加 T6 的兩個寬葉候選（`WIDE_LEAF_GATES=48` 併進 `producer_revision`），還是所有葉維持 ≤ 32。
-  - 接不接受 seven_segment 的 ticks gate 長期紅燈，並改用上面那組追蹤目標。
-  - T6 在 Q1 下只分到 1 個 worker，推估 Mac 上 185–240 s。在 Mac 實測 ≤ 180 s 之前，T6 要不要等 P1、P2 加上「分 worker 的靜態規則、P5 或 S1」其中一項完成。
+  - 接不接受 seven_segment（98）和 segment_a（72）的 ticks gate 長期紅燈，並改用上面那組追蹤目標。segment_a 最好的實測是 T6 單葉的 80 ticks，計畫裡沒有任何項目以 ≤ 72 為目標。
+  - T6 在 Q1 下只分到 1 個 worker，推估 Mac 上約 190–285 s（依推法不同，見 T6 風險），而且會超過 Q1 的 user time 1.5 倍上限。在 Mac 實測 ≤ 180 s 之前，T6 要不要等 P1、P2 加上「分 worker 的靜態規則、P5 或 S1」其中一項完成。
 
-### 5. legacy baseline 本身的物理性（建議：照預設結案）
+### 6.5 legacy baseline 本身的物理性（建議：照預設結案）
 
 - **原問題**：baseline 由 `compile_legacy` 產生（`F/benchmark.rs:251`）。2026-09-27 已查 and4、full_adder、seven_segment 的 legacy 世界：懸空 0；segment_a 尚未查。若 segment_a 也乾淨，baseline 就是合法的比較標準。預設：JSON 凍結不改，C1 的 Support 檢查補查 segment_a 並在報告註明。
 - **結果**：已查完，全部乾淨。
@@ -1179,7 +1202,7 @@
   - 同意結案。
   - 凍結 JSON 的守門測試 `tests/fragment_synth_baseline.rs:56` 現在是紅的，見 C0。建議在測試裡把 `1af20604…` 釘成常數、另外報告漂移，不改 JSON。
 
-### 6. DFF 路徑（建議：可以接受，C1 不用等）
+### 6.6 DFF 路徑（建議：可以接受，C1 不用等）
 
 - **原問題**：C1 之後 DFF 可能從「出貨壞世界」變成「編譯失敗」，可以接受嗎？
 - **建議**：可以接受，C1 不需要先修 DFF。
@@ -1195,7 +1218,7 @@
   - 同意 C1 照原樣落地，不以 DFF 修正為前提。
   - 同意先不加 `compile()` → `compile_grown` 的 fallback，等 C8 的功能 gate 就緒再評估。
 
-### 7. 180 s 上限與跨機器 fingerprint（建議：秒數只報告，fingerprint 寫進 fixture）
+### 6.7 180 s 上限與跨機器 fingerprint（建議：秒數只報告，fingerprint 寫進 fixture）
 
 - **原問題**：每案 180 s 上限要當成正式的合併 gate 嗎？CI 的核心數和這台 Mac 不同，1 vs N 要不要跨機器比對 fingerprint？
 - **事實**
@@ -1203,8 +1226,8 @@
   - 180 s 出自交接文件 `:20`、`:143`，是給 agent 的迭代規則。計畫在 §2 把它升格成合併規則，但沒指定機器。
     - 不過 `docs/superpowers/specs/2026-08-05-redstone-eda-design.md:937` 顯示，擁有者把「每次要等好幾分鐘」視為真正的產品問題（該處講的是 fast / refinement 模式）。
   - 跨機器實測：
-    - 這台 x86_64、4 核、rustc 1.94.1 重建的 5 個 viewer synth 檔，和 Mac（arm64、8 worker）烤的 sha256 完全相同。
-    - acceptance 入口的世界 fingerprint 也和 baked 檔一致。
+    - 雲端容器（x86_64、4 核、rustc 1.94.1）重建的 5 個 viewer synth 檔，和 Mac（arm64、8 worker）烤的 sha256 完全相同。
+    - acceptance 入口的世界 fingerprint，在 and4、full_adder、segment_a、pinned 上和 baked 檔一致。verilog:and4 不同是預期的：viewer 檔用即時 Yosys 加 `lower_optimised`，gate 用 baked netlist 加 `lower`（見 S3）。
     - 原因：浮點只用 IEEE 精確運算；`HashMap` 只做查找；`sort_unstable` 只用在原生型別；平行結果依 index 合併。
   - 時間取決於機器：
 
@@ -1218,13 +1241,13 @@
 - **建議**
   - (i) 180 s 不當硬合併 gate。
     - M1 報告印出 `compile_ms`、`measure_ms` 和機器標記。
-    - 180 s 和 §4 的秒數目標保留為參考機上的軟目標（10 核 Mac、8 worker；load < 1.0 時開始；3 次中位數；max/min > 1.05 就重量）。
+    - 180 s 和 §4 的秒數目標保留為參考機上的軟目標（10 核 Mac、8 worker；load < 1.0 時開始；3 次中位數；max/min > 1.05 就重新量測）。
     - 另外可以加一個不隨機器改變的工作量計數（A\* 展開數加 queue 數，只算「串行等價」會被用到的 job）。先當 fixture 欄位，變動時要在 PR 明講；等 M1、M2 證明它和 wall 相關再設上限。Q1、D2、T6 本來就會讓它上升。
   - (ii) 跨機器用「寫死的預期值」比對，不是兩台機器即時互比。
     - 新增 `tests/fixtures/fragment_synth_shipping_fingerprints.json`，baseline JSON 不動。每案記 `producer_revision`、case fingerprint、candidate fingerprint、`canonical_world_fingerprint`（之後加工作量）。
     - 在 `run_budget_zero_case`（`tests/fragment_synth_acceptance.rs:159`）裡、`assert!(case.passed())` 之前檢查，並用獨立的錯誤訊息。否則三個紅燈案例永遠跑不到這一步，漂移也會被已知的品質失敗蓋住。
     - C5 的 sweep 在每台機器上都對照這份 fixture。Mac 涵蓋 1/2/8、4 核機涵蓋 1/2/4。
-    - 09-27 量到的 `canonical_world_fingerprint`（凡有 baked 檔的都和 Mac 一致）：
+    - 09-27 量到的 `canonical_world_fingerprint`。and4、full_adder、segment_a、pinned 和 Mac 烤的檔案一致；seven_segment 沒有 baked 檔（1、4 worker 一致）；verilog:and4 的 viewer 檔是另一個世界（`fa225fa5…`，見 S3），所以這一格沒有跨機器比對過：
 
       | case | canonical_world_fingerprint |
       |---|---|
@@ -1237,9 +1260,9 @@
 
   - (iii) 若將來加 CI：
     - 每案設約 450 s 的卡死防護。libtest 沒有 per-test 逾時，要用 nextest 的 terminate-after 或外包 `timeout`。
-    - 450 s 只防卡死，不是 2 倍回歸偵測器：實測最差的 1 核慢速比是 pinned 的 2.24 倍，180 × 2.24 ≈ 404 s。
+    - 450 s 只防卡死，不是 2 倍回歸偵測器：實測最差的慢速比是 pinned 在 1 worker 時的 2.24 倍（82.3 s 對 Mac 的 36.7 s），180 × 2.24 ≈ 404 s。
     - 至少 2 vCPU，否則 1 vs N 沒有意義。
-    - `rust-toolchain.toml` 釘版本可選：兩台機器 rustc 版本不同，產物仍一致，fixture 才是真正的守門。
+    - `rust-toolchain.toml` 釘版本可選。Mac 烤檔時的 rustc 版本沒有記錄（`docs/native-wasm-verilog-compiler-plan.md:110` 記的 arm64 1.98.1 是別的量測），容器是 1.94.1，產物仍一致。fixture 才是真正的守門。
 - **待決定**
   - 秒數只報告、另設工作量計數，還是堅持設 wall gate？若設 wall gate，確認參考機是 10 核 Mac、8 worker、3 次中位數。
   - 同不同意新增出貨 fingerprint fixture（baseline JSON 不動）。
