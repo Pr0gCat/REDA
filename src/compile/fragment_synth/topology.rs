@@ -585,9 +585,56 @@ pub fn merge_isolation_mask(
     Ok(InputMask::new(bits))
 }
 
+/// The seed generator's isolation decision: [`merge_isolation_mask`], and
+/// every merge input that is also a declared output isolated as well.
+///
+/// A declared output is a consumer too: its caller cell reads the same wire,
+/// and a bare branch lets the merge's other inputs flow back up it. Measured
+/// in `verilog:seven_segment`, where g17 fed only the merge g18 inside its
+/// leaf yet was that leaf's output, and read true whenever g2 lit the merge.
+/// The legacy emitter decides bare branches on its own and its primitive
+/// graph reads [`merge_isolation_mask`], so that one is left as it is.
+pub fn seed_merge_isolation_mask(
+    lowered: &Netlist,
+    gate_index: GateIndex,
+) -> Result<InputMask, MergeMaskError> {
+    let mask = merge_isolation_mask(lowered, gate_index)?;
+    let index =
+        usize::try_from(gate_index.0).map_err(|_| MergeMaskError::UnknownGate { gate_index })?;
+    let outputs = lowered.gates[index]
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, input)| lowered.outputs.contains(input))
+        .fold(0u64, |bits, (input_index, _)| bits | 1u64 << input_index);
+    Ok(InputMask::new(mask.bits() | outputs))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
+    /// A merge input that is also a declared output is isolated: the caller
+    /// reads that wire, so the merge's other inputs must not flow back up it.
+    #[test]
+    fn a_merge_input_that_is_also_an_output_is_isolated() {
+        use crate::compile::fragment_synth::identity::GateIndex;
+        use crate::compile::Netlist;
+        let merge = Gate {
+            kind: GateKind::Or(2),
+            ..Gate::nor("m", &["a", "b"])
+        };
+        let mut netlist = Netlist {
+            inputs: vec!["x".into(), "y".into()],
+            outputs: vec!["m".into()],
+            gates: vec![Gate::nor("a", &["x"]), Gate::nor("b", &["y"]), merge],
+        };
+        assert_eq!(super::seed_merge_isolation_mask(&netlist, GateIndex(2)), Ok(InputMask::new(0)));
+        netlist.outputs.push("a".into());
+        assert_eq!(super::seed_merge_isolation_mask(&netlist, GateIndex(2)), Ok(InputMask::new(0b01)));
+        // The legacy decision is untouched.
+        assert_eq!(super::merge_isolation_mask(&netlist, GateIndex(2)), Ok(InputMask::new(0)));
+    }
 
     use crate::compile::fragment_synth::identity::{
         ConnectionId, ImplementationKey, InputMask, InstanceId, LibraryEntryId, PrimitiveId,

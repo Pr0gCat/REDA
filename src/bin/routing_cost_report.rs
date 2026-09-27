@@ -23,6 +23,13 @@ use reda::circuits::full_adder::{build_full_adder_netlist, INPUT_NAMES as ADDER_
 use reda::circuits::seven_segment::{
     build_seven_segment_netlist, build_single_segment_netlist, INPUT_NAMES as DECODER_INPUTS,
 };
+use reda::compile::fragment_synth::attribution::{
+    attribute_transition, critical_trunks, verify_partition, AttributionError, HopKind,
+};
+use reda::compile::fragment_synth::benchmark::{
+    legacy_benchmark_evaluator, MAX_TRANSITION_GAME_TICKS,
+};
+use reda::compile::fragment_synth::{compile_fragment_synth, SynthesisBudget, SynthesisInput};
 use reda::compile::routing_stats::{
     analyze, distinct_totals_by_part, EdgeRoute, PartTotals, RoutePart, ALL_PARTS,
 };
@@ -254,6 +261,55 @@ fn run_and_report(label: &str, netlist: &Netlist, input_names: &[&str], outputs:
     println!("Critical path: {}", summary.critical_path.join(" -> "));
 
     let crit_edges = critical_edges(netlist, &report.edges, &summary.critical_path);
+    assert_eq!(crit_edges.len(), summary.critical_path.len() - 1);
+    let worst_transition = transitions
+        .iter()
+        .find(|transition| transition.settle_game_ticks == summary.worst_settle_game_ticks)
+        .expect("the timing summary's worst transition must be in the sweep");
+    let attribution = attribute_transition(netlist, &summary.critical_path, worst_transition)
+        .expect("the critical path must map onto the production partition and observations");
+    assert!(attribution.reconciles());
+    let mut child_repeaters = 0usize;
+    let mut trunk_repeaters = 0usize;
+    for (hop, edge) in attribution.hops.iter().zip(&crit_edges) {
+        let repeaters = edge.total().repeaters;
+        match &hop.kind {
+            HopKind::Trunk { .. } => trunk_repeaters += repeaters,
+            HopKind::Intra(_) | HopKind::FromInput(_) => child_repeaters += repeaters,
+        }
+    }
+    assert_eq!(
+        child_repeaters + trunk_repeaters,
+        crit_edges
+            .iter()
+            .map(|edge| edge.total().repeaters)
+            .sum::<usize>()
+    );
+    println!(
+        "\nMeasured critical-path attribution (production leaf partition): child={} ticks/{} repeaters; trunk={} ticks/{} repeaters; input lead={} ticks; output/settle tail={} ticks; total={} ticks",
+        attribution.intra_ticks,
+        child_repeaters,
+        attribution.trunk_ticks,
+        trunk_repeaters,
+        attribution.lead_ticks,
+        attribution.tail_ticks,
+        attribution.settle_game_ticks,
+    );
+    println!("Critical-path hops by production chunk:");
+    for (hop, edge) in attribution.hops.iter().zip(&crit_edges) {
+        let kind = match &hop.kind {
+            HopKind::Intra(chunk) => format!("child {chunk:?}"),
+            HopKind::Trunk { from, to } => format!("trunk {from:?} -> {to:?}"),
+            HopKind::FromInput(chunk) => format!("input boundary -> child {chunk:?}"),
+        };
+        println!(
+            "  {} -> {}  {kind}: measured_delta={} ticks, route_repeaters={}",
+            hop.from,
+            hop.to,
+            hop.ticks,
+            edge.total().repeaters,
+        );
+    }
     println!();
     print_distribution("Critical-path edges", &crit_edges);
 
@@ -283,7 +339,167 @@ fn run_and_report(label: &str, netlist: &Netlist, input_names: &[&str], outputs:
     );
 }
 
+/// Measure the production recursive product over the acceptance evaluator's
+/// exact transition manifest, then attribute the same worst transition.
+fn run_recursive_segment_a() {
+    let evaluator = legacy_benchmark_evaluator().expect("acceptance fixtures must load");
+    let fixture = evaluator.fixture("segment_a").expect("segment_a fixture");
+    let netlist = fixture.lowered_netlist();
+    let result = compile_fragment_synth(
+        SynthesisInput {
+            lowered: netlist,
+            source_provenance: None,
+            pins: Some(fixture.placements()),
+        },
+        SynthesisBudget::Evaluations(0),
+    )
+    .expect("segment_a recursive production compile");
+    let compiled = &result.compiled;
+    let acceptance = evaluator
+        .evaluate_world("segment_a", compiled)
+        .expect("acceptance manifest must measure the recursive world");
+    let acceptance_ticks = acceptance
+        .max_observed_settle_game_ticks_on_manifest
+        .expect("acceptance report has a measured settle");
+
+    let manifest = fixture.transition_manifest();
+    let mut initial = Simulator::new(compiled.world.clone());
+    initial
+        .run_until_stable(MAX_TRANSITION_GAME_TICKS)
+        .expect("recursive world must initially settle");
+    let mut warm = initial.world().clone();
+    warm.take_dirty();
+    let watched = watch_all_nets(compiled);
+    let mut transitions = Vec::with_capacity(manifest.transitions().len());
+    for transition in manifest.transitions() {
+        let mut simulator = Simulator::new(warm.clone());
+        for (signal, bit) in manifest.input_ports().iter().zip(&transition.from) {
+            let &(x, y, z) = compiled
+                .input_positions
+                .get(signal)
+                .expect("input position");
+            let mut lever = simulator.world().get(x, y, z).clone();
+            lever.lit = *bit;
+            simulator.world_mut().set(x, y, z, lever);
+        }
+        simulator
+            .run_until_stable(MAX_TRANSITION_GAME_TICKS)
+            .expect("manifest from-state must settle");
+        simulator.attach_observer(watched.clone());
+        simulator.reset_observer();
+        let start_tick = simulator.current_tick();
+        for (signal, bit) in manifest.input_ports().iter().zip(&transition.to) {
+            let &(x, y, z) = compiled
+                .input_positions
+                .get(signal)
+                .expect("input position");
+            let mut lever = simulator.world().get(x, y, z).clone();
+            lever.lit = *bit;
+            simulator.world_mut().set(x, y, z, lever);
+        }
+        let settle = simulator
+            .run_until_stable(MAX_TRANSITION_GAME_TICKS)
+            .expect("manifest to-state must settle");
+        transitions.push(observations_to_result(
+            simulator.observations(),
+            start_tick,
+            settle,
+        ));
+    }
+    let outputs = netlist.outputs.clone();
+    let summary = summarize_worst_case(netlist, compiled, &outputs, &transitions);
+    assert_eq!(
+        summary.worst_settle_game_ticks, acceptance_ticks,
+        "report must reproduce the acceptance manifest metric"
+    );
+    let worst = transitions
+        .iter()
+        .find(|transition| transition.settle_game_ticks == summary.worst_settle_game_ticks)
+        .expect("worst transition is in the acceptance manifest sweep");
+    let attribution = attribute_transition(netlist, &summary.critical_path, worst)
+        .expect("critical path must map onto production chunks and observations");
+    assert!(attribution.reconciles());
+    // The attribution keys on the static production partition; the product
+    // says what it actually built. The two must agree, leaf for leaf, or
+    // the attribution is about a decomposition that never existed.
+    let diagnostics = result
+        .recursive_diagnostics
+        .as_ref()
+        .ok_or(AttributionError::NoDiagnostics)
+        .expect("segment_a takes the packed recursive shape, which records its leaves");
+    verify_partition(netlist, &diagnostics.leaves)
+        .expect("the product's leaves must be the static partition's leaves");
+    let tied = critical_trunks(&attribution, &diagnostics.root_trunks)
+        .expect("every trunk hop on the critical path must ride a root trunk");
+
+    println!("================ segment_a recursive production ================");
+    println!(
+        "budget=Evaluations(0), acceptance transitions={}, acceptance/report worst settle={} ticks",
+        manifest.transitions().len(),
+        summary.worst_settle_game_ticks
+    );
+    println!("Critical path: {}", summary.critical_path.join(" -> "));
+    println!(
+        "Measured attribution: child={} ticks; trunk={} ticks; input lead={} ticks; output/settle tail={} ticks; total={} ticks",
+        attribution.intra_ticks,
+        attribution.trunk_ticks,
+        attribution.lead_ticks,
+        attribution.tail_ticks,
+        attribution.settle_game_ticks,
+    );
+    for hop in &attribution.hops {
+        let kind = match &hop.kind {
+            HopKind::Intra(chunk) => format!("child {chunk:?}"),
+            HopKind::Trunk { from, to } => format!("trunk {from:?} -> {to:?}"),
+            HopKind::FromInput(input) => format!("input {input:?}"),
+        };
+        println!(
+            "  {} -> {}: {kind}, {} measured ticks",
+            hop.from, hop.to, hop.ticks
+        );
+    }
+    println!(
+        "Actual product leaves: {} (static partition: {} leaves, verified gate for gate)",
+        diagnostics.leaves.len(),
+        attribution.chunks.len().max(diagnostics.leaves.len())
+    );
+    for leaf in &diagnostics.leaves {
+        println!("  leaf {:?}: {} gates", leaf.chunk, leaf.gates.len());
+    }
+    println!(
+        "Root trunks: {} (signals: {})",
+        diagnostics.root_trunks.len(),
+        diagnostics
+            .root_trunks
+            .iter()
+            .map(|trunk| trunk.signal.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for (hop, trunk) in &tied {
+        println!(
+            "Critical trunk hop {} -> {} rides root trunk `{}`: {} conductor cells, {} floors, {} repeaters among conductors, branch terminal repeaters {:?}, lane {:?}, {} measured ticks",
+            hop.from,
+            hop.to,
+            trunk.signal,
+            trunk.cells,
+            trunk.floors,
+            trunk.repeaters,
+            trunk.branch_terminal_repeaters,
+            trunk.lane,
+            hop.ticks
+        );
+    }
+    println!(
+        "Repeater ownership: root trunk repeaters are read off the shipped route trees above; per-hop repeaters inside a child are not exposed by the product and are not inferred."
+    );
+}
+
 fn main() {
+    if std::env::args().any(|arg| arg == "--recursive-segment-a") {
+        run_recursive_segment_a();
+        return;
+    }
     let (and4, and4_output) = build_and4_netlist();
     run_and_report("and4", &and4, &AND4_INPUTS, &[and4_output]);
 

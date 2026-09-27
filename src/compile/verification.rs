@@ -19,9 +19,9 @@ use super::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
 use super::fragment_synth::realise::ExpandedCandidateAdapter;
 use super::fragment_synth::topology::ConnectionTarget;
 use super::fragment_synth::verify::certify_expanded_structure;
-use super::planner::{self, PlanCandidate, PlannerError, RealisedCandidate};
+use super::planner::{self, NodeRealisation, PlanCandidate, PlannerError, RealisedCandidate};
 use super::routing::route_step_is_legal;
-use super::topology::{Library, Primitive};
+use super::topology::{GateKind, Library, Primitive};
 use super::{Net, Netlist, Reservation};
 use crate::compile::geometry::Anchor;
 use crate::redstone::rules::taxonomy::BlockPower;
@@ -293,6 +293,14 @@ pub(crate) fn verify_legacy_candidate(
     }
 
     let realised = realised.expect("verifier pipeline must include collision setup");
+    if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
+        verify_stateful_macros(candidate, netlist, &realised.world)?;
+        return Ok((
+            realised,
+            reservation.expect("verifier pipeline must include collision setup"),
+            nets.expect("verifier pipeline must include collision setup"),
+        ));
+    }
     let adapted = LegacyCandidateAdapter::adapt_plan(netlist, candidate, &realised.world)
         .map_err(|error| durable_legacy_error("typed adapter", error))?;
     let library = Library::default_library();
@@ -316,6 +324,61 @@ pub(crate) fn verify_legacy_candidate(
         reservation.expect("verifier pipeline must include collision setup"),
         nets.expect("verifier pipeline must include collision setup"),
     ))
+}
+
+fn verify_stateful_macros(
+    candidate: &PlanCandidate,
+    netlist: &Netlist,
+    world: &World,
+) -> Result<(), PlannerError> {
+    for (gate, definition) in netlist.gates.iter().enumerate() {
+        if definition.kind != GateKind::DffPosedge {
+            continue;
+        }
+        let node = &candidate.primitive_nodes()[gate];
+        if node.realisation != NodeRealisation::DffPosedge {
+            return Err(PlannerError::UnrealisableNode {
+                id: node.id.clone(),
+                reason: "DFF is not realised by Design H".to_string(),
+            });
+        }
+        let facing = candidate.facing_of(gate);
+        let at = |offset: (i32, i32, i32)| {
+            let (x, y, z) = super::geometry::rotate(offset, facing);
+            Position::new(node.anchor.x + x, node.anchor.y + y, node.anchor.z + z)
+        };
+        let expected_repeaters = [
+            ((0, 0, 0), Facing::North),
+            ((0, 0, -1), Facing::North),
+            ((1, 0, 0), Facing::West),
+            ((1, 0, -1), Facing::West),
+        ];
+        for (offset, direction) in expected_repeaters {
+            let position = at(offset);
+            let block = world.get(position.x, position.y, position.z);
+            let stored_facing = super::geometry::turn(direction, facing).opposite();
+            if block.kind != BlockKind::Repeater || block.facing != Some(stored_facing) {
+                return Err(PlannerError::UnrealisableNode {
+                    id: node.id.clone(),
+                    reason: format!(
+                        "Design H repeater at ({}, {}, {}) is {:?} facing {:?}",
+                        position.x, position.y, position.z, block.kind, block.facing
+                    ),
+                });
+            }
+        }
+        let torch = at((2, 0, -1));
+        let block = world.get(torch.x, torch.y, torch.z);
+        if block.kind != BlockKind::WallTorch
+            || block.facing != Some(super::geometry::turn(Facing::North, facing))
+        {
+            return Err(PlannerError::UnrealisableNode {
+                id: node.id.clone(),
+                reason: "Design H complementary-clock torch is missing or misoriented".to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn durable_legacy_error(stage: &str, error: impl std::fmt::Display) -> PlannerError {

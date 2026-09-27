@@ -44,15 +44,49 @@
 //! [`FrontendError`] (not a panic or a bare `ModuleNotFoundError`
 //! traceback) if `python` is missing, or if `python` is present but
 //! `yowasp-yosys` is not installed.
+//!
+//! # The REDA SystemVerilog compiler
+//!
+//! Beside the Yosys path above lives [`compile_systemverilog`], a pure Rust
+//! compiler for a synthesizable SystemVerilog subset. It shells out to
+//! nothing, reads no files, and inspects no environment, so it runs
+//! unchanged on native targets and on `wasm32-unknown-unknown`. Its output
+//! stops at exactly the same boundary the Yosys bridge does -- a gate-level
+//! [`Netlist`] -- plus a [`DebugDatabase`] sidecar recording where every
+//! gate came from.
+//!
+//! The two frontends coexist on purpose. Yosys remains the production path
+//! while the generator is changing; this one is proven against it, fixture by
+//! fixture, and takes over only at the cutover the plan describes
+//! (`docs/native-wasm-verilog-compiler-plan.md`). Nothing in this module
+//! changes [`synthesize_verilog`] or any of its callers.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
+use serde::{Deserialize, Serialize};
+
 use crate::compile::Netlist;
 
+pub mod debug;
+pub mod evaluate;
+pub mod source;
+
+mod ast;
+mod elaborate;
+mod lexer;
+mod logic;
+mod netlist;
+mod parser;
+mod rtl;
 mod yosys_json;
+
+pub use ast::{PortDirection, SourceKind, SourceNode, SourceNodeId};
+pub use debug::DebugDatabase;
+pub use elaborate::ElabNodeId;
+pub use source::{line_column, ExpansionId, FileId, SourceFileInfo, SourceInput, Span};
 
 /// The Python driver that actually invokes Yosys. Kept as a standalone
 /// script (rather than a Rust-constructed `python -c "..."` one-liner) so it
@@ -118,6 +152,175 @@ impl From<serde_json::Error> for FrontendError {
     fn from(err: serde_json::Error) -> Self {
         FrontendError::Json(err)
     }
+}
+
+// ---------------------------------------------------------------------
+// The pure SystemVerilog entry point
+// ---------------------------------------------------------------------
+
+/// How severe a [`Diagnostic`] is. Version 1 only ever produces errors;
+/// the enum exists so that adding a warning later is not an API break, and
+/// so nothing here has to invent a warning it does not mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Severity {
+    Error,
+}
+
+/// One compiler message, located by byte offsets into one source file.
+///
+/// Byte offsets are the canonical representation: a native host and a
+/// browser host can each derive line and column with [`line_column`] when
+/// they need to show a position, rather than every token carrying two
+/// coordinate systems it mostly does not use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Diagnostic {
+    pub severity: Severity,
+    pub message: String,
+    pub span: Span,
+}
+
+impl Diagnostic {
+    /// `name:line:column: message`, given the same sources the compile was
+    /// handed. Hosts that show diagnostics differently can ignore this and
+    /// read the span directly.
+    pub fn render(&self, sources: &[SourceInput<'_>]) -> String {
+        let file = sources.get(self.span.file.0 as usize);
+        let (name, text) = match file {
+            Some(source) => (source.name, source.text),
+            None => ("<unknown>", ""),
+        };
+        let (line, column) = line_column(text, self.span.start);
+        format!("{name}:{line}:{column}: {}", self.message)
+    }
+}
+
+/// What to compile. One selected top module, which is all version 1
+/// elaborates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompileOptions {
+    pub top: String,
+}
+
+impl CompileOptions {
+    pub fn new(top: impl Into<String>) -> CompileOptions {
+        CompileOptions { top: top.into() }
+    }
+}
+
+/// One port bit of the top module, and the [`Netlist`] signal it is.
+///
+/// A scalar port is its own name; bit `i` of a vector port is `name[i]`,
+/// LSB-first -- the same spelling the Yosys bridge produces, so a caller
+/// cannot tell the two frontends apart by how they label a port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortBinding {
+    /// The port bit's name, e.g. `"y"` or `"q[3]"`.
+    pub name: String,
+    pub direction: PortDirection,
+    /// The signal this port bit is in [`Netlist`].
+    pub signal: String,
+    /// The elaborated signal this bit belongs to.
+    pub elab: ElabNodeId,
+    /// Which bit of that signal, LSB-first.
+    pub bit: u32,
+}
+
+/// Everything one successful compile produced.
+#[derive(Debug, Clone)]
+pub struct CompileArtifact {
+    pub netlist: Netlist,
+    /// Every port bit, sorted by name for deterministic transport.
+    pub ports: Vec<PortBinding>,
+    pub debug: DebugDatabase,
+}
+
+impl CompileArtifact {
+    /// The signal a named port bit drives, e.g. `ports_for("y")`.
+    pub fn port(&self, name: &str) -> Option<&PortBinding> {
+        self.ports.iter().find(|port| port.name == name)
+    }
+
+    /// `port name -> netlist signal` for the output ports only -- the same
+    /// shape [`synthesize_verilog`] returns, so a caller can switch
+    /// frontends without changing how it finds its own outputs.
+    pub fn output_map(&self) -> HashMap<String, String> {
+        self.ports
+            .iter()
+            .filter(|port| port.direction == PortDirection::Output)
+            .map(|port| (port.name.clone(), port.signal.clone()))
+            .collect()
+    }
+}
+
+/// Compile `sources` into a gate-level [`Netlist`] plus its provenance.
+///
+/// This is the cross-platform entry point: pure, synchronous, and free of
+/// target-specific types, so a browser worker and a native file watcher can
+/// each wrap it without the compiler knowing which one it is running in.
+///
+/// Version 1 normally receives one source. It takes a slice anyway, because
+/// includes and multi-file projects would otherwise change the meaning of
+/// every [`FileId`] in every span and debug record -- the one thing the
+/// provenance contract must not have to do twice.
+///
+/// # Errors
+///
+/// Returns every [`Diagnostic`] the compile produced, sorted by position.
+/// Lexing and parsing stop at the first error (version 1 has no syntax
+/// recovery); elaboration accumulates independent item-level errors.
+pub fn compile_systemverilog(
+    sources: &[SourceInput<'_>],
+    options: &CompileOptions,
+) -> Result<CompileArtifact, Vec<Diagnostic>> {
+    let files: Vec<(FileId, &str)> = sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| (FileId(index as u32), source.text))
+        .collect();
+
+    let set = parser::parse_sources(&files).map_err(|diagnostic| vec![diagnostic])?;
+    let design = elaborate::elaborate(&set, &options.top)?;
+    let blasted = logic::build(&design)?;
+    let emitted = netlist::emit(&design, &blasted)?;
+
+    // The same structural checks any consumer of a `Netlist` depends on.
+    // Reaching one of these is a compiler bug, not a source error, so it is
+    // reported as one instead of being left for the placer to trip over.
+    if let Err(error) = evaluate::validate(&emitted.netlist) {
+        return Err(vec![Diagnostic {
+            severity: Severity::Error,
+            message: format!("internal compiler error: emitted netlist is invalid: {error}"),
+            span: Span::new(FileId(0), 0, 0),
+        }]);
+    }
+
+    let mut transformations = blasted.graph.transformations;
+    transformations.extend(emitted.transformations);
+
+    let debug = DebugDatabase {
+        files: sources
+            .iter()
+            .map(|source| SourceFileInfo {
+                name: source.name.to_string(),
+                len: source.text.len() as u32,
+            })
+            .collect(),
+        source_nodes: set.nodes,
+        elab_nodes: design.nodes,
+        gates: emitted.gates,
+        logic_origins: blasted.graph.origins,
+        extra_origins: blasted.graph.extra_origins,
+        realisations: emitted.realisations,
+        transformations,
+        signals: emitted.signals,
+        netlist_fingerprint: debug::netlist_fingerprint(&emitted.netlist),
+    };
+
+    Ok(CompileArtifact {
+        netlist: emitted.netlist,
+        ports: emitted.ports,
+        debug,
+    })
 }
 
 /// Synthesize `verilog_source`'s `top_module` into a **gate-level**

@@ -43,7 +43,8 @@ use crate::compile::metrics::Fingerprint;
 use crate::compile::physical::{self, PortKind};
 use crate::compile::planner::{PortPlacements, PortRole};
 use crate::compile::routing::{
-    DelayedComponent, DelayedOwner, NonEmptyRouteSinks, PhysicalReservationKind,
+    AirKeepOut, DelayedComponent, DelayedOwner, IsolatingOwners, NonEmptyRouteSinks,
+    PhysicalReservationKind,
     PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RouteEndpoint, RouteGuidance,
     RouteRequest, RouteSink, RouterFailure, RouterLimitKind, RouterRefusalCategory,
     TerminalContract, TerminalRequirement,
@@ -245,6 +246,12 @@ impl std::error::Error for SeedRepairRefusal {}
 
 pub(crate) struct SparseSeedBuilder;
 
+/// The legacy whole-circuit seed with fixture boundaries.
+///
+/// **Test-only.** Production leaves are built by
+/// [`compile_parent_connectable_seed_with_services`]; nothing that ships
+/// compiles a whole circuit as one seed any more.
+#[cfg(test)]
 pub(crate) fn compile_sparse_seed_with_services(
     input: SeedInput<'_>,
     services: SeedServices<'_>,
@@ -252,12 +259,30 @@ pub(crate) fn compile_sparse_seed_with_services(
     SparseSeedBuilder::build(input, services)
 }
 
+/// Builds parent-connectable boundaries only for a pinless input. Explicit
+/// `SeedInput::pins` retains the normal fixtures boundary behavior.
+pub(crate) fn compile_parent_connectable_seed_with_services(
+    input: SeedInput<'_>,
+    services: SeedServices<'_>,
+) -> Result<CertifiedCandidate, SeedError> {
+    SparseSeedBuilder::build_parent_connectable(input, services)
+}
+
+/// A whole-circuit seed under an explicit variant: the legacy proposal
+/// loop's builder. **Test-only**, for the same reason as above.
+#[cfg(test)]
 pub(crate) fn compile_sparse_seed_variant_with_services(
     input: SeedInput<'_>,
     services: SeedServices<'_>,
     variant: &SeedVariant,
 ) -> Result<CertifiedCandidate, SeedError> {
-    SparseSeedBuilder::build_variant(input, services, variant)
+    SparseSeedBuilder::build_variant(input, services, variant, BoundaryMode::Fixtures)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundaryMode {
+    Fixtures,
+    ParentConnectable,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -502,17 +527,36 @@ impl PendingTarget {
 }
 
 impl SparseSeedBuilder {
+    #[cfg(test)]
     pub(crate) fn build(
         input: SeedInput<'_>,
         services: SeedServices<'_>,
     ) -> Result<CertifiedCandidate, SeedError> {
-        Self::build_variant(input, services, &SeedVariant::default())
+        Self::build_variant(
+            input,
+            services,
+            &SeedVariant::default(),
+            BoundaryMode::Fixtures,
+        )
+    }
+
+    fn build_parent_connectable(
+        input: SeedInput<'_>,
+        services: SeedServices<'_>,
+    ) -> Result<CertifiedCandidate, SeedError> {
+        Self::build_variant(
+            input,
+            services,
+            &SeedVariant::default(),
+            BoundaryMode::ParentConnectable,
+        )
     }
 
     fn build_variant(
         input: SeedInput<'_>,
         services: SeedServices<'_>,
         variant: &SeedVariant,
+        boundary_mode: BoundaryMode,
     ) -> Result<CertifiedCandidate, SeedError> {
         if let Some(provenance) = input.source_provenance {
             if provenance.len() != input.lowered.gates.len() {
@@ -580,6 +624,7 @@ impl SparseSeedBuilder {
                 input,
                 services,
                 variant,
+                boundary_mode,
                 instances.clone(),
                 &repairs.iter().copied().collect::<Vec<_>>(),
                 trace.then_some(&mut marks),
@@ -673,6 +718,7 @@ impl SparseSeedBuilder {
         input: SeedInput<'_>,
         services: SeedServices<'_>,
         variant: &SeedVariant,
+        boundary_mode: BoundaryMode,
         instances: InstanceGraph,
         repairs: &[LayoutRepair],
         mut phase_marks: Option<&mut Vec<Instant>>,
@@ -694,7 +740,13 @@ impl SparseSeedBuilder {
         )?;
         let plan_translation =
             PlanTranslation::for_unpinned(&placement_plan, !candidate.pin_contracts.is_empty());
-
+        // Explicit pins remain their caller-supplied fixture contract, even through
+        // the parent-connectable entry. Only a genuinely pinless input is automatic.
+        let boundary_mode = if input.pins.is_none() {
+            boundary_mode
+        } else {
+            BoundaryMode::Fixtures
+        };
         let mut occupied = BTreeSet::new();
         let mut sources = BTreeMap::new();
         let mut targets = BTreeMap::new();
@@ -703,6 +755,7 @@ impl SparseSeedBuilder {
             input.lowered,
             &placement_plan,
             plan_translation,
+            boundary_mode,
             &mut occupied,
             &mut sources,
             &mut targets,
@@ -1464,10 +1517,14 @@ fn place_boundaries(
     netlist: &Netlist,
     plan: &SeedPlacementPlan,
     plan_translation: PlanTranslation,
+    boundary_mode: BoundaryMode,
     occupied: &mut BTreeSet<Anchor>,
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
 ) -> Result<(), SeedError> {
+    if boundary_mode == BoundaryMode::ParentConnectable {
+        inject_parent_connectable_pins(candidate, netlist, plan, plan_translation)?;
+    }
     for pin in candidate.pin_contracts.values() {
         if !occupied.insert(pin.at) {
             return Err(SeedError::PlacementCollision { at: pin.at });
@@ -1647,6 +1704,40 @@ fn place_boundaries(
         targets.insert(PhysicalSink::DeclaredOutput(port), geometry);
     }
     Ok(())
+}
+
+fn inject_parent_connectable_pins(
+    candidate: &mut ExpandedPhysicalCandidate,
+    netlist: &Netlist,
+    plan: &SeedPlacementPlan,
+    plan_translation: PlanTranslation,
+) -> Result<(), SeedError> {
+    let toward = plan.frame.forward;
+    for (index, name) in netlist.inputs.iter().enumerate() {
+        let port = PortId(u32::try_from(index).map_err(|_| SeedError::IdentityOverflow)?);
+        let home = plan
+            .automatic_inputs
+            .get(&port)
+            .copied()
+            .ok_or(SeedError::Incomplete("automatic input placement"))?;
+        candidate
+            .pins
+            .pin(name.clone(), plan_translation.apply(home), toward);
+    }
+    for (index, name) in netlist.outputs.iter().enumerate() {
+        let port = PortId(u32::try_from(index).map_err(|_| SeedError::IdentityOverflow)?);
+        let home = plan
+            .automatic_outputs
+            .get(&port)
+            .copied()
+            .ok_or(SeedError::Incomplete("automatic output placement"))?;
+        candidate
+            .pins
+            .pin(name.clone(), plan_translation.apply(home), toward);
+    }
+    candidate.bind_pin_contracts(netlist)?;
+    crate::compile::planner::validate_port_placements(netlist, &candidate.pins)
+        .map_err(SeedError::InvalidPins)
 }
 
 fn automatic_boundary_direction(candidate: &ExpandedPhysicalCandidate) -> Facing {
@@ -2367,6 +2458,10 @@ fn route_guidance_for_source(
         lateral: plan.frame.lateral,
         track: *plan.signal_tracks.get(&signal)?,
         half_width: 2,
+        access_half_width: 0,
+        preferred_y: None,
+        access_y: None,
+        hard: false,
         penalty_per_block: 2,
     })
 }
@@ -3379,6 +3474,7 @@ fn reservations_for_components(
     candidate: &ExpandedPhysicalCandidate,
 ) -> Result<PhysicalReservations, SeedError> {
     let mut reservations = PhysicalReservations::new();
+    let mut blocks = BTreeMap::new();
     let mut ordinal = 0u32;
     for (block, kind) in candidate
         .placements
@@ -3405,9 +3501,18 @@ fn reservations_for_components(
         if reservations.get(&block.at).is_some() {
             return Err(SeedError::PlacementCollision { at: block.at });
         }
+        if kind == PhysicalReservationKind::KeepOut {
+            blocks.insert(block.at, block.state.clone());
+        }
         reservations.reserve(block.at, PhysicalReservationOwner::KeepOut(ordinal), kind);
         ordinal = ordinal.saturating_add(1);
     }
+    // Every other keep-out a seed adds -- sockets, isolation, route halos --
+    // is air a route must floor itself, and only those it may floor.
+    reservations.treat_keep_out_as_air(AirKeepOut {
+        blocks,
+        isolating: IsolatingOwners::AnyKeepOut,
+    });
     Ok(reservations)
 }
 
@@ -3424,10 +3529,13 @@ fn reserve_route(
         );
     }
     for block in &tree.floors {
-        reservations.reserve(
+        // A floor the route laid on isolating keep-out replaces it, so a later
+        // route reads the stone that stands there rather than air to floor.
+        let _ = reservations.commit_routed(
             block.at,
             PhysicalReservationOwner::RouteStair(tree.id),
             PhysicalReservationKind::Floor(block.state.clone()),
+            &[],
         );
     }
     for block in &tree.cells {
@@ -5178,6 +5286,7 @@ mod tests {
 
     struct LiteralSeedPlacer {
         calls: Cell<u32>,
+        forward: Facing,
     }
 
     impl SeedPlacer for LiteralSeedPlacer {
@@ -5188,8 +5297,14 @@ mod tests {
             self.calls.set(self.calls.get() + 1);
             Ok(SeedPlacementPlan {
                 frame: crate::compile::fragment_synth::placement::PlacementFrame {
-                    forward: Facing::East,
-                    lateral: Facing::South,
+                    forward: self.forward,
+                    lateral: match self.forward {
+                        Facing::North | Facing::South => Facing::East,
+                        Facing::East | Facing::West => Facing::South,
+                        Facing::Up | Facing::Down => {
+                            unreachable!("placement frames are horizontal")
+                        }
+                    },
                     origin: Anchor { x: 0, y: 1, z: 0 },
                 },
                 signal_tracks: BTreeMap::new(),
@@ -5222,6 +5337,7 @@ mod tests {
         let config = SearchConfig::checked_defaults();
         let placer = LiteralSeedPlacer {
             calls: Cell::new(0),
+            forward: Facing::East,
         };
 
         let certified = compile_sparse_seed_with_services(
@@ -5264,6 +5380,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parent_connectable_seed_uses_the_plan_frame_for_synthetic_pin_direction() {
+        let netlist = not_netlist();
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let placer = LiteralSeedPlacer {
+            calls: Cell::new(0),
+            forward: Facing::North,
+        };
+
+        let certified = compile_parent_connectable_seed_with_services(
+            SeedInput {
+                lowered: &netlist,
+                source_provenance: None,
+                pins: None,
+            },
+            SeedServices {
+                library: &library,
+                placer: &placer,
+                router: &DurablePhysicalRouter,
+                emitter: &DurableSeedEmitter,
+                verifier: &DurableSeedVerifier,
+                certifier: &CompleteCandidateCertifier,
+                search_config: &config,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(placer.calls.get(), 1);
+        assert!(certified
+            .candidate()
+            .pins
+            .iter()
+            .all(|(_, pin)| pin.toward == Facing::North));
+    }
+
     fn build(netlist: &Netlist) -> Result<CertifiedCandidate, SeedError> {
         build_with_pins(netlist, None)
     }
@@ -5290,6 +5442,151 @@ mod tests {
                 search_config: &config,
             },
         )
+    }
+
+    fn build_parent_connectable(netlist: &Netlist) -> Result<CertifiedCandidate, SeedError> {
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        compile_parent_connectable_seed_with_services(
+            SeedInput {
+                lowered: netlist,
+                source_provenance: None,
+                pins: None,
+            },
+            SeedServices {
+                library: &library,
+                placer: &TopologyAwareSeedPlacer,
+                router: &DurablePhysicalRouter,
+                emitter: &DurableSeedEmitter,
+                verifier: &DurableSeedVerifier,
+                certifier: &CompleteCandidateCertifier,
+                search_config: &config,
+            },
+        )
+    }
+
+    #[test]
+    fn parent_connectable_seed_turns_automatic_homes_into_pin_contracts() {
+        let netlist = not_netlist();
+        let first = build_parent_connectable(&netlist).unwrap();
+        let second = build_parent_connectable(&netlist).unwrap();
+        let candidate = first.candidate();
+
+        assert_eq!(
+            first.metrics().candidate_fingerprint,
+            second.metrics().candidate_fingerprint
+        );
+        for (index, name) in netlist.inputs.iter().enumerate() {
+            let port = PortId(index as u32);
+            let endpoint = PhysicalEndpointId::PrimaryInput(port);
+            let pin = candidate.pins.get(name).expect("automatic input is pinned");
+            assert_eq!(candidate.pin_contracts.get(&endpoint), Some(&pin));
+            assert_eq!(
+                candidate.observations[&ObservationId::PrimaryInput(port)]
+                    .site
+                    .at,
+                pin.at
+            );
+            assert_eq!(
+                candidate.observations[&ObservationId::PrimaryInput(port)]
+                    .state
+                    .kind,
+                BlockKind::Air
+            );
+            let boundary = &candidate.boundaries[&endpoint];
+            let handover = pin.handover(PortRole::Input);
+            assert_eq!(
+                boundary.delayed.as_ref().map(|delay| delay.at),
+                Some(handover)
+            );
+            assert!(boundary
+                .blocks
+                .iter()
+                .any(|block| block.at == handover && block.state == compile::repeater(pin.toward)));
+        }
+        for (index, name) in netlist.outputs.iter().enumerate() {
+            let port = PortId(index as u32);
+            let endpoint = PhysicalEndpointId::DeclaredOutput(port);
+            let pin = candidate
+                .pins
+                .get(name)
+                .expect("automatic output is pinned");
+            assert_eq!(candidate.pin_contracts.get(&endpoint), Some(&pin));
+            assert_eq!(
+                candidate.observations[&ObservationId::DeclaredOutput(port)]
+                    .site
+                    .at,
+                pin.at
+            );
+            assert_eq!(
+                candidate.observations[&ObservationId::DeclaredOutput(port)]
+                    .state
+                    .kind,
+                BlockKind::Air
+            );
+            let terminal = candidate
+                .routes
+                .values()
+                .flat_map(|route| &route.branches)
+                .find(|branch| {
+                    branch.target == crate::compile::routing::RouteTarget::DeclaredOutput(port)
+                })
+                .expect("declared output has a route terminal");
+            assert_eq!(terminal.terminal.at, pin.handover(PortRole::Output));
+            assert_eq!(
+                terminal.terminal.kind,
+                crate::compile::routing::RouteTerminalKind::OutputTerminalRepeater
+            );
+            assert_eq!(terminal.terminal.state, compile::repeater(pin.toward));
+        }
+        let views = candidate.compatibility_views(&netlist).unwrap();
+        assert_eq!(
+            views.input_positions,
+            BTreeMap::from([(
+                "a".to_string(),
+                (
+                    candidate.pins.get("a").unwrap().at.x,
+                    candidate.pins.get("a").unwrap().at.y,
+                    candidate.pins.get("a").unwrap().at.z,
+                ),
+            )])
+        );
+        assert_eq!(
+            views.output_positions,
+            BTreeMap::from([(
+                "y".to_string(),
+                (
+                    candidate.pins.get("y").unwrap().at.x,
+                    candidate.pins.get("y").unwrap().at.y,
+                    candidate.pins.get("y").unwrap().at.z,
+                ),
+            )])
+        );
+    }
+
+    #[test]
+    fn fixtures_mode_keeps_automatic_lever_and_lamp_boundaries() {
+        let netlist = not_netlist();
+        let first = build(&netlist).unwrap();
+        let second = build(&netlist).unwrap();
+        let candidate = first.candidate();
+
+        assert_eq!(
+            first.metrics().candidate_fingerprint,
+            second.metrics().candidate_fingerprint
+        );
+        assert!(
+            candidate.boundaries[&PhysicalEndpointId::PrimaryInput(PortId(0))]
+                .blocks
+                .iter()
+                .any(|block| block.state.kind == BlockKind::Lever)
+        );
+        assert!(
+            candidate.boundaries[&PhysicalEndpointId::DeclaredOutput(PortId(0))]
+                .blocks
+                .iter()
+                .any(|block| block.state.kind == BlockKind::Lamp)
+        );
     }
 
     #[test]
@@ -6137,6 +6434,7 @@ mod tests {
                     search_config: &config,
                 },
                 &SeedVariant::default(),
+                BoundaryMode::Fixtures,
                 instances,
                 repairs,
                 None,

@@ -169,6 +169,23 @@ pub fn root_chunk_id(netlist: &Netlist) -> Result<ChunkId, PartitionError> {
     ))
 }
 
+/// The identity a whole netlist has as one child of `parent`.
+///
+/// The same descriptor [`root_chunk_id`] builds, with the enclosing identity
+/// folded in: a node that is packed into a parent is that parent's child, and
+/// two structurally identical nodes under different parents are not the same
+/// child.  It is derived from the declared interface and the membership only,
+/// so nothing a placer or router later decides can move it.
+pub fn node_chunk_id(netlist: &Netlist, parent: &ChunkId) -> Result<ChunkId, PartitionError> {
+    canonical_order(netlist)?;
+    Ok(chunk_id(
+        Some(parent),
+        &netlist.inputs,
+        &netlist.outputs,
+        &netlist.gates,
+    ))
+}
+
 /// Split `netlist` into chunks of at most `max_gates` gates each, in
 /// canonical order.  `parent` is the identity of the enclosing root/parent
 /// chunk and is folded into every child [`ChunkId`].

@@ -10,7 +10,7 @@ fn assert_and4_truth_table(result: &SynthesisResult, output: &str) {
     let mut simulator = Simulator::new(result.compiled.world.clone());
     simulator
         .run_until_stable(MAX_TICKS)
-        .expect("fragment seed must settle initially");
+        .expect("the recursive contract circuit must settle initially");
     let inputs =
         ["a", "b", "c", "d"].map(|name| *result.compiled.input_positions.get(name).unwrap());
     let output = *result.compiled.output_positions.get(output).unwrap();
@@ -34,7 +34,7 @@ fn assert_and4_truth_table(result: &SynthesisResult, output: &str) {
         }
         simulator
             .run_until_stable(MAX_TICKS)
-            .expect("fragment seed must settle after a vector change");
+            .expect("the recursive contract circuit must settle after a vector change");
         assert_eq!(
             simulator.world().get(output.0, output.1, output.2).lit,
             bits.iter().all(|value| *value),
@@ -52,7 +52,7 @@ fn the_public_zero_budget_api_is_independent_deterministic_and_truthful() {
         pins: None,
     };
     let first = compile_fragment_synth(input(), SynthesisBudget::Evaluations(0))
-        .expect("zero budget must still return the certified independent seed");
+        .expect("zero budget must still return the certified recursive contract circuit");
     let repeated = compile_fragment_synth(input(), SynthesisBudget::Evaluations(0))
         .expect("the same zero-budget case must repeat");
 

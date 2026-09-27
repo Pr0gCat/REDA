@@ -42,11 +42,41 @@ pub struct Simulator {
     observer: Option<Observer>,
 }
 
+/// 一筆卡在佇列裡的排程，連同它那一格現在的樣子。
+///
+/// 只在回報 `Diverged` 時才會被建出來 —— 收斂的路徑一次也不會走到這裡。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTickDetail {
+    pub position: Position,
+    pub at_game_tick: u64,
+    pub priority: TickPriority,
+    pub kind: BlockKind,
+    pub lit: bool,
+    pub power: u8,
+}
+
+/// 回報 `Diverged` 時最多列出幾筆待處理排程。
+///
+/// 診斷要的是「卡在哪一類元件、哪一帶座標」，不是整份佇列 —— 一個沒收斂
+/// 的解碼器可能有上千筆待處理，全部印出來只會把真正的線索淹掉。
+pub const DIVERGED_PENDING_DETAIL_LIMIT: usize = 8;
+
 /// 模擬過程的錯誤。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SimulationError {
     /// 電路在上限內沒有穩定 —— 通常是回授迴路在振盪
-    Diverged { game_ticks: u64, pending: usize },
+    ///
+    /// `pending_detail` 最多 [`DIVERGED_PENDING_DETAIL_LIMIT`] 筆，依佇列
+    /// 存放順序；`last_progress_tick` 是最後一次真的有格子改變狀態的那個
+    /// game tick。兩者一起就分得出「還在慢慢傳、只是上限太低」（改變一直
+    /// 到最後都還在發生）跟「卡住了」（`last_progress_tick` 停在很久以前，
+    /// 佇列卻還在被重新填滿）。
+    Diverged {
+        game_ticks: u64,
+        pending: usize,
+        pending_detail: Vec<PendingTickDetail>,
+        last_progress_tick: u64,
+    },
     /// 碰到本階段不支援的元件
     UnsupportedComponent { position: Position, name: String },
 }
@@ -284,6 +314,35 @@ impl Simulator {
         simulator
     }
 
+    /// 從一個「紅石粉強度已經算好」的世界建立模擬器。
+    ///
+    /// 和 [`Simulator::new`] 唯一的差別是不再重算一次紅石粉強度 —— 其餘
+    /// 都一樣：全新的 tick 佇列、tick 從零開始、工作量計數從零開始，不
+    /// 支援的元件一樣會警告。
+    ///
+    /// 只有當 `world` 的紅石粉強度已經是重算過的結果、而且那次重算自己
+    /// 寫下的 dirty 記號也已經被清掉時才成立：那時再重算一次不會改動任
+    /// 何一格，跳過它得到的世界一模一樣。拿一個剛被 `set` 動過的世界呼
+    /// 叫這個建構子，它的紅石粉強度就會停留在舊值。
+    pub(crate) fn from_recomputed_world(world: World) -> Self {
+        let simulator = Simulator {
+            world,
+            queue: TickQueue::new(),
+            torch_changes: HashMap::new(),
+            work_done: 0,
+            observer: None,
+        };
+
+        if let Some((position, name)) = find_unsupported_component(&simulator.world) {
+            eprintln!(
+                "reda: 世界在 {position:?} 有本階段不支援的元件 `{name}` —— \
+                 不會被模擬，呼叫 run_until_stable 時會回報 UnsupportedComponent"
+            );
+        }
+
+        simulator
+    }
+
     pub fn world(&self) -> &World {
         &self.world
     }
@@ -364,6 +423,9 @@ impl Simulator {
         }
 
         let mut game_ticks_run = 0u64;
+        // 最後一次真的有格子改變狀態的 game tick。只是個 `u64`，每個 tick
+        // 更新一次，沒有任何配置。
+        let mut last_progress_tick = self.queue.current_tick();
         loop {
             // 每一輪都先從目前的世界狀態重新安定下來：這代表「從呼叫端
             // 現在讓世界處於的狀態安定下來」，而不是「處理佇列裡剛好排到
@@ -378,19 +440,27 @@ impl Simulator {
             }
 
             if game_ticks_run >= max_game_ticks {
+                let pending_detail = self.pending_detail();
                 eprintln!(
                     "reda: 電路在 {game_ticks_run} 個 game tick 內沒有穩定 \
-                     （共處理 {} 筆排程，仍有 {} 筆待處理）—— 回報 Diverged",
+                     （共處理 {} 筆排程，仍有 {} 筆待處理，最後一次改變在 tick {}）\
+                     —— 回報 Diverged；佇列前幾筆：{:?}",
                     self.work_done,
-                    self.queue.pending_count()
+                    self.queue.pending_count(),
+                    last_progress_tick,
+                    pending_detail
                 );
                 return Err(SimulationError::Diverged {
                     game_ticks: game_ticks_run,
                     pending: self.queue.pending_count(),
+                    pending_detail,
+                    last_progress_tick,
                 });
             }
 
-            self.advance_one_tick();
+            if self.advance_one_tick() > 0 {
+                last_progress_tick = self.queue.current_tick();
+            }
             game_ticks_run += 1;
         }
     }
@@ -410,6 +480,7 @@ impl Simulator {
         }
         let work_at_start = self.work_done;
         let mut game_ticks_run = 0u64;
+        let mut last_progress_tick = self.queue.current_tick();
         loop {
             self.settle_from_current_state();
             if self.queue.is_empty() {
@@ -420,6 +491,8 @@ impl Simulator {
                     SimulationError::Diverged {
                         game_ticks: game_ticks_run,
                         pending: self.queue.pending_count(),
+                        pending_detail: self.pending_detail(),
+                        last_progress_tick,
                     },
                 ));
             }
@@ -428,17 +501,45 @@ impl Simulator {
                 .checked_sub(work_at_start)
                 .unwrap_or(u64::MAX);
             let remaining = max_events.saturating_sub(used);
-            if self.advance_one_tick_bounded(remaining).is_err() {
-                return Err(BoundedSimulationError::WorkLimitExceeded {
-                    used: self
-                        .work_done
-                        .checked_sub(work_at_start)
-                        .unwrap_or(u64::MAX),
-                    limit: max_events,
-                });
+            match self.advance_one_tick_bounded(remaining) {
+                Ok(changed) if changed > 0 => last_progress_tick = self.queue.current_tick(),
+                Ok(_) => {}
+                Err(()) => {
+                    return Err(BoundedSimulationError::WorkLimitExceeded {
+                        used: self
+                            .work_done
+                            .checked_sub(work_at_start)
+                            .unwrap_or(u64::MAX),
+                        limit: max_events,
+                    });
+                }
             }
             game_ticks_run += 1;
         }
+    }
+
+    /// 佇列前幾筆待處理的排程，連同那幾格現在的狀態。
+    ///
+    /// 只有回報 `Diverged` 的那條路徑會叫它 —— 它會配置一個 `Vec`，而收斂
+    /// 的模擬永遠不會走到。
+    fn pending_detail(&self) -> Vec<PendingTickDetail> {
+        self.queue
+            .peek_pending(DIVERGED_PENDING_DETAIL_LIMIT)
+            .into_iter()
+            .map(|tick| {
+                let state = self
+                    .world
+                    .get(tick.position.x, tick.position.y, tick.position.z);
+                PendingTickDetail {
+                    position: tick.position,
+                    at_game_tick: tick.at_game_tick,
+                    priority: tick.priority,
+                    kind: state.kind,
+                    lit: state.lit,
+                    power: state.power,
+                }
+            })
+            .collect()
     }
 
     /// 從目前的世界狀態安定下來：先重算紅石粉強度，再排程任何因此變得
@@ -593,14 +694,17 @@ impl Simulator {
             if self.queue.is_scheduled(position) {
                 continue;
             }
-            if component::repeater_is_locked(&self.world, position) {
-                continue;
-            }
 
+            // 三個判斷都是對世界的純讀取，所以誰先問不影響結論 —— 只影響
+            // 問幾次。絕大多數中繼器的輸出本來就跟輸入一致，先問這件事，
+            // 鎖存就只有真的不一致的那幾個才需要再去讀兩側鄰居。
             let state = self.world.get(position.x, position.y, position.z);
             let currently_lit = state.lit;
             let desired = component::repeater_input_is_powered(&self.world, position);
             if currently_lit == desired {
+                continue;
+            }
+            if component::repeater_is_locked(&self.world, position) {
                 continue;
             }
 
@@ -963,9 +1067,34 @@ mod tests {
         let mut simulator = Simulator::new(world);
         let result = simulator.run_until_stable(50);
 
+        let Err(SimulationError::Diverged {
+            pending,
+            pending_detail,
+            last_progress_tick,
+            ..
+        }) = result
+        else {
+            panic!("a self-feeding ring of torches must never report Ok, got {result:?}");
+        };
+
+        // The diagnostic an oscillator gives: the queue is still full, the
+        // detail names torches, and something changed as recently as the last
+        // few ticks -- which is what tells it apart from a circuit that stopped
+        // moving while its queue kept refilling.
+        assert!(pending > 0);
+        assert!(!pending_detail.is_empty());
+        assert!(pending_detail.len() <= DIVERGED_PENDING_DETAIL_LIMIT);
         assert!(
-            matches!(result, Err(SimulationError::Diverged { .. })),
-            "a self-feeding ring of torches must never report Ok, got {result:?}"
+            pending_detail
+                .iter()
+                .all(|tick| matches!(tick.kind, BlockKind::Torch | BlockKind::WallTorch)),
+            "every stuck tick here is a torch: {pending_detail:?}"
+        );
+        assert!(
+            last_progress_tick + 4 >= simulator.current_tick(),
+            "an oscillator keeps changing, so progress must be recent: \
+             last {last_progress_tick} of {}",
+            simulator.current_tick()
         );
     }
 
@@ -1021,6 +1150,43 @@ mod tests {
             !simulator.world().get(2, 0, 2).lit,
             "power in front of a repeater must never be read as its input"
         );
+    }
+
+    #[test]
+    fn a_side_locked_repeater_is_never_scheduled_although_its_input_disagrees() {
+        // Same shape as the test below, asked of the scan rather than of the
+        // output: the repeater is lit, its input is dark, and the only reason
+        // it is not scheduled is the lock.
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, repeater(Facing::West, 1, true));
+        world.set(2, 0, 1, repeater(Facing::North, 1, true));
+        let mut lock_input = lever();
+        lock_input.lit = true;
+        world.set(2, 0, 0, lock_input);
+
+        let locked = Position::new(2, 0, 2);
+        let mut simulator = Simulator::new(world);
+
+        // The mismatch the lock is being asked to override, stated outright.
+        assert!(simulator.world().get(2, 0, 2).lit, "it starts lit");
+        assert!(
+            !component::repeater_input_is_powered(simulator.world(), locked),
+            "its input must be dark, or there is no mismatch to suppress"
+        );
+        assert!(
+            component::repeater_is_locked(simulator.world(), locked),
+            "the side repeater must actually lock it"
+        );
+
+        // Nothing is scheduled, so the circuit settles immediately and the
+        // output never moves. An unlocked repeater in this state would be
+        // scheduled, turn off one delay later, and this would not be `Ok(0)`.
+        assert_eq!(
+            simulator.run_until_stable(64),
+            Ok(0),
+            "a locked repeater must not put itself in the queue"
+        );
+        assert!(simulator.world().get(2, 0, 2).lit);
     }
 
     #[test]

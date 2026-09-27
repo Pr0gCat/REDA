@@ -14,8 +14,30 @@ echo "== root: test =="
 cargo test --release 2>&1 | grep -E "^test result" |
   awk '{s+=$4; f+=$6; i+=$8} END {print "passed="s, "failed="f, "ignored="i; if (f>0) exit 1}'
 
+# The acceptance gate is six `budget_zero_*` per-case tests in
+# `tests/fragment_synth_acceptance.rs`, one per canonical case, generated from
+# one macro invocation there. The suite above runs them; this only proves they
+# are still *registered*. It is the same skip trap the wasm stanza below
+# guards against, one level up: delete a wrapper, or the macro line that
+# registers it, and the suite reports one fewer pass and still exits 0. Read
+# off `--list`, which builds nothing new and runs nothing, so no case is
+# measured twice.
+echo "== root: acceptance gate registration =="
+cargo test --release --test fragment_synth_acceptance -- --list 2>&1 |
+  grep -cE '^budget_zero_[a-z0-9_]+: test$' |
+  awk '{print "budget_zero tests="$1; if ($1 != 6) exit 1}'
+
 echo "== root: clippy =="
 cargo clippy --all-targets -- -D warnings 2>&1 | tail -1
+
+# The native suite above never builds for wasm32, and the viewer stanzas
+# below only prove *reda-viewer* builds there -- a `reda`-only break (a
+# platform cfg with no wasm32 arm, for one) could still hide behind a green
+# run if `reda-viewer` happened not to reach the broken path. This is the
+# same boundary Milestone 0 of `docs/native-wasm-verilog-compiler-plan.md`
+# asks for directly on the root crate, not by way of the viewer.
+echo "== root: wasm check =="
+cargo check -p reda --target wasm32-unknown-unknown 2>&1 | tail -1
 
 echo "== viewer: test =="
 (cd viewer && cargo test --release 2>&1 | grep -E "^test result" |

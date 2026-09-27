@@ -1,0 +1,17 @@
+
+running 1 test
+test budget_zero_seven_segment has been running for over 60 seconds
+budget-zero seven_segment: certified=false ticks=None blocks=None passed=false error=Some("recursive contract synthesis failed: node ChunkId(Fingerprint(\"d43a872b2d644dcb634148bb8b5e235b9e6aad033d00eca548eb57781f05bad5\")) could not be packed: all 5 packed layouts were refused; the first refused: packed connection g19 from None could not be routed: legacy physical router refused route RouteId(2) as PhysicalInvariant")
+
+thread 'budget_zero_seven_segment' (5583512) panicked at tests/fragment_synth_acceptance.rs:166:5:
+seven_segment: passed=false compiled_and_certified=false no_tick_regression=false no_block_regression=false pinned_ten_percent_tick_improvement=None strict_block_improvement=None error=Some("recursive contract synthesis failed: node ChunkId(Fingerprint(\"d43a872b2d644dcb634148bb8b5e235b9e6aad033d00eca548eb57781f05bad5\")) could not be packed: all 5 packed layouts were refused; the first refused: packed connection g19 from None could not be routed: legacy physical router refused route RouteId(2) as PhysicalInvariant")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test budget_zero_seven_segment ... FAILED
+
+failures:
+
+failures:
+    budget_zero_seven_segment
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 88.06s
+

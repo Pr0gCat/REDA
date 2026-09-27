@@ -187,8 +187,17 @@ pub(crate) trait SeedPlacer {
     }
 }
 
+/// The seed placer at the standard grid, [`STANDARD_PITCH`]. Leaves choose
+/// their grid ([`PitchedSeedPlacer`]); what still names this is test code.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TopologyAwareSeedPlacer;
+
+/// The seed placer on a grid of `0` cells: the routing channel ahead of and
+/// behind every macro, and the lateral pitch between signal tracks and
+/// between separated owners. The two were always the same number.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PitchedSeedPlacer(pub(crate) i32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NetInterval {
@@ -250,19 +259,37 @@ impl MacroEnvelope {
     }
 }
 
-const ROUTING_CHANNEL: i32 = 6;
-const TRACK_PITCH: i32 = 6;
+/// The grid every leaf was always placed on.
+pub(crate) const STANDARD_PITCH: i32 = 6;
 
 impl SeedPlacer for TopologyAwareSeedPlacer {
     fn plan(
         &self,
         request: SeedPlacementRequest<'_>,
     ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+        PitchedSeedPlacer(STANDARD_PITCH).plan(request)
+    }
+
+    fn plan_with_repairs(
+        &self,
+        request: SeedPlacementRequest<'_>,
+        repairs: &[LayoutRepair],
+    ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+        PitchedSeedPlacer(STANDARD_PITCH).plan_with_repairs(request, repairs)
+    }
+}
+
+impl SeedPlacer for PitchedSeedPlacer {
+    fn plan(
+        &self,
+        request: SeedPlacementRequest<'_>,
+    ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+        let pitch = self.0;
         let analysis = request.analysis;
         let frame = derive_frame(request.pins);
         let intervals = net_intervals(request.graph, analysis);
         let tracks = colour_intervals(&intervals);
-        let track_laterals = track_laterals(request.graph, request.pins, frame, &tracks);
+        let track_laterals = track_laterals(request.graph, request.pins, frame, &tracks, pitch);
         let envelopes = request
             .graph
             .instances
@@ -309,8 +336,8 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
             .max()
             .unwrap_or(1);
             let origin = frame_to_world(frame, 0, lateral);
-            let source = frame_to_world(frame, -ROUTING_CHANNEL, lateral);
-            let target = frame_to_world(frame, max_span + ROUTING_CHANNEL, lateral);
+            let source = frame_to_world(frame, -pitch, lateral);
+            let target = frame_to_world(frame, max_span + pitch, lateral);
             facings.insert(
                 instance.id,
                 choose_instance_facing(
@@ -359,7 +386,7 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
             columns.insert(level, column);
             cursor = column
                 .checked_add(level_bounds.max_forward)
-                .and_then(|value| value.checked_add(ROUTING_CHANNEL))
+                .and_then(|value| value.checked_add(pitch))
                 .ok_or(SeedPlacementError::CoordinateOverflow)?;
         }
 
@@ -377,7 +404,7 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                 .copied()
                 .map(|id| (id, lanes[&id], bounds[&id]))
                 .collect::<Vec<_>>();
-            let legalized = legalize_laterals(&entries)?;
+            let legalized = legalize_laterals(&entries, pitch)?;
             for id in ids {
                 let lateral = legalized[&id];
                 frame_origins.insert(id, (column, lateral));
@@ -397,7 +424,7 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
             );
         }
 
-        let input_forward = -ROUTING_CHANNEL;
+        let input_forward = -pitch;
         let output_forward = cursor;
         let automatic_inputs = request
             .graph
@@ -443,7 +470,7 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                     .and_then(|signal| track_laterals.get(&signal).copied())
                     .unwrap_or(0);
                 while !taken_output_laterals.insert(lateral) {
-                    lateral = lateral.saturating_add(TRACK_PITCH);
+                    lateral = lateral.saturating_add(pitch);
                 }
                 (port, frame_to_world(frame, output_forward, lateral))
             })
@@ -546,6 +573,7 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                         direction,
                         preferred_sign,
                         i32::from(ordinal),
+                        self.0,
                     )? {
                         return Err(SeedPlacementError::SeparationExhausted {
                             source_owner,
@@ -700,6 +728,7 @@ fn separate_owners_legalized(
     direction: Facing,
     preferred_sign: i32,
     first_attempt: i32,
+    pitch: i32,
 ) -> Result<bool, SeedPlacementError> {
     let shell_count = i32::try_from(request.graph.instances.len())
         .unwrap_or(i32::MAX)
@@ -722,7 +751,7 @@ fn separate_owners_legalized(
     let mut legal = 0;
     for attempt in 0..=final_attempt {
         let shell = attempt.div_euclid(4).saturating_add(1);
-        let magnitude = TRACK_PITCH.saturating_mul(shell);
+        let magnitude = pitch.saturating_mul(shell);
         let candidate = usize::try_from(attempt.rem_euclid(4)).unwrap_or(0);
         let (owner, sign) = candidates[candidate];
         let mut trial = plan.clone();
@@ -1104,6 +1133,7 @@ const fn project_horizontal(x: i32, z: i32, direction: Facing) -> i32 {
 
 fn legalize_laterals(
     entries: &[(InstanceId, i32, MacroBounds)],
+    channel: i32,
 ) -> Result<BTreeMap<InstanceId, i32>, SeedPlacementError> {
     let mut next_min_lateral: Option<i32> = None;
     let mut origins = BTreeMap::new();
@@ -1121,7 +1151,7 @@ fn legalize_laterals(
         next_min_lateral = Some(
             origin
                 .checked_add(bounds.max_lateral)
-                .and_then(|maximum| maximum.checked_add(ROUTING_CHANNEL))
+                .and_then(|maximum| maximum.checked_add(channel))
                 .ok_or(SeedPlacementError::CoordinateOverflow)?,
         );
     }
@@ -1227,9 +1257,12 @@ fn colour_intervals(intervals: &[NetInterval]) -> BTreeMap<LogicalSignalId, usiz
     tracks
 }
 
-fn track_lateral(tracks: &BTreeMap<LogicalSignalId, usize>, signal: LogicalSignalId) -> i32 {
-    i32::try_from(tracks.get(&signal).copied().unwrap_or(0)).unwrap_or(i32::MAX / TRACK_PITCH)
-        * TRACK_PITCH
+fn track_lateral(
+    tracks: &BTreeMap<LogicalSignalId, usize>,
+    signal: LogicalSignalId,
+    pitch: i32,
+) -> i32 {
+    i32::try_from(tracks.get(&signal).copied().unwrap_or(0)).unwrap_or(i32::MAX / pitch) * pitch
 }
 
 fn track_laterals(
@@ -1237,11 +1270,12 @@ fn track_laterals(
     pins: &BTreeMap<PhysicalEndpointId, PortPin>,
     frame: PlacementFrame,
     tracks: &BTreeMap<LogicalSignalId, usize>,
+    pitch: i32,
 ) -> BTreeMap<LogicalSignalId, i32> {
     let mut laterals = tracks
         .keys()
         .copied()
-        .map(|signal| (signal, track_lateral(tracks, signal)))
+        .map(|signal| (signal, track_lateral(tracks, signal, pitch)))
         .collect::<BTreeMap<_, _>>();
     for (endpoint, pin) in pins {
         let (signal, role) = match *endpoint {
@@ -2045,7 +2079,7 @@ mod tests {
         instance_owner_collides, lateral_projection, logical_signal_for_owner,
         macro_access_envelope, EdgeFacts, LayoutOwner, LayoutRepair, NetInterval, PlacementFrame,
         RunwayDirection, SeedPlacementError, SeedPlacementRequest, SeedPlacer, SeparationAxis,
-        TopologyAwareSeedPlacer, TRACK_PITCH,
+        TopologyAwareSeedPlacer, STANDARD_PITCH as TRACK_PITCH,
     };
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {

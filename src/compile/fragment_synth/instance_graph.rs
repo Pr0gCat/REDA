@@ -9,7 +9,7 @@ use crate::compile::fragment_synth::identity::{
     GateIndex, ImplementationKey, InstanceId, PortId, PrimitiveId,
 };
 use crate::compile::fragment_synth::topology::{
-    instantiate, merge_isolation_mask, ContributorSpec, ExpandedInstance, OutputSpec, TopologyError,
+    instantiate, merge_isolation_mask, seed_merge_isolation_mask, ContributorSpec, ExpandedInstance, OutputSpec, TopologyError,
 };
 use crate::compile::topology::{GateKind, Library};
 use crate::compile::Netlist;
@@ -181,6 +181,27 @@ impl InstanceGraph {
         Self::one_to_one_with_implementations(netlist, library, &BTreeMap::new())
     }
 
+    /// [`one_to_one`](Self::one_to_one) with every merge isolated the way
+    /// the legacy emitter isolates it ([`merge_isolation_mask`]), for
+    /// adapting a circuit that emitter built. The seed generator's own graph
+    /// also isolates a merge input that is a declared output
+    /// ([`seed_merge_isolation_mask`]); the legacy one does not.
+    pub(crate) fn one_to_one_legacy(netlist: &Netlist, library: &Library) -> Result<Self, SynthesisError> {
+        let mut implementations = BTreeMap::new();
+        for (index, gate) in netlist.gates.iter().enumerate() {
+            if matches!(gate.kind, GateKind::Or(_)) {
+                let gate_index = gate_index(index)?;
+                let isolation_mask = merge_isolation_mask(netlist, gate_index)
+                    .map_err(|_| SynthesisError::NoLibraryEntry { gate: gate_index })?;
+                implementations.insert(
+                    InstanceId(gate_index.0),
+                    ImplementationKey::Merge { isolation_mask },
+                );
+            }
+        }
+        Self::one_to_one_with_implementations(netlist, library, &implementations)
+    }
+
     pub(crate) fn one_to_one_with_implementations(
         netlist: &Netlist,
         library: &Library,
@@ -204,7 +225,7 @@ impl InstanceGraph {
             let instance = InstanceId(gate_index.0);
             let default_implementation = if matches!(gate.kind, GateKind::Or(_)) {
                 ImplementationKey::Merge {
-                    isolation_mask: merge_isolation_mask(netlist, gate_index)
+                    isolation_mask: seed_merge_isolation_mask(netlist, gate_index)
                         .map_err(|_| SynthesisError::NoLibraryEntry { gate: gate_index })?,
                 }
             } else {

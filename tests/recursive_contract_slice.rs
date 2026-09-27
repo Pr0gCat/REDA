@@ -128,7 +128,7 @@ fn solve(child: &Child) -> ChildResult {
     .expect("a pinned one-input NOR must certify");
     assert_eq!(
         result.evaluations_used, 0,
-        "this test certifies seed layouts"
+        "the recursive contract spends no budget; this test certifies its layouts"
     );
     let case = result.case_fingerprint.as_str().to_owned();
     let candidate = result.candidate_fingerprint.as_str().to_owned();
@@ -224,7 +224,8 @@ fn assert_identity(mut world: World, root_out: (i32, i32, i32), stages: usize) {
     }
 }
 
-/// Compile `n` seed layouts concurrently and sequentially, certify their flat
+/// Compile `n` child layouts through the public recursive contract entry,
+/// concurrently and sequentially, certify their flat
 /// composition, and prove the even number of inversions is the identity.
 fn run_pipeline(n: usize) {
     assert_eq!(n % 2, 0, "an identity pipeline needs an even stage count");
@@ -278,6 +279,6 @@ fn two_parallel_children_compose_through_one_parent_portal() {
 }
 
 #[test]
-fn sixteen_parallel_seed_children_compose_through_fifteen_parent_portals() {
+fn sixteen_parallel_recursive_children_compose_through_fifteen_parent_portals() {
     run_pipeline(16);
 }

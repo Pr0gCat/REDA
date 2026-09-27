@@ -31,6 +31,7 @@
 use std::path::Path;
 
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
+use reda::compile::evaluation::CircuitEvaluation;
 use reda::compile::lowering::{lower, lower_optimised};
 use reda::compile::planner::{Anchor, PortPin, PortPlacements, PortRole};
 use reda::compile::{compile, CompileError, CompiledCircuit, Netlist};
@@ -620,8 +621,10 @@ fn facing_name(facing: Facing) -> &'static str {
 }
 
 fn list_circuits(circuits: &[CircuitInfo]) {
-    println!("Usage: build_circuit <name> [--grown [--pins <file.json>]]");
+    println!("Usage: build_circuit <name> [--grown|--synth [--pins <file.json>]] [--evaluation text|json]");
     println!("       build_circuit verilog <file.v> <top-module>");
+    println!("--evaluation writes output/<name>[.grown].evaluation.txt or .json.");
+    println!("Counts describe the lowered circuit; unmeasured timing is reported as unavailable.");
     println!();
     println!("--grown compiles through the generation front door (minutes, not");
     println!("milliseconds); --pins declares IO terminals for it -- inputs by name,");
@@ -649,8 +652,29 @@ fn list_circuits(circuits: &[CircuitInfo]) {
     }
 }
 
+fn take_evaluation_format(args: &mut Vec<String>) -> Result<Option<&'static str>, String> {
+    let Some(index) = args.iter().position(|arg| arg == "--evaluation") else {
+        return Ok(None);
+    };
+    args.remove(index);
+    let extension = match args.get(index).map(String::as_str) {
+        Some("text") => "txt",
+        Some("json") => "json",
+        _ => return Err("--evaluation needs a format: text or json".into()),
+    };
+    args.remove(index);
+    if args.iter().any(|arg| arg == "--evaluation") {
+        return Err("--evaluation may only be specified once".into());
+    }
+    Ok(Some(extension))
+}
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let evaluation_format = take_evaluation_format(&mut args).unwrap_or_else(|why| {
+        eprintln!("{why}");
+        std::process::exit(1);
+    });
     // `--grown` compiles through the failure-directed generation front door
     // (`compile_grown`) instead of the fast trial-then-fallback `compile`.
     // Minutes, not milliseconds -- see compile_grown's own doc for the
@@ -658,6 +682,15 @@ fn main() {
     // the two producers' outputs can sit side by side.
     let grown = args.iter().any(|arg| arg == "--grown");
     args.retain(|arg| arg != "--grown");
+    // `--synth` compiles through the recursive fragment synthesiser
+    // (`compile_fragment_synth`), the producer the acceptance cases score,
+    // and names the file `<name>.synth.litematic`.
+    let synth = args.iter().any(|arg| arg == "--synth");
+    args.retain(|arg| arg != "--synth");
+    if grown && synth {
+        eprintln!("--grown and --synth are two producers; pick one");
+        std::process::exit(1);
+    }
     // `--pins <file.json>` declares terminals for the ports the caller owns
     // (the IO-terminals contract, docs/superpowers/specs/2026-08-30):
     // inputs by name, outputs by display label. Grown-only, because pins
@@ -674,15 +707,19 @@ fn main() {
         }
         None => None,
     };
-    if pins_path.is_some() && !grown {
+    if pins_path.is_some() && !grown && !synth {
         eprintln!(
-            "--pins requires --grown: pinned ports compile through the generation front door"
+            "--pins requires --grown or --synth: pinned ports compile through a generator"
         );
         std::process::exit(1);
     }
     let circuits = available_circuits();
 
     if args.is_empty() {
+        if evaluation_format.is_some() {
+            eprintln!("--evaluation requires a circuit name");
+            std::process::exit(1);
+        }
         list_circuits(&circuits);
         return;
     }
@@ -742,7 +779,21 @@ fn main() {
     // Not an `expect`: a synthesized netlist is only as well-formed as the
     // Verilog it came from, so this has to be able to fail readably rather
     // than panicking. See `mc_dump`'s identical reasoning.
-    let compiled = match if grown {
+    let compiled = match if synth {
+        reda::compile::fragment_synth::compile_fragment_synth(
+            reda::compile::fragment_synth::SynthesisInput {
+                lowered: &netlist,
+                source_provenance: None,
+                pins: Some(&placements),
+            },
+            reda::compile::fragment_synth::SynthesisBudget::Evaluations(0),
+        )
+        .map(|result| result.compiled)
+        .map_err(|error| {
+            eprintln!("circuit '{name}' failed to synthesise: {error}");
+            std::process::exit(1);
+        })
+    } else if grown {
         reda::compile::compile_grown(&netlist, &placements)
     } else {
         compile(&netlist)
@@ -769,7 +820,9 @@ fn main() {
 
     let output_dir = Path::new("output");
     std::fs::create_dir_all(output_dir).expect("failed to create the output directory");
-    let stem = if grown {
+    let stem = if synth {
+        format!("{name}.synth")
+    } else if grown {
         format!("{name}.grown")
     } else {
         name.clone()
@@ -778,6 +831,21 @@ fn main() {
 
     litematic::save(&output_path, &compiled.world, &name)
         .expect("failed to write the litematic file");
+
+    if let Some(format) = evaluation_format {
+        let evaluation = CircuitEvaluation::from_compiled(&netlist, &compiled);
+        let report = if format == "json" {
+            serde_json::to_string_pretty(&evaluation).expect("evaluation must serialize") + "\n"
+        } else {
+            evaluation.to_string()
+        };
+        let report_path = output_dir.join(format!("{stem}.evaluation.{format}"));
+        std::fs::write(&report_path, report).unwrap_or_else(|error| {
+            eprintln!("could not write {}: {error}", report_path.display());
+            std::process::exit(1);
+        });
+        println!("wrote {}", report_path.display());
+    }
 
     // A plain-text block dump beside the litematic, one non-air block per
     // line -- `x y z kind facing lit power` -- for viewers that are not
@@ -894,6 +962,26 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evaluation_format_is_explicit_and_preserves_circuit_arguments() {
+        let mut args = vec![
+            "and4".into(),
+            "--evaluation".into(),
+            "json".into(),
+            "--grown".into(),
+        ];
+        assert_eq!(take_evaluation_format(&mut args), Ok(Some("json")));
+        assert_eq!(args, ["and4", "--grown"]);
+        for values in [
+            vec!["--evaluation"],
+            vec!["--evaluation", "yaml"],
+            vec!["--evaluation", "text", "--evaluation", "json"],
+        ] {
+            let mut args = values.into_iter().map(String::from).collect();
+            assert!(take_evaluation_format(&mut args).is_err());
+        }
+    }
 
     /// The spec's own example shape parses: both sections, any of the four
     /// horizontal facings, negative-free coordinates as written.

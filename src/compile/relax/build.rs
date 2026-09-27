@@ -19,9 +19,9 @@
 
 use crate::compile::geometry::{self, CellFacing};
 use crate::compile::physical::{self, PortKind, RelativeSide};
-use crate::compile::planner::{Anchor, PortPlacements};
+use crate::compile::planner::{Anchor, LowerBound, PortPlacements};
 use crate::compile::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
-use crate::compile::topology::{Primitive, TemplateNode};
+use crate::compile::topology::{GateKind, Primitive, TemplateNode};
 use crate::compile::Netlist;
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::{BlockKind, Facing};
@@ -241,6 +241,8 @@ pub enum BodyKind {
     /// A declared wire merge. `expand` produces no primitive for one, and
     /// `place_merge_gate` writes blocks at its anchor regardless.
     Junction { gate: usize },
+    /// One fixed Design H macro. Internal primitives never relax separately.
+    DffPosedge { gate: usize },
     /// A pinned input's terminal: the caller's own cell (claimed, written by
     /// nobody), a normalizing repeater in the neighbour `toward` names, and
     /// the route's source one cell further. Always pinned, and it does not
@@ -331,6 +333,9 @@ pub struct BodyGraph {
     /// Which body carries each node's anchor: a NOR's torch, a merge's
     /// junction, an input's lever.
     pub anchor_body: Vec<usize>,
+    /// The caller's [`LowerBound`], from `PortPlacements`. Projection lifts
+    /// every free node whose cells would fall below it.
+    pub lower_bound: Option<LowerBound>,
 }
 
 /// How many hops out along a body's output face its pin sits.
@@ -348,6 +353,7 @@ pub fn pin_hops(body: &Body) -> i32 {
             kind: Primitive::Torch,
             ..
         } => 2,
+        BodyKind::DffPosedge { .. } => 2,
         BodyKind::InputTerminal { .. } => 2,
         // An output terminal is a sink, not a source: the spring from its
         // producer attaches at the caller's own cell, zero hops out.
@@ -365,6 +371,15 @@ pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3] {
     let facing = body.facing;
     match attach {
         Attach::Socket(index) => {
+            if matches!(body.what, BodyKind::DffPosedge { .. }) {
+                let local = match index {
+                    0 => (0, 0, 1),
+                    1 => (3, 0, 0),
+                    _ => unreachable!("a DFF has exactly D and C inputs"),
+                };
+                let (x, y, z) = geometry::rotate(local, facing);
+                return [x as f64, y as f64, z as f64];
+            }
             let direction = geometry::input_directions(facing)[index];
             let step = Position::new(0, 0, 0).offset(direction);
             [step.x as f64, step.y as f64, step.z as f64]
@@ -428,6 +443,42 @@ pub struct Cell {
 pub fn cells(body: &Body) -> Vec<Cell> {
     let facing = body.facing;
     let mut cells = Vec::new();
+
+    if matches!(body.what, BodyKind::DffPosedge { .. }) {
+        let d = body.inputs[0].clone();
+        let clock = body.inputs[1].clone();
+        let q = body.output.clone().expect("a DFF body drives Q");
+        let mut push = |offset, carries: Vec<String>| {
+            cells.push(Cell {
+                offset: geometry::rotate(offset, facing),
+                carries,
+            });
+        };
+        push((0, 0, 0), vec![d.clone()]);
+        push((0, 0, -1), vec![q.clone()]);
+        push((1, 0, 0), vec![clock.clone()]);
+        push((1, 0, -1), Vec::new());
+        push((2, 0, 0), vec![clock.clone()]);
+        push((2, 0, -1), Vec::new());
+        push((0, 0, 1), vec![d]);
+        push((3, 0, 0), vec![clock]);
+        // Keep source bodies off the two mandatory straight approaches. The
+        // router owns these cells; a lever placed on one would be overwritten
+        // by its own route before the DFF ever saw the input.
+        push((0, 0, 2), Vec::new());
+        push((4, 0, 0), Vec::new());
+        push((0, 0, -2), vec![q]);
+        for offset in [
+            (0, -1, 0),
+            (0, -1, -1),
+            (1, -1, 0),
+            (1, -1, -1),
+            (0, -1, -2),
+        ] {
+            push(offset, Vec::new());
+        }
+        return cells;
+    }
 
     // An output terminal fits neither arm below: it carries a net without
     // driving one. Its own position is the **caller's** cell, which REDA never
@@ -650,7 +701,17 @@ pub fn build(
 
         // The body that carries this gate's anchor: a merge's junction, or the
         // single torch its library entry instantiated.
-        let anchor = if gate.is_merge() {
+        let anchor = if gate.kind == GateKind::DffPosedge {
+            bodies.push(Body {
+                what: BodyKind::DffPosedge { gate: gate_index },
+                position,
+                inputs: gate.inputs.clone(),
+                output: Some(gate.output.clone()),
+                facing: CellFacing::NORTH,
+                pinned: is_pinned,
+            });
+            bodies.len() - 1
+        } else if gate.is_merge() {
             bodies.push(Body {
                 what: BodyKind::Junction { gate: gate_index },
                 position,
@@ -812,6 +873,7 @@ pub fn build(
         welds,
         nodes,
         anchor_body,
+        lower_bound: pinned.lower_bound(),
     })
 }
 

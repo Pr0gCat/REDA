@@ -51,12 +51,12 @@ A ready-made launch entry for this is checked in at `.claude/launch.json`
 
 ## Using the page
 
-Three views share one loaded circuit, switched from the header: **2D Slice**,
-**3D View**, and **Topology**. The circuit dropdown lists the four hand-written
-reference circuits plus the Verilog-derived ones, which the wasm build loads
-from the checked-in netlists in `src/circuits/baked/` -- a browser cannot run
-Yosys, so those are baked at build time and held to fresh synthesis by
-`the_baked_netlists_match_fresh_synthesis`.
+Four views share one loaded circuit, switched from the header: **2D Slice**,
+**3D View**, **Topology**, and **Signals**. The circuit dropdown lists the four
+hand-written reference circuits plus the Verilog-derived ones, which the wasm
+build loads from the checked-in netlists in `src/circuits/baked/` -- a
+browser cannot run Yosys, so those are baked at build time and held to fresh
+synthesis by `the_baked_netlists_match_fresh_synthesis`.
 
 `grown:verilog:seven_segment` is different: it fetches the checked-in grown
 `.litematic` and its structured pinout. Every pinned `at` cell belongs to the
@@ -91,6 +91,21 @@ reset restores the saved world with those runtime fixtures already present.
    state and tick count without recompiling or changing baked geometry.
 5. Hovering the canvas shows the coordinate, block kind, and signal strength
    under the cursor.
+
+### Signals
+
+The Signals tab is a compact I/O logic analyzer. Inputs are blue, outputs are
+green, and each row shows a digital low/high trace plus its latest 0-15 signal
+strength. It keeps the latest 256 samples and resets when the circuit or
+simulation is reset. Input changes and manual **Step** actions add samples;
+**Run to stable** adds the final settled state rather than every internal tick.
+
+### Verilog
+
+The Verilog tab shows, read-only, the exact source `verilog_source()` reports
+for the loaded circuit -- the same canonical source the baked netlist was
+synthesized from. The hand-written circuits have no Verilog source, so the
+tab says as much instead.
 
 ### Topology
 

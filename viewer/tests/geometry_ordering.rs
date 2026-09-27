@@ -138,9 +138,14 @@ fn check_geometry_against_the_world(
     let pattern: Vec<bool> = (0..input_names.len()).map(|i| i % 3 != 1).collect();
     for (&name, &on) in input_names.iter().zip(pattern.iter()) {
         let position = input_positions[name];
-        let mut state = ground_truth.world().get(position.0, position.1, position.2).clone();
+        let mut state = ground_truth
+            .world()
+            .get(position.0, position.1, position.2)
+            .clone();
         state.lit = on;
-        ground_truth.world_mut().set(position.0, position.1, position.2, state);
+        ground_truth
+            .world_mut()
+            .set(position.0, position.1, position.2, state);
     }
     ground_truth
         .run_until_stable(MAX_TICKS)
@@ -149,7 +154,9 @@ fn check_geometry_against_the_world(
     let mut session =
         Session::new(circuit).unwrap_or_else(|_| panic!("{circuit} must be a valid circuit name"));
     for (&name, &on) in input_names.iter().zip(pattern.iter()) {
-        session.set_lever(name, on).unwrap_or_else(|_| panic!("`{name}` must be a valid input"));
+        session
+            .set_lever(name, on)
+            .unwrap_or_else(|_| panic!("`{name}` must be a valid input"));
     }
     session
         .run_until_stable()
@@ -170,7 +177,10 @@ fn check_geometry_against_the_world(
         strengths.len(),
         "geometry() and strengths() must report the same number of cells"
     );
-    assert!(cell_count > 0, "{circuit} must have at least one non-air block");
+    assert!(
+        cell_count > 0,
+        "{circuit} must have at least one non-air block"
+    );
 
     let (size_x, size_y, size_z) = ground_truth.world().size();
 
@@ -202,7 +212,9 @@ fn check_geometry_against_the_world(
     // is the direct check the plan asks for: catch a facing that "look[s]
     // entirely plausible" by construction, not by coincidence.
     let mut repeater_facings_seen = std::collections::BTreeSet::new();
-    let entries = geometry.chunks_exact(GEOMETRY_BYTES_PER_CELL).zip(strengths.iter());
+    let entries = geometry
+        .chunks_exact(GEOMETRY_BYTES_PER_CELL)
+        .zip(strengths.iter());
     for (i, (cell, &strength)) in entries.enumerate() {
         let x = u16::from_le_bytes([cell[0], cell[1]]) as i32;
         let y = u16::from_le_bytes([cell[2], cell[3]]) as i32;

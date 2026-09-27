@@ -33,15 +33,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
-use reda::compile::primitive_graph::{self, PrimitiveGraph, Provenance};
-use reda::compile::topology::{Library, Primitive as TopoPrimitive, TemplateNode};
 use reda::compile::lowering::{lower_optimised_with_provenance, lower_with_provenance};
 use reda::compile::planner::{Anchor, PortPin, PortPlacements, PortRole};
+use reda::compile::primitive_graph::{self, PrimitiveGraph, Provenance};
+use reda::compile::topology::{Library, Primitive as TopoPrimitive, TemplateNode};
 use reda::compile::{
     compile, compile_planned, drive_caller_cell, input_terminal_reader, output_terminal_handover,
     probe_caller_cell, Netlist,
 };
-use reda::redstone::simulator::position::Position;
+use reda::redstone::simulator::position::{Position, HORIZONTAL};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use reda::redstone::world::storage::World;
@@ -88,7 +88,10 @@ fn segment_a_adapter() -> (Netlist, Vec<(String, String)>) {
     // Segment index 0 is "a" in `seven_segment::SEGMENT_NAMES`, matching
     // `tests/reference_circuits.rs`'s `the_compiled_segment_a_matches_its_truth_table`.
     let (netlist, output) = seven_segment::build_single_segment_netlist(0);
-    (netlist, vec![(seven_segment::SEGMENT_NAMES[0].to_string(), output)])
+    (
+        netlist,
+        vec![(seven_segment::SEGMENT_NAMES[0].to_string(), output)],
+    )
 }
 
 fn seven_segment_adapter() -> (Netlist, Vec<(String, String)>) {
@@ -137,11 +140,11 @@ const CIRCUITS: &[(&str, CircuitBuilder)] = &[
 /// choosing its own anchors -- rather than by `compile`.
 const PLANNED_PREFIX: &str = "planned:";
 
-/// Names carrying this prefix are PRE-BAKED `compile_grown` circuits: the
-/// generation takes minutes natively and would take tens of minutes in wasm,
-/// so the page fetches the `.litematic` the `build_circuit --grown` bin
+/// Names carrying this prefix are PRE-BAKED `compile_fragment_synth`
+/// circuits: synthesis takes seconds to minutes natively and far longer in
+/// wasm, so the page fetches the `.litematic` the `build_circuit --synth` bin
 /// wrote, plus its pinout sidecar, and hands both to `Session::from_baked`.
-const GROWN_PREFIX: &str = "grown:";
+const BAKED_PREFIX: &str = "synth:";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
@@ -213,9 +216,7 @@ fn validate_baked_pinout_ports(
         let by_signal = signal_name != display_name && baked_outputs.contains_key(signal_name);
         match (by_display, by_signal) {
             (false, false) => {
-                return Err(format!(
-                    "circuit `{circuit_name}` baked pinout is missing required output port `{display_name}`"
-                ));
+                return Err(format!("circuit `{circuit_name}` baked pinout is missing required output port `{display_name}`"));
             }
             (true, true) => {
                 return Err(format!(
@@ -253,17 +254,17 @@ fn baked_port_position(
 ) -> Result<([i32; 3], bool), String> {
     let (at, toward, handover) = match baked {
         BakedPort::Unpinned(at) => return Ok((at, false)),
-        BakedPort::Pinned { at, toward, handover } => (at, toward, handover),
+        BakedPort::Pinned {
+            at,
+            toward,
+            handover,
+        } => (at, toward, handover),
     };
     let role_name = match role {
         PortRole::Input => "input",
         PortRole::Output => "output",
     };
-    let toward_facing = baked_facing(&toward).ok_or_else(|| {
-        format!(
-            "{role_name} port `{port}` at caller cell {at:?} has invalid `toward` value {toward:?}; expected north, south, east, or west"
-        )
-    })?;
+    let toward_facing = baked_facing(&toward).ok_or_else(|| format!("{role_name} port `{port}` at caller cell {at:?} has invalid `toward` value {toward:?}; expected north, south, east, or west"))?;
     let pin = PortPin {
         at: Anchor {
             x: at[0],
@@ -299,7 +300,7 @@ fn baked_port_position(
 
 fn build_named_circuit(name: &str) -> Option<(Netlist, Vec<(String, String)>)> {
     let name = name.strip_prefix(PLANNED_PREFIX).unwrap_or(name);
-    let name = name.strip_prefix(GROWN_PREFIX).unwrap_or(name);
+    let name = name.strip_prefix(BAKED_PREFIX).unwrap_or(name);
     if let Some(&(_, build)) = CIRCUITS.iter().find(|&&(n, _)| n == name) {
         return Some(build());
     }
@@ -338,8 +339,24 @@ pub fn list_circuits() -> Vec<String> {
     CIRCUITS
         .iter()
         .map(|&(name, _)| name.to_string())
-        .chain(verilog::CIRCUITS.iter().map(|circuit| circuit.name.to_string()))
+        .chain(
+            verilog::CIRCUITS
+                .iter()
+                .map(|circuit| circuit.name.to_string()),
+        )
         .collect()
+}
+
+/// The canonical Verilog source behind a listed circuit, for the read-only
+/// Verilog tab. `synth:` circuits share the same source as their ordinary
+/// compiled counterpart. `None` for the hand-written circuits, which have no
+/// Verilog source.
+#[wasm_bindgen]
+pub fn verilog_source(circuit_name: &str) -> Option<String> {
+    let name = circuit_name
+        .strip_prefix(BAKED_PREFIX)
+        .unwrap_or(circuit_name);
+    verilog::find(name).map(|circuit| circuit.source.to_string())
 }
 
 // ---------------------------------------------------------------------
@@ -422,7 +439,7 @@ fn block_kind_colour(kind: BlockKind) -> &'static str {
         BlockKind::Glass => "#cfe8ff",
         BlockKind::Slab => "#b0b0b0",
         BlockKind::RedstoneWire => "#ff3b3b",
-        BlockKind::Repeater => "#c9a227",
+        BlockKind::Repeater => "#4fc3f7",
         BlockKind::Comparator => "#d9a441",
         BlockKind::Torch => "#ff8c00",
         BlockKind::WallTorch => "#ff8c00",
@@ -571,6 +588,43 @@ struct Pin {
     y: i32,
     z: i32,
     pinned: bool,
+    /// The way the signal crosses this port's cell -- into the circuit for
+    /// an input, out of it for an output -- or `None` when nothing beside
+    /// the cell carries it. Read off the world by [`port_flow`], so it
+    /// holds for levers and lamps as well as pinned caller cells.
+    flow: Option<Facing>,
+}
+
+/// The direction the signal travels through a port's cell `at`.
+///
+/// An input's signal leaves `at` toward the component that reads it; an
+/// output's arrives at `at` from the component that drives it. A repeater or
+/// comparator only counts when it faces the right way (its `facing` points
+/// at its own input side), so a reader is never mistaken for a driver; dust
+/// counts either way and is tried after them, sideways before vertically.
+fn port_flow(world: &World, (x, y, z): (i32, i32, i32), role: PortRole) -> Option<Facing> {
+    let at = Position::new(x, y, z);
+    let toward = |away: Facing| match role {
+        PortRole::Input => away,
+        PortRole::Output => away.opposite(),
+    };
+    let diode = HORIZONTAL.iter().copied().find(|&away| {
+        let next = at.offset(away);
+        let state = world.get(next.x, next.y, next.z);
+        matches!(state.kind, BlockKind::Repeater | BlockKind::Comparator)
+            && state.facing.map(Facing::opposite) == Some(toward(away))
+    });
+    let dust = || {
+        HORIZONTAL
+            .iter()
+            .copied()
+            .chain([Facing::Up, Facing::Down])
+            .find(|&away| {
+                let next = at.offset(away);
+                world.get(next.x, next.y, next.z).kind == BlockKind::RedstoneWire
+            })
+    };
+    diode.or_else(dust).map(toward)
 }
 
 #[derive(Serialize)]
@@ -644,11 +698,16 @@ enum TopologyProvenance {
 
 fn topology_provenance(provenance: &Provenance) -> TopologyProvenance {
     match provenance {
-        Provenance::Gate { gate, role } => {
-            TopologyProvenance::Gate { gate: *gate, role: template_role_name(*role) }
+        Provenance::Gate { gate, role } => TopologyProvenance::Gate {
+            gate: *gate,
+            role: template_role_name(*role),
+        },
+        Provenance::PrimaryInput { name } => {
+            TopologyProvenance::PrimaryInput { name: name.clone() }
         }
-        Provenance::PrimaryInput { name } => TopologyProvenance::PrimaryInput { name: name.clone() },
-        Provenance::PrimaryOutput { name } => TopologyProvenance::PrimaryOutput { name: name.clone() },
+        Provenance::PrimaryOutput { name } => {
+            TopologyProvenance::PrimaryOutput { name: name.clone() }
+        }
     }
 }
 
@@ -1009,15 +1068,12 @@ impl Session {
         Session::build_inner(circuit_name, None)
     }
 
-    fn build_inner(
-        circuit_name: &str,
-        baked: Option<BakedParts>,
-    ) -> Result<Session, String> {
-        let base_name = circuit_name.strip_prefix(GROWN_PREFIX).unwrap_or(circuit_name);
+    fn build_inner(circuit_name: &str, baked: Option<BakedParts>) -> Result<Session, String> {
+        let base_name = circuit_name
+            .strip_prefix(BAKED_PREFIX)
+            .unwrap_or(circuit_name);
         let (source_netlist, outputs) = build_named_circuit(circuit_name).ok_or_else(|| {
-            format!(
-                "unknown circuit `{circuit_name}` -- see list_circuits() for the valid names"
-            )
+            format!("unknown circuit `{circuit_name}` -- see list_circuits() for the valid names")
         })?;
 
         // Lower once, here, and use the result for everything below.
@@ -1032,11 +1088,16 @@ impl Session {
         // doc comment.
         let (netlist, provenance, source_terminals) = if verilog::find(base_name).is_some() {
             lower_optimised_with_provenance(&source_netlist).map(|lowered| {
-                (lowered.netlist, lowered.provenance, lowered.source_terminals)
+                (
+                    lowered.netlist,
+                    lowered.provenance,
+                    lowered.source_terminals,
+                )
             })
         } else {
             lower_with_provenance(&source_netlist).map(|(netlist, provenance)| {
-                let source_terminals = source_terminals_by_declared_output(&source_netlist, &netlist, &provenance);
+                let source_terminals =
+                    source_terminals_by_declared_output(&source_netlist, &netlist, &provenance);
                 (netlist, provenance, source_terminals)
             })
         }
@@ -1045,88 +1106,88 @@ impl Session {
         // own, rather than the row/channel/track one it merely realises and
         // checks. They are different circuits computing the same function,
         // which is the whole point of being able to look at both.
-        let (
-            world,
-            input_positions,
-            input_controls,
-            output_positions_by_signal,
-            pinned_outputs,
-        ) = match baked {
-            // A pre-baked world skips compilation entirely: the litematic IS
-            // the circuit `compile_grown` produced. Validate each typed pinned
-            // port against that shipped world before installing the viewer's
-            // caller-owned source or receiver.
-            Some(BakedParts { world, pinout }) => {
-                let BakedPinout {
-                    inputs: baked_inputs,
-                    outputs: baked_outputs,
-                } = pinout;
-                validate_baked_pinout_ports(
-                    circuit_name,
-                    &source_netlist,
-                    &outputs,
-                    &baked_inputs,
-                    &baked_outputs,
-                )?;
-                let mut input_positions = BTreeMap::new();
-                let mut input_controls = BTreeMap::new();
-                for (name, port) in baked_inputs {
-                    let (at, pinned) = baked_port_position(&world, &name, port, PortRole::Input)?;
-                    input_positions.insert(name.clone(), (at[0], at[1], at[2]));
-                    let control =
-                        if pinned { InputControl::CallerCell } else { InputControl::Lever };
-                    input_controls.insert(name, control);
-                }
-
-                let mut output_positions = BTreeMap::new();
-                let mut pinned_outputs = Vec::new();
-                for (name, port) in baked_outputs {
-                    let (at, pinned) = baked_port_position(&world, &name, port, PortRole::Output)?;
-                    output_positions.insert(name, (at[0], at[1], at[2]));
-                    if pinned {
-                        pinned_outputs.push((at[0], at[1], at[2]));
+        let (world, input_positions, input_controls, output_positions_by_signal, pinned_outputs) =
+            match baked {
+                // A pre-baked world skips compilation entirely: the litematic IS
+                // the circuit the generator produced. Validate each typed pinned
+                // port against that shipped world before installing the viewer's
+                // caller-owned source or receiver.
+                Some(BakedParts { world, pinout }) => {
+                    let BakedPinout {
+                        inputs: baked_inputs,
+                        outputs: baked_outputs,
+                    } = pinout;
+                    validate_baked_pinout_ports(
+                        circuit_name,
+                        &source_netlist,
+                        &outputs,
+                        &baked_inputs,
+                        &baked_outputs,
+                    )?;
+                    let mut input_positions = BTreeMap::new();
+                    let mut input_controls = BTreeMap::new();
+                    for (name, port) in baked_inputs {
+                        let (at, pinned) =
+                            baked_port_position(&world, &name, port, PortRole::Input)?;
+                        input_positions.insert(name.clone(), (at[0], at[1], at[2]));
+                        let control = if pinned {
+                            InputControl::CallerCell
+                        } else {
+                            InputControl::Lever
+                        };
+                        input_controls.insert(name, control);
                     }
-                }
 
-                (
-                    world,
-                    input_positions,
-                    input_controls,
-                    output_positions,
-                    pinned_outputs,
-                )
-            }
-            None => {
-                let compiled = if circuit_name.starts_with(PLANNED_PREFIX) {
-                    // Nothing is pinned here: the viewer's job is to show what the
-                    // planner does when it is left to decide.
-                    //
-                    // `{error}`, not `{error:?}`: `CompileError` writes a sentence
-                    // saying what failed and why -- "the geometry is structurally
-                    // connected but the real, decayed signal dies out before it
-                    // arrives" -- and the derived Debug throws all of that away for a
-                    // struct dump. This page is where a person reads these.
-                    compile_planned(&netlist, &PortPlacements::default()).map_err(|error| {
-                        format!("the planner could not build this circuit: {error}")
-                    })?
-                } else {
-                    compile(&netlist)
-                        .map_err(|error| format!("this circuit does not compile: {error}"))?
-                };
-                let input_controls = compiled
-                    .input_positions
-                    .keys()
-                    .map(|name| (name.clone(), InputControl::Lever))
-                    .collect();
-                (
-                    compiled.world,
-                    compiled.input_positions,
-                    input_controls,
-                    compiled.output_positions,
-                    Vec::new(),
-                )
-            }
-        };
+                    let mut output_positions = BTreeMap::new();
+                    let mut pinned_outputs = Vec::new();
+                    for (name, port) in baked_outputs {
+                        let (at, pinned) =
+                            baked_port_position(&world, &name, port, PortRole::Output)?;
+                        output_positions.insert(name, (at[0], at[1], at[2]));
+                        if pinned {
+                            pinned_outputs.push((at[0], at[1], at[2]));
+                        }
+                    }
+
+                    (
+                        world,
+                        input_positions,
+                        input_controls,
+                        output_positions,
+                        pinned_outputs,
+                    )
+                }
+                None => {
+                    let compiled = if circuit_name.starts_with(PLANNED_PREFIX) {
+                        // Nothing is pinned here: the viewer's job is to show what the
+                        // planner does when it is left to decide.
+                        //
+                        // `{error}`, not `{error:?}`: `CompileError` writes a sentence
+                        // saying what failed and why -- "the geometry is structurally
+                        // connected but the real, decayed signal dies out before it
+                        // arrives" -- and the derived Debug throws all of that away for a
+                        // struct dump. This page is where a person reads these.
+                        compile_planned(&netlist, &PortPlacements::default()).map_err(|error| {
+                            format!("the planner could not build this circuit: {error}")
+                        })?
+                    } else {
+                        compile(&netlist)
+                            .map_err(|error| format!("this circuit does not compile: {error}"))?
+                    };
+                    let input_controls = compiled
+                        .input_positions
+                        .keys()
+                        .map(|name| (name.clone(), InputControl::Lever))
+                        .collect();
+                    (
+                        compiled.world,
+                        compiled.input_positions,
+                        input_controls,
+                        compiled.output_positions,
+                        Vec::new(),
+                    )
+                }
+            };
 
         // Every gate in `netlist` is a NOR or a merge of fan-in 1..=3 --
         // `lower` produces nothing else, and `compile()` above rejects
@@ -1183,7 +1244,11 @@ impl Session {
                 .into_iter()
                 .zip(lowered)
                 .zip(source_terminals)
-                .map(|((layer, lowered), terminals)| CellMeta { layer, lowered, terminals })
+                .map(|((layer, lowered), terminals)| CellMeta {
+                    layer,
+                    lowered,
+                    terminals,
+                })
                 .collect()
         };
 
@@ -1301,7 +1366,12 @@ impl Session {
             shared_edges: self.shared_edges(&cells),
             cells,
             inputs: self.source_netlist.inputs.clone(),
-            outputs: self.source_netlist.outputs.iter().map(&cell_input).collect(),
+            outputs: self
+                .source_netlist
+                .outputs
+                .iter()
+                .map(&cell_input)
+                .collect(),
         }
     }
 
@@ -1342,7 +1412,12 @@ impl Session {
             if owner == reader || terminals[owner].contains(&edge.from) {
                 continue;
             }
-            shared.push(SharedEdge { from: edge.from, to: edge.to, owner, reader });
+            shared.push(SharedEdge {
+                from: edge.from,
+                to: edge.to,
+                owner,
+                reader,
+            });
         }
         shared
     }
@@ -1358,11 +1433,11 @@ impl Session {
     }
 
     /// Build a session from a pre-baked circuit: the gzip `.litematic` bytes
-    /// `build_circuit --grown` wrote, and its `.pinout.json`. Each input or
+    /// `build_circuit --synth` wrote, and its `.pinout.json`. Each input or
     /// output value is either the legacy unpinned `[x,y,z]`, or the structured
     /// pinned `{at: [x,y,z], toward: "north|south|east|west", handover:
     /// [x,y,z]}`. The name still has to resolve in the catalog (with its
-    /// `grown:` prefix stripped), because the topology view and the output
+    /// `synth:` prefix stripped), because the topology view and the output
     /// ORDER come from the netlist -- only the world and the port metadata
     /// come from the bake.
     pub fn from_baked(
@@ -1376,6 +1451,35 @@ impl Session {
             .map_err(|error| JsValue::from_str(&format!("bad pinout: {error}")))?;
         Session::build_inner(circuit_name, Some(BakedParts { world, pinout }))
             .map_err(|error| JsValue::from_str(&error))
+    }
+
+    /// Build a session that only shows a world: a diagnostic dump such as the
+    /// `REDA_DUMP_FAILED_TRUNK` litematic a failed packed trunk writes. It has
+    /// no netlist, so no levers, lamps or topology -- the slice and 3D views
+    /// are what it is for.
+    pub fn from_debug_world(circuit_name: &str, world_bytes: &[u8]) -> Result<Session, JsValue> {
+        let world = reda::formats::litematic::load_bytes(world_bytes)
+            .map_err(|error| JsValue::from_str(&format!("bad litematic: {error}")))?;
+        let source_netlist = Netlist {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            gates: Vec::new(),
+        };
+        let primitive_graph = primitive_graph::expand(&source_netlist, &Library::default_library())
+            .map_err(|error| JsValue::from_str(&format!("empty topology: {error}")))?;
+        Ok(Session {
+            circuit_name: circuit_name.to_string(),
+            simulator: Simulator::new(world.clone()),
+            initial_world: world,
+            input_positions: BTreeMap::new(),
+            input_controls: BTreeMap::new(),
+            output_positions: Vec::new(),
+            pinned_outputs: Vec::new(),
+            primitive_graph,
+            gate_meta: Vec::new(),
+            source_netlist,
+            cell_meta: Vec::new(),
+        })
     }
 
     /// World size as `[x, y, z]`.
@@ -1398,6 +1502,7 @@ impl Session {
                 y,
                 z,
                 pinned: self.input_controls[name] == InputControl::CallerCell,
+                flow: port_flow(&self.initial_world, (x, y, z), PortRole::Input),
             })
             .collect();
         let outputs = self
@@ -1409,6 +1514,7 @@ impl Session {
                 y,
                 z,
                 pinned: self.pinned_outputs.contains(&(x, y, z)),
+                flow: port_flow(&self.initial_world, (x, y, z), PortRole::Output),
             })
             .collect();
         serde_wasm_bindgen::to_value(&Pinout { inputs, outputs })
@@ -1510,9 +1616,7 @@ impl Session {
             Axis::Z => index >= 0 && index < size_z,
         };
         if !in_range {
-            return Err(JsValue::from_str(&format!(
-                "index {index} out of range for axis {axis:?} (world size is {size_x}x{size_y}x{size_z})"
-            )));
+            return Err(JsValue::from_str(&format!("index {index} out of range for axis {axis:?} (world size is {size_x}x{size_y}x{size_z})")));
         }
 
         let (outer_len, inner_len) = match axis {
@@ -1651,8 +1755,15 @@ impl Session {
                 provenance: topology_provenance(&node.provenance),
             })
             .collect();
-        let edges =
-            self.primitive_graph.edges.iter().map(|edge| TopologyEdge { from: edge.from, to: edge.to }).collect();
+        let edges = self
+            .primitive_graph
+            .edges
+            .iter()
+            .map(|edge| TopologyEdge {
+                from: edge.from,
+                to: edge.to,
+            })
+            .collect();
         let gates = self
             .gate_meta
             .iter()
@@ -1670,9 +1781,16 @@ impl Session {
                 outputs: outputs.clone(),
             })
             .collect();
-        let primitive_level = PrimitiveLevel { nodes, edges, gates };
-        serde_wasm_bindgen::to_value(&Topology { gate_level, primitive_level })
-            .expect("Topology serializes without error -- it is plain strings and integers")
+        let primitive_level = PrimitiveLevel {
+            nodes,
+            edges,
+            gates,
+        };
+        serde_wasm_bindgen::to_value(&Topology {
+            gate_level,
+            primitive_level,
+        })
+        .expect("Topology serializes without error -- it is plain strings and integers")
     }
 
     /// One byte per non-air cell, in **exactly** `geometry()`'s order (see
@@ -1687,7 +1805,9 @@ impl Session {
     /// whole lifetime and just re-upload this one array.
     pub fn strengths(&self) -> Vec<u8> {
         let world = self.simulator.world();
-        non_air_coords(world).map(|(x, y, z)| signal_strength(world.get(x, y, z))).collect()
+        non_air_coords(world)
+            .map(|(x, y, z)| signal_strength(world.get(x, y, z)))
+            .collect()
     }
 }
 
@@ -1713,7 +1833,9 @@ mod gate_level_tests {
     use super::*;
 
     fn gate_level_of(circuit: &str) -> GateLevel {
-        Session::build(circuit).expect("circuit builds").gate_level()
+        Session::build(circuit)
+            .expect("circuit builds")
+            .gate_level()
     }
 
     fn histogram(level: &GateLevel) -> BTreeMap<&'static str, usize> {
@@ -1733,7 +1855,10 @@ mod gate_level_tests {
 
         assert_eq!(level.cells.len(), 3, "and4.netlist declares `# 3 gates`");
         assert_eq!(histogram(&level), BTreeMap::from([("and", 3)]));
-        assert!(level.cells.iter().all(|cell| !cell.realisable), "an $_AND_ is not realisable");
+        assert!(
+            level.cells.iter().all(|cell| !cell.realisable),
+            "an $_AND_ is not realisable"
+        );
 
         // `gate and g0 <- d c` / `g1 <- a b` / `g2 <- g0 g1` -- pin order
         // included, since it is what the picture draws.
@@ -1744,7 +1869,11 @@ mod gate_level_tests {
         assert_eq!(names(&level.cells[1]), ["a", "b"]);
         assert_eq!(names(&level.cells[2]), ["g0", "g1"]);
         assert_eq!(
-            level.cells[2].inputs.iter().map(|input| input.cell).collect::<Vec<_>>(),
+            level.cells[2]
+                .inputs
+                .iter()
+                .map(|input| input.cell)
+                .collect::<Vec<_>>(),
             [Some(0), Some(1)],
             "g2 reads the two other cells; the earlier two read primary inputs only"
         );
@@ -1755,14 +1884,21 @@ mod gate_level_tests {
         assert_eq!(level.inputs, ["a", "b", "c", "d"]);
         assert_eq!(level.outputs.len(), 1);
         assert_eq!(level.outputs[0].name, "g2");
-        assert_eq!(level.outputs[0].cell, Some(2), "the sole output is driven by the last cell");
+        assert_eq!(
+            level.outputs[0].cell,
+            Some(2),
+            "the sole output is driven by the last cell"
+        );
 
         // The lowering is not lost: the chosen rails produce seven physical
         // gates.  This deliberately is not the old nine-NOR local expansion;
         // it is the same whole-netlist optimisation the official mc_dump
         // path uses.
         let lowered: usize = level.cells.iter().map(|cell| cell.lowered.len()).sum();
-        assert_eq!(lowered, 7, "global polarity assignment must reach the official and4 realisation");
+        assert_eq!(
+            lowered, 7,
+            "global polarity assignment must reach the official and4 realisation"
+        );
     }
 
     /// The mix from `seven_segment.netlist`'s own `# cells:` line, and the
@@ -1772,7 +1908,11 @@ mod gate_level_tests {
     fn seven_segments_gate_level_is_its_baked_netlist() {
         let level = gate_level_of("verilog:seven_segment");
 
-        assert_eq!(level.cells.len(), 31, "seven_segment.netlist declares `# 31 gates`");
+        assert_eq!(
+            level.cells.len(),
+            31,
+            "seven_segment.netlist declares `# 31 gates`"
+        );
         assert_eq!(
             histogram(&level),
             BTreeMap::from([
@@ -1790,14 +1930,25 @@ mod gate_level_tests {
         // `gate mux g20 <- g14 g1 d0` -- the one cell the tab's own
         // verification singles out, because a multiplexer is exactly the kind
         // of thing that vanishes into a pile of torches when lowered.
-        let muxes: Vec<&TopologyCell> = level.cells.iter().filter(|cell| cell.kind == "mux").collect();
-        assert_eq!(muxes.len(), 1, "there is exactly one mux, and it must be findable");
+        let muxes: Vec<&TopologyCell> = level
+            .cells
+            .iter()
+            .filter(|cell| cell.kind == "mux")
+            .collect();
+        assert_eq!(
+            muxes.len(),
+            1,
+            "there is exactly one mux, and it must be findable"
+        );
         let mux = muxes[0];
         assert_eq!(mux.index, 20);
         assert_eq!(mux.output, "g20");
         assert!(!mux.realisable);
         assert_eq!(
-            mux.inputs.iter().map(|input| (input.name.as_str(), input.cell)).collect::<Vec<_>>(),
+            mux.inputs
+                .iter()
+                .map(|input| (input.name.as_str(), input.cell))
+                .collect::<Vec<_>>(),
             [("g14", Some(14)), ("g1", Some(1)), ("d0", None)],
             "A, B, S in Yosys's pin order -- a mux is not symmetric, so drawing \
              these in any other order draws a different circuit"
@@ -1811,7 +1962,11 @@ mod gate_level_tests {
 
         assert_eq!(level.inputs, ["d0", "d1", "d2", "d3"]);
         assert_eq!(
-            level.outputs.iter().map(|output| output.name.as_str()).collect::<Vec<_>>(),
+            level
+                .outputs
+                .iter()
+                .map(|output| output.name.as_str())
+                .collect::<Vec<_>>(),
             ["g18", "g21", "g25", "g17", "g27", "g28", "g30"],
             "the seven `output` lines, in the netlist's own order"
         );
@@ -1820,7 +1975,11 @@ mod gate_level_tests {
         // Every realisable cell is one lowered gate (`lower` adopts it
         // verbatim); every gate-level one is more.
         for cell in &level.cells {
-            assert!(!cell.lowered.is_empty(), "cell {} lowered into nothing", cell.output);
+            assert!(
+                !cell.lowered.is_empty(),
+                "cell {} lowered into nothing",
+                cell.output
+            );
             if cell.realisable {
                 assert_eq!(cell.lowered.len(), 1, "{} is adopted verbatim", cell.output);
             }
@@ -1833,7 +1992,12 @@ mod gate_level_tests {
     /// as its neighbour.
     #[test]
     fn every_lowered_gate_belongs_to_exactly_one_cell() {
-        for circuit in ["verilog:and4", "verilog:seven_segment", "seven_segment", "full_adder"] {
+        for circuit in [
+            "verilog:and4",
+            "verilog:seven_segment",
+            "seven_segment",
+            "full_adder",
+        ] {
             let session = Session::build(circuit).expect("circuit builds");
             let total = session.gate_meta.len();
             let level = session.gate_level();
@@ -1865,7 +2029,12 @@ mod gate_level_tests {
     /// terminals.
     #[test]
     fn every_primitive_node_is_inside_exactly_one_cell_or_is_a_port() {
-        for circuit in ["verilog:and4", "verilog:seven_segment", "seven_segment", "full_adder"] {
+        for circuit in [
+            "verilog:and4",
+            "verilog:seven_segment",
+            "seven_segment",
+            "full_adder",
+        ] {
             let session = Session::build(circuit).expect("circuit builds");
             let ports = session
                 .primitive_graph
@@ -1883,13 +2052,22 @@ mod gate_level_tests {
                 }
             }
             for (id, &count) in claims.iter().enumerate() {
-                let is_port =
-                    !matches!(session.primitive_graph.nodes[id].provenance, Provenance::Gate { .. });
+                let is_port = !matches!(
+                    session.primitive_graph.nodes[id].provenance,
+                    Provenance::Gate { .. }
+                );
                 let expected = usize::from(!is_port);
-                assert_eq!(count, expected, "{circuit}: node #{id} is claimed by {count} cells");
+                assert_eq!(
+                    count, expected,
+                    "{circuit}: node #{id} is claimed by {count} cells"
+                );
             }
             let owned: usize = level.cells.iter().map(|cell| cell.nodes.len()).sum();
-            assert_eq!(owned + ports, total, "{circuit}: cells and ports must cover every node");
+            assert_eq!(
+                owned + ports,
+                total,
+                "{circuit}: cells and ports must cover every node"
+            );
         }
     }
 
@@ -1902,16 +2080,26 @@ mod gate_level_tests {
     fn a_shared_inverter_is_reported_as_an_edge_out_of_the_cell_that_built_it() {
         let session = Session::build("verilog:seven_segment").expect("circuit builds");
         let level = session.gate_level();
-        assert!(!level.shared_edges.is_empty(), "this circuit really does share inverters");
+        assert!(
+            !level.shared_edges.is_empty(),
+            "this circuit really does share inverters"
+        );
 
         // Every shared edge has to be a real edge of the primitive graph,
         // leaving a node its owner really owns for a node its reader really
         // owns -- otherwise the dashed line the picture draws points at
         // nothing.
-        let edges: HashSet<(usize, usize)> =
-            session.primitive_graph.edges.iter().map(|edge| (edge.from, edge.to)).collect();
+        let edges: HashSet<(usize, usize)> = session
+            .primitive_graph
+            .edges
+            .iter()
+            .map(|edge| (edge.from, edge.to))
+            .collect();
         for shared in &level.shared_edges {
-            assert!(edges.contains(&(shared.from, shared.to)), "{shared:?} is not a real edge");
+            assert!(
+                edges.contains(&(shared.from, shared.to)),
+                "{shared:?} is not a real edge"
+            );
             assert_ne!(shared.owner, shared.reader);
             assert!(level.cells[shared.owner].nodes.contains(&shared.from));
             assert!(level.cells[shared.reader].nodes.contains(&shared.to));
@@ -1922,7 +2110,11 @@ mod gate_level_tests {
         // result so a future change cannot silently return the viewer to
         // ordinary lowering while leaving only a vague "some sharing exists"
         // assertion behind.
-        let g3 = level.cells.iter().find(|cell| cell.output == "g3").expect("g3 exists");
+        let g3 = level
+            .cells
+            .iter()
+            .find(|cell| cell.output == "g3")
+            .expect("g3 exists");
         assert_eq!(g3.kind, "andnot");
         let mut readers: Vec<&str> = level
             .shared_edges
@@ -1944,7 +2136,11 @@ mod gate_level_tests {
             .filter(|shared| shared.owner == g3.index)
             .map(|shared| shared.from)
             .collect();
-        assert_eq!(sources.len(), 1, "there is one physical primitive, shared -- not one per reader");
+        assert_eq!(
+            sources.len(),
+            1,
+            "there is one physical primitive, shared -- not one per reader"
+        );
     }
 
     /// `verilog:and4`'s three ANDs share no physical rail.  A bare merge has
@@ -1957,7 +2153,9 @@ mod gate_level_tests {
         assert!(level.shared_edges.is_empty());
         for cell in &level.cells {
             assert!(
-                cell.lowered.len() >= cell.nodes.len() && !cell.lowered.is_empty() && !cell.nodes.is_empty(),
+                cell.lowered.len() >= cell.nodes.len()
+                    && !cell.lowered.is_empty()
+                    && !cell.nodes.is_empty(),
                 "`{}` must own its physical gates and primitives without borrowed rails",
                 cell.output,
             );
@@ -1971,7 +2169,11 @@ mod gate_level_tests {
     fn the_muxs_hull_holds_exactly_the_five_primitives_its_optimised_lowering_instantiates() {
         let session = Session::build("verilog:seven_segment").expect("circuit builds");
         let level = session.gate_level();
-        let mux = level.cells.iter().find(|cell| cell.kind == "mux").expect("one mux");
+        let mux = level
+            .cells
+            .iter()
+            .find(|cell| cell.kind == "mux")
+            .expect("one mux");
 
         assert_eq!(mux.lowered.len(), 5);
         let union: Vec<usize> = {
@@ -1984,7 +2186,10 @@ mod gate_level_tests {
             nodes.dedup();
             nodes
         };
-        assert_eq!(mux.nodes, union, "the box holds its gates' nodes, all of them and nothing else");
+        assert_eq!(
+            mux.nodes, union,
+            "the box holds its gates' nodes, all of them and nothing else"
+        );
         assert_eq!(mux.nodes.len(), 5);
         assert!(
             mux.nodes.iter().all(|&id| matches!(
@@ -1993,7 +2198,6 @@ mod gate_level_tests {
             )),
             "and each of those nodes names one of this cell's own gates as its provenance"
         );
-
     }
 
     /// A hand-written circuit is genuinely all-NOR -- `NetlistBuilder` emits
@@ -2006,9 +2210,16 @@ mod gate_level_tests {
         let lowered = session.gate_meta.len();
         let level = session.gate_level();
 
-        assert_eq!(level.cells.len(), lowered, "lowering is the identity on a hand-written circuit");
+        assert_eq!(
+            level.cells.len(),
+            lowered,
+            "lowering is the identity on a hand-written circuit"
+        );
         assert!(
-            level.cells.iter().all(|cell| cell.realisable && cell.kind == "nor"),
+            level
+                .cells
+                .iter()
+                .all(|cell| cell.realisable && cell.kind == "nor"),
             "every hand-written gate is a NOR"
         );
     }
@@ -2061,7 +2272,11 @@ mod repeater_delay_geometry_tests {
         // somewhere else -- an empty `Netlist` expands to an empty, but
         // still real, `PrimitiveGraph` rather than needing a second
         // "uninitialised" constructor on that type just for this one test.
-        let empty_netlist = Netlist { inputs: Vec::new(), outputs: Vec::new(), gates: Vec::new() };
+        let empty_netlist = Netlist {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            gates: Vec::new(),
+        };
         let primitive_graph = primitive_graph::expand(&empty_netlist, &Library::default_library())
             .expect("an empty netlist has nothing for expand() to fail on");
         Session {
@@ -2086,7 +2301,11 @@ mod repeater_delay_geometry_tests {
 
         assert_eq!(bytes.len() % GEOMETRY_BYTES_PER_CELL, 0);
         let cells: Vec<&[u8]> = bytes.chunks_exact(GEOMETRY_BYTES_PER_CELL).collect();
-        assert_eq!(cells.len(), 4, "all four repeaters must be non-air and appear once each");
+        assert_eq!(
+            cells.len(),
+            4,
+            "all four repeaters must be non-air and appear once each"
+        );
 
         // Ascending-X order (see non_air_coords) puts delay 1 first, matching
         // the order they were placed above.
@@ -2153,16 +2372,16 @@ mod pinned_baked_session_tests {
         }
     }
 
-    fn checked_in_grown_decoder_baked_parts() -> BakedParts {
+    fn checked_in_synth_decoder_baked_parts() -> BakedParts {
         let baked = Path::new(env!("CARGO_MANIFEST_DIR")).join("baked");
         let world =
-            reda::formats::litematic::load(&baked.join("verilog_seven_segment.grown.litematic"))
-                .expect("the checked-in grown decoder litematic loads");
+            reda::formats::litematic::load(&baked.join("verilog_seven_segment.synth.litematic"))
+                .expect("the checked-in synth decoder litematic loads");
         let pinout = serde_json::from_str(
-            &std::fs::read_to_string(baked.join("verilog_seven_segment.grown.pinout.json"))
-                .expect("the checked-in grown decoder pinout loads"),
+            &std::fs::read_to_string(baked.join("verilog_seven_segment.synth.pinout.json"))
+                .expect("the checked-in synth decoder pinout loads"),
         )
-        .expect("the checked-in grown decoder pinout has the baked schema");
+        .expect("the checked-in synth decoder pinout has the baked schema");
         BakedParts { world, pinout }
     }
 
@@ -2175,7 +2394,7 @@ mod pinned_baked_session_tests {
     }
 
     #[test]
-    fn checked_in_grown_decoder_matches_literal_truth_through_caller_fixtures() {
+    fn checked_in_synth_decoder_matches_literal_truth_through_caller_fixtures() {
         // Deliberately independent of seven_segment::TRUTH_TABLE: corruption
         // in the shipped binary must be compared with reviewed literal truth,
         // not with another value produced by the same implementation.
@@ -2198,10 +2417,10 @@ mod pinned_baked_session_tests {
             [false; 7],
         ];
         let mut session = Session::build_inner(
-            "grown:verilog:seven_segment",
-            Some(checked_in_grown_decoder_baked_parts()),
+            "synth:verilog:seven_segment",
+            Some(checked_in_synth_decoder_baked_parts()),
         )
-        .expect("the checked-in grown decoder builds a fixture-installed session");
+        .expect("the checked-in synth decoder builds a fixture-installed session");
 
         let output_names: Vec<&str> = session
             .output_positions
@@ -2227,14 +2446,14 @@ mod pinned_baked_session_tests {
                 .collect();
             assert_eq!(
                 observed, expected[value],
-                "checked-in grown decoder returned the wrong a..g glyph for {value:04b}"
+                "checked-in synth decoder returned the wrong a..g glyph for {value:04b}"
             );
         }
     }
 
     #[test]
     fn pinned_baked_session_installs_and_drives_caller_fixtures() {
-        let mut session = Session::build_inner("grown:and4", Some(pinned_and4_baked_parts()))
+        let mut session = Session::build_inner("synth:and4", Some(pinned_and4_baked_parts()))
             .expect("typed baked session builds");
 
         assert_eq!(
@@ -2260,7 +2479,7 @@ mod pinned_baked_session_tests {
 
     #[test]
     fn pinned_baked_reset_restores_the_same_fixture_installed_world() {
-        let mut session = Session::build_inner("grown:and4", Some(pinned_and4_baked_parts()))
+        let mut session = Session::build_inner("synth:and4", Some(pinned_and4_baked_parts()))
             .expect("typed baked session builds");
 
         for input in ["a", "b", "c", "d"] {
@@ -2294,12 +2513,12 @@ mod pinned_baked_session_tests {
         let mut parts = pinned_and4_baked_parts();
         parts.pinout.outputs.remove(and4::OUTPUT_NAME);
 
-        let error = match Session::build_inner("grown:and4", Some(parts)) {
+        let error = match Session::build_inner("synth:and4", Some(parts)) {
             Err(error) => error,
             Ok(_) => panic!("a baked and4 without output `y` must be refused"),
         };
 
-        for context in ["grown:and4", "output", and4::OUTPUT_NAME] {
+        for context in ["synth:and4", "output", and4::OUTPUT_NAME] {
             assert!(
                 error.contains(context),
                 "the missing-output refusal must include `{context}`: {error}"
@@ -2312,12 +2531,12 @@ mod pinned_baked_session_tests {
         let mut parts = pinned_and4_baked_parts();
         parts.pinout.inputs.remove("a");
 
-        let error = match Session::build_inner("grown:and4", Some(parts)) {
+        let error = match Session::build_inner("synth:and4", Some(parts)) {
             Err(error) => error,
             Ok(_) => panic!("a baked and4 without input `a` must be refused"),
         };
 
-        for context in ["grown:and4", "input", "a"] {
+        for context in ["synth:and4", "input", "a"] {
             assert!(
                 error.contains(context),
                 "the missing-input refusal must include `{context}`: {error}"
@@ -2333,12 +2552,12 @@ mod pinned_baked_session_tests {
             .inputs
             .insert("intruder".to_string(), BakedPort::Unpinned([0, 0, 0]));
 
-        let error = match Session::build_inner("grown:and4", Some(parts)) {
+        let error = match Session::build_inner("synth:and4", Some(parts)) {
             Err(error) => error,
             Ok(_) => panic!("a baked and4 with an undeclared input must be refused"),
         };
 
-        for context in ["grown:and4", "input", "intruder"] {
+        for context in ["synth:and4", "input", "intruder"] {
             assert!(
                 error.contains(context),
                 "the unknown-input refusal must include `{context}`: {error}"
@@ -2354,12 +2573,12 @@ mod pinned_baked_session_tests {
             .outputs
             .insert("intruder".to_string(), BakedPort::Unpinned([0, 0, 0]));
 
-        let error = match Session::build_inner("grown:and4", Some(parts)) {
+        let error = match Session::build_inner("synth:and4", Some(parts)) {
             Err(error) => error,
             Ok(_) => panic!("a baked and4 with an undeclared output must be refused"),
         };
 
-        for context in ["grown:and4", "output", "intruder"] {
+        for context in ["synth:and4", "output", "intruder"] {
             assert!(
                 error.contains(context),
                 "the unknown-output refusal must include `{context}`: {error}"
@@ -2377,14 +2596,17 @@ mod pinned_baked_session_tests {
             .get(and4::OUTPUT_NAME)
             .expect("the fixture has the display alias")
             .clone();
-        parts.pinout.outputs.insert(internal_name.clone(), duplicate);
+        parts
+            .pinout
+            .outputs
+            .insert(internal_name.clone(), duplicate);
 
-        let error = match Session::build_inner("grown:and4", Some(parts)) {
+        let error = match Session::build_inner("synth:and4", Some(parts)) {
             Err(error) => error,
             Ok(_) => panic!("both aliases for one baked output must be refused"),
         };
 
-        for context in ["grown:and4", "output", and4::OUTPUT_NAME, &internal_name] {
+        for context in ["synth:and4", "output", and4::OUTPUT_NAME, &internal_name] {
             assert!(
                 error.contains(context),
                 "the dual-alias refusal must include `{context}`: {error}"
@@ -2416,10 +2638,9 @@ mod baked_pinout_format_tests {
 
     #[test]
     fn structured_entries_deserialize_as_pinned_ports() {
-        let pinout: BakedPinout = serde_json::from_str(
-            r#"{"inputs":{"a":{"at":[21,1,62],"toward":"north","handover":[21,1,61]}},"outputs":{"y":{"at":[53,1,10],"toward":"north","handover":[53,1,11]}}}"#,
-        )
-        .expect("structured pinned sidecar parses");
+        let pinout: BakedPinout =
+            serde_json::from_str(r#"{"inputs":{"a":{"at":[21,1,62],"toward":"north","handover":[21,1,61]}},"outputs":{"y":{"at":[53,1,10],"toward":"north","handover":[53,1,11]}}}"#)
+                .expect("structured pinned sidecar parses");
 
         match pinout.inputs.get("a") {
             Some(BakedPort::Pinned {
@@ -2468,14 +2689,12 @@ mod baked_pinout_format_tests {
                 PortRole::Input => &mut parts.pinout.inputs,
                 PortRole::Output => &mut parts.pinout.outputs,
             };
-            let BakedPort::Pinned { handover, .. } =
-                ports.get_mut(port).expect("literal fixture port exists")
-            else {
+            let BakedPort::Pinned { handover, .. } = ports.get_mut(port).expect("literal fixture port exists") else {
                 panic!("literal fixture port must be pinned");
             };
             *handover = reported;
 
-            let error = match Session::build_inner("grown:and4", Some(parts)) {
+            let error = match Session::build_inner("synth:and4", Some(parts)) {
                 Err(error) => error,
                 Ok(_) => panic!("a sidecar reporting the wrong handover must be refused"),
             };
@@ -2506,14 +2725,12 @@ mod baked_pinout_format_tests {
                 PortRole::Input => &mut parts.pinout.inputs,
                 PortRole::Output => &mut parts.pinout.outputs,
             };
-            let BakedPort::Pinned { toward, .. } =
-                ports.get_mut(port).expect("literal fixture port exists")
-            else {
+            let BakedPort::Pinned { toward, .. } = ports.get_mut(port).expect("literal fixture port exists") else {
                 panic!("literal fixture port must be pinned");
             };
             *toward = received.to_string();
 
-            let error = match Session::build_inner("grown:and4", Some(parts)) {
+            let error = match Session::build_inner("synth:and4", Some(parts)) {
                 Err(error) => error,
                 Ok(_) => panic!("a sidecar reporting a vertical facing must be refused"),
             };
@@ -2530,7 +2747,7 @@ mod baked_pinout_format_tests {
         reader.facing = Some(Facing::North);
         parts.world.set(21, 1, 63, reader);
 
-        let error = match Session::build_inner("grown:and4", Some(parts)) {
+        let error = match Session::build_inner("synth:and4", Some(parts)) {
             Err(error) => error,
             Ok(_) => panic!("a sidecar disagreeing with its shipped world must be refused"),
         };
@@ -2546,7 +2763,7 @@ mod baked_pinout_format_tests {
         let mut parts = pinned_and4_baked_parts();
         parts.world.set(53, 1, 11, BlockState::air());
 
-        let error = match Session::build_inner("grown:and4", Some(parts)) {
+        let error = match Session::build_inner("synth:and4", Some(parts)) {
             Err(error) => error,
             Ok(_) => panic!("a sidecar whose shipped world has no handover must be refused"),
         };

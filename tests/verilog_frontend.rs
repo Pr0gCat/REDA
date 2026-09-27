@@ -29,6 +29,7 @@ use reda::circuits::and4::build_and4_netlist;
 use reda::circuits::seven_segment::{build_seven_segment_netlist, TRUTH_TABLE};
 use reda::circuits::verilog;
 use reda::compile::lowering::{format_histogram, lower, lower_optimised, LowerError};
+use reda::compile::topology::GateKind;
 use reda::compile::{compile, CompiledCircuit, Netlist, PlannerKind};
 use reda::frontend::synthesize_verilog;
 use reda::redstone::simulator::Simulator;
@@ -341,6 +342,41 @@ fn the_verilog_and4_matches_its_truth_table() {
         "and4 comparison: verilog {}g/{}b/{}t vs hand-written {}g/{}b/{}t",
         verilog_stats.0, verilog_stats.1, verilog_stats.2, hand_stats.0, hand_stats.1, hand_stats.2
     );
+}
+
+#[test]
+fn verilog_dff_reaches_the_physical_simulator() {
+    let source = std::fs::read_to_string("tests/fixtures/dff.v").expect("fixture must exist");
+    let (netlist, port_map) =
+        synthesize_verilog(&source, "dff_example").expect("dff.v must synthesize");
+    assert!(netlist
+        .gates
+        .iter()
+        .any(|gate| gate.kind == GateKind::DffPosedge));
+
+    let lowered = lower(&netlist).expect("DFF netlist must lower");
+    let compiled = compile(&lowered).expect("DFF netlist must compile");
+    assert_eq!(compiled.planner_kind(), PlannerKind::Unified3d);
+
+    let d = compiled.input_positions["d"];
+    let clk = compiled.input_positions["clk"];
+    let q = compiled.output_positions[&port_map["q"]];
+    let mut simulator = Simulator::new(compiled.world);
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("DFF must settle");
+
+    let mut apply = |position, on| {
+        set_lever(&mut simulator, position, on);
+        read_output(&simulator, q)
+    };
+    assert!(!apply(clk, true));
+    assert!(!apply(clk, false));
+    assert!(!apply(d, true));
+    assert!(apply(clk, true));
+    assert!(apply(d, false));
+    assert!(apply(clk, false));
+    assert!(!apply(clk, true));
 }
 
 #[test]

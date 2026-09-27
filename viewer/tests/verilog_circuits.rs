@@ -34,7 +34,7 @@ use reda::compile::{compile, input_terminal_reader, output_terminal_handover};
 use reda::formats::litematic;
 use reda::redstone::simulator::position::Position;
 use reda::redstone::world::block::{BlockKind, Facing};
-use reda_viewer::{list_circuits, Axis, Session};
+use reda_viewer::{list_circuits, verilog_source, Axis, Session};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -55,18 +55,29 @@ fn strength_at(slice_bytes: &[u8], size_y: i32, coord: (i32, i32, i32)) -> u8 {
 
 /// Set every lever to the bits of `value` (MSB first over `inputs`), settle,
 /// and read each output lamp back through `slice`.
-fn evaluate(session: &mut Session, inputs: &[&str], value: u32, outputs: &[(i32, i32, i32)]) -> Vec<bool> {
+fn evaluate(
+    session: &mut Session,
+    inputs: &[&str],
+    value: u32,
+    outputs: &[(i32, i32, i32)],
+) -> Vec<bool> {
     for (index, name) in inputs.iter().enumerate() {
         let bit = (value >> (inputs.len() - 1 - index)) & 1 == 1;
-        session.set_lever(name, bit).expect("every input name comes from the netlist itself");
+        session
+            .set_lever(name, bit)
+            .expect("every input name comes from the netlist itself");
     }
-    session.run_until_stable().expect("a synthesised circuit must settle");
+    session
+        .run_until_stable()
+        .expect("a synthesised circuit must settle");
 
     let size = session.size();
     outputs
         .iter()
         .map(|&position| {
-            let bytes = session.slice(Axis::Z, position.2).expect("an output lamp is inside the world");
+            let bytes = session
+                .slice(Axis::Z, position.2)
+                .expect("an output lamp is inside the world");
             strength_at(&bytes, size[1], position) > 0
         })
         .collect()
@@ -82,7 +93,12 @@ fn output_positions(circuit_name: &str) -> Vec<(i32, i32, i32)> {
     let compiled = compile(&netlist).expect("a baked netlist compiles");
     labels
         .iter()
-        .map(|(_port, signal)| *compiled.output_positions.get(signal).expect("compile places every output"))
+        .map(|(_port, signal)| {
+            *compiled
+                .output_positions
+                .get(signal)
+                .expect("compile places every output")
+        })
         .collect()
 }
 
@@ -97,9 +113,9 @@ fn json_coordinate(value: &Value, field: &str, port: &str) -> [i32; 3] {
     );
     let mut coordinate = [0; 3];
     for (index, value) in values.iter().enumerate() {
-        let value = value
-            .as_i64()
-            .unwrap_or_else(|| panic!("`{port}`'s `{field}` coordinate #{index} is not an integer"));
+        let value = value.as_i64().unwrap_or_else(|| {
+            panic!("`{port}`'s `{field}` coordinate #{index} is not an integer")
+        });
         coordinate[index] = i32::try_from(value).unwrap_or_else(|_| {
             panic!("`{port}`'s `{field}` coordinate #{index} is outside the i32 world range")
         });
@@ -121,33 +137,35 @@ fn json_facing(value: &Value, field: &str, port: &str) -> Facing {
 /// Compare both files port-by-port so a stale sidecar cannot pass merely by
 /// remaining self-consistent with the litematic that was generated beside it.
 #[test]
-fn checked_in_grown_decoder_pinout_matches_its_literal_pins() {
+fn checked_in_synth_decoder_pinout_matches_its_literal_pins() {
     let baked = Path::new(env!("CARGO_MANIFEST_DIR")).join("baked");
     let pins: Value = serde_json::from_str(
-        &std::fs::read_to_string(baked.join("verilog_seven_segment.grown.pins.json"))
-            .expect("the literal grown decoder pins are checked in"),
+        &std::fs::read_to_string(baked.join("verilog_seven_segment.synth.pins.json"))
+            .expect("the literal synth decoder pins are checked in"),
     )
-    .expect("the literal grown decoder pins are JSON");
+    .expect("the literal synth decoder pins are JSON");
     let pinout: Value = serde_json::from_str(
-        &std::fs::read_to_string(baked.join("verilog_seven_segment.grown.pinout.json"))
-            .expect("the generated grown decoder pinout is checked in"),
+        &std::fs::read_to_string(baked.join("verilog_seven_segment.synth.pinout.json"))
+            .expect("the generated synth decoder pinout is checked in"),
     )
-    .expect("the generated grown decoder pinout is JSON");
+    .expect("the generated synth decoder pinout is JSON");
 
     let expected_inputs = [
-        ("d3", [76, 1, 120], "north", [76, 1, 119]),
-        ("d2", [88, 1, 120], "north", [88, 1, 119]),
-        ("d1", [100, 1, 120], "north", [100, 1, 119]),
-        ("d0", [112, 1, 120], "north", [112, 1, 119]),
+        ("d3", [76, 1, 144], "north", [76, 1, 143]),
+        ("d2", [88, 1, 144], "north", [88, 1, 143]),
+        ("d1", [100, 1, 144], "north", [100, 1, 143]),
+        ("d0", [112, 1, 144], "north", [112, 1, 143]),
     ];
+    // The display wall: every segment on z = 24 facing its reader, fed from
+    // behind.
     let expected_outputs = [
-        ("a", [76, 1, 24], "north", [76, 1, 25]),
-        ("b", [84, 1, 32], "east", [83, 1, 32]),
-        ("c", [84, 1, 48], "east", [83, 1, 48]),
-        ("d", [76, 1, 56], "south", [76, 1, 55]),
-        ("e", [68, 1, 48], "west", [69, 1, 48]),
-        ("f", [68, 1, 32], "west", [69, 1, 32]),
-        ("g", [76, 1, 40], "west", [77, 1, 40]),
+        ("a", [76, 13, 24], "north", [76, 13, 25]),
+        ("b", [68, 10, 24], "north", [68, 10, 25]),
+        ("c", [68, 4, 24], "north", [68, 4, 25]),
+        ("d", [76, 1, 24], "north", [76, 1, 25]),
+        ("e", [84, 4, 24], "north", [84, 4, 25]),
+        ("f", [84, 10, 24], "north", [84, 10, 25]),
+        ("g", [76, 7, 24], "north", [76, 7, 25]),
     ];
 
     for (role_name, role, expected) in [
@@ -225,12 +243,13 @@ fn checked_in_grown_decoder_pinout_matches_its_literal_pins() {
 /// literal geometry, while the litematic must contain the matching terminal
 /// handovers and leave every caller-owned `at` cell empty.
 #[test]
-fn checked_in_grown_decoder_is_the_pinned_glyph() {
+fn checked_in_synth_decoder_is_the_pinned_glyph() {
     let baked = Path::new(env!("CARGO_MANIFEST_DIR")).join("baked");
-    let pinout_text = std::fs::read_to_string(baked.join("verilog_seven_segment.grown.pinout.json"))
-        .expect("the grown decoder pinout is checked in");
+    let pinout_text =
+        std::fs::read_to_string(baked.join("verilog_seven_segment.synth.pinout.json"))
+            .expect("the synth decoder pinout is checked in");
     let pinout: Value =
-        serde_json::from_str(&pinout_text).expect("the grown decoder pinout is JSON");
+        serde_json::from_str(&pinout_text).expect("the synth decoder pinout is JSON");
     let inputs = pinout["inputs"]
         .as_object()
         .expect("pinout inputs are an object");
@@ -252,43 +271,47 @@ fn checked_in_grown_decoder_is_the_pinned_glyph() {
     );
 
     let expected_inputs = [
-        ("d3", [76, 1, 120], "north", [76, 1, 119]),
-        ("d2", [88, 1, 120], "north", [88, 1, 119]),
-        ("d1", [100, 1, 120], "north", [100, 1, 119]),
-        ("d0", [112, 1, 120], "north", [112, 1, 119]),
+        ("d3", [76, 1, 144], "north", [76, 1, 143]),
+        ("d2", [88, 1, 144], "north", [88, 1, 143]),
+        ("d1", [100, 1, 144], "north", [100, 1, 143]),
+        ("d0", [112, 1, 144], "north", [112, 1, 143]),
     ];
+    // The display wall: every segment on z = 24 facing its reader, fed from
+    // behind.
     let expected_outputs = [
-        ("a", [76, 1, 24], "north", [76, 1, 25]),
-        ("b", [84, 1, 32], "east", [83, 1, 32]),
-        ("c", [84, 1, 48], "east", [83, 1, 48]),
-        ("d", [76, 1, 56], "south", [76, 1, 55]),
-        ("e", [68, 1, 48], "west", [69, 1, 48]),
-        ("f", [68, 1, 32], "west", [69, 1, 32]),
-        ("g", [76, 1, 40], "west", [77, 1, 40]),
+        ("a", [76, 13, 24], "north", [76, 13, 25]),
+        ("b", [68, 10, 24], "north", [68, 10, 25]),
+        ("c", [68, 4, 24], "north", [68, 4, 25]),
+        ("d", [76, 1, 24], "north", [76, 1, 25]),
+        ("e", [84, 4, 24], "north", [84, 4, 25]),
+        ("f", [84, 10, 24], "north", [84, 10, 25]),
+        ("g", [76, 7, 24], "north", [76, 7, 25]),
     ];
 
-    let world = litematic::load(&baked.join("verilog_seven_segment.grown.litematic"))
-        .expect("the checked-in grown decoder litematic loads");
+    let world = litematic::load(&baked.join("verilog_seven_segment.synth.litematic"))
+        .expect("the checked-in synth decoder litematic loads");
     for (is_input, expected) in [
         (true, expected_inputs.as_slice()),
         (false, expected_outputs.as_slice()),
     ] {
         let ports = if is_input { inputs } else { outputs };
         for &(name, at, toward, handover) in expected {
-            let entry = ports[name]
-                .as_object()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "`{name}` must be a structured pinned entry, got {}",
-                        ports[name]
-                    )
-                });
+            let entry = ports[name].as_object().unwrap_or_else(|| {
+                panic!(
+                    "`{name}` must be a structured pinned entry, got {}",
+                    ports[name]
+                )
+            });
             assert_eq!(
                 entry.len(),
                 3,
                 "`{name}` must report only at, toward and handover"
             );
-            assert_eq!(json_coordinate(&entry["at"], "at", name), at, "`{name}` moved");
+            assert_eq!(
+                json_coordinate(&entry["at"], "at", name),
+                at,
+                "`{name}` moved"
+            );
             assert_eq!(
                 entry["toward"].as_str(),
                 Some(toward),
@@ -343,7 +366,10 @@ fn checked_in_grown_decoder_is_the_pinned_glyph() {
 #[test]
 fn list_circuits_reports_both_catalogs_and_nothing_else() {
     let names = list_circuits();
-    let verilog_names: Vec<String> = verilog::CIRCUITS.iter().map(|c| c.name.to_string()).collect();
+    let verilog_names: Vec<String> = verilog::CIRCUITS
+        .iter()
+        .map(|c| c.name.to_string())
+        .collect();
 
     assert!(
         !names.iter().any(|name| name.starts_with("planned:")),
@@ -354,14 +380,36 @@ fn list_circuits_reports_both_catalogs_and_nothing_else() {
         verilog_names[..],
         "the Verilog catalog must appear last, in its own order; got {names:?}"
     );
-    assert!(names.iter().any(|n| n == "seven_segment"), "the hand-written decoder must still be listed");
-    assert!(names.iter().any(|n| n == "verilog:seven_segment"), "the synthesised decoder must be listed");
+    assert!(
+        names.iter().any(|n| n == "seven_segment"),
+        "the hand-written decoder must still be listed"
+    );
+    assert!(
+        names.iter().any(|n| n == "verilog:seven_segment"),
+        "the synthesised decoder must be listed"
+    );
+}
+
+#[test]
+fn verilog_source_matches_the_catalog_and_accepts_synth_names() {
+    for circuit in verilog::CIRCUITS {
+        assert_eq!(
+            verilog_source(circuit.name).as_deref(),
+            Some(circuit.source)
+        );
+    }
+    assert_eq!(
+        verilog_source("synth:verilog:seven_segment").as_deref(),
+        verilog::find("verilog:seven_segment").map(|circuit| circuit.source)
+    );
+    assert_eq!(verilog_source("and4"), None);
 }
 
 #[test]
 fn the_verilog_and4_session_matches_its_truth_table_through_the_wasm_api() {
     let outputs = output_positions("verilog:and4");
-    let mut session = Session::new("verilog:and4").expect("the baked and4 netlist builds a session");
+    let mut session =
+        Session::new("verilog:and4").expect("the baked and4 netlist builds a session");
 
     for value in 0..16u32 {
         let expected = value == 0b1111;
@@ -377,13 +425,20 @@ fn the_verilog_and4_session_matches_its_truth_table_through_the_wasm_api() {
 #[test]
 fn the_verilog_seven_segment_session_matches_its_truth_table_through_the_wasm_api() {
     let outputs = output_positions("verilog:seven_segment");
-    assert_eq!(outputs.len(), 7, "a seven-segment decoder has seven outputs");
-    let mut session =
-        Session::new("verilog:seven_segment").expect("the baked seven_segment netlist builds a session");
+    assert_eq!(
+        outputs.len(),
+        7,
+        "a seven-segment decoder has seven outputs"
+    );
+    let mut session = Session::new("verilog:seven_segment")
+        .expect("the baked seven_segment netlist builds a session");
 
     for value in 0..16u32 {
         let expected: Vec<bool> = if (value as usize) < TRUTH_TABLE.len() {
-            TRUTH_TABLE[value as usize].iter().map(|&bit| bit == 1).collect()
+            TRUTH_TABLE[value as usize]
+                .iter()
+                .map(|&bit| bit == 1)
+                .collect()
         } else {
             vec![false; 7]
         };
@@ -399,10 +454,16 @@ fn the_verilog_seven_segment_session_matches_its_truth_table_through_the_wasm_ap
 /// count as the viewer itself sees it: one entry per non-air cell.
 #[test]
 fn the_verilog_seven_segment_is_the_size_the_ladder_says_it_is() {
-    let (netlist, _) = verilog::find("verilog:seven_segment").expect("catalog entry").baked_netlist();
+    let (netlist, _) = verilog::find("verilog:seven_segment")
+        .expect("catalog entry")
+        .baked_netlist();
     assert_eq!(netlist.gates.len(), 31, "gate-level cell count has moved");
     assert_eq!(
-        netlist.gates.iter().filter(|gate| gate.kind.is_realisable()).count(),
+        netlist
+            .gates
+            .iter()
+            .filter(|gate| gate.kind.is_realisable())
+            .count(),
         9,
         "only 9 of the decoder's 31 cells are things redstone builds directly"
     );
@@ -412,7 +473,14 @@ fn the_verilog_seven_segment_is_the_size_the_ladder_says_it_is() {
 
     let session = Session::new("verilog:seven_segment").expect("session builds");
     let cells = session.geometry().len() / GEOMETRY_BYTES_PER_CELL;
-    assert_eq!(cells, 10088, "the synthesised decoder's block count has moved");
+    assert_eq!(
+        cells, 10088,
+        "the synthesised decoder's block count has moved"
+    );
     assert_eq!(session.geometry().len() % GEOMETRY_BYTES_PER_CELL, 0);
-    assert_eq!(session.strengths().len(), cells, "one strength byte per geometry entry");
+    assert_eq!(
+        session.strengths().len(),
+        cells,
+        "one strength byte per geometry entry"
+    );
 }
