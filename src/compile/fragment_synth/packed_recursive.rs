@@ -1222,6 +1222,53 @@ mod tests {
         assert_eq!(heights[0], heights[1], "the fabric's height moved with its trunks");
     }
 
+    /// How wide the seams of `seven_segment`'s wide fabric come out, and why:
+    /// with `REDA_TRACE_FABRIC` set, every step `StripShape::tightest` takes
+    /// is printed, then the shipped strip's seams and trunk lengths.
+    #[test]
+    #[ignore = "measurement: builds seven_segment's wide fabric, several minutes"]
+    fn seven_segment_wide_fabric_seams() {
+        let evaluator =
+            crate::compile::fragment_synth::benchmark::legacy_benchmark_evaluator().unwrap();
+        let net = evaluator.fixture("seven_segment").unwrap().lowered_netlist().clone();
+        let search = SearchConfig::checked_defaults();
+        let certification = CertificationConfig::from_search(&search);
+        let root = root_chunk_id(&net).unwrap();
+        let product = synthesise_packed_recursive_fabric(
+            &net,
+            &root,
+            None,
+            &DurablePhysicalRouter,
+            &search,
+            &certification,
+            4,
+            &LEAF_PITCHES,
+            LeafCut::WIDE,
+            false,
+        )
+        .unwrap();
+        for (chunk, placement) in &product.node.packed.placements {
+            let xs = placement.halo.iter().map(|at| at.x);
+            let zs = placement.halo.iter().map(|at| at.z);
+            println!(
+                "SEAM leaf {chunk:?}: halo x {}..{}, z {}..{}",
+                xs.clone().min().unwrap(),
+                xs.max().unwrap(),
+                zs.clone().min().unwrap(),
+                zs.max().unwrap()
+            );
+        }
+        for trunk in &product.node.trunks {
+            println!(
+                "SEAM trunk {:?} from {:?}: {} conductor cells, {} floors",
+                trunk.id,
+                trunk.source,
+                trunk.cells.len(),
+                trunk.floors.len()
+            );
+        }
+    }
+
     /// The fabric is the same world at one worker and at eight.
     #[test]
     #[ignore = "measurement: builds a 20-input netlist twice, about eight minutes"]
