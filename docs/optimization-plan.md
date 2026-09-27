@@ -30,18 +30,19 @@
 | seven_segment | 198 / 21,847 | 98 / 16,244 | 707,850（325×18×121，09-27 補量，legacy 的 2.15 倍）/ 329,814 | 161.4 s | lid fabric `[6]`（第 4 個嘗試） | **紅** |
 | pinned:verilog:seven_segment | 190 / 20,410 | baseline 未認證 | 非空氣 bbox 431×20×119 = 1,025,780 | 36.7 s | pinned fabric `[4,6]` | 過（gate 只要求 certify，見 `F/benchmark.rs:523-548`） |
 
-**09-27 實作 Q1、T6、T1 之後**（`producer_revision` v2；4 核容器，秒數只供參考）
+**09-27 實作 Q1、T6、T1、T3a 之後**（`producer_revision` v3；4 核容器，秒數只供參考）
 
 | 案例 | ticks / blocks | legacy | 出貨的候選 | gate |
 |---|---|---|---|---|
 | and4 | **12** / 232 | 18 / 472 | 直接葉，精確 refresh | 過 |
 | verilog:and4 | 14 / 290 | 22 / 480 | 直接葉（兩個候選相同，選第一個） | 過 |
 | full_adder | **36** / 1,094 | 46 / 1,784 | 直接葉，精確 refresh | **轉綠** |
-| segment_a | **80 / 4,183** | 72 / 6,416 | fabric wide `[4,6]`（單一 46-gate 葉） | blocks 轉綠，ticks 仍紅 |
+| segment_a | **66 / 3,627** | 72 / 6,416 | fabric wide timed `[4,6]`（單一 46-gate 葉，T3a 時序導向擺放） | **轉綠** |
 | seven_segment | **142 / 15,261** | 98 / 16,244 | fabric wide `[4,6]`（42+42） | blocks 轉綠，ticks 仍紅 |
 | pinned:verilog:seven_segment | 190 / 20,410 | 未認證 | pinned fabric `[4,6]`（不變） | 過 |
 
-- 所有有 legacy baseline 的案例，blocks gate 都是綠的。剩下的紅燈只有 segment_a 和 seven_segment 的 ticks。
+- 6 個 acceptance 案例中 5 個通過。剩下的紅燈只有 seven_segment 的 ticks（142 對 98）；它唯一那次跨越的 70 ticks 主要花在兩片葉之間的 seam，下一步是 D1 系列。
+- Q1、T6、T1 之後 segment_a 曾是 80 / 4,183；T3a 再降到 66 / 3,627。
 - 串行建完全部候選的時間（加上寬葉 `[6]` 之前量的）：segment_a 約 332 s，seven_segment 約 577 s，pinned 約 193 s（4 核容器）。依文件開頭記錄的使用者指示，時間暫不處理。
 
 ### 1.2 已經穩固的部分
@@ -587,7 +588,8 @@
   - segment_a 做成單一片 46-gate 葉（k=0）實測 80 ticks（lead 8 + 葉內 66 + tail 6），仍高於 legacy 的 72。見 T6。
 
 #### T0 量測管線：每跳歸因
-- **狀態（09-27）：進行中**，作為 T3 的前置。
+- **狀態（09-27）：已實作。** `routing_cost_report --recursive <fixture>`：用出貨產物實際的葉歸因（`attribution::leaf_owner`），關鍵路徑由量到的到達時間往回推（`last_change_path`），量測用 acceptance 評估器自己的 driver 與 probe（`worst_transition_timing`），並斷言 lead + 葉內 + 跨越 + tail 等於 acceptance ticks。每一跳也印出兩端座標。
+  - 已量：full_adder 1 + 31 + 0 + 4 = 36；segment_a 1 + 59 + 0 + 6 = 66；seven_segment 1 + 59 + 70 + 12 = 142（幹線 14 個 repeater = 28 ticks）；pinned decoder 32 + 34 + 48 + 76 = 190（pinned 的輸入沒有觀測事件，路徑只追到 g5，所以 lead 偏大；tail 76 是輸出經 feet 到 pin 的腿，屬 D4.2）。
 - **問題**
   - `attribution.rs:236-257` 仍假設靜態分割。
   - `TrunkSummary`（`F/attribution.rs:44-52`）沒有 sink 身分。
