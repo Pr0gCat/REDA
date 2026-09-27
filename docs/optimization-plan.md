@@ -30,6 +30,20 @@
 | seven_segment | 198 / 21,847 | 98 / 16,244 | 707,850（325×18×121，09-27 補量，legacy 的 2.15 倍）/ 329,814 | 161.4 s | lid fabric `[6]`（第 4 個嘗試） | **紅** |
 | pinned:verilog:seven_segment | 190 / 20,410 | baseline 未認證 | 非空氣 bbox 431×20×119 = 1,025,780 | 36.7 s | pinned fabric `[4,6]` | 過（gate 只要求 certify，見 `F/benchmark.rs:523-548`） |
 
+**09-27 實作 Q1、T6、T1 之後**（`producer_revision` v2；4 核容器，秒數只供參考）
+
+| 案例 | ticks / blocks | legacy | 出貨的候選 | gate |
+|---|---|---|---|---|
+| and4 | **12** / 232 | 18 / 472 | 直接葉，精確 refresh | 過 |
+| verilog:and4 | 14 / 290 | 22 / 480 | 直接葉（兩個候選相同，選第一個） | 過 |
+| full_adder | **36** / 1,094 | 46 / 1,784 | 直接葉，精確 refresh | **轉綠** |
+| segment_a | **80 / 4,183** | 72 / 6,416 | fabric wide `[4,6]`（單一 46-gate 葉） | blocks 轉綠，ticks 仍紅 |
+| seven_segment | **142 / 15,261** | 98 / 16,244 | fabric wide `[4,6]`（42+42） | blocks 轉綠，ticks 仍紅 |
+| pinned:verilog:seven_segment | 190 / 20,410 | 未認證 | pinned fabric `[4,6]`（不變） | 過 |
+
+- 所有有 legacy baseline 的案例，blocks gate 都是綠的。剩下的紅燈只有 segment_a 和 seven_segment 的 ticks。
+- 串行建完全部候選的時間（加上寬葉 `[6]` 之前量的）：segment_a 約 332 s，seven_segment 約 577 s，pinned 約 193 s（4 核容器）。依文件開頭記錄的使用者指示，時間暫不處理。
+
 ### 1.2 已經穩固的部分
 
 - 6 個案例全部通過 certify，懸空方塊為 0。檢查點是 `certify_root_world`（`F/certification.rs:773`）裡的 `unsupported_component`（`F/certification.rs:629-652`）。
@@ -211,6 +225,7 @@
 - **工作量**：a、c 各 S｜**依賴**：M2；b 依賴 Q1。
 
 #### Q1. 決定性多候選選擇，取代「第一個認證就出貨」
+- **狀態（09-27）：已實作。** `pick`、`ship_best` 在 `F/recursive.rs`；未釘選和釘選的 packed root 都依固定順序串行建完全部候選，每個候選拿全部 worker。`RecursiveDiagnostics` 記錄 `candidates` 與 `chosen`。
 - **問題**
   - 每一層都是先成功的先出貨：
     - `F/recursive.rs:794-828`（unpinned）、`849-893`（pinned）。
@@ -590,6 +605,10 @@
 - **工作量**：S｜**依賴**：無（放在 Phase 0）。
 
 #### T1 直接葉改用精確 refresh 政策（對應 full_adder）
+- **狀態（09-27）：已實作，做法和下面原案不同。**
+  - 原案是直接把直接葉改成精確 refresh，失敗再落回 packed。實作改成照 Q1 的方式：直接葉建兩個候選，先是 planner 原本的 `TotalStairs` reserve，再是精確 refresh（`routing::with_exact_refresh`，thread-local 範圍，同時讓不 carry 的分支試 shared-trunk refresh），用 `pick` 選。
+  - 結果：full_adder 54 → 36 ticks（blocks 不變，gate 轉綠），and4 14 → 12，verilog:and4 不變。
+  - 沒有等 C1：精確 refresh 自成一個範圍，不共用 own-crush 開關。
 - **問題**
   - planner 走 `route_with_policy`（`src/compile/planner.rs:5127`；`routing.rs:1440-1460`），也就是 `TotalStairs`。這個政策的文件自己寫了：樓梯多時大約每 3 格就 refresh 一次（`routing.rs:3667-3676`）。
   - 實例：g12→g13 距離 11 卻花 10 ticks，legacy 是 4。
@@ -657,6 +676,9 @@
 - **工作量**：M｜**依賴**：T0。
 
 #### T6 寬葉候選（09-27 新增；開放問題 4 已決定採用）
+- **狀態（09-27）：已實作。** `LeafCut::WIDE`（`F/packed_recursive.rs`）：grain 48，root 本身放得下時整個當一片葉。只在切法和正式切法不同時（`wide_cut_differs`）附加兩個候選：fabric wide `[4,6]` 和 `[6]`。
+  - segment_a 出貨 80 / 4,183，seven_segment 出貨 142 / 15,261，都是 `[4,6]` 那個；`[6]` 沒有更好。
+  - 時間相關的落地條件依使用者指示暫停，T0、P1、P2、分 worker 的規則都還沒做。
 - **問題**
   - seven_segment 出貨的 4×21 切法有 3 次跨越，佔 138 ticks。
   - 超過 32 gates 的 seed 葉（free leaf）沒有任何量測紀錄。直接葉 planner 在 46、84 gates 試過並被拒（`F/recursive.rs:66-68`）。`TERMINAL_GATES` 從引入起一直是 32。
