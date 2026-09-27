@@ -362,6 +362,14 @@
 | coil riser（`plan_riser`，`src/compile/routing/riser.rs:210`） | 部分 | 7×7 盒子互相重疊 | 不採用：盒子互相重疊，結果依規劃順序而變。nested 的 `coil_egress` 已經在用它（`F/parent.rs:2032`），D3.1 也建立在它上面 |
 | E 層依側分高度 | 不能 | — | 不採用：兩面的高度曲線必然相交 |
 
+**09-27 實測：seven_segment 出貨的寬葉 fabric（兩片 42-gate 葉）**（`packed_recursive` 的 ignored 測試 `seven_segment_wide_fabric_seams`，加 `REDA_TRACE_FABRIC`）
+- 唯一一條 seam 從 `least` 18 開始，每次衝突加寬 3，撞到 105 才建成；full 是 113。兩片葉的 halo 在 x 32..117 與 222..284。
+- 衝突點隨 seam 加寬而移動（x 125 → 168，y 9–18，z 多在 20），是真實的 pad 相撞，不是 D1.1 所說的錯誤歸屬。
+- `interleaved_shifts` 回 `[0, 0]`：兩面各 12 個埠，列距都是 3，在 `0..2*PITCH` 裡找不到能讓每列相距 ≥ 3 的位移，兩面的 pad 只能迎面相撞。
+- 12 條幹線各 126–226 格；關鍵的 g31 是最長的 226 格。comb 在兩側各佔 3×12 = 36 格，約佔 seam 的 70%。
+- 結論：對 seven_segment 的 ticks，D1 的槓桿有限。幹線全長只值 28 ticks，seam 收窄一半也只省十來個 ticks；D1.3 估計只把這條 seam 收窄約 22 格。D1 仍是降 blocks 的項目，但不是讓 seven_segment ticks 轉綠的路。
+  - 要讓 interleave 生效，至少一面的埠列距要 ≥ 6（例如 pitch 6 的葉，埠都在 6 的格線上時位移 3 就錯得開）；或走 D1.3 的 z 向 pad。
+
 #### D1.1 `plan_clash` 只把 seam 造成的衝突算給 seam
 - **問題**
   - `tightest` 一遇到 clash 就加寬 `seam_at` 指到的 seam。加寬到 full 仍 clash 時，所有 seam 一起退回 full（`F/packed_node.rs:1782-1784`、`884`）。
