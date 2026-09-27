@@ -924,10 +924,11 @@ fn compile_with_cutoff(
         // The nested packed producer and the lid fabric, each on dense leaves
         // first and then on the standard grid ([`LEAF_LADDERS`]) -- the order
         // the first-success rule tried them in -- and last the lid fabric on
-        // wide leaves when that cut differs from the production one. The
-        // fabric plans every trunk onto fixed layers with room reserved by
-        // demand, so it builds wherever the nested lanes run out of height or
-        // room. Every candidate is built and [`pick`] chooses what ships.
+        // wide leaves, on the same two grids, when that cut differs from the
+        // production one. The fabric plans every trunk onto fixed layers with
+        // room reserved by demand, so it builds wherever the nested lanes run
+        // out of height or room. Every candidate is built and [`pick`]
+        // chooses what ships.
         let certification = CertificationConfig::from_search(search);
         let adapt = |product: Result<PackedRecursiveProduct, PackedRecursiveError>|
          -> Result<RecursiveProduct, RecursiveError> {
@@ -972,23 +973,25 @@ fn compile_with_cutoff(
         // production fabric rung's, as before the wide candidate existed.
         let reported = candidates.len() - 1;
         if wide_cut_differs(lowered, &root)? {
-            let (root, certification) = (&root, &certification);
-            candidates.push((
-                format!("fabric wide {:?}", &LEAF_PITCHES),
-                Box::new(move || {
-                    adapt(synthesise_packed_recursive_fabric(
-                        lowered,
-                        root,
-                        None,
-                        &DurablePhysicalRouter,
-                        search,
-                        certification,
-                        workers,
-                        &LEAF_PITCHES,
-                        LeafCut::WIDE,
-                    ))
-                }),
-            ));
+            for pitches in LEAF_LADDERS {
+                let (root, certification) = (&root, &certification);
+                candidates.push((
+                    format!("fabric wide {pitches:?}"),
+                    Box::new(move || {
+                        adapt(synthesise_packed_recursive_fabric(
+                            lowered,
+                            root,
+                            None,
+                            &DurablePhysicalRouter,
+                            search,
+                            certification,
+                            workers,
+                            pitches,
+                            LeafCut::WIDE,
+                        ))
+                    }),
+                ));
+            }
         }
         return ship_best(candidates).map_err(|mut refusals| refusals.swap_remove(reported));
     }
@@ -2870,12 +2873,13 @@ mod tests {
     /// where N workers genuinely run.
     ///
     /// A level with one sibling collapses to one worker whatever the cap says.
-    /// Thirty-three gates is the smallest chain that crosses the 32-gate leaf
-    /// threshold, so the root has two children to hand out and the parallel
-    /// arm cannot silently compare another serial run.
+    /// Forty-nine gates is the smallest chain above both the 32-gate leaf
+    /// threshold and the 48-gate wide leaf, so whichever candidate ships, the
+    /// root has two children to hand out and the parallel arm cannot silently
+    /// compare another serial run.
     #[test]
     fn one_worker_and_many_compose_the_same_recursive_circuit() {
-        let netlist = chain(33);
+        let netlist = chain(49);
         let search = SearchConfig::checked_defaults();
         let serial = compile_with_workers(&netlist, None, &search, 1).unwrap();
         let parallel = compile_with_workers(&netlist, None, &search, many_workers()).unwrap();
