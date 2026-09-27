@@ -47,7 +47,7 @@ use crate::compile::fragment_synth::partition::{
     node_chunk_id, partition, Chunk, ChunkId, PartitionError,
 };
 use crate::compile::fragment_synth::recursive::{
-    assemble_product, split_of, RecursiveProduct, RootAssembly, TERMINAL_GATES,
+    assemble_product, split_of, RecursiveProduct, RootAssembly, TERMINAL_GATES, WIDE_LEAF_GATES,
 };
 use crate::compile::geometry::Anchor;
 use crate::compile::planner::{PortPlacements, PortRole};
@@ -269,7 +269,11 @@ pub(crate) fn synthesise_packed_recursive_pinned<R: PhysicalRouter + Sync>(
     loop {
         let trace = std::env::var_os("REDA_TRACE_PINNED").is_some();
         let siblings = CertificationWorkers::bounded(workers);
-        let artifacts = flat_leaves(netlist, &chunk, grain, contract, search, siblings, pitches)?;
+        let cut = LeafCut {
+            grain,
+            whole_root: false,
+        };
+        let artifacts = flat_leaves(netlist, &chunk, cut, contract, search, siblings, pitches)?;
         if trace {
             eprintln!("reda: pinned root at grain {grain}: {} leaves", artifacts.len());
         }
@@ -326,30 +330,81 @@ pub(crate) fn synthesise_packed_recursive_pinned<R: PhysicalRouter + Sync>(
     }
 }
 
-/// Every leaf of `netlist` at `grain`, each under the chunk that split it so
-/// it keeps the boundary its own split gave it, built in parallel in chunk
-/// order.
+/// How a fabric root is cut into leaves.
+///
+/// The production cut halves the root, and every half above the grain again,
+/// until each piece fits [`TERMINAL_GATES`]. The wide cut does the same at
+/// [`WIDE_LEAF_GATES`], and a root that already fits is one leaf. Both are
+/// fixed: the only values a cut takes are these two, plus the finer grains a
+/// pinned room too narrow for a leaf halves down to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LeafCut {
+    grain: usize,
+    whole_root: bool,
+}
+
+impl LeafCut {
+    pub(crate) const PRODUCTION: Self = Self {
+        grain: TERMINAL_GATES,
+        whole_root: false,
+    };
+    pub(crate) const WIDE: Self = Self {
+        grain: WIDE_LEAF_GATES,
+        whole_root: true,
+    };
+}
+
+/// The leaf chunks `cut` makes of `netlist` under `chunk`, in chunk order,
+/// each under the chunk that split it so it keeps the boundary its own split
+/// gave it.
+fn leaf_chunks(
+    netlist: &Netlist,
+    chunk: &ChunkId,
+    cut: LeafCut,
+) -> Result<Vec<Chunk>, PartitionError> {
+    let mut leaves = Vec::new();
+    if cut.whole_root && netlist.gates.len() <= cut.grain {
+        leaves = partition(netlist, chunk, netlist.gates.len().max(1))?;
+    } else {
+        let mut pending = vec![(chunk.clone(), netlist.clone())];
+        while let Some((id, net)) = pending.pop() {
+            for part in partition(&net, &id, split_of(&net))? {
+                if part.netlist.gates.len() <= cut.grain {
+                    leaves.push(part);
+                } else {
+                    pending.push((part.id.clone(), part.netlist.clone()));
+                }
+            }
+        }
+    }
+    leaves.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(leaves)
+}
+
+/// Whether the wide cut builds leaves the production cut does not. When it
+/// does not, the wide fabric candidate would rebuild the production one.
+pub(crate) fn wide_cut_differs(
+    netlist: &Netlist,
+    parent: &ChunkId,
+) -> Result<bool, PackedRecursiveError> {
+    let chunk = node_chunk_id(netlist, parent)?;
+    let ids = |cut| -> Result<Vec<ChunkId>, PartitionError> {
+        Ok(leaf_chunks(netlist, &chunk, cut)?.into_iter().map(|leaf| leaf.id).collect())
+    };
+    Ok(ids(LeafCut::WIDE)? != ids(LeafCut::PRODUCTION)?)
+}
+
+/// Every leaf `cut` makes of `netlist`, built in parallel in chunk order.
 fn flat_leaves(
     netlist: &Netlist,
     chunk: &ChunkId,
-    grain: usize,
+    cut: LeafCut,
     contract: SignalContract,
     search: &SearchConfig,
     siblings: CertificationWorkers,
     pitches: &[i32],
 ) -> Result<Vec<FreeLeafArtifact>, PackedRecursiveError> {
-    let mut leaves = Vec::new();
-    let mut pending = vec![(chunk.clone(), netlist.clone())];
-    while let Some((id, net)) = pending.pop() {
-        for part in partition(&net, &id, split_of(&net))? {
-            if part.netlist.gates.len() <= grain {
-                leaves.push(part);
-            } else {
-                pending.push((part.id.clone(), part.netlist.clone()));
-            }
-        }
-    }
-    leaves.sort_by(|left, right| left.id.cmp(&right.id));
+    let leaves = leaf_chunks(netlist, chunk, cut)?;
     Ok(run_indexed(siblings, leaves.len(), |index| {
         build_leaf_finer(&leaves[index], contract, search, pitches)
     })?
@@ -372,6 +427,7 @@ pub(crate) fn synthesise_packed_recursive_fabric<R: PhysicalRouter + Sync>(
     certification: &CertificationConfig,
     workers: usize,
     pitches: &[i32],
+    cut: LeafCut,
 ) -> Result<PackedRecursiveProduct, PackedRecursiveError> {
     let chunk = node_chunk_id(netlist, parent)?;
     if netlist.gates.is_empty() {
@@ -380,12 +436,12 @@ pub(crate) fn synthesise_packed_recursive_fabric<R: PhysicalRouter + Sync>(
     let siblings = CertificationWorkers::bounded(workers);
     // A pinned room narrower than a leaf takes finer leaves, exactly as the
     // pinned packed path does; nothing else changes the grain.
-    let mut grain = TERMINAL_GATES;
+    let mut cut = cut;
     let (artifacts, node) = loop {
         let artifacts = flat_leaves(
             netlist,
             &chunk,
-            grain,
+            cut,
             packed_contract(search),
             search,
             siblings,
@@ -409,8 +465,11 @@ pub(crate) fn synthesise_packed_recursive_fabric<R: PhysicalRouter + Sync>(
             Err(PackedNodeError::LayoutsExhausted { rank_zero, .. })
                 if matches!(**rank_zero, PackedNodeError::PinnedRegionTooSmall { .. })
         );
-        if pins.is_some() && short && grain > 1 {
-            grain /= 2;
+        if pins.is_some() && short && cut.grain > 1 {
+            cut = LeafCut {
+                grain: cut.grain / 2,
+                whole_root: false,
+            };
             continue;
         }
         let node = node.map_err(|error| PackedRecursiveError::Packed {
@@ -746,6 +805,8 @@ pub(crate) fn adapt_packed_root(
             diagnostics: Some(RecursiveDiagnostics {
                 leaves: product.leaves.clone(),
                 root_trunks,
+                candidates: Vec::new(),
+                chosen: None,
             }),
         },
         certificate,
@@ -992,6 +1053,7 @@ mod tests {
                 &certification,
                 4,
                 &LEAF_PITCHES,
+                LeafCut::PRODUCTION,
             )
             .unwrap_or_else(|error| panic!("{n} inputs: {error}"));
             let lid = product.node.packed.halo.iter().map(|at| at.y).max().unwrap();
@@ -1029,6 +1091,7 @@ mod tests {
                 &certification,
                 workers,
                 &LEAF_PITCHES,
+                LeafCut::PRODUCTION,
             )
             .unwrap()
         };

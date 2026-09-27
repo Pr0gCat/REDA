@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
+use crate::compile::fragment_synth::certification::QualityKey;
 use crate::compile::fragment_synth::partition::{
     partition, root_chunk_id, ChunkId, PartitionError,
 };
@@ -59,6 +60,19 @@ pub struct TrunkSummary {
 pub struct RecursiveDiagnostics {
     pub leaves: Vec<LeafDiagnostic>,
     pub root_trunks: Vec<TrunkSummary>,
+    /// Every candidate the packed root built, in list order, and what each
+    /// certified to. Empty for a product that was not chosen from a list.
+    pub candidates: Vec<CandidateOutcome>,
+    /// The index into `candidates` that shipped.
+    pub chosen: Option<usize>,
+}
+
+/// One packed-root candidate and its outcome: the certified quality, or the
+/// refusal as text. Reported, never consulted by the producer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateOutcome {
+    pub label: String,
+    pub quality: Result<QualityKey, String>,
 }
 
 /// Which side of the partition one critical-path hop lies on.

@@ -9,7 +9,7 @@ use crate::compile::fragment_synth::allocation::{
     allocate_with, normalise_root_pins, root_placement, AllocationError, AllocationLimits,
     AllocationPlan, ChildAllocation, ChildExtent, RootPort,
 };
-use crate::compile::fragment_synth::attribution::RecursiveDiagnostics;
+use crate::compile::fragment_synth::attribution::{CandidateOutcome, RecursiveDiagnostics};
 use crate::compile::fragment_synth::benchmark::canonical_world_fingerprint;
 use crate::compile::fragment_synth::certification::{
     certify_root_world, CandidateCertificationError, CandidateMetrics, CertificationWorkers,
@@ -21,8 +21,8 @@ use crate::compile::fragment_synth::leaf::LEAF_PITCHES;
 use crate::compile::fragment_synth::placement::STANDARD_PITCH;
 use crate::compile::fragment_synth::packed_recursive::{
     adapt_packed_root, synthesise_packed_recursive_fabric, synthesise_packed_recursive_on,
-    synthesise_packed_recursive_pinned,
-    PackedAdapterError, PackedRecursiveError,
+    synthesise_packed_recursive_pinned, wide_cut_differs, LeafCut,
+    PackedAdapterError, PackedRecursiveError, PackedRecursiveProduct,
 };
 use crate::compile::fragment_synth::packed_node::{pinned_floors_short, PinnedRoom};
 use crate::compile::fragment_synth::parent::{compose, ComposeError};
@@ -74,6 +74,19 @@ use crate::redstone::world::storage::World;
 /// `split_refused_child` here, and `synthesise_child` in `packed_recursive`,
 /// both of which deliberately do not read this constant.
 pub(crate) const TERMINAL_GATES: usize = 32;
+
+/// The largest seed-built leaf the wide fabric candidate asks for.
+///
+/// [`TERMINAL_GATES`] stays the production grain; this only names one extra,
+/// fixed candidate the unpinned root also builds and keeps when it is no
+/// worse on ticks and blocks ([`pick`]). The number is measured, not tuned:
+/// on the lid fabric a free leaf of 42 gates (`seven_segment` cut once) and
+/// one of 46 (`segment_a` whole) both certify inside the unchanged A* cap,
+/// shipping 142 ticks / 15,261 blocks and 80 / 4,183 against 198 / 21,847 and
+/// 124 / 9,305 at the production grain; one of 84 gates is refused and falls
+/// back through the ordinary repair split. A refused wide leaf splits into
+/// exactly the chunks the production grain would have built.
+pub(crate) const WIDE_LEAF_GATES: usize = 48;
 const MAX_RECURSIVE_WORKERS: usize = 8;
 
 pub(crate) struct RecursiveProduct {
@@ -443,10 +456,109 @@ fn describe_pending_routes(
 /// Deliberately not derived from any output: a revision read off a compiled
 /// world would change whenever the world did, which is the opposite of an
 /// identity a baseline can be found under.
+///
+/// v2: a packed root builds every candidate in a fixed list and ships the
+/// one [`pick`] chooses, instead of the first that certifies; the unpinned
+/// list ends with the wide fabric candidate at [`WIDE_LEAF_GATES`]. A direct
+/// root leaf is chosen the same way from the planner's refresh reserve and
+/// exact refresh placement.
 pub(crate) fn producer_revision() -> Fingerprint {
     canonical_fingerprint(
-        format!("recursive-contract-producer-v1:terminal-gates={TERMINAL_GATES}").as_bytes(),
+        format!(
+            "recursive-contract-producer-v2:terminal-gates={TERMINAL_GATES}:\
+             wide-leaf-gates={WIDE_LEAF_GATES}:selection=dominance:\
+             direct-leaf-refresh=reserve,exact"
+        )
+        .as_bytes(),
     )
+}
+
+/// Which certified candidate a packed root ships.
+///
+/// `keys` holds each candidate's quality in list order, `None` where the
+/// candidate was refused. The reference is the first that certified -- the
+/// product the first-success rule shipped before. Only a candidate no worse
+/// than the reference on both settle ticks and non-air blocks may replace it,
+/// and among those the smallest `(QualityKey, index)` wins. Equivalently:
+/// ticks-first [`QualityKey`] order, restricted to candidates with no more
+/// blocks than the reference.
+///
+/// Dominance rather than plain lexicographic order because the acceptance
+/// gates are `new <= legacy` on ticks and on blocks separately: a shipped
+/// product that is no worse on either than the reference cannot turn a
+/// passing gate red, whatever the baseline is, and this function never reads
+/// one. Plain lexicographic order would trade any number of blocks for one
+/// tick.
+///
+/// Reads only integer keys and indices -- never time, worker count or a
+/// baseline -- so the choice is the same on every machine.
+pub(crate) fn pick(keys: &[Option<QualityKey>]) -> Option<usize> {
+    let reference = keys.iter().flatten().next()?;
+    keys.iter()
+        .enumerate()
+        .filter_map(|(index, key)| key.as_ref().map(|key| (index, key)))
+        .filter(|(_, key)| {
+            key.observed_settle <= reference.observed_settle
+                && key.non_air_blocks <= reference.non_air_blocks
+        })
+        .min_by(|(left_index, left), (right_index, right)| {
+            left.cmp(right).then(left_index.cmp(right_index))
+        })
+        .map(|(index, _)| index)
+}
+
+/// Build every candidate in `candidates`, in order, and ship the one [`pick`]
+/// chooses.
+///
+/// Each candidate runs to completion on the whole worker budget, one after
+/// another, so what each one builds is exactly what it builds alone. Every
+/// outcome is recorded on the shipped product's diagnostics. `Err` carries
+/// every refusal, in list order, when nothing certified.
+fn ship_best(
+    candidates: Vec<(String, Box<dyn FnOnce() -> Result<RecursiveProduct, RecursiveError> + '_>)>,
+) -> Result<RecursiveProduct, Vec<RecursiveError>> {
+    let mut labels = Vec::with_capacity(candidates.len());
+    let mut outcomes = Vec::with_capacity(candidates.len());
+    for (label, build) in candidates {
+        let outcome = build();
+        if let (Err(error), true) = (&outcome, std::env::var_os("REDA_TRACE_PINNED").is_some()) {
+            eprintln!("reda: candidate {label} refused: {error}");
+        }
+        labels.push(label);
+        outcomes.push(outcome);
+    }
+    let keys: Vec<Option<QualityKey>> = outcomes
+        .iter()
+        .map(|outcome| outcome.as_ref().ok().map(|product| product.metrics.quality))
+        .collect();
+    let summary: Vec<CandidateOutcome> = labels
+        .into_iter()
+        .zip(&outcomes)
+        .map(|(label, outcome)| CandidateOutcome {
+            label,
+            quality: match outcome {
+                Ok(product) => Ok(product.metrics.quality),
+                Err(error) => Err(error.to_string()),
+            },
+        })
+        .collect();
+    let Some(chosen) = pick(&keys) else {
+        return Err(outcomes.into_iter().filter_map(Result::err).collect());
+    };
+    let mut product = outcomes
+        .into_iter()
+        .nth(chosen)
+        .expect("pick chose a listed candidate")
+        .expect("pick chose a certified candidate");
+    let diagnostics = product.diagnostics.get_or_insert_with(|| RecursiveDiagnostics {
+        leaves: Vec::new(),
+        root_trunks: Vec::new(),
+        candidates: Vec::new(),
+        chosen: None,
+    });
+    diagnostics.candidates = summary;
+    diagnostics.chosen = Some(chosen);
+    Ok(product)
 }
 
 pub(crate) fn compile(
@@ -477,6 +589,32 @@ fn compile_root_leaf(
     search: &SearchConfig,
     workers: usize,
 ) -> Result<RecursiveProduct, RecursiveError> {
+    // Two candidates, as a packed root builds its list: the planner's own
+    // refresh reserve first, which is what this leaf always shipped, then
+    // exact refresh placement. [`pick`] keeps the second only when it is no
+    // worse on ticks and blocks; a refusal of both reports the first.
+    let reserved = root_leaf_candidate(lowered, pins, search, workers, false);
+    let exact = root_leaf_candidate(lowered, pins, search, workers, true);
+    let keys = [
+        reserved.as_ref().ok().map(|product| product.metrics.quality),
+        exact.as_ref().ok().map(|product| product.metrics.quality),
+    ];
+    match pick(&keys) {
+        Some(1) => exact,
+        _ => reserved,
+    }
+}
+
+/// The direct root leaf, planned with the planner's refresh reserve, or with
+/// exact refresh placement when `exact`
+/// ([`crate::compile::routing::with_exact_refresh`]).
+fn root_leaf_candidate(
+    lowered: &Netlist,
+    pins: &RootPins<'_>,
+    search: &SearchConfig,
+    workers: usize,
+    exact: bool,
+) -> Result<RecursiveProduct, RecursiveError> {
     // Caller geometry is refused the same way whatever shape builds it: a pin
     // this contract cannot honour is an `UnsupportedRootPin`, not something the
     // planner is asked to make sense of. The placement itself is unused here --
@@ -498,8 +636,13 @@ fn compile_root_leaf(
     let placements = pins.cloned().unwrap_or_default();
     // The planner is asked for a buildable world: no route may step under a
     // cell of its own path, which certification would refuse.
+    let plan = || planner::plan_from_netlist(lowered, &placements);
     let candidate = crate::compile::routing::refusing_own_crush(|| {
-        planner::plan_from_netlist(lowered, &placements)
+        if exact {
+            crate::compile::routing::with_exact_refresh(plan)
+        } else {
+            plan()
+        }
     })
     .map_err(refuse)?;
     let realised = planner::realise_and_verify(
@@ -738,12 +881,6 @@ fn compile_with_workers(
 /// exactly what the standard grid always built.
 const LEAF_LADDERS: [&[i32]; 2] = [&LEAF_PITCHES, &[STANDARD_PITCH]];
 
-fn trace_refusal(producer: &str, pitches: &[i32], error: &PackedRecursiveError) {
-    if std::env::var_os("REDA_TRACE_PINNED").is_some() {
-        eprintln!("reda: {producer} on leaf grids {pitches:?} refused: {error}");
-    }
-}
-
 fn compile_with_cutoff(
     lowered: &Netlist,
     pins: Option<&PortPlacements>,
@@ -784,53 +921,82 @@ fn compile_with_cutoff(
     // test.
     if pins.is_none() {
         let root = root_chunk_id(lowered)?;
-        // The nested packed producer first; the lid fabric when it cannot
-        // build the root. The fabric plans every trunk onto fixed layers with
-        // room reserved by demand, so it builds wherever the nested lanes run
-        // out of height or room. Both are tried on dense leaves first, then
-        // again on the standard grid ([`LEAF_LADDERS`]).
+        // The nested packed producer and the lid fabric, each on dense leaves
+        // first and then on the standard grid ([`LEAF_LADDERS`]) -- the order
+        // the first-success rule tried them in -- and last the lid fabric on
+        // wide leaves when that cut differs from the production one. The
+        // fabric plans every trunk onto fixed layers with room reserved by
+        // demand, so it builds wherever the nested lanes run out of height or
+        // room. Every candidate is built and [`pick`] chooses what ships.
         let certification = CertificationConfig::from_search(search);
-        let mut refusal = None;
+        let adapt = |product: Result<PackedRecursiveProduct, PackedRecursiveError>|
+         -> Result<RecursiveProduct, RecursiveError> {
+            Ok(adapt_packed_root(lowered, &product?, None, search, workers)?)
+        };
+        type Build<'a> = Box<dyn FnOnce() -> Result<RecursiveProduct, RecursiveError> + 'a>;
+        let mut candidates: Vec<(String, Build<'_>)> = Vec::new();
         for pitches in LEAF_LADDERS {
-            match synthesise_packed_recursive_on(
-                lowered,
-                &root,
-                &DurablePhysicalRouter,
-                search,
-                &certification,
-                workers,
-                pitches,
-            ) {
-                Ok(product) => {
-                    return Ok(adapt_packed_root(lowered, &product, None, search, workers)?)
-                }
-                Err(error) => trace_refusal("nested packed root", pitches, &error),
-            }
-            match synthesise_packed_recursive_fabric(
-                lowered,
-                &root,
-                None,
-                &DurablePhysicalRouter,
-                search,
-                &certification,
-                workers,
-                pitches,
-            ) {
-                Ok(product) => {
-                    return Ok(adapt_packed_root(lowered, &product, None, search, workers)?)
-                }
-                Err(error) => {
-                    trace_refusal("lid fabric root", pitches, &error);
-                    refusal = Some(error);
-                }
-            }
+            let (root, certification) = (&root, &certification);
+            candidates.push((
+                format!("nested {pitches:?}"),
+                Box::new(move || {
+                    adapt(synthesise_packed_recursive_on(
+                        lowered,
+                        root,
+                        &DurablePhysicalRouter,
+                        search,
+                        certification,
+                        workers,
+                        pitches,
+                    ))
+                }),
+            ));
+            candidates.push((
+                format!("fabric {pitches:?}"),
+                Box::new(move || {
+                    adapt(synthesise_packed_recursive_fabric(
+                        lowered,
+                        root,
+                        None,
+                        &DurablePhysicalRouter,
+                        search,
+                        certification,
+                        workers,
+                        pitches,
+                        LeafCut::PRODUCTION,
+                    ))
+                }),
+            ));
         }
-        return Err(refusal.expect("the ladder has a rung").into());
+        // The refusal a root reports when nothing certifies is the last
+        // production fabric rung's, as before the wide candidate existed.
+        let reported = candidates.len() - 1;
+        if wide_cut_differs(lowered, &root)? {
+            let (root, certification) = (&root, &certification);
+            candidates.push((
+                format!("fabric wide {:?}", &LEAF_PITCHES),
+                Box::new(move || {
+                    adapt(synthesise_packed_recursive_fabric(
+                        lowered,
+                        root,
+                        None,
+                        &DurablePhysicalRouter,
+                        search,
+                        certification,
+                        workers,
+                        &LEAF_PITCHES,
+                        LeafCut::WIDE,
+                    ))
+                }),
+            ));
+        }
+        return ship_best(candidates).map_err(|mut refusals| refusals.swap_remove(reported));
     }
     // **The pinned packed shape.** A pinned root is packed like an unpinned
     // one, then placed inside the rectangle its pins draw, with every port
     // built at the caller's own cell -- so the circuit stands between its
-    // inputs and outputs rather than behind the southmost pin.
+    // inputs and outputs rather than behind the southmost pin. Every
+    // candidate is built and [`pick`] chooses what ships.
     //
     // ponytail: a layout that does not fit the rectangle falls back to the
     // allocating shape below; stacking upward and growing toward the pin-free
@@ -846,51 +1012,52 @@ fn compile_with_cutoff(
     }
     if let (Some(compiled), None) = (pins, short) {
         let root = root_chunk_id(lowered)?;
+        let certification = CertificationConfig::from_search(search);
+        let supplied = caller.supplied;
+        let adapt = |product: Result<PackedRecursiveProduct, PackedRecursiveError>|
+         -> Result<RecursiveProduct, RecursiveError> {
+            Ok(adapt_packed_root(lowered, &product?, supplied, search, workers)?)
+        };
+        type Build<'a> = Box<dyn FnOnce() -> Result<RecursiveProduct, RecursiveError> + 'a>;
+        let mut candidates: Vec<(String, Build<'_>)> = Vec::new();
         for pitches in LEAF_LADDERS {
-            match synthesise_packed_recursive_pinned(
-                lowered,
-                &root,
-                compiled,
-                &DurablePhysicalRouter,
-                search,
-                &CertificationConfig::from_search(search),
-                workers,
-                pitches,
-            ) {
-                Ok(product) => {
-                    return Ok(adapt_packed_root(
+            let (root, certification) = (&root, &certification);
+            candidates.push((
+                format!("pinned packed {pitches:?}"),
+                Box::new(move || {
+                    adapt(synthesise_packed_recursive_pinned(
                         lowered,
-                        &product,
-                        caller.supplied,
+                        root,
+                        compiled,
+                        &DurablePhysicalRouter,
                         search,
+                        certification,
                         workers,
-                    )?)
-                }
-                Err(error) => trace_refusal("pinned packed root", pitches, &error),
-            }
+                        pitches,
+                    ))
+                }),
+            ));
             // The lid fabric inside the same room: each pin joined to a foot
             // by an ordinary search, every trunk from there on planned.
-            match synthesise_packed_recursive_fabric(
-                lowered,
-                &root,
-                Some(compiled),
-                &DurablePhysicalRouter,
-                search,
-                &CertificationConfig::from_search(search),
-                workers,
-                pitches,
-            ) {
-                Ok(product) => {
-                    return Ok(adapt_packed_root(
+            candidates.push((
+                format!("pinned fabric {pitches:?}"),
+                Box::new(move || {
+                    adapt(synthesise_packed_recursive_fabric(
                         lowered,
-                        &product,
-                        caller.supplied,
+                        root,
+                        Some(compiled),
+                        &DurablePhysicalRouter,
                         search,
+                        certification,
                         workers,
-                    )?)
-                }
-                Err(error) => trace_refusal("pinned fabric root", pitches, &error),
-            }
+                        pitches,
+                        LeafCut::PRODUCTION,
+                    ))
+                }),
+            ));
+        }
+        if let Ok(product) = ship_best(candidates) {
+            return Ok(product);
         }
     }
     let root = root_chunk_id(lowered)?;
@@ -1557,6 +1724,87 @@ mod tests {
     use crate::compile::planner::PortPlacements;
     use crate::compile::{Gate, Netlist};
     use crate::redstone::world::block::Facing;
+
+    fn key(ticks: u64, blocks: u64, volume: u64) -> Option<QualityKey> {
+        Some(QualityKey {
+            observed_settle: ticks,
+            non_air_blocks: blocks,
+            occupied_volume: volume,
+            static_routed_delay: crate::compile::fragment_synth::timing_graph::ExactDelay(ticks),
+        })
+    }
+
+    /// The candidate lists measured on the three packed acceptance cases at
+    /// v1, in list order: the first-success product is the only one no
+    /// candidate after it dominates, so it is what ships.
+    #[test]
+    fn pick_keeps_the_first_certified_candidate_when_nothing_dominates_it() {
+        let segment_a = [None, key(124, 9_305, 391_680), None, key(148, 10_973, 443_592)];
+        let pinned = [None, key(190, 20_410, 1_025_780), None, key(240, 24_204, 1_161_440)];
+        let seven_segment = [None, None, None, key(198, 21_847, 707_850)];
+        assert_eq!(pick(&segment_a), Some(1));
+        assert_eq!(pick(&pinned), Some(1));
+        assert_eq!(pick(&seven_segment), Some(3));
+        assert_eq!(pick(&[key(9, 9, 9)]), Some(0));
+    }
+
+    #[test]
+    fn pick_does_not_trade_blocks_for_ticks() {
+        assert_eq!(pick(&[key(124, 9_305, 1), key(100, 9_400, 1)]), Some(0));
+        assert_eq!(pick(&[key(124, 9_305, 1), key(130, 6_000, 1)]), Some(0));
+    }
+
+    #[test]
+    fn pick_ships_a_dominating_candidate_by_quality_then_index() {
+        // The wide fabric candidate appended after the production four.
+        let segment_a = [
+            None,
+            key(124, 9_305, 391_680),
+            None,
+            key(148, 10_973, 443_592),
+            key(80, 4_183, 1),
+        ];
+        assert_eq!(pick(&segment_a), Some(4));
+        // Among dominating candidates, ticks first, then blocks, then volume.
+        assert_eq!(pick(&[key(124, 9_305, 9), key(110, 9_000, 9), key(110, 8_000, 9)]), Some(2));
+        assert_eq!(pick(&[key(124, 9_305, 9), key(124, 9_305, 8)]), Some(1));
+        // A full tie keeps the earlier candidate.
+        assert_eq!(pick(&[key(7, 7, 7), key(7, 7, 7)]), Some(0));
+    }
+
+    #[test]
+    fn pick_chooses_nothing_when_nothing_certified() {
+        assert_eq!(pick(&[None, None]), None);
+        assert_eq!(pick(&[]), None);
+    }
+
+    /// Whatever the legacy baseline is, the shipped product passes every
+    /// ticks and blocks gate the first-success product passes.
+    #[test]
+    fn pick_never_turns_a_passing_gate_red() {
+        let values = [10u64, 20, 30];
+        let options: Vec<Option<QualityKey>> = std::iter::once(None)
+            .chain(values.iter().flat_map(|&t| values.iter().map(move |&b| key(t, b, 1))))
+            .collect();
+        for a in &options {
+            for b in &options {
+                for c in &options {
+                    let keys = [*a, *b, *c];
+                    let Some(chosen) = pick(&keys) else { continue };
+                    let reference = keys.iter().flatten().next().unwrap();
+                    let shipped = keys[chosen].unwrap();
+                    for legacy in [5u64, 10, 15, 20, 25, 30, 35] {
+                        assert!(
+                            reference.observed_settle > legacy || shipped.observed_settle <= legacy
+                        );
+                        assert!(
+                            reference.non_air_blocks > legacy || shipped.non_air_blocks <= legacy
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     /// Compile through the production entry point with only the direct-leaf
     /// cutoff lowered, so a small netlist provably takes the packed branch.

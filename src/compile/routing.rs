@@ -1707,7 +1707,7 @@ where
                 terminal_hosts_refresh,
             );
             let mut promoted = None;
-            if strict_local && !laid.carries {
+            if (strict_local || exact_refresh()) && !laid.carries {
                 for &candidate in path[..shared].iter().rev() {
                     let Some(direction) = shared_trunk_refresh_direction(
                         &request,
@@ -2250,6 +2250,38 @@ pub(crate) fn refusing_own_crush<T>(route: impl FnOnce() -> T) -> T {
         }
     }
     let _restore = Restore(REFUSE_OWN_CRUSH.with(|flag| flag.replace(true)));
+    route()
+}
+
+thread_local! {
+    static EXACT_REFRESH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn exact_refresh() -> bool {
+    EXACT_REFRESH.with(std::cell::Cell::get)
+}
+
+/// Run `route` with the legacy router mode placing each refresh where the
+/// wire would otherwise die ([`ReservePolicy::LatestLegalCell`]) instead of
+/// holding back a reserve for every staircase step
+/// ([`ReservePolicy::TotalStairs`]), and with a branch that then does not
+/// carry offered a refresh on its shared trunk, as the strict mode does.
+///
+/// `TotalStairs` refreshes a stair-heavy branch about every third cell
+/// whether or not its geometry needs it, and each refresh is two game ticks:
+/// on `full_adder` one eleven-cell hop took ten ticks. Only a caller that
+/// prices the result and keeps the better world asks for this; the planner's
+/// own worlds, which `compile` has always shipped and recorded, keep the
+/// reserve. Scoped to this thread and restored on the way out, panic
+/// included.
+pub(crate) fn with_exact_refresh<T>(route: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            EXACT_REFRESH.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(EXACT_REFRESH.with(|flag| flag.replace(true)));
     route()
 }
 
@@ -3699,7 +3731,7 @@ pub(crate) enum ReservePolicy {
 }
 
 fn reserve_policy(strict_local: bool, seed_rules: bool) -> ReservePolicy {
-    if strict_local || seed_rules {
+    if strict_local || seed_rules || exact_refresh() {
         ReservePolicy::LatestLegalCell
     } else {
         ReservePolicy::TotalStairs
