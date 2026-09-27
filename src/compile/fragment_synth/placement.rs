@@ -419,23 +419,35 @@ impl SeedPlacer for PitchedSeedPlacer {
                 .copied()
                 .filter(|id| analysis.nodes[id].forward_level == level)
                 .collect::<Vec<_>>();
-            ids.sort_by_key(|id| (lanes[id], *id));
-            let entries = ids
-                .iter()
-                .copied()
-                .map(|id| (id, lanes[&id], bounds[&id]))
-                .collect::<Vec<_>>();
-            let mut legalized = legalize_laterals(&entries, pitch)?;
-            if guide.timing {
-                let anchor = timing_anchor(
+            // Every critical instance of the column asks for the lateral of
+            // its anchor instead of its lane; the rest keep their lanes.
+            let anchors = if guide.timing {
+                timing_anchors(
                     request.graph,
                     analysis,
                     guide,
                     &track_laterals,
                     &frame_origins,
                     &ids,
-                );
-                if let Some((anchored, lateral)) = anchor {
+                )
+            } else {
+                Vec::new()
+            };
+            let preferred = |id: &InstanceId| {
+                anchors
+                    .iter()
+                    .find(|(anchored, _)| anchored == id)
+                    .map_or(lanes[id], |&(_, lateral)| lateral)
+            };
+            ids.sort_by_key(|id| (preferred(id), *id));
+            let entries = ids
+                .iter()
+                .copied()
+                .map(|id| (id, preferred(&id), bounds[&id]))
+                .collect::<Vec<_>>();
+            let mut legalized = legalize_laterals(&entries, pitch)?;
+            if guide.timing {
+                if let Some(&(anchored, lateral)) = anchors.first() {
                     let shift = lateral
                         .checked_sub(legalized[&anchored])
                         .ok_or(SeedPlacementError::CoordinateOverflow)?;
@@ -1188,21 +1200,23 @@ const fn project_horizontal(x: i32, z: i32, direction: Facing) -> i32 {
     }
 }
 
-/// The one instance of a column the timing guide anchors, and the lateral it
-/// is anchored to: an instance on the leaf's critical chain whose critical
-/// driver stands in an earlier column, straight across from that driver; or
-/// the reader of a critical boundary input, straight across from its port.
-/// Readers of critical boundary inputs come first -- the root measured those
-/// across the whole circuit -- then the leaf's own chain; ties go to the
-/// instance with the longer path through it, then to the lower id.
-fn timing_anchor(
+/// The instances of a column the timing guide anchors, each with the lateral
+/// it asks for, most critical first: an instance on the leaf's critical
+/// chain whose critical driver stands in an earlier column asks to stand
+/// straight across from that driver; the reader of a critical boundary input
+/// asks to stand straight across from its port. Readers of critical boundary
+/// inputs come first -- the root measured those across the whole circuit --
+/// then the leaf's own chain; ties go to the instance with the longer path
+/// through it, then to the lower id. The column is then shifted so the first
+/// stands exactly where it asked.
+fn timing_anchors(
     graph: &InstanceGraph,
     analysis: &SeedPlacementAnalysis,
     guide: &PlacementGuide,
     track_laterals: &BTreeMap<LogicalSignalId, i32>,
     placed: &BTreeMap<InstanceId, (i32, i32)>,
     column: &[InstanceId],
-) -> Option<(InstanceId, i32)> {
+) -> Vec<(InstanceId, i32)> {
     let path = |id: &InstanceId| analysis.nodes[id].head_ticks + analysis.nodes[id].tail_ticks;
     let boundary = column.iter().filter_map(|&id| {
         graph.assignments.iter().find_map(|assignment| match (&assignment.driver, assignment.sink) {
@@ -1223,12 +1237,18 @@ fn timing_anchor(
             .max_by_key(|&(source, _)| (path(&source), std::cmp::Reverse(source)))
             .map(|(_, lateral)| (id, lateral))
     });
-    let best = |candidates: Vec<(InstanceId, i32)>| {
+    let ranked = |candidates: Vec<(InstanceId, i32)>| {
+        let mut candidates = candidates;
+        candidates.sort_by_key(|&(id, _)| (std::cmp::Reverse(path(&id)), id));
         candidates
-            .into_iter()
-            .max_by_key(|&(id, _)| (path(&id), std::cmp::Reverse(id)))
     };
-    best(boundary.collect()).or_else(|| best(chain.collect()))
+    let mut anchors = ranked(boundary.collect());
+    for (id, lateral) in ranked(chain.collect()) {
+        if !anchors.iter().any(|&(anchored, _)| anchored == id) {
+            anchors.push((id, lateral));
+        }
+    }
+    anchors
 }
 
 fn legalize_laterals(
