@@ -443,7 +443,21 @@ fn run_recursive(name: &str) {
             }
             HopKind::FromInput(_) => "from a primary input".to_owned(),
         };
-        println!("  {} -> {}: {} ticks, {kind}", hop.from, hop.to, hop.ticks);
+        let at = |signal: &str| {
+            compiled
+                .gate_output_positions
+                .get(signal)
+                .or_else(|| compiled.input_positions.get(signal))
+                .copied()
+        };
+        let span = match (at(&hop.from), at(&hop.to)) {
+            (Some(from), Some(to)) => format!(
+                " [{from:?} -> {to:?}, manhattan {}]",
+                (from.0 - to.0).abs() + (from.1 - to.1).abs() + (from.2 - to.2).abs()
+            ),
+            _ => String::new(),
+        };
+        println!("  {} -> {}: {} ticks, {kind}{span}", hop.from, hop.to, hop.ticks);
     }
 }
 

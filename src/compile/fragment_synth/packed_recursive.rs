@@ -26,7 +26,7 @@
 
 use thiserror::Error;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::compile::fragment_synth::allocation::SignalContract;
 use crate::compile::fragment_synth::attribution::{
@@ -37,14 +37,15 @@ use crate::compile::fragment_synth::certification::{
 };
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
 use crate::compile::fragment_synth::leaf::{
-    synthesise_free_leaf, FreeLeafArtifact, FreeLeafError, GateMetadata, LEAF_PITCHES,
+    synthesise_free_leaf, synthesise_free_leaf_timed, FreeLeafArtifact, FreeLeafError,
+    GateMetadata, LEAF_PITCHES,
 };
 use crate::compile::fragment_synth::packed_node::{
     into_parent_connectable, synthesise_packed_node, synthesise_packed_node_pinned,
     synthesise_packed_node_fabric, PackedNode, PackedNodeError,
 };
 use crate::compile::fragment_synth::partition::{
-    node_chunk_id, partition, Chunk, ChunkId, PartitionError,
+    canonical_order, node_chunk_id, partition, Chunk, ChunkId, PartitionError,
 };
 use crate::compile::fragment_synth::recursive::{
     assemble_product, split_of, RecursiveProduct, RootAssembly, TERMINAL_GATES, WIDE_LEAF_GATES,
@@ -273,7 +274,8 @@ pub(crate) fn synthesise_packed_recursive_pinned<R: PhysicalRouter + Sync>(
             grain,
             whole_root: false,
         };
-        let artifacts = flat_leaves(netlist, &chunk, cut, contract, search, siblings, pitches)?;
+        let artifacts =
+            flat_leaves(netlist, &chunk, cut, contract, search, siblings, pitches, None)?;
         if trace {
             eprintln!("reda: pinned root at grain {grain}: {} leaves", artifacts.len());
         }
@@ -390,7 +392,101 @@ pub(crate) fn wide_cut_differs(netlist: &Netlist, parent: &ChunkId) -> Result<bo
     Ok(wide.iter().map(|leaf| &leaf.id).ne(production.iter().map(|leaf| &leaf.id)))
 }
 
-/// Every leaf `cut` makes of `netlist`, built in parallel in chunk order.
+/// How many gate delays one crossing between leaves is worth when the root
+/// looks for its critical path: a crossing measured 42-70 game ticks against
+/// about 6 for a gate inside a leaf.
+const CROSSING_PENALTY_GATES: u64 = 8;
+
+/// The boundary signals the whole circuit's critical path crosses under a
+/// cut into `leaves`: gate outputs read in another leaf, primary inputs the
+/// path starts at, and declared outputs it ends at.
+///
+/// Arrival is counted in gates from the primary inputs, with
+/// [`CROSSING_PENALTY_GATES`] added on every edge between two leaves; a
+/// signal is critical when an edge it drives lies on a longest path. A
+/// static model, not a measurement: it only decides where a leaf's timing
+/// placement looks first.
+fn critical_crossings(
+    netlist: &Netlist,
+    leaves: &[Chunk],
+) -> Result<BTreeSet<String>, PartitionError> {
+    let order = canonical_order(netlist)?;
+    let leaf_of: BTreeMap<&str, usize> = leaves
+        .iter()
+        .enumerate()
+        .flat_map(|(index, leaf)| {
+            leaf.netlist.gates.iter().map(move |gate| (gate.output.as_str(), index))
+        })
+        .collect();
+    let edge = |from: &str, to: &str| -> u64 {
+        match (leaf_of.get(from), leaf_of.get(to)) {
+            (Some(from), Some(to)) if from != to => 1 + CROSSING_PENALTY_GATES,
+            _ => 1,
+        }
+    };
+    let mut arrival: BTreeMap<&str, u64> =
+        netlist.inputs.iter().map(|input| (input.as_str(), 0)).collect();
+    for &index in &order {
+        let gate = &netlist.gates[index];
+        let at = gate
+            .inputs
+            .iter()
+            .map(|input| arrival.get(input.as_str()).copied().unwrap_or(0) + edge(input, &gate.output))
+            .max()
+            .unwrap_or(1);
+        arrival.insert(gate.output.as_str(), at);
+    }
+    let horizon = netlist
+        .outputs
+        .iter()
+        .filter_map(|output| arrival.get(output.as_str()).copied())
+        .max()
+        .unwrap_or(0);
+    let mut required: BTreeMap<&str, u64> = BTreeMap::new();
+    for output in &netlist.outputs {
+        required.insert(output.as_str(), horizon);
+    }
+    for &index in order.iter().rev() {
+        let gate = &netlist.gates[index];
+        let Some(&due) = required.get(gate.output.as_str()) else {
+            continue;
+        };
+        for input in &gate.inputs {
+            let by = due.saturating_sub(edge(input, &gate.output));
+            required
+                .entry(input.as_str())
+                .and_modify(|current| *current = (*current).min(by))
+                .or_insert(by);
+        }
+    }
+    let tight = |signal: &str| arrival.get(signal) == required.get(signal);
+    let mut critical = BTreeSet::new();
+    for gate in &netlist.gates {
+        if !tight(&gate.output) {
+            continue;
+        }
+        for input in &gate.inputs {
+            let on_path = tight(input)
+                && arrival[input.as_str()] + edge(input, &gate.output) == arrival[gate.output.as_str()];
+            let crosses = !leaf_of.contains_key(input.as_str())
+                || leaf_of.get(input.as_str()) != leaf_of.get(gate.output.as_str());
+            if on_path && crosses {
+                critical.insert(input.clone());
+            }
+        }
+    }
+    for output in &netlist.outputs {
+        if arrival.get(output.as_str()) == Some(&horizon) {
+            critical.insert(output.clone());
+        }
+    }
+    Ok(critical)
+}
+
+/// Every leaf `cut` makes of `netlist`, built in parallel in chunk order,
+/// placed for timing against `critical` when it is given
+/// ([`synthesise_free_leaf_timed`]).
+#[allow(clippy::too_many_arguments)]
 fn flat_leaves(
     netlist: &Netlist,
     chunk: &ChunkId,
@@ -399,10 +495,11 @@ fn flat_leaves(
     search: &SearchConfig,
     siblings: CertificationWorkers,
     pitches: &[i32],
+    critical: Option<&BTreeSet<String>>,
 ) -> Result<Vec<FreeLeafArtifact>, PackedRecursiveError> {
     let leaves = leaf_chunks(netlist, chunk, cut)?;
     Ok(run_indexed(siblings, leaves.len(), |index| {
-        build_leaf_finer(&leaves[index], contract, search, pitches)
+        build_leaf_finer(&leaves[index], contract, search, pitches, critical)
     })?
     .into_iter()
     .flatten()
@@ -424,12 +521,20 @@ pub(crate) fn synthesise_packed_recursive_fabric<R: PhysicalRouter + Sync>(
     workers: usize,
     pitches: &[i32],
     cut: LeafCut,
+    timing: bool,
 ) -> Result<PackedRecursiveProduct, PackedRecursiveError> {
     let chunk = node_chunk_id(netlist, parent)?;
     if netlist.gates.is_empty() {
         return Err(PackedRecursiveError::NoGates { chunk });
     }
     let siblings = CertificationWorkers::bounded(workers);
+    // With `timing`, every leaf is placed against the boundary signals the
+    // whole circuit's critical path crosses under this cut.
+    let critical = if timing {
+        Some(critical_crossings(netlist, &leaf_chunks(netlist, &chunk, cut)?)?)
+    } else {
+        None
+    };
     // A pinned room narrower than a leaf takes finer leaves, exactly as the
     // pinned packed path does; nothing else changes the grain.
     let mut cut = cut;
@@ -442,6 +547,7 @@ pub(crate) fn synthesise_packed_recursive_fabric<R: PhysicalRouter + Sync>(
             search,
             siblings,
             pitches,
+            critical.as_ref(),
         )?;
         let node = synthesise_packed_node_fabric(
             netlist,
@@ -502,13 +608,14 @@ fn build_leaf_finer(
     contract: SignalContract,
     search: &SearchConfig,
     pitches: &[i32],
+    critical: Option<&BTreeSet<String>>,
 ) -> Result<Vec<FreeLeafArtifact>, PackedRecursiveError> {
-    match synthesise_free_leaf(chunk, contract, search, pitches) {
+    match synthesise_free_leaf_timed(chunk, contract, search, pitches, critical) {
         Ok(leaf) => Ok(vec![leaf]),
         Err(refusal) if chunk.netlist.gates.len() > 1 => {
             let built = partition(&chunk.netlist, &chunk.id, split_of(&chunk.netlist))?
                 .iter()
-                .map(|half| build_leaf_finer(half, contract, search, pitches))
+                .map(|half| build_leaf_finer(half, contract, search, pitches, critical))
                 .collect::<Result<Vec<_>, _>>();
             built.map(|halves| halves.concat()).map_err(|error| {
                 PackedRecursiveError::RepairFailed {
@@ -1006,6 +1113,51 @@ mod tests {
         }
     }
 
+    /// The root's critical path, read on a cut: the signals it crosses between
+    /// leaves, the input it starts at and the output it ends at -- and not a
+    /// short side branch that crosses too.
+    #[test]
+    fn critical_crossings_name_what_the_longest_path_crosses() {
+        // x -> d -> e -> f is the long path; y -> g reads d across the cut
+        // but ends one gate later at its own output.
+        let net = Netlist {
+            inputs: vec!["x".into(), "y".into()],
+            outputs: vec!["f".into(), "g".into()],
+            gates: vec![
+                Gate::nor("d", &["x"]),
+                Gate::nor("e", &["d"]),
+                Gate::nor("f", &["e"]),
+                Gate::nor("g", &["d", "y"]),
+            ],
+        };
+        let leaf = |gates: &[&str]| Chunk {
+            id: root_chunk_id(&net).unwrap(),
+            netlist: Netlist {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                gates: net
+                    .gates
+                    .iter()
+                    .filter(|gate| gates.contains(&gate.output.as_str()))
+                    .cloned()
+                    .collect(),
+            },
+            boundary_inputs: Vec::new(),
+            boundary_outputs: Vec::new(),
+        };
+        let critical = critical_crossings(&net, &[leaf(&["d"]), leaf(&["e", "f", "g"])]).unwrap();
+        assert_eq!(
+            critical,
+            ["d", "f", "x"].into_iter().map(str::to_owned).collect::<BTreeSet<_>>()
+        );
+        // Uncut, only the endpoints are boundary signals.
+        let whole = critical_crossings(&net, &[leaf(&["d", "e", "f", "g"])]).unwrap();
+        assert_eq!(
+            whole,
+            ["f", "x"].into_iter().map(str::to_owned).collect::<BTreeSet<_>>()
+        );
+    }
+
     /// `n` inputs, each inverted twice: `2n` gates, so above the grain the
     /// first and second inversions land in different leaves and up to `n`
     /// trunks cross between them.
@@ -1050,6 +1202,7 @@ mod tests {
                 4,
                 &LEAF_PITCHES,
                 LeafCut::PRODUCTION,
+                false,
             )
             .unwrap_or_else(|error| panic!("{n} inputs: {error}"));
             let lid = product.node.packed.halo.iter().map(|at| at.y).max().unwrap();
@@ -1088,6 +1241,7 @@ mod tests {
                 workers,
                 &LEAF_PITCHES,
                 LeafCut::PRODUCTION,
+                false,
             )
             .unwrap()
         };

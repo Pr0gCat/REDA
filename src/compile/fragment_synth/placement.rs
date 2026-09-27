@@ -195,9 +195,28 @@ pub(crate) struct TopologyAwareSeedPlacer;
 
 /// The seed placer on a grid of `0` cells: the routing channel ahead of and
 /// behind every macro, and the lateral pitch between signal tracks and
-/// between separated owners. The two were always the same number.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct PitchedSeedPlacer(pub(crate) i32);
+/// between separated owners. The two were always the same number. `1` is
+/// the timing emphasis it places with; the default is the placer every leaf
+/// always had.
+#[derive(Debug, Clone)]
+pub(crate) struct PitchedSeedPlacer(pub(crate) i32, pub(crate) PlacementGuide);
+
+/// What a leaf's placement may be told about timing beyond its own netlist.
+///
+/// With `timing` off -- the default -- the placer is exactly the one every
+/// leaf always had. With it on, each column is shifted laterally so that one
+/// critical instance stands straight across from its critical driver: the
+/// leaf's own zero-slack chain, or the reader of a boundary input the root
+/// found critical ([`Self::critical_inputs`]). A boundary output the root
+/// found critical ([`Self::critical_outputs`]) leaves the leaf level with the
+/// gate that drives it instead of on that signal's track. Columns keep their
+/// legal spacing; only their lateral offset moves.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct PlacementGuide {
+    pub timing: bool,
+    pub critical_inputs: BTreeSet<PortId>,
+    pub critical_outputs: BTreeSet<PortId>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NetInterval {
@@ -267,7 +286,7 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
         &self,
         request: SeedPlacementRequest<'_>,
     ) -> Result<SeedPlacementPlan, SeedPlacementError> {
-        PitchedSeedPlacer(STANDARD_PITCH).plan(request)
+        PitchedSeedPlacer(STANDARD_PITCH, PlacementGuide::default()).plan(request)
     }
 
     fn plan_with_repairs(
@@ -275,7 +294,8 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
         request: SeedPlacementRequest<'_>,
         repairs: &[LayoutRepair],
     ) -> Result<SeedPlacementPlan, SeedPlacementError> {
-        PitchedSeedPlacer(STANDARD_PITCH).plan_with_repairs(request, repairs)
+        PitchedSeedPlacer(STANDARD_PITCH, PlacementGuide::default())
+            .plan_with_repairs(request, repairs)
     }
 }
 
@@ -390,6 +410,7 @@ impl SeedPlacer for PitchedSeedPlacer {
                 .ok_or(SeedPlacementError::CoordinateOverflow)?;
         }
 
+        let guide = &self.1;
         let mut frame_origins = BTreeMap::<InstanceId, (i32, i32)>::new();
         for (&level, &column) in &columns {
             let mut ids = analysis
@@ -404,7 +425,27 @@ impl SeedPlacer for PitchedSeedPlacer {
                 .copied()
                 .map(|id| (id, lanes[&id], bounds[&id]))
                 .collect::<Vec<_>>();
-            let legalized = legalize_laterals(&entries, pitch)?;
+            let mut legalized = legalize_laterals(&entries, pitch)?;
+            if guide.timing {
+                let anchor = timing_anchor(
+                    request.graph,
+                    analysis,
+                    guide,
+                    &track_laterals,
+                    &frame_origins,
+                    &ids,
+                );
+                if let Some((anchored, lateral)) = anchor {
+                    let shift = lateral
+                        .checked_sub(legalized[&anchored])
+                        .ok_or(SeedPlacementError::CoordinateOverflow)?;
+                    for origin in legalized.values_mut() {
+                        *origin = origin
+                            .checked_add(shift)
+                            .ok_or(SeedPlacementError::CoordinateOverflow)?;
+                    }
+                }
+            }
             for id in ids {
                 let lateral = legalized[&id];
                 frame_origins.insert(id, (column, lateral));
@@ -469,6 +510,22 @@ impl SeedPlacer for PitchedSeedPlacer {
                 let mut lateral = signal
                     .and_then(|signal| track_laterals.get(&signal).copied())
                     .unwrap_or(0);
+                // A critical boundary output leaves level with its driver.
+                if guide.timing && guide.critical_outputs.contains(&port) {
+                    let driver = request.graph.assignments.iter().find_map(|assignment| {
+                        match (&assignment.driver, assignment.sink) {
+                            (PhysicalDriver::Instance(driver), PhysicalSink::DeclaredOutput(sink))
+                                if sink == port =>
+                            {
+                                frame_origins.get(&instance_driver_owner(driver))
+                            }
+                            _ => None,
+                        }
+                    });
+                    if let Some(&(_, driver_lateral)) = driver {
+                        lateral = driver_lateral;
+                    }
+                }
                 while !taken_output_laterals.insert(lateral) {
                     lateral = lateral.saturating_add(pitch);
                 }
@@ -1129,6 +1186,49 @@ const fn project_horizontal(x: i32, z: i32, direction: Facing) -> i32 {
         Facing::West => -x,
         Facing::Up | Facing::Down => unreachable!(),
     }
+}
+
+/// The one instance of a column the timing guide anchors, and the lateral it
+/// is anchored to: an instance on the leaf's critical chain whose critical
+/// driver stands in an earlier column, straight across from that driver; or
+/// the reader of a critical boundary input, straight across from its port.
+/// Readers of critical boundary inputs come first -- the root measured those
+/// across the whole circuit -- then the leaf's own chain; ties go to the
+/// instance with the longer path through it, then to the lower id.
+fn timing_anchor(
+    graph: &InstanceGraph,
+    analysis: &SeedPlacementAnalysis,
+    guide: &PlacementGuide,
+    track_laterals: &BTreeMap<LogicalSignalId, i32>,
+    placed: &BTreeMap<InstanceId, (i32, i32)>,
+    column: &[InstanceId],
+) -> Option<(InstanceId, i32)> {
+    let path = |id: &InstanceId| analysis.nodes[id].head_ticks + analysis.nodes[id].tail_ticks;
+    let boundary = column.iter().filter_map(|&id| {
+        graph.assignments.iter().find_map(|assignment| match (&assignment.driver, assignment.sink) {
+            (PhysicalDriver::PrimaryInput(port), PhysicalSink::InstanceInput { instance, .. })
+                if instance == id && guide.critical_inputs.contains(port) =>
+            {
+                track_laterals.get(&assignment.signal).map(|&lateral| (id, lateral))
+            }
+            _ => None,
+        })
+    });
+    let chain = column.iter().filter_map(|&id| {
+        analysis
+            .edges
+            .iter()
+            .filter(|edge| edge.sink == id && edge.structural_slack_ticks == 0)
+            .filter_map(|edge| placed.get(&edge.source).map(|&(_, lateral)| (edge.source, lateral)))
+            .max_by_key(|&(source, _)| (path(&source), std::cmp::Reverse(source)))
+            .map(|(_, lateral)| (id, lateral))
+    });
+    let best = |candidates: Vec<(InstanceId, i32)>| {
+        candidates
+            .into_iter()
+            .max_by_key(|&(id, _)| (path(&id), std::cmp::Reverse(id)))
+    };
+    best(boundary.collect()).or_else(|| best(chain.collect()))
 }
 
 fn legalize_laterals(

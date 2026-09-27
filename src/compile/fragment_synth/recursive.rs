@@ -974,6 +974,7 @@ fn compile_with_cutoff(
                         workers,
                         pitches,
                         LeafCut::PRODUCTION,
+                        false,
                     ))
                 }),
             ));
@@ -997,10 +998,39 @@ fn compile_with_cutoff(
                             workers,
                             pitches,
                             LeafCut::WIDE,
+                            false,
                         ))
                     }),
                 ));
             }
+        }
+        // Last, the fabric with every leaf placed for timing against the
+        // boundary signals the root's critical path crosses (T3a), on the
+        // production cut and, when it differs, the wide one.
+        let cuts = [(LeafCut::PRODUCTION, "fabric timed"), (LeafCut::WIDE, "fabric wide timed")];
+        let wide_differs = wide_cut_differs(lowered, &root)?;
+        for (cut, label) in cuts {
+            if cut == LeafCut::WIDE && !wide_differs {
+                continue;
+            }
+            let (root, certification) = (&root, &certification);
+            candidates.push((
+                format!("{label} {:?}", &LEAF_PITCHES),
+                Box::new(move || {
+                    adapt(synthesise_packed_recursive_fabric(
+                        lowered,
+                        root,
+                        None,
+                        &DurablePhysicalRouter,
+                        search,
+                        certification,
+                        workers,
+                        &LEAF_PITCHES,
+                        cut,
+                        true,
+                    ))
+                }),
+            ));
         }
         return ship_best(candidates).map_err(|mut refusals| refusals.swap_remove(reported));
     }
@@ -1063,6 +1093,7 @@ fn compile_with_cutoff(
                         workers,
                         pitches,
                         LeafCut::PRODUCTION,
+                        false,
                     ))
                 }),
             ));

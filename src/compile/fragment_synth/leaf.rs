@@ -27,7 +27,9 @@ use crate::compile::fragment_synth::partition::{Chunk, ChunkId};
 use crate::compile::fragment_synth::seed::{
     compile_parent_connectable_seed_with_services, SeedError, SeedInput, SeedServices,
 };
-use crate::compile::fragment_synth::placement::{PitchedSeedPlacer, STANDARD_PITCH};
+use crate::compile::fragment_synth::placement::{
+    PitchedSeedPlacer, PlacementGuide, STANDARD_PITCH,
+};
 use crate::compile::fragment_synth::services::{
     DurableSeedEmitter, DurableSeedVerifier,
 };
@@ -203,9 +205,39 @@ pub(crate) fn synthesise_free_leaf(
     search: &SearchConfig,
     pitches: &[i32],
 ) -> Result<FreeLeafArtifact, FreeLeafError> {
+    synthesise_free_leaf_timed(chunk, contract, search, pitches, None)
+}
+
+/// [`synthesise_free_leaf`], placed for timing when `critical` is given: the
+/// boundary signals of the whole circuit the root found on its critical path,
+/// by name. This leaf reads the ones that cross its own boundary, and places
+/// its own critical chain straight ([`PlacementGuide`]). `None` is the
+/// placement every leaf always had.
+pub(crate) fn synthesise_free_leaf_timed(
+    chunk: &Chunk,
+    contract: SignalContract,
+    search: &SearchConfig,
+    pitches: &[i32],
+    critical: Option<&BTreeSet<String>>,
+) -> Result<FreeLeafArtifact, FreeLeafError> {
+    let guide = critical.map_or_else(PlacementGuide::default, |critical| {
+        let ports = |names: &[String]| -> BTreeSet<PortId> {
+            names
+                .iter()
+                .enumerate()
+                .filter(|(_, name)| critical.contains(*name))
+                .filter_map(|(index, _)| u32::try_from(index).ok().map(PortId))
+                .collect()
+        };
+        PlacementGuide {
+            timing: true,
+            critical_inputs: ports(&chunk.netlist.inputs),
+            critical_outputs: ports(&chunk.netlist.outputs),
+        }
+    });
     let mut refusal = None;
     for &pitch in pitches {
-        match synthesise_free_leaf_at(chunk, contract, search, pitch) {
+        match synthesise_free_leaf_at(chunk, contract, search, pitch, &guide) {
             Ok(leaf) => return Ok(leaf),
             Err(error) => refusal = Some(error),
         }
@@ -218,6 +250,7 @@ fn synthesise_free_leaf_at(
     contract: SignalContract,
     search: &SearchConfig,
     pitch: i32,
+    guide: &PlacementGuide,
 ) -> Result<FreeLeafArtifact, FreeLeafError> {
     let library = Library::default_library();
     let certified = compile_parent_connectable_seed_with_services(
@@ -228,7 +261,7 @@ fn synthesise_free_leaf_at(
         },
         SeedServices {
             library: &library,
-            placer: &PitchedSeedPlacer(pitch),
+            placer: &PitchedSeedPlacer(pitch, guide.clone()),
             router: &DurablePhysicalRouter,
             emitter: &DurableSeedEmitter,
             verifier: &DurableSeedVerifier,
