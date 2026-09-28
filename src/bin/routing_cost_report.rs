@@ -33,7 +33,10 @@ use reda::compile::routing_stats::{
     analyze, distinct_totals_by_part, EdgeRoute, PartTotals, RoutePart, ALL_PARTS,
 };
 use reda::compile::{compile_legacy, Netlist};
+use reda::redstone::simulator::position::Position;
 use reda::redstone::simulator::Simulator;
+use reda::redstone::world::block::BlockKind;
+use reda::redstone::world::storage::World;
 use reda::timing::{
     observations_to_result, summarize_worst_case, watch_all_nets, TransitionResult,
 };
@@ -366,14 +369,23 @@ fn run_recursive(name: &str) {
         .expect("acceptance manifest must measure the shipped world")
         .max_observed_settle_game_ticks_on_manifest
         .expect("acceptance report has a measured settle");
+    let conductors = conductor_watch(&compiled.world);
     let worst = evaluator
-        .worst_transition_timing(name, compiled)
+        .worst_transition_timing(name, compiled, &conductors)
         .expect("the worst transition must measure");
+    let cell_arrivals = conductors
+        .iter()
+        .filter_map(|(at, label)| {
+            let tick = worst.nets.get(label)?.arrival_tick()?;
+            Some(((at.x, at.y, at.z), tick))
+        })
+        .collect::<BTreeMap<_, _>>();
     assert_eq!(
         worst.settle_game_ticks, acceptance_ticks,
         "the report must reproduce the acceptance ticks"
     );
-    let arrivals = arrivals_of(&worst);
+    let mut arrivals = arrivals_of(&worst);
+    arrivals.retain(|label, _| !label.starts_with('@'));
     let path = last_change_path(netlist, &arrivals).expect("a critical path must be readable");
     let diagnostics = result.recursive_diagnostics.as_ref();
     let owner = leaf_owner(netlist, diagnostics).expect("every gate must belong to one leaf");
@@ -458,7 +470,114 @@ fn run_recursive(name: &str) {
             _ => String::new(),
         };
         println!("  {} -> {}: {} ticks, {kind}{span}", hop.from, hop.to, hop.ticks);
+        if let (Some(from), Some(to)) = (at(&hop.from), at(&hop.to)) {
+            match trail(&compiled.world, &cell_arrivals, from, to) {
+                Some(cells) => print_trail(&compiled.world, &cells),
+                None => println!("    (no monotone trail through watched conductors)"),
+            }
+        }
     }
+}
+
+type Cell = (i32, i32, i32);
+
+/// Every conductor and source cell of `world`, labelled by its coordinate,
+/// for a transition that should be walked cell by cell.
+fn conductor_watch(world: &World) -> Vec<(Position, String)> {
+    [
+        BlockKind::RedstoneWire,
+        BlockKind::Repeater,
+        BlockKind::Comparator,
+        BlockKind::Torch,
+        BlockKind::WallTorch,
+        BlockKind::Lever,
+    ]
+    .into_iter()
+    .flat_map(|kind| world.positions_of(kind).collect::<Vec<_>>())
+    .map(|flat| {
+        let (x, y, z) = world.decode(flat);
+        (Position::new(x, y, z), format!("@{x},{y},{z}"))
+    })
+    .collect()
+}
+
+/// One measured hop, walked cell by cell: the shortest chain of watched
+/// cells from `from` to `to` whose measured arrivals lie between theirs and
+/// never go back in time. A step spans at most two cells, so it may pass
+/// through the one unwatched block a torch, repeater or dust powers; and
+/// time may only step up onto a cell that delays (a torch, repeater or
+/// comparator), since dust carries a change within the tick.
+fn trail(
+    world: &World,
+    arrivals: &BTreeMap<Cell, u64>,
+    from: Cell,
+    to: Cell,
+) -> Option<Vec<(Cell, u64)>> {
+    let &start = arrivals.get(&from)?;
+    let &end = arrivals.get(&to)?;
+    let mut previous = BTreeMap::from([(from, from)]);
+    let mut queue = std::collections::VecDeque::from([from]);
+    while let Some(cell) = queue.pop_front() {
+        if cell == to {
+            let mut path = vec![(to, end)];
+            let mut at = to;
+            while at != from {
+                at = previous[&at];
+                path.push((at, arrivals[&at]));
+            }
+            path.reverse();
+            return Some(path);
+        }
+        let now = arrivals[&cell];
+        for dx in -2i32..=2 {
+            for dy in -2i32..=2 {
+                for dz in -2i32..=2 {
+                    if dx.abs() + dy.abs() + dz.abs() == 0 || dx.abs() + dy.abs() + dz.abs() > 2 {
+                        continue;
+                    }
+                    let next = (cell.0 + dx, cell.1 + dy, cell.2 + dz);
+                    let Some(&tick) = arrivals.get(&next) else {
+                        continue;
+                    };
+                    if tick < now.max(start) || tick > end || previous.contains_key(&next) {
+                        continue;
+                    }
+                    let delays = matches!(
+                        world.get(next.0, next.1, next.2).kind,
+                        BlockKind::Repeater
+                            | BlockKind::Comparator
+                            | BlockKind::Torch
+                            | BlockKind::WallTorch
+                    );
+                    if tick > now && !delays {
+                        continue;
+                    }
+                    previous.insert(next, cell);
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Where a trail spent its time: every cell at which the arrival steps up,
+/// with what stands there and how far the trail had come since the last
+/// step.
+fn print_trail(world: &World, cells: &[(Cell, u64)]) {
+    let mut last = cells[0];
+    let mut since = 0usize;
+    let mut steps = Vec::new();
+    for &(at, tick) in &cells[1..] {
+        since += 1;
+        if tick > last.1 {
+            let kind = world.get(at.0, at.1, at.2).kind;
+            steps.push(format!("+{} {kind:?}@{at:?} after {since}", tick - last.1));
+            since = 0;
+        }
+        last = (at, tick);
+    }
+    println!("    trail {} cells: {}", cells.len() - 1, steps.join(", "));
 }
 
 fn main() {

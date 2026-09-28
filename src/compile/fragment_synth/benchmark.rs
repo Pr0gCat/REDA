@@ -246,10 +246,15 @@ impl AcceptanceEvaluator {
     /// [`Self::evaluate_world`] measures, so its settle is the acceptance
     /// ticks by construction. The first transition reaching the worst settle
     /// is the one returned.
+    ///
+    /// `extra_watch` adds positions to observe beside every net, under their
+    /// own labels -- a measurement that walks a hop cell by cell watches the
+    /// conductors too. Observing changes nothing the simulator does.
     pub fn worst_transition_timing(
         &self,
         name: &str,
         compiled: &CompiledCircuit,
+        extra_watch: &[(crate::redstone::simulator::position::Position, String)],
     ) -> Result<crate::timing::TransitionResult, String> {
         let fixture = self
             .fixture(name)
@@ -274,7 +279,9 @@ impl AcceptanceEvaluator {
             simulator
                 .run_until_stable(MAX_TRANSITION_GAME_TICKS)
                 .map_err(|error| format!("{} did not settle: {error:?}", fixture.name))?;
-            simulator.attach_observer(crate::timing::watch_all_nets(compiled));
+            let mut watched = crate::timing::watch_all_nets(compiled);
+            watched.extend(extra_watch.iter().cloned());
+            simulator.attach_observer(watched);
             let result =
                 crate::timing::measure_transition(&mut simulator, MAX_TRANSITION_GAME_TICKS, |sim| {
                     drive(sim, &drivers, &transition.to)
