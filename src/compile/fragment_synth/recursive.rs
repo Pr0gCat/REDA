@@ -2939,10 +2939,16 @@ mod tests {
         assert_eq!(product.gate_facings.len(), netlist.gates.len());
     }
 
-    /// One unpinned fabric candidate, measured the way acceptance measures
-    /// it, without building the rest of the list: `REDA_CANDIDATE_FIXTURE`
-    /// (default `seven_segment`), `REDA_CANDIDATE_GRAIN` (default the wide
-    /// leaf), and `REDA_CANDIDATE_TIMED` to place the leaves for timing.
+    /// One fabric candidate, measured the way acceptance measures it, without
+    /// building the rest of the list: `REDA_CANDIDATE_FIXTURE` (default
+    /// `seven_segment`), `REDA_CANDIDATE_GRAIN` (default the wide leaf), and
+    /// `REDA_CANDIDATE_TIMED` to place the leaves for timing.
+    ///
+    /// A pinned fixture (`pinned:verilog:seven_segment`) is built the way the
+    /// pinned candidate list builds it: its placements normalised as
+    /// [`compile_with_cutoff`] normalises them, the completed set handed to
+    /// the fabric and the caller's own set to the adapter. An unpinned fixture
+    /// normalises to no pins, so it is built exactly as before.
     #[test]
     #[ignore = "measurement: builds one fabric candidate of an acceptance fixture, minutes"]
     fn measure_one_fabric_candidate() {
@@ -2953,13 +2959,26 @@ mod tests {
         let evaluator =
             crate::compile::fragment_synth::benchmark::legacy_benchmark_evaluator().unwrap();
         let net = evaluator.fixture(&fixture).unwrap().lowered_netlist().clone();
+        let placements = evaluator.fixture(&fixture).unwrap().placements();
+        // As `compile_with_cutoff`: the completed pins go to the fabric, the
+        // caller's own to the adapter. No pins at all means the unpinned
+        // candidate, with `None` for both.
+        let caller = RootPins::normalise(&net, Some(placements)).unwrap();
+        let pins = caller.compiled();
+        let supplied = pins.and(caller.supplied);
+        if let Some(compiled) = pins {
+            let short =
+                pinned_floors_short(net.gates.len(), &PinnedRoom::of(compiled, &net.inputs));
+            println!("CANDIDATE {fixture}: pinned, production room gate short = {short:?}");
+        }
         let search = SearchConfig::checked_defaults();
         let certification = CertificationConfig::from_search(&search);
         let root = root_chunk_id(&net).unwrap();
+        let started = std::time::Instant::now();
         let packed = synthesise_packed_recursive_fabric(
             &net,
             &root,
-            None,
+            pins,
             &DurablePhysicalRouter,
             &search,
             &certification,
@@ -2971,11 +2990,15 @@ mod tests {
         let packed = match packed {
             Ok(packed) => packed,
             Err(error) => {
-                println!("CANDIDATE {fixture} grain {grain} timed {timed}: refused: {error}");
+                println!(
+                    "CANDIDATE {fixture} grain {grain} timed {timed}: refused after {:.1}s: {error}",
+                    started.elapsed().as_secs_f64()
+                );
                 return;
             }
         };
-        let product = adapt_packed_root(&net, &packed, None, &search, 4).unwrap();
+        let product = adapt_packed_root(&net, &packed, supplied, &search, 4).unwrap();
+        let built = started.elapsed().as_secs_f64();
         let compiled = crate::compile::CompiledCircuit {
             world: product.world,
             input_positions: product.input_positions,
@@ -2987,11 +3010,19 @@ mod tests {
             planner_kind: crate::compile::PlannerKind::FragmentSynth,
         };
         let case = evaluator.evaluate_world(&fixture, &compiled).unwrap();
+        // The leaf sizes show a pinned room that halved the cut, or a leaf the
+        // builder refused and split.
+        let sizes = packed
+            .leaves
+            .iter()
+            .map(|leaf| leaf.gates.len())
+            .collect::<Vec<_>>();
         println!(
-            "CANDIDATE {fixture} grain {grain} timed {timed}: {} leaves, {:?} ticks / {:?} blocks",
+            "CANDIDATE {fixture} grain {grain} timed {timed}: {} leaves {sizes:?}, {:?} ticks / {:?} blocks, built in {built:.1}s, {:.1}s with evaluation",
             packed.leaves.len(),
             case.max_observed_settle_game_ticks_on_manifest,
             case.physical.map(|physical| physical.non_air_blocks),
+            started.elapsed().as_secs_f64(),
         );
     }
 
