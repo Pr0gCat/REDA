@@ -63,7 +63,10 @@
 | 案例 | ticks / blocks | legacy | 出貨的候選 | gate |
 |---|---|---|---|---|
 | segment_a | **60 / 3,569** | 72 / 6,416 | fabric wide arrival `[4,6]` | 過 |
-| seven_segment | 待端到端確認（單獨量 74 / 7,789） | 98 / 16,244 | 預期 fabric whole arrival `[4,6]` | 過 |
+| seven_segment | **74 / 7,789** | 98 / 16,244 | fabric whole arrival `[4,6]`（單一 84-gate 葉） | 過 |
+
+- seven_segment 端到端：lead 1 + 葉內 67 + tail 6 = 74；240 次轉換裡最慢的 12 次全是 74，7 個輸出的最晚到達 56–68。
+- 現在最長的一跳是 g39 → g44 的 18 ticks（橫走約 110 格），其次是 g5 → g7 的 12 ticks。fabric wide arrival 在 seven_segment 上是 147 / 16,741，不會被選。
 - 串行建完全部候選的時間（加上寬葉 `[6]` 之前量的）：segment_a 約 332 s，seven_segment 約 577 s，pinned 約 193 s（4 核容器）。依文件開頭記錄的使用者指示，時間暫不處理。
 
 ### 1.2 已經穩固的部分
@@ -858,7 +861,7 @@
   - 量測工具：`measure_one_fabric_candidate` 支援 `REDA_CANDIDATE_ARRIVAL=1`；ignored 探針 `seven_segment_whole_leaf_anchors_by_arrival` 只做擺放、不繞線，0.03 s 印出關鍵 gate 的位置和各自對齊的 driver。
 - **實測（4 核容器）**
   - segment_a：**60 / 3,569**（原本 66 / 3,627，legacy 72 / 6,416），端到端出貨 fabric wide arrival `[4,6]`。viewer 的 segment_a 已重烤；and4、full_adder 重新產生後逐位元相同。
-  - seven_segment 單獨量：74 / 7,789（原本 78 / 7,405）。ticks 少 4，blocks 多 384（每個 instance 都對齊最晚的前級，欄比較寬）。dominance 先比 ticks，所以預期它會出貨。
+  - seven_segment：**74 / 7,789**（原本 78 / 7,405），端到端出貨 fabric whole arrival `[4,6]`。ticks 少 4，blocks 多 384（每個 instance 都對齊最晚的前級，欄比較寬）；dominance 先比 ticks，兩項也都遠低於 legacy。
   - 探針：g80 現在離 g34 約 10 格（原本 130 格）；g0 → g32 那跳沒有改善（g32 對齊到估計較晚的 g6）。
   - 對照組：segment_a timed 仍是 66 / 3,627、seven_segment timed 仍是 78 / 7,405，舊模式沒有被改到。lib 只剩 6 個已知的 C0 失敗。
 - **沒有採用的變體 B：到達時間 anchor 加兩側合法化**（Abacus 式 cluster 合併，最高 anchor 權重 16、其他 anchor 4、lane 1）
