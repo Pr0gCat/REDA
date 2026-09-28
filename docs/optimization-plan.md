@@ -816,6 +816,28 @@
   - pinned decoder 是同一個 84-gate netlist，但 pinned 清單還沒有單葉候選，是下一個值得試的地方（D4 系列）。
   - 對 seven_segment 來說，T3b 已經不需要；它留給仍有跨越的更大電路。
 - **工作量**：S｜**依賴**：T3a、T6。
+- **（09-28 追查）三項後續量測與分析**（workflow，3 個 agent；兩項只讀程式）
+  - **pinned decoder 做不成一片葉。**
+    - 它的 netlist 是 47 gates（`verilog:seven_segment` 經最佳化 lowering），不是 84。
+    - 47-gate 單葉本身建得起來（無 pin 時 223 s），但 pinned 房間放不下，fabric 迴圈把切法對半回 23+24，和今天一樣。
+    - 用整個 root 算出的關鍵集合來引導這兩片葉，得到 **186 / 19,638**，兩項都比今天的 190 / 20,410 好。若改用 23/24 切法自己的關鍵集合，是 196 / 20,330，不會被選。
+    - 今天這樣做要先白建一片 47-gate 葉（約 210 s）再丟掉。更省的做法是直接用 production 切法、配上整個 root 的關鍵集合，預估 30–45 s，還沒實作。
+    - pinned decoder 的大頭仍是 tail 76（輸出經 feet 到 pin），屬 D4。
+  - **timing guide 為什麼讓 84-gate 葉繞得通**（信心中等，由程式和舊 log 推得，沒有重新量）
+    - untimed 時 `legalize_laterals` 只往 +lateral 推（`origin = max(preferred, required)`），寬欄（minterm 那層）一路溢到 track 帶外面，窄欄留在帶內，相鄰欄形成漏斗。
+    - seed router 的 guidance 是軟的，A\* 的估計不計這個罰分，高度只有 6 層。長的橫向繞線要嘛塞爆 262,144 的 queue，要嘛鋪出後面的線爬不過的「牆」。
+    - guide 讓零 slack 的鏈對齊各自的 driver；而 route schedule 先鋪的正好是零 slack、高 fanout 的線，所以這些線變短變直，把橫向空間留給後面的線。
+    - untimed 那 58 次嘗試是 1 次初建 + 42 次 schedule 修補 + 15 次 layout 修補，用完的是 16 次的 layout 上限。
+    - 風險：guide 的效果不單調（OR 樹那片葉就是加了 guide 反而被拒）；48-gate 的葉已經用到 queue 上限的 91%，84-gate 這次成功可能離邊緣不遠。
+  - **最長那一跳 g34 → g80 的原因**（信心高：用 Python 複製擺放邏輯，6 個實測的橫向位置全部對上）
+    - decoder 很平衡，每條 minterm → OR 的邊 slack 都是 0。`timing_anchors` 在並列時取 id 最小的 driver，所以 g80 = NOR(g25, g28, g34) 對齊的是 g25，不是實際最晚到的 g34；g82 也對到 g79 而不是 g81。
+    - 那一欄有 16 個 NOR3，只要求 8 個不同的位置；只往 +z 推的合法化把排第 14 的 g80 推到 z=144，比它要求的位置遠 60 格、離 g34 130 格。
+    - 真正關鍵的 g0 → g32 跨了一欄，模型給它 2 ticks slack，所以從來不是 anchor 候選，實際卻花 12 ticks。
+    - 建議的改法（依預估收益排序；都要做成額外的 guide 模式或候選，由 dominance 選，不要直接取代今天的 timed 葉）：
+      1. **依到達時間選 anchor**：沿欄估每個 instance 的到達時間（gate 延遲 + 依已擺位置的距離估 repeater），選最晚到的 driver 當 anchor，欄的平移也服務最晚的那個。預估 78 → 約 68–74。
+      2. **兩側合法化**（Abacus 式）取代只往一側推的 `legalize_laterals`，和 1 搭配。預估 78 → 約 63–70，blocks 也會少。
+      3. 並列時的便宜破同分規則，約 −2 到 −4。
+      4. 後面幾項（fanout 置中、折欄、複製 gate）收益不確定、風險較高。
 
 ### 3.D 正確性與可信度
 
