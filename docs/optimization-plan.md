@@ -803,6 +803,10 @@
   - seven_segment 出貨 **78 / 7,405**（legacy 98 / 16,244），ticks gate 轉綠。這個候選單獨建約 160 s。
   - 量測工具：`recursive` 的 ignored 測試 `measure_one_fabric_candidate`，只建一個 fabric 候選，再照 acceptance 的方式量。可用 `REDA_CANDIDATE_FIXTURE`、`REDA_CANDIDATE_GRAIN`、`REDA_CANDIDATE_TIMED` 指定。
   - 被拒時退回「只對齊關鍵輸出」的機制不需要：拿掉以後仍是 78 / 7,405，所以沒有保留。
+  - 驗證：
+    - lib 1,136 過，只剩 6 個已知的 C0 失敗（planner ×5、resettle_differential）。
+    - 整合測試除了已知的 `tests/fragment_synth_baseline.rs:56` 全過：`fragment_synth_acceptance` 11 項（1,167 s）、`build_circuit_pins` 6 項。
+    - Yosys 相關的測試要把 `TMPDIR` 設在 `/tmp` 以外。DFF 差分另外要 `REDA_PYTHON` 指向裝了 `yowasp-yosys` 的 Python；容器預設的 Python 沒有，用 uv 快取建的 venv 補跑通過。
 - **還不知道的事**：為什麼 guide 讓 84-gate 葉繞得通線，還沒查。可能是關鍵鏈拉直以後，各欄的橫向位置比較規律。
 - **風險**
   - 能不能 certify 取決於 guide 的擺法，不只取決於大小。96 這個上限只有一個 84-gate 的量測支撐。
