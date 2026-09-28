@@ -205,22 +205,44 @@ pub(crate) fn synthesise_free_leaf(
     search: &SearchConfig,
     pitches: &[i32],
 ) -> Result<FreeLeafArtifact, FreeLeafError> {
-    synthesise_free_leaf_timed(chunk, contract, search, pitches, None)
+    synthesise_free_leaf_timed(chunk, contract, search, pitches, None, false)
 }
 
 /// [`synthesise_free_leaf`], placed for timing when `critical` is given: the
 /// boundary signals of the whole circuit the root found on its critical path,
 /// by name. This leaf reads the ones that cross its own boundary, and places
-/// its own critical chain straight ([`PlacementGuide`]). `None` is the
-/// placement every leaf always had.
+/// its own critical chain straight ([`PlacementGuide`]); with `arrival`, it
+/// anchors each column by estimated arrival instead
+/// ([`PlacementGuide::arrival`]). `None` is the placement every leaf always
+/// had, whatever `arrival` says.
 pub(crate) fn synthesise_free_leaf_timed(
     chunk: &Chunk,
     contract: SignalContract,
     search: &SearchConfig,
     pitches: &[i32],
     critical: Option<&BTreeSet<String>>,
+    arrival: bool,
 ) -> Result<FreeLeafArtifact, FreeLeafError> {
-    let guide = critical.map_or_else(PlacementGuide::default, |critical| {
+    let guide = leaf_placement_guide(chunk, critical, arrival);
+    let mut refusal = None;
+    for &pitch in pitches {
+        match synthesise_free_leaf_at(chunk, contract, search, pitch, &guide) {
+            Ok(leaf) => return Ok(leaf),
+            Err(error) => refusal = Some(error),
+        }
+    }
+    Err(refusal.expect("a leaf is tried on at least one grid"))
+}
+
+/// The guide [`synthesise_free_leaf_timed`] places `chunk` with: the
+/// critical boundary signals it reads or drives, by port, when `critical` is
+/// given, and the default placement otherwise.
+pub(crate) fn leaf_placement_guide(
+    chunk: &Chunk,
+    critical: Option<&BTreeSet<String>>,
+    arrival: bool,
+) -> PlacementGuide {
+    critical.map_or_else(PlacementGuide::default, |critical| {
         let ports = |names: &[String]| -> BTreeSet<PortId> {
             names
                 .iter()
@@ -231,18 +253,11 @@ pub(crate) fn synthesise_free_leaf_timed(
         };
         PlacementGuide {
             timing: true,
+            arrival,
             critical_inputs: ports(&chunk.netlist.inputs),
             critical_outputs: ports(&chunk.netlist.outputs),
         }
-    });
-    let mut refusal = None;
-    for &pitch in pitches {
-        match synthesise_free_leaf_at(chunk, contract, search, pitch, &guide) {
-            Ok(leaf) => return Ok(leaf),
-            Err(error) => refusal = Some(error),
-        }
-    }
-    Err(refusal.expect("a leaf is tried on at least one grid"))
+    })
 }
 
 fn synthesise_free_leaf_at(

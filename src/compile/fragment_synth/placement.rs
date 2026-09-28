@@ -211,11 +211,52 @@ pub(crate) struct PitchedSeedPlacer(pub(crate) i32, pub(crate) PlacementGuide);
 /// found critical ([`Self::critical_outputs`]) leaves the leaf level with the
 /// gate that drives it instead of on that signal's track. Columns keep their
 /// legal spacing; only their lateral offset moves.
+///
+/// `arrival` (read only with `timing`) anchors the columns by estimated
+/// arrival instead of by the static critical chain ([`arrival_anchors`]). On
+/// a balanced netlist every edge has zero structural slack, so the chain
+/// cannot tell a late driver from an early one and its ties fall to the
+/// lowest id; the placement already made can. Off -- the default -- the
+/// timed placer is exactly the critical-chain one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PlacementGuide {
     pub timing: bool,
+    pub arrival: bool,
     pub critical_inputs: BTreeSet<PortId>,
     pub critical_outputs: BTreeSet<PortId>,
+}
+
+/// Whose lateral an anchored instance asked to stand straight across from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum AnchorDriver {
+    /// A gate placed in an earlier column.
+    Instance(InstanceId),
+    /// A boundary input, on its own signal track.
+    Input(PortId),
+}
+
+/// One instance a timing guide anchors: the lateral it asks for, and whose
+/// lateral that is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ColumnAnchor {
+    instance: InstanceId,
+    lateral: i32,
+    driver: AnchorDriver,
+}
+
+/// What the timing guide decided while placing a leaf, for probes that ask
+/// why a gate stands where it does. Nothing that places reads it back.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct GuideTrace {
+    /// Every anchored instance, with its driver and the lateral it asked for;
+    /// an instance not here kept its lane.
+    pub anchors: BTreeMap<InstanceId, (AnchorDriver, i32)>,
+    /// The anchor each column was shifted to serve, by forward level.
+    pub served: BTreeMap<u64, InstanceId>,
+    /// Estimated arrival in game ticks, under the arrival guide only.
+    pub arrivals: BTreeMap<InstanceId, u64>,
+    /// Every instance's `(forward, lateral)` origin in the placement frame.
+    pub origins: BTreeMap<InstanceId, (i32, i32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,11 +340,12 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
     }
 }
 
-impl SeedPlacer for PitchedSeedPlacer {
-    fn plan(
+impl PitchedSeedPlacer {
+    /// [`SeedPlacer::plan`], with what the timing guide decided on the way.
+    pub(crate) fn plan_traced(
         &self,
         request: SeedPlacementRequest<'_>,
-    ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+    ) -> Result<(SeedPlacementPlan, GuideTrace), SeedPlacementError> {
         let pitch = self.0;
         let analysis = request.analysis;
         let frame = derive_frame(request.pins);
@@ -411,6 +453,8 @@ impl SeedPlacer for PitchedSeedPlacer {
         }
 
         let guide = &self.1;
+        let arrival = guide.timing && guide.arrival;
+        let mut trace = GuideTrace::default();
         let mut frame_origins = BTreeMap::<InstanceId, (i32, i32)>::new();
         for (&level, &column) in &columns {
             let mut ids = analysis
@@ -421,7 +465,17 @@ impl SeedPlacer for PitchedSeedPlacer {
                 .collect::<Vec<_>>();
             // Every critical instance of the column asks for the lateral of
             // its anchor instead of its lane; the rest keep their lanes.
-            let anchors = if guide.timing {
+            let anchors = if arrival {
+                arrival_anchors(
+                    request.graph,
+                    analysis,
+                    guide,
+                    &track_laterals,
+                    &frame_origins,
+                    &trace.arrivals,
+                    &ids,
+                )
+            } else if guide.timing {
                 timing_anchors(
                     request.graph,
                     analysis,
@@ -433,13 +487,24 @@ impl SeedPlacer for PitchedSeedPlacer {
             } else {
                 Vec::new()
             };
-            let preferred = |id: &InstanceId| {
-                anchors
-                    .iter()
-                    .find(|(anchored, _)| anchored == id)
-                    .map_or(lanes[id], |&(_, lateral)| lateral)
-            };
-            ids.sort_by_key(|id| (preferred(id), *id));
+            let anchor_of = |id: &InstanceId| anchors.iter().find(|anchor| anchor.instance == *id);
+            let preferred =
+                |id: &InstanceId| anchor_of(id).map_or(lanes[id], |anchor| anchor.lateral);
+            if arrival {
+                // Of the instances that ask for one lateral, the latest takes
+                // it: one-sided legalization pushes the rest outward in turn.
+                ids.sort_by_key(|id| {
+                    let rank = arrival_rank(
+                        analysis,
+                        &trace.arrivals,
+                        anchor_of(id).map(|anchor| anchor.driver),
+                        *id,
+                    );
+                    (preferred(id), std::cmp::Reverse(rank), *id)
+                });
+            } else {
+                ids.sort_by_key(|id| (preferred(id), *id));
+            }
             let entries = ids
                 .iter()
                 .copied()
@@ -447,22 +512,44 @@ impl SeedPlacer for PitchedSeedPlacer {
                 .collect::<Vec<_>>();
             let mut legalized = legalize_laterals(&entries, pitch)?;
             if guide.timing {
-                if let Some(&(anchored, lateral)) = anchors.first() {
-                    let shift = lateral
-                        .checked_sub(legalized[&anchored])
+                if let Some(anchor) = anchors.first() {
+                    let shift = anchor
+                        .lateral
+                        .checked_sub(legalized[&anchor.instance])
                         .ok_or(SeedPlacementError::CoordinateOverflow)?;
                     for origin in legalized.values_mut() {
                         *origin = origin
                             .checked_add(shift)
                             .ok_or(SeedPlacementError::CoordinateOverflow)?;
                     }
+                    trace.served.insert(level, anchor.instance);
                 }
             }
-            for id in ids {
+            for &id in &ids {
                 let lateral = legalized[&id];
                 frame_origins.insert(id, (column, lateral));
             }
+            if arrival {
+                for &id in &ids {
+                    let ticks = estimated_arrival(
+                        request.graph,
+                        analysis,
+                        &track_laterals,
+                        &frame_origins,
+                        &trace.arrivals,
+                        pitch,
+                        id,
+                    )?;
+                    trace.arrivals.insert(id, ticks);
+                }
+            }
+            for anchor in &anchors {
+                trace
+                    .anchors
+                    .insert(anchor.instance, (anchor.driver, anchor.lateral));
+            }
         }
+        trace.origins = frame_origins.clone();
 
         let mut instances = BTreeMap::new();
         for instance in &request.graph.instances {
@@ -555,7 +642,7 @@ impl SeedPlacer for PitchedSeedPlacer {
             &owner_offsets,
             &[],
         );
-        Ok(SeedPlacementPlan {
+        let plan = SeedPlacementPlan {
             frame,
             signal_tracks: track_laterals,
             instances,
@@ -563,7 +650,17 @@ impl SeedPlacer for PitchedSeedPlacer {
             automatic_outputs,
             owner_offsets,
             fingerprint,
-        })
+        };
+        Ok((plan, trace))
+    }
+}
+
+impl SeedPlacer for PitchedSeedPlacer {
+    fn plan(
+        &self,
+        request: SeedPlacementRequest<'_>,
+    ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+        self.plan_traced(request).map(|(plan, _)| plan)
     }
 
     fn plan_with_repairs(
@@ -1216,36 +1313,215 @@ fn timing_anchors(
     track_laterals: &BTreeMap<LogicalSignalId, i32>,
     placed: &BTreeMap<InstanceId, (i32, i32)>,
     column: &[InstanceId],
-) -> Vec<(InstanceId, i32)> {
+) -> Vec<ColumnAnchor> {
     let path = |id: &InstanceId| analysis.nodes[id].head_ticks + analysis.nodes[id].tail_ticks;
-    let boundary = column.iter().filter_map(|&id| {
-        graph.assignments.iter().find_map(|assignment| match (&assignment.driver, assignment.sink) {
-            (PhysicalDriver::PrimaryInput(port), PhysicalSink::InstanceInput { instance, .. })
-                if instance == id && guide.critical_inputs.contains(port) =>
-            {
-                track_laterals.get(&assignment.signal).map(|&lateral| (id, lateral))
-            }
-            _ => None,
-        })
-    });
+    let boundary = column
+        .iter()
+        .filter_map(|&id| critical_input_anchor(graph, guide, track_laterals, id));
     let chain = column.iter().filter_map(|&id| {
         analysis
             .edges
             .iter()
             .filter(|edge| edge.sink == id && edge.structural_slack_ticks == 0)
-            .filter_map(|edge| placed.get(&edge.source).map(|&(_, lateral)| (edge.source, lateral)))
+            .filter_map(|edge| {
+                placed
+                    .get(&edge.source)
+                    .map(|&(_, lateral)| (edge.source, lateral))
+            })
             .max_by_key(|&(source, _)| (path(&source), std::cmp::Reverse(source)))
-            .map(|(_, lateral)| (id, lateral))
+            .map(|(source, lateral)| ColumnAnchor {
+                instance: id,
+                lateral,
+                driver: AnchorDriver::Instance(source),
+            })
     });
-    let ranked = |candidates: Vec<(InstanceId, i32)>| {
+    let ranked = |candidates: Vec<ColumnAnchor>| {
         let mut candidates = candidates;
-        candidates.sort_by_key(|&(id, _)| (std::cmp::Reverse(path(&id)), id));
+        candidates
+            .sort_by_key(|anchor| (std::cmp::Reverse(path(&anchor.instance)), anchor.instance));
         candidates
     };
     let mut anchors = ranked(boundary.collect());
-    for (id, lateral) in ranked(chain.collect()) {
-        if !anchors.iter().any(|&(anchored, _)| anchored == id) {
-            anchors.push((id, lateral));
+    for anchor in ranked(chain.collect()) {
+        if !anchors
+            .iter()
+            .any(|anchored| anchored.instance == anchor.instance)
+        {
+            anchors.push(anchor);
+        }
+    }
+    anchors
+}
+
+/// `id` asking to stand straight across from the first boundary input the
+/// root found critical that it reads, if it reads one.
+fn critical_input_anchor(
+    graph: &InstanceGraph,
+    guide: &PlacementGuide,
+    track_laterals: &BTreeMap<LogicalSignalId, i32>,
+    id: InstanceId,
+) -> Option<ColumnAnchor> {
+    graph
+        .assignments
+        .iter()
+        .find_map(|assignment| match (&assignment.driver, assignment.sink) {
+            (PhysicalDriver::PrimaryInput(port), PhysicalSink::InstanceInput { instance, .. })
+                if instance == id && guide.critical_inputs.contains(port) =>
+            {
+                track_laterals
+                    .get(&assignment.signal)
+                    .map(|&lateral| ColumnAnchor {
+                        instance: id,
+                        lateral,
+                        driver: AnchorDriver::Input(*port),
+                    })
+            }
+            _ => None,
+        })
+}
+
+/// Cells of wire one repeater's worth of delay covers, for the arrival
+/// guide's estimate. Measured on built leaves: about one 2-tick repeater per
+/// 13-15 cells of lateral or forward distance between a driver and its
+/// reader (dust carries 15, and a route bends), so 14.
+const ARRIVAL_CELLS_PER_REPEATER: u64 = 14;
+
+/// The estimated wire delay between two frame origins: one repeater
+/// ([`REPEATER_GAME_TICKS_PER_REDSTONE_TICK`] game ticks) per started
+/// [`ARRIVAL_CELLS_PER_REPEATER`] cells of Manhattan distance in the frame.
+fn arrival_wire_ticks(from: (i32, i32), to: (i32, i32)) -> u64 {
+    let cells = (i64::from(from.0) - i64::from(to.0)).unsigned_abs()
+        + (i64::from(from.1) - i64::from(to.1)).unsigned_abs();
+    REPEATER_GAME_TICKS_PER_REDSTONE_TICK * cells.div_ceil(ARRIVAL_CELLS_PER_REPEATER)
+}
+
+/// When `id`'s output is estimated to settle, in game ticks, once it and
+/// everything before it is placed: its own gate delay after the latest of
+/// its inputs, each input arriving at its driver's estimate plus the wire
+/// from where that driver stands ([`arrival_wire_ticks`]). Every placed
+/// driver counts, not only the zero-slack ones. A primary input arrives at 0
+/// from its automatic cell, one pitch behind the first column on its track.
+fn estimated_arrival(
+    graph: &InstanceGraph,
+    analysis: &SeedPlacementAnalysis,
+    track_laterals: &BTreeMap<LogicalSignalId, i32>,
+    placed: &BTreeMap<InstanceId, (i32, i32)>,
+    arrivals: &BTreeMap<InstanceId, u64>,
+    pitch: i32,
+    id: InstanceId,
+) -> Result<u64, SeedPlacementError> {
+    let node = &analysis.nodes[&id];
+    let at = placed[&id];
+    // `head_ticks` is the latest predecessor's plus this instance's delay.
+    let upstream = node
+        .predecessors
+        .iter()
+        .map(|predecessor| analysis.nodes[predecessor].head_ticks)
+        .max()
+        .unwrap_or(0);
+    let delay = node.head_ticks.saturating_sub(upstream);
+    let mut latest = 0u64;
+    for predecessor in &node.predecessors {
+        if let (Some(&arrives), Some(&from)) = (arrivals.get(predecessor), placed.get(predecessor))
+        {
+            let ticks = arrives
+                .checked_add(arrival_wire_ticks(from, at))
+                .ok_or(SeedPlacementError::TimingOverflow)?;
+            latest = latest.max(ticks);
+        }
+    }
+    for assignment in &graph.assignments {
+        if let (PhysicalDriver::PrimaryInput(_), PhysicalSink::InstanceInput { instance, .. }) =
+            (&assignment.driver, assignment.sink)
+        {
+            if instance == id {
+                if let Some(&lateral) = track_laterals.get(&assignment.signal) {
+                    latest = latest.max(arrival_wire_ticks((-pitch, lateral), at));
+                }
+            }
+        }
+    }
+    latest
+        .checked_add(delay)
+        .ok_or(SeedPlacementError::TimingOverflow)
+}
+
+/// The order the arrival guide serves a column in: when the driver `id`
+/// waits for is estimated to arrive (a boundary input, or no driver, at 0)
+/// plus the longest static path still ahead of `id`. Higher is later.
+fn arrival_rank(
+    analysis: &SeedPlacementAnalysis,
+    arrivals: &BTreeMap<InstanceId, u64>,
+    driver: Option<AnchorDriver>,
+    id: InstanceId,
+) -> u64 {
+    let arrives = match driver {
+        Some(AnchorDriver::Instance(source)) => arrivals.get(&source).copied().unwrap_or(0),
+        Some(AnchorDriver::Input(_)) | None => 0,
+    };
+    arrives.saturating_add(analysis.nodes[&id].tail_ticks)
+}
+
+/// The instances of a column the arrival guide anchors, each with the
+/// lateral it asks for, latest first.
+///
+/// Every instance with a placed gate driver asks to stand straight across
+/// from the driver estimated to arrive last ([`estimated_arrival`]; ties go
+/// to the lower id), whatever the edge's structural slack: the late input is
+/// the one whose wire shows on the output. The reader of a critical boundary
+/// input asks to stand across from its port as under [`timing_anchors`], but
+/// only when its edge from that input has zero structural slack in this
+/// leaf; anchoring every reader of such an input refused leaves. Readers of
+/// boundary inputs come first, then the rest, each by [`arrival_rank`]
+/// descending and then id, so the column is shifted to serve the instance
+/// that will be latest at the outputs.
+fn arrival_anchors(
+    graph: &InstanceGraph,
+    analysis: &SeedPlacementAnalysis,
+    guide: &PlacementGuide,
+    track_laterals: &BTreeMap<LogicalSignalId, i32>,
+    placed: &BTreeMap<InstanceId, (i32, i32)>,
+    arrivals: &BTreeMap<InstanceId, u64>,
+    column: &[InstanceId],
+) -> Vec<ColumnAnchor> {
+    // A primary input's head is 0, so the edge from it into `id` is on the
+    // critical path exactly when `id`'s tail spans the whole of it.
+    let boundary = column
+        .iter()
+        .filter(|id| analysis.nodes[id].tail_ticks >= analysis.critical_delay_ticks)
+        .filter_map(|&id| critical_input_anchor(graph, guide, track_laterals, id));
+    let chain = column.iter().filter_map(|&id| {
+        analysis.nodes[&id]
+            .predecessors
+            .iter()
+            .filter_map(|source| placed.get(source).map(|&(_, lateral)| (*source, lateral)))
+            .max_by_key(|&(source, _)| {
+                (
+                    arrivals.get(&source).copied().unwrap_or(0),
+                    std::cmp::Reverse(source),
+                )
+            })
+            .map(|(source, lateral)| ColumnAnchor {
+                instance: id,
+                lateral,
+                driver: AnchorDriver::Instance(source),
+            })
+    });
+    let ranked = |candidates: Vec<ColumnAnchor>| {
+        let mut candidates = candidates;
+        candidates.sort_by_key(|anchor| {
+            let rank = arrival_rank(analysis, arrivals, Some(anchor.driver), anchor.instance);
+            (std::cmp::Reverse(rank), anchor.instance)
+        });
+        candidates
+    };
+    let mut anchors = ranked(boundary.collect());
+    for anchor in ranked(chain.collect()) {
+        if !anchors
+            .iter()
+            .any(|anchored| anchored.instance == anchor.instance)
+        {
+            anchors.push(anchor);
         }
     }
     anchors

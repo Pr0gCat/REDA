@@ -21,7 +21,7 @@ use crate::compile::fragment_synth::leaf::LEAF_PITCHES;
 use crate::compile::fragment_synth::placement::STANDARD_PITCH;
 use crate::compile::fragment_synth::packed_recursive::{
     adapt_packed_root, synthesise_packed_recursive_fabric, synthesise_packed_recursive_on,
-    synthesise_packed_recursive_pinned, cut_differs, wide_cut_differs, LeafCut,
+    synthesise_packed_recursive_pinned, cut_differs, wide_cut_differs, LeafCut, LeafTiming,
     PackedAdapterError, PackedRecursiveError, PackedRecursiveProduct,
 };
 use crate::compile::fragment_synth::packed_node::{pinned_floors_short, PinnedRoom};
@@ -997,7 +997,7 @@ fn compile_with_cutoff(
                         workers,
                         pitches,
                         LeafCut::PRODUCTION,
-                        false,
+                        LeafTiming::Off,
                     ))
                 }),
             ));
@@ -1021,7 +1021,7 @@ fn compile_with_cutoff(
                             workers,
                             pitches,
                             LeafCut::WIDE,
-                            false,
+                            LeafTiming::Off,
                         ))
                     }),
                 ));
@@ -1058,7 +1058,7 @@ fn compile_with_cutoff(
                         workers,
                         &LEAF_PITCHES,
                         cut,
-                        true,
+                        LeafTiming::Critical,
                     ))
                 }),
             ));
@@ -1124,7 +1124,7 @@ fn compile_with_cutoff(
                         workers,
                         pitches,
                         LeafCut::PRODUCTION,
-                        false,
+                        LeafTiming::Off,
                     ))
                 }),
             ));
@@ -2941,8 +2941,10 @@ mod tests {
 
     /// One fabric candidate, measured the way acceptance measures it, without
     /// building the rest of the list: `REDA_CANDIDATE_FIXTURE` (default
-    /// `seven_segment`), `REDA_CANDIDATE_GRAIN` (default the wide leaf), and
-    /// `REDA_CANDIDATE_TIMED` to place the leaves for timing.
+    /// `seven_segment`), `REDA_CANDIDATE_GRAIN` (default the wide leaf),
+    /// `REDA_CANDIDATE_TIMED` to place the leaves for timing, and
+    /// `REDA_CANDIDATE_ARRIVAL` to place them for timing by estimated arrival
+    /// ([`LeafTiming::Arrival`]; it implies `REDA_CANDIDATE_TIMED`).
     ///
     /// A pinned fixture (`pinned:verilog:seven_segment`) is built the way the
     /// pinned candidate list builds it: its placements normalised as
@@ -2955,7 +2957,13 @@ mod tests {
         let fixture = std::env::var("REDA_CANDIDATE_FIXTURE").unwrap_or("seven_segment".into());
         let grain = std::env::var("REDA_CANDIDATE_GRAIN")
             .map_or(WIDE_LEAF_GATES, |grain| grain.parse().unwrap());
-        let timed = std::env::var_os("REDA_CANDIDATE_TIMED").is_some();
+        let arrival = std::env::var_os("REDA_CANDIDATE_ARRIVAL").is_some();
+        let timed = arrival || std::env::var_os("REDA_CANDIDATE_TIMED").is_some();
+        let timing = match (timed, arrival) {
+            (_, true) => LeafTiming::Arrival,
+            (true, false) => LeafTiming::Critical,
+            (false, false) => LeafTiming::Off,
+        };
         let evaluator =
             crate::compile::fragment_synth::benchmark::legacy_benchmark_evaluator().unwrap();
         let net = evaluator.fixture(&fixture).unwrap().lowered_netlist().clone();
@@ -2985,13 +2993,13 @@ mod tests {
             4,
             &LEAF_PITCHES,
             LeafCut::whole_up_to(grain),
-            timed,
+            timing,
         );
         let packed = match packed {
             Ok(packed) => packed,
             Err(error) => {
                 println!(
-                    "CANDIDATE {fixture} grain {grain} timed {timed}: refused after {:.1}s: {error}",
+                    "CANDIDATE {fixture} grain {grain} timed {timed} arrival {arrival}: refused after {:.1}s: {error}",
                     started.elapsed().as_secs_f64()
                 );
                 return;
@@ -3018,7 +3026,7 @@ mod tests {
             .map(|leaf| leaf.gates.len())
             .collect::<Vec<_>>();
         println!(
-            "CANDIDATE {fixture} grain {grain} timed {timed}: {} leaves {sizes:?}, {:?} ticks / {:?} blocks, built in {built:.1}s, {:.1}s with evaluation",
+            "CANDIDATE {fixture} grain {grain} timed {timed} arrival {arrival}: {} leaves {sizes:?}, {:?} ticks / {:?} blocks, built in {built:.1}s, {:.1}s with evaluation",
             packed.leaves.len(),
             case.max_observed_settle_game_ticks_on_manifest,
             case.physical.map(|physical| physical.non_air_blocks),

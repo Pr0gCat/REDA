@@ -276,7 +276,7 @@ pub(crate) fn synthesise_packed_recursive_pinned<R: PhysicalRouter + Sync>(
             whole_root: false,
         };
         let artifacts =
-            flat_leaves(netlist, &chunk, cut, contract, search, siblings, pitches, None)?;
+            flat_leaves(netlist, &chunk, cut, contract, search, siblings, pitches, None, false)?;
         if trace {
             eprintln!("reda: pinned root at grain {grain}: {} leaves", artifacts.len());
         }
@@ -371,6 +371,20 @@ impl LeafCut {
             whole_root: true,
         }
     }
+}
+
+/// How the fabric's leaves are placed for timing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum LeafTiming {
+    /// The placement every leaf always had.
+    #[default]
+    Off,
+    /// Against the boundary signals the root's critical path crosses under
+    /// the cut, each leaf's own zero-slack chain placed straight (T3a).
+    Critical,
+    /// As [`Self::Critical`], with every column anchored by estimated arrival
+    /// instead of by the static chain (the placement guide's `arrival`).
+    Arrival,
 }
 
 /// The leaf chunks `cut` makes of `netlist` under `chunk`, in chunk order,
@@ -512,8 +526,8 @@ fn critical_crossings(
 }
 
 /// Every leaf `cut` makes of `netlist`, built in parallel in chunk order,
-/// placed for timing against `critical` when it is given
-/// ([`synthesise_free_leaf_timed`]).
+/// placed for timing against `critical` when it is given, by arrival with
+/// `arrival` ([`synthesise_free_leaf_timed`]).
 #[allow(clippy::too_many_arguments)]
 fn flat_leaves(
     netlist: &Netlist,
@@ -524,10 +538,11 @@ fn flat_leaves(
     siblings: CertificationWorkers,
     pitches: &[i32],
     critical: Option<&BTreeSet<String>>,
+    arrival: bool,
 ) -> Result<Vec<FreeLeafArtifact>, PackedRecursiveError> {
     let leaves = leaf_chunks(netlist, chunk, cut)?;
     Ok(run_indexed(siblings, leaves.len(), |index| {
-        build_leaf_finer(&leaves[index], contract, search, pitches, critical)
+        build_leaf_finer(&leaves[index], contract, search, pitches, critical, arrival)
     })?
     .into_iter()
     .flatten()
@@ -549,7 +564,7 @@ pub(crate) fn synthesise_packed_recursive_fabric<R: PhysicalRouter + Sync>(
     workers: usize,
     pitches: &[i32],
     cut: LeafCut,
-    timing: bool,
+    timing: LeafTiming,
 ) -> Result<PackedRecursiveProduct, PackedRecursiveError> {
     let chunk = node_chunk_id(netlist, parent)?;
     if netlist.gates.is_empty() {
@@ -558,11 +573,12 @@ pub(crate) fn synthesise_packed_recursive_fabric<R: PhysicalRouter + Sync>(
     let siblings = CertificationWorkers::bounded(workers);
     // With `timing`, every leaf is placed against the boundary signals the
     // whole circuit's critical path crosses under this cut.
-    let critical = if timing {
-        Some(critical_crossings(netlist, &leaf_chunks(netlist, &chunk, cut)?)?)
-    } else {
+    let critical = if timing == LeafTiming::Off {
         None
+    } else {
+        Some(critical_crossings(netlist, &leaf_chunks(netlist, &chunk, cut)?)?)
     };
+    let arrival = timing == LeafTiming::Arrival;
     // A pinned room narrower than a leaf takes finer leaves, exactly as the
     // pinned packed path does; nothing else changes the grain.
     let mut cut = cut;
@@ -576,6 +592,7 @@ pub(crate) fn synthesise_packed_recursive_fabric<R: PhysicalRouter + Sync>(
             siblings,
             pitches,
             critical.as_ref(),
+            arrival,
         )?;
         let node = synthesise_packed_node_fabric(
             netlist,
@@ -637,13 +654,14 @@ fn build_leaf_finer(
     search: &SearchConfig,
     pitches: &[i32],
     critical: Option<&BTreeSet<String>>,
+    arrival: bool,
 ) -> Result<Vec<FreeLeafArtifact>, PackedRecursiveError> {
-    match synthesise_free_leaf_timed(chunk, contract, search, pitches, critical) {
+    match synthesise_free_leaf_timed(chunk, contract, search, pitches, critical, arrival) {
         Ok(leaf) => Ok(vec![leaf]),
         Err(refusal) if chunk.netlist.gates.len() > 1 => {
             let built = partition(&chunk.netlist, &chunk.id, split_of(&chunk.netlist))?
                 .iter()
-                .map(|half| build_leaf_finer(half, contract, search, pitches, critical))
+                .map(|half| build_leaf_finer(half, contract, search, pitches, critical, arrival))
                 .collect::<Result<Vec<_>, _>>();
             built.map(|halves| halves.concat()).map_err(|error| {
                 PackedRecursiveError::RepairFailed {
@@ -1230,7 +1248,7 @@ mod tests {
                 4,
                 &LEAF_PITCHES,
                 LeafCut::PRODUCTION,
-                false,
+                LeafTiming::Off,
             )
             .unwrap_or_else(|error| panic!("{n} inputs: {error}"));
             let lid = product.node.packed.halo.iter().map(|at| at.y).max().unwrap();
@@ -1273,7 +1291,11 @@ mod tests {
             4,
             &LEAF_PITCHES,
             LeafCut::WIDE,
-            std::env::var_os("REDA_SEAM_TIMED").is_some(),
+            if std::env::var_os("REDA_SEAM_TIMED").is_some() {
+                LeafTiming::Critical
+            } else {
+                LeafTiming::Off
+            },
         )
         .unwrap_or_else(|error| panic!("the wide fabric was refused: {error:?}"));
         for (chunk, placement) in &product.node.packed.placements {
@@ -1334,6 +1356,7 @@ mod tests {
                             search,
                             &[pitch],
                             critical,
+                            false,
                         );
                         (index, pitch, timed, outcome)
                     })
@@ -1366,6 +1389,114 @@ mod tests {
         }
     }
 
+    /// Where `seven_segment`'s whole leaf stands its long hops under the
+    /// critical-chain guide and under the arrival guide, placement only -- no
+    /// routing, seconds. For `g0`, `g32`, `g34` and the OR gates `g80`-`g82`
+    /// it prints the frame lateral, the estimated arrival (arrival guide
+    /// only) and whose lateral each asked for; for `g80` and `g82`, which
+    /// anchor their column was shifted to serve.
+    #[test]
+    #[ignore = "probe: places seven_segment's whole leaf under two guides, seconds"]
+    fn seven_segment_whole_leaf_anchors_by_arrival() {
+        use crate::compile::fragment_synth::identity::InstanceId;
+        use crate::compile::fragment_synth::instance_graph::{Instance, InstanceGraph};
+        use crate::compile::fragment_synth::leaf::leaf_placement_guide;
+        use crate::compile::fragment_synth::placement::{
+            analyse_instance_dag, AnchorDriver, PitchedSeedPlacer, SeedPlacementRequest,
+        };
+        use crate::compile::topology::Library;
+
+        let evaluator =
+            crate::compile::fragment_synth::benchmark::legacy_benchmark_evaluator().unwrap();
+        let net = evaluator.fixture("seven_segment").unwrap().lowered_netlist().clone();
+        let root = root_chunk_id(&net).unwrap();
+        let leaves = leaf_chunks(&net, &root, LeafCut::WHOLE).unwrap();
+        assert_eq!(leaves.len(), 1, "seven_segment is one whole leaf");
+        let leaf = &leaves[0];
+        let critical = critical_crossings(&net, &leaves).unwrap();
+        let graph = InstanceGraph::with_variants(
+            &leaf.netlist,
+            &Library::default_library(),
+            &BTreeMap::new(),
+            &[],
+        )
+        .unwrap();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let pins = BTreeMap::new();
+        let output =
+            |instance: &Instance| &leaf.netlist.gates[instance.logical_gate.0 as usize].output;
+        let name = |id: InstanceId| {
+            let instance = graph.instances.iter().find(|instance| instance.id == id).unwrap();
+            output(instance).clone()
+        };
+        let id_of = |gate: &str| {
+            graph.instances.iter().find(|instance| output(instance) == gate).unwrap().id
+        };
+        let driver_name = |driver: AnchorDriver| match driver {
+            AnchorDriver::Instance(id) => name(id),
+            AnchorDriver::Input(port) => format!("input {}", leaf.netlist.inputs[port.0 as usize]),
+        };
+        println!(
+            "PROBE seven_segment whole leaf: {} gates, critical delay {} ticks, crossings {:?}",
+            leaf.netlist.gates.len(),
+            analysis.critical_delay_ticks,
+            critical
+        );
+        for pitch in LEAF_PITCHES {
+            for (label, arrival) in [("timed", false), ("arrival", true)] {
+                let guide = leaf_placement_guide(leaf, Some(&critical), arrival);
+                let (_, trace) = PitchedSeedPlacer(pitch, guide)
+                    .plan_traced(SeedPlacementRequest {
+                        graph: &graph,
+                        analysis: &analysis,
+                        pins: &pins,
+                    })
+                    .unwrap();
+                for gate in ["g0", "g32", "g34", "g80", "g81", "g82"] {
+                    let id = id_of(gate);
+                    let (forward, lateral) = trace.origins[&id];
+                    let anchor = match trace.anchors.get(&id) {
+                        Some(&(driver, asked)) => {
+                            format!("{} (asked lateral {asked})", driver_name(driver))
+                        }
+                        None => "its lane".to_owned(),
+                    };
+                    let arrives = trace
+                        .arrivals
+                        .get(&id)
+                        .map_or(String::new(), |ticks| format!(", est. arrival {ticks}"));
+                    println!(
+                        "PROBE pitch {pitch} {label}: {gate} ({id:?}) forward {forward} \
+                         lateral {lateral}{arrives}, anchored to {anchor}"
+                    );
+                }
+                for gate in ["g80", "g82"] {
+                    let id = id_of(gate);
+                    let level = analysis.nodes[&id].forward_level;
+                    let drivers = analysis.nodes[&id]
+                        .predecessors
+                        .iter()
+                        .map(|&driver| {
+                            let lateral = trace.origins[&driver].1;
+                            let arrives = trace
+                                .arrivals
+                                .get(&driver)
+                                .map_or(String::new(), |ticks| format!(" arrives {ticks}"));
+                            format!("{} lateral {lateral}{arrives}", name(driver))
+                        })
+                        .collect::<Vec<_>>();
+                    let served =
+                        trace.served.get(&level).map_or("nothing".to_owned(), |&id| name(id));
+                    println!(
+                        "PROBE pitch {pitch} {label}: {gate} reads [{}]; its column \
+                         (level {level}) was shifted to serve {served}",
+                        drivers.join(", ")
+                    );
+                }
+            }
+        }
+    }
+
     /// The fabric is the same world at one worker and at eight.
     #[test]
     #[ignore = "measurement: builds a 20-input netlist twice, about eight minutes"]
@@ -1385,7 +1516,7 @@ mod tests {
                 workers,
                 &LEAF_PITCHES,
                 LeafCut::PRODUCTION,
-                false,
+                LeafTiming::Off,
             )
             .unwrap()
         };
