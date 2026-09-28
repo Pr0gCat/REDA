@@ -21,7 +21,7 @@ use crate::compile::fragment_synth::leaf::LEAF_PITCHES;
 use crate::compile::fragment_synth::placement::STANDARD_PITCH;
 use crate::compile::fragment_synth::packed_recursive::{
     adapt_packed_root, synthesise_packed_recursive_fabric, synthesise_packed_recursive_on,
-    synthesise_packed_recursive_pinned, wide_cut_differs, LeafCut,
+    synthesise_packed_recursive_pinned, cut_differs, wide_cut_differs, LeafCut,
     PackedAdapterError, PackedRecursiveError, PackedRecursiveProduct,
 };
 use crate::compile::fragment_synth::packed_node::{pinned_floors_short, PinnedRoom};
@@ -83,10 +83,24 @@ pub(crate) const TERMINAL_GATES: usize = 32;
 /// on the lid fabric a free leaf of 42 gates (`seven_segment` cut once) and
 /// one of 46 (`segment_a` whole) both certify inside the unchanged A* cap,
 /// shipping 142 ticks / 15,261 blocks and 80 / 4,183 against 198 / 21,847 and
-/// 124 / 9,305 at the production grain; one of 84 gates is refused and falls
-/// back through the ordinary repair split. A refused wide leaf splits into
-/// exactly the chunks the production grain would have built.
+/// 124 / 9,305 at the production grain; one of 84 gates placed without the
+/// timing guide is refused and falls back through the ordinary repair split.
+/// A refused wide leaf splits into exactly the chunks the production grain
+/// would have built.
 pub(crate) const WIDE_LEAF_GATES: usize = 48;
+
+/// The largest root the whole-root candidate builds as one timed leaf.
+///
+/// One more fixed candidate at the end of the unpinned list, kept only when
+/// [`pick`] finds it no worse on ticks and blocks. A root that is one leaf
+/// has no seam and no trunk: `seven_segment`'s one crossing cost 70 of its
+/// 142 ticks, 28 on the trunk and 42 on the legs inside the leaves that
+/// reach it. Placed with the timing guide, the 84-gate root certifies as one
+/// leaf at 78 ticks / 7,405 blocks (measured); placed without it, it is
+/// refused as [`WIDE_LEAF_GATES`] records, so the untimed shape is not a
+/// candidate. Twice the wide grain, so the next root it would take is one
+/// the wide cut halves once.
+pub(crate) const WHOLE_LEAF_GATES: usize = 2 * WIDE_LEAF_GATES;
 const MAX_RECURSIVE_WORKERS: usize = 8;
 
 pub(crate) struct RecursiveProduct {
@@ -467,12 +481,16 @@ fn describe_pending_routes(
 /// for timing (`PlacementGuide` in `placement`): the root's critical
 /// crossings from `critical_crossings` in `packed_recursive`, and each leaf's
 /// own zero-slack chain, anchored straight.
+///
+/// v4: the unpinned list ends with the whole root as one timed leaf, up to
+/// [`WHOLE_LEAF_GATES`].
 pub(crate) fn producer_revision() -> Fingerprint {
     canonical_fingerprint(
         format!(
-            "recursive-contract-producer-v3:terminal-gates={TERMINAL_GATES}:\
-             wide-leaf-gates={WIDE_LEAF_GATES}:selection=dominance:\
-             direct-leaf-refresh=reserve,exact:leaf-timing=critical-anchors"
+            "recursive-contract-producer-v4:terminal-gates={TERMINAL_GATES}:\
+             wide-leaf-gates={WIDE_LEAF_GATES}:whole-leaf-gates={WHOLE_LEAF_GATES}:\
+             selection=dominance:direct-leaf-refresh=reserve,exact:\
+             leaf-timing=critical-anchors"
         )
         .as_bytes(),
     )
@@ -1012,10 +1030,18 @@ fn compile_with_cutoff(
         // Last, the fabric with every leaf placed for timing against the
         // boundary signals the root's critical path crosses (T3a), on the
         // production cut and, when it differs, the wide one.
-        let cuts = [(LeafCut::PRODUCTION, "fabric timed"), (LeafCut::WIDE, "fabric wide timed")];
+        // Then the whole root as one timed leaf, when that is not the wide cut
+        // already.
+        let cuts = [
+            (LeafCut::PRODUCTION, "fabric timed"),
+            (LeafCut::WIDE, "fabric wide timed"),
+            (LeafCut::WHOLE, "fabric whole timed"),
+        ];
         let wide_differs = wide_cut_differs(lowered, &root)?;
+        let whole_differs = cut_differs(lowered, &root, LeafCut::WHOLE, LeafCut::WIDE)?;
         for (cut, label) in cuts {
-            if cut == LeafCut::WIDE && !wide_differs {
+            if (cut == LeafCut::WIDE && !wide_differs) || (cut == LeafCut::WHOLE && !whole_differs)
+            {
                 continue;
             }
             let (root, certification) = (&root, &certification);
@@ -2913,17 +2939,73 @@ mod tests {
         assert_eq!(product.gate_facings.len(), netlist.gates.len());
     }
 
+    /// One unpinned fabric candidate, measured the way acceptance measures
+    /// it, without building the rest of the list: `REDA_CANDIDATE_FIXTURE`
+    /// (default `seven_segment`), `REDA_CANDIDATE_GRAIN` (default the wide
+    /// leaf), and `REDA_CANDIDATE_TIMED` to place the leaves for timing.
+    #[test]
+    #[ignore = "measurement: builds one fabric candidate of an acceptance fixture, minutes"]
+    fn measure_one_fabric_candidate() {
+        let fixture = std::env::var("REDA_CANDIDATE_FIXTURE").unwrap_or("seven_segment".into());
+        let grain = std::env::var("REDA_CANDIDATE_GRAIN")
+            .map_or(WIDE_LEAF_GATES, |grain| grain.parse().unwrap());
+        let timed = std::env::var_os("REDA_CANDIDATE_TIMED").is_some();
+        let evaluator =
+            crate::compile::fragment_synth::benchmark::legacy_benchmark_evaluator().unwrap();
+        let net = evaluator.fixture(&fixture).unwrap().lowered_netlist().clone();
+        let search = SearchConfig::checked_defaults();
+        let certification = CertificationConfig::from_search(&search);
+        let root = root_chunk_id(&net).unwrap();
+        let packed = synthesise_packed_recursive_fabric(
+            &net,
+            &root,
+            None,
+            &DurablePhysicalRouter,
+            &search,
+            &certification,
+            4,
+            &LEAF_PITCHES,
+            LeafCut::whole_up_to(grain),
+            timed,
+        );
+        let packed = match packed {
+            Ok(packed) => packed,
+            Err(error) => {
+                println!("CANDIDATE {fixture} grain {grain} timed {timed}: refused: {error}");
+                return;
+            }
+        };
+        let product = adapt_packed_root(&net, &packed, None, &search, 4).unwrap();
+        let compiled = crate::compile::CompiledCircuit {
+            world: product.world,
+            input_positions: product.input_positions,
+            output_positions: product.output_positions,
+            gate_output_positions: product.gate_output_positions,
+            gate_facings: product.gate_facings,
+            observations: Default::default(),
+            legacy_emission: None,
+            planner_kind: crate::compile::PlannerKind::FragmentSynth,
+        };
+        let case = evaluator.evaluate_world(&fixture, &compiled).unwrap();
+        println!(
+            "CANDIDATE {fixture} grain {grain} timed {timed}: {} leaves, {:?} ticks / {:?} blocks",
+            packed.leaves.len(),
+            case.max_observed_settle_game_ticks_on_manifest,
+            case.physical.map(|physical| physical.non_air_blocks),
+        );
+    }
+
     /// One worker and N workers must produce the same circuit -- on a netlist
     /// where N workers genuinely run.
     ///
     /// A level with one sibling collapses to one worker whatever the cap says.
-    /// Forty-nine gates is the smallest chain above both the 32-gate leaf
-    /// threshold and the 48-gate wide leaf, so whichever candidate ships, the
-    /// root has two children to hand out and the parallel arm cannot silently
-    /// compare another serial run.
+    /// Ninety-seven gates is the smallest chain above the 32-gate leaf
+    /// threshold, the 48-gate wide leaf and the 96-gate whole leaf, so
+    /// whichever candidate ships, the root has two children to hand out and
+    /// the parallel arm cannot silently compare another serial run.
     #[test]
     fn one_worker_and_many_compose_the_same_recursive_circuit() {
-        let netlist = chain(49);
+        let netlist = chain(WHOLE_LEAF_GATES + 1);
         let search = SearchConfig::checked_defaults();
         let serial = compile_with_workers(&netlist, None, &search, 1).unwrap();
         let parallel = compile_with_workers(&netlist, None, &search, many_workers()).unwrap();

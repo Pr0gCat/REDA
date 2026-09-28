@@ -48,7 +48,8 @@ use crate::compile::fragment_synth::partition::{
     canonical_order, node_chunk_id, partition, Chunk, ChunkId, PartitionError,
 };
 use crate::compile::fragment_synth::recursive::{
-    assemble_product, split_of, RecursiveProduct, RootAssembly, TERMINAL_GATES, WIDE_LEAF_GATES,
+    assemble_product, split_of, RecursiveProduct, RootAssembly, TERMINAL_GATES, WHOLE_LEAF_GATES,
+    WIDE_LEAF_GATES,
 };
 use crate::compile::geometry::Anchor;
 use crate::compile::planner::{PortPlacements, PortRole};
@@ -336,9 +337,10 @@ pub(crate) fn synthesise_packed_recursive_pinned<R: PhysicalRouter + Sync>(
 ///
 /// The production cut halves the root, and every half above the grain again,
 /// until each piece fits [`TERMINAL_GATES`]. The wide cut does the same at
-/// [`WIDE_LEAF_GATES`], and a root that already fits is one leaf. Both are
-/// fixed: the only values a cut takes are these two, plus the finer grains a
-/// pinned room too narrow for a leaf halves down to.
+/// [`WIDE_LEAF_GATES`], and the whole cut at [`WHOLE_LEAF_GATES`]; under
+/// either, a root that already fits is one leaf. All are fixed: the only
+/// values a cut takes are these three, plus the finer grains a pinned room
+/// too narrow for a leaf halves down to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LeafCut {
     grain: usize,
@@ -354,6 +356,21 @@ impl LeafCut {
         grain: WIDE_LEAF_GATES,
         whole_root: true,
     };
+    pub(crate) const WHOLE: Self = Self {
+        grain: WHOLE_LEAF_GATES,
+        whole_root: true,
+    };
+
+    /// A cut that keeps the whole root as one leaf up to `grain` gates and
+    /// halves anything larger down to it: what a measurement uses to try a
+    /// grain the candidate list does not.
+    #[cfg(test)]
+    pub(crate) fn whole_up_to(grain: usize) -> Self {
+        Self {
+            grain,
+            whole_root: true,
+        }
+    }
 }
 
 /// The leaf chunks `cut` makes of `netlist` under `chunk`, in chunk order,
@@ -386,10 +403,21 @@ fn leaf_chunks(
 /// Whether the wide cut builds leaves the production cut does not. When it
 /// does not, the wide fabric candidate would rebuild the production one.
 pub(crate) fn wide_cut_differs(netlist: &Netlist, parent: &ChunkId) -> Result<bool, PartitionError> {
+    cut_differs(netlist, parent, LeafCut::WIDE, LeafCut::PRODUCTION)
+}
+
+/// Whether `cut` builds leaves `than` does not: when it does not, a
+/// candidate on `cut` would rebuild the one on `than`.
+pub(crate) fn cut_differs(
+    netlist: &Netlist,
+    parent: &ChunkId,
+    cut: LeafCut,
+    than: LeafCut,
+) -> Result<bool, PartitionError> {
     let chunk = node_chunk_id(netlist, parent)?;
-    let wide = leaf_chunks(netlist, &chunk, LeafCut::WIDE)?;
-    let production = leaf_chunks(netlist, &chunk, LeafCut::PRODUCTION)?;
-    Ok(wide.iter().map(|leaf| &leaf.id).ne(production.iter().map(|leaf| &leaf.id)))
+    let ours = leaf_chunks(netlist, &chunk, cut)?;
+    let theirs = leaf_chunks(netlist, &chunk, than)?;
+    Ok(ours.iter().map(|leaf| &leaf.id).ne(theirs.iter().map(|leaf| &leaf.id)))
 }
 
 /// How many gate delays one crossing between leaves is worth when the root
@@ -1224,7 +1252,8 @@ mod tests {
 
     /// How wide the seams of `seven_segment`'s wide fabric come out, and why:
     /// with `REDA_TRACE_FABRIC` set, every step `StripShape::tightest` takes
-    /// is printed, then the shipped strip's seams and trunk lengths.
+    /// is printed, then the shipped strip's seams and trunk lengths. With
+    /// `REDA_SEAM_TIMED` set, the leaves are placed with the timing guide.
     #[test]
     #[ignore = "measurement: builds seven_segment's wide fabric, several minutes"]
     fn seven_segment_wide_fabric_seams() {
@@ -1244,9 +1273,9 @@ mod tests {
             4,
             &LEAF_PITCHES,
             LeafCut::WIDE,
-            false,
+            std::env::var_os("REDA_SEAM_TIMED").is_some(),
         )
-        .unwrap();
+        .unwrap_or_else(|error| panic!("the wide fabric was refused: {error:?}"));
         for (chunk, placement) in &product.node.packed.placements {
             let xs = placement.halo.iter().map(|at| at.x);
             let zs = placement.halo.iter().map(|at| at.z);
@@ -1266,6 +1295,74 @@ mod tests {
                 trunk.cells.len(),
                 trunk.floors.len()
             );
+        }
+    }
+
+    /// Which of `seven_segment`'s two wide leaves the timing guide makes
+    /// refuse, on which grid, and why: every leaf on every grid, placed with
+    /// and without the guide, in parallel.
+    #[test]
+    #[ignore = "measurement: synthesises seven_segment's wide leaves four ways each, minutes"]
+    fn seven_segment_wide_leaves_with_the_timing_guide() {
+        let evaluator =
+            crate::compile::fragment_synth::benchmark::legacy_benchmark_evaluator().unwrap();
+        let net = evaluator.fixture("seven_segment").unwrap().lowered_netlist().clone();
+        let search = SearchConfig::checked_defaults();
+        let root = root_chunk_id(&net).unwrap();
+        let leaves = leaf_chunks(&net, &root, LeafCut::WIDE).unwrap();
+        let critical = critical_crossings(&net, &leaves).unwrap();
+        println!("LEAVES critical crossings: {critical:?}");
+        let runs = leaves
+            .iter()
+            .enumerate()
+            .flat_map(|(index, leaf)| {
+                LEAF_PITCHES.iter().flat_map(move |&pitch| {
+                    [false, true].map(|timed| (index, leaf, pitch, timed))
+                })
+            })
+            .collect::<Vec<_>>();
+        let outcomes = std::thread::scope(|scope| {
+            runs.iter()
+                .map(|&(index, leaf, pitch, timed)| {
+                    let critical = &critical;
+                    let search = &search;
+                    scope.spawn(move || {
+                        let critical = timed.then_some(critical);
+                        let outcome = synthesise_free_leaf_timed(
+                            leaf,
+                            packed_contract(search),
+                            search,
+                            &[pitch],
+                            critical,
+                        );
+                        (index, pitch, timed, outcome)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        for (index, pitch, timed, outcome) in outcomes {
+            let leaf = &leaves[index];
+            let crossing = leaf
+                .netlist
+                .inputs
+                .iter()
+                .chain(&leaf.netlist.outputs)
+                .filter(|name| critical.contains(*name))
+                .collect::<Vec<_>>();
+            match outcome {
+                Ok(artifact) => println!(
+                    "LEAVES leaf {index} ({} gates, critical ports {crossing:?}) pitch {pitch} timed {timed}: built, size {:?}",
+                    leaf.netlist.gates.len(),
+                    artifact.world.size()
+                ),
+                Err(error) => println!(
+                    "LEAVES leaf {index} ({} gates, critical ports {crossing:?}) pitch {pitch} timed {timed}: refused: {error}",
+                    leaf.netlist.gates.len()
+                ),
+            }
         }
     }
 

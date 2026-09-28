@@ -16,6 +16,8 @@
 > - 這一輪量測在 Linux x86_64、4 核、rustc 1.94.1 的雲端容器上做（出貨 worker 數 4），程式碼是 `d8f3af0`（與 `cc43241` 的差異只有本文件）。
 > - 部分計時是在其他建置同時執行時量的，只能當粗略參考。產物的逐位元比對和 certify 結果不受機器影響。
 > - 原始紀錄同樣放在 session scratchpad，session 結束後可能會消失。
+>
+> **2026-09-28 更新**：seven_segment 改由「整個 root 一片 timed 葉」出貨（`producer_revision` v4），78 ticks / 7,405 blocks，6 個 acceptance 案例全部通過。見 §1.1 的 v4 表與 T7。本輪新增的內容標「（09-28 …）」。
 
 ## 1. 現況摘要
 
@@ -42,7 +44,19 @@
 | pinned:verilog:seven_segment | 190 / 20,410 | 未認證 | pinned fabric `[4,6]`（不變） | 過 |
 
 - 6 個 acceptance 案例中 5 個通過。剩下的紅燈只有 seven_segment 的 ticks（142 對 98）；它唯一那次跨越的 70 ticks 主要花在兩片葉之間的 seam，下一步是 D1 系列。
+  - （09-28 更正）跨越那 70 ticks 其實主要花在兩片葉的埠沒有橫向對齊，不是 seam 本身，見 T0 的逐格軌跡。這個紅燈已由 T7 解決，見下表。
 - Q1、T6、T1 之後 segment_a 曾是 80 / 4,183；T3a 再降到 66 / 3,627。
+
+**09-28 實作 T7 之後**（`producer_revision` v4；只有 seven_segment 改變，其餘案例的候選清單不變）
+
+| 案例 | ticks / blocks | legacy | 出貨的候選 | gate |
+|---|---|---|---|---|
+| seven_segment | **78 / 7,405** | 98 / 16,244 | fabric whole timed `[4,6]`（單一 84-gate 葉，T3a 時序導向擺放） | **轉綠** |
+
+- 6 個 acceptance 案例全部通過。seven_segment 的 ticks 比 legacy 少 20%，blocks 少 54%。
+- 單一片葉沒有 seam、沒有幹線：lead 1 + 葉內 71 + tail 6 = 78，0 次跨越。
+- 最慢的轉換是 78、78、76…（240 次中），7 個輸出的最晚到達是 62–72，分布很平。
+- 剩下最長的一跳是 g34 → g80 的 26 ticks：一個 minterm 在葉內橫走約 130 格，接到最遠的 OR gate。
 - 串行建完全部候選的時間（加上寬葉 `[6]` 之前量的）：segment_a 約 332 s，seven_segment 約 577 s，pinned 約 193 s（4 核容器）。依文件開頭記錄的使用者指示，時間暫不處理。
 
 ### 1.2 已經穩固的部分
@@ -591,6 +605,7 @@
 - **預算模型**：ticks ≈ lead + leaf 內 + k×C + tail。seven_segment 要 ≤ 98，需要 k=1 且 C ≤ 38。**必須同時減少 k，並把 C 壓到 ≤ 30。**
   - （09-27 更正）算式本身沒錯（8+42+38+10 = 98），但「leaf 內」和 C 不是常數，會隨葉變大而增加。
   - 實測 k=1（兩片 42-gate 葉）：lead 6 + leaf 內 54 + 跨越 70 + tail 12 = 142。
+  - （09-28 實測）k=0（單一 84-gate timed 葉，T7）：lead 1 + 葉內 71 + tail 6 = 78。少掉的 64 ticks 幾乎就是那次跨越；葉內只從 54–59 增加到 71。
     - 那條跨越幹線 g31 長 226 格、14 個 terminal repeater，約 28 ticks，其餘約 42 ticks 在兩側葉內的腿。
     - 在 k=1 時要到 98，需要 C ≤ 26，比今天這條幹線本身還短。除非 seam 大幅收窄，否則不太可能。
   - segment_a 做成單一片 46-gate 葉（k=0）實測 80 ticks（lead 8 + 葉內 66 + tail 6），仍高於 legacy 的 72。見 T6。
@@ -598,6 +613,14 @@
 #### T0 量測管線：每跳歸因
 - **狀態（09-27）：已實作。** `routing_cost_report --recursive <fixture>`：用出貨產物實際的葉歸因（`attribution::leaf_owner`），關鍵路徑由量到的到達時間往回推（`last_change_path`），量測用 acceptance 評估器自己的 driver 與 probe（`worst_transition_timing`），並斷言 lead + 葉內 + 跨越 + tail 等於 acceptance ticks。每一跳也印出兩端座標。
   - 已量：full_adder 1 + 31 + 0 + 4 = 36；segment_a 1 + 59 + 0 + 6 = 66；seven_segment 1 + 59 + 70 + 12 = 142（幹線 14 個 repeater = 28 ticks）；pinned decoder 32 + 34 + 48 + 76 = 190（pinned 的輸入沒有觀測事件，路徑只追到 g5，所以 lead 偏大；tail 76 是輸出經 feet 到 pin 的腿，屬 D4.2）。
+  - （09-28 補充）**逐格軌跡**：報告現在也觀測世界裡每一格 dust、repeater、torch，對每一跳印出一條「到達時間只在會延遲的格子上遞增」的最短格子鏈，列出每個延遲點的位置和間隔。`worst_transition_timing` 多了 `extra_watch` 參數，新增的 `transition_timings` 回傳每一次轉換，報告另外印出最慢的幾次 settle 和每個輸出的最晚到達。
+  - （09-28 實測）seven_segment（v3 出貨的 42+42）那次跨越 g31 → g58 的 70 ticks，逐格拆開是：
+    - 葉 A 內的腿 16 ticks：g31 在 z=73，A 給 g31 的輸出埠卻在 z=16，先在葉內橫走 57 格才出去。
+    - 幹線 28 ticks：從 z=16 爬上 lid，在 spine 上從 z=10 走到 z=92（橫走約 80 格），再下到 B 的輸入埠。
+    - 葉 B 內的腿 24 ticks：入口在 z=92，先往南繞到 z=140 再折返到 z=38 的 g58，是一個 U 型繞路。
+    - g58 本身 2 ticks。
+    - 直線走大約 30 ticks 就夠。浪費的主因是兩片葉的埠各自決定位置、橫向沒有對齊，不是 seam 的寬度。
+  - （09-28 實測）同一個產物的 240 次轉換中，最慢的 12 次都在 140–142，7 個輸出的最晚到達是 104–130。關鍵路徑很平，只修一條路徑不會降低最大值。
 - **問題**
   - `attribution.rs:236-257` 仍假設靜態分割。
   - `TrunkSummary`（`F/attribution.rs:44-52`）沒有 sink 身分。
@@ -671,6 +694,10 @@
     - segment_a：出貨 fabric wide timed，**66 ticks / 3,627 blocks**（原本 80 / 4,183，legacy 72 / 6,416），ticks gate 轉綠。一般切法的 timed 版本也從 124 / 9,305 改善到 100 / 7,737。
     - 為什麼有效：T0 顯示原本兩個 14 ticks 的跳，是關鍵路徑上的下一個 gate 被擺到橫向 59、65 格外。只對齊每欄一個 instance 的第一版是 74 ticks（關鍵路徑換到另一條分支）；改成每欄所有關鍵 instance 都對齊後是 66。
     - seven_segment：timed 版本是 162 / 17,783，比 untimed 的 142 / 15,261 差，dominance 維持 142。它唯一那次跨越的 70 ticks 中，28 是幹線 repeater，兩片葉相隔約 130 格 seam，主要是 D1 的範圍。
+      - （09-28 更正）v3 最後的程式裡，fabric wide timed `[4,6]` 在 seven_segment 上是被拒的（162 / 17,783 是較早版本的數字）。原因有兩層：
+        - `critical_crossings` 在 seven_segment 上標了 22 個訊號。decoder 很對稱，每個 minterm 一樣深，許多條路徑並列最長。OR 樹那片葉因此有 19 個關鍵埠，guide 同時要求一大堆 reader 對齊各自的埠，兩個 pitch 都繞不通線（`packed_recursive` 的 ignored 測試 `seven_segment_wide_leaves_with_the_timing_guide`）。這片葉被拆成兩片，fabric 接著拉不通 g19 的幹線。
+        - 試過讓被拒的 timed 葉退回「只對齊關鍵輸出」：OR 樹那片建得起來，但 minterm 那片的輸出埠跟著 driver 移到 z=7 這類邊緣位置，幹線 g13 在 lid 上撞到另一條幹線的樓梯，連 full seam 都拉不通（`plan_clash` 沒有抓到，是 router 的 NoLocalRoute）。這個退路沒有保留。
+      - 單一片 84-gate 葉加上 timing guide 則可以 certify，見 T7。
   1. 用 root netlist 算 gate level 的 arrival／required／slack，每跨一次 leaf 邊界加一個固定的跨越罰分，得到 `critical_boundary: BTreeSet<String>`。
   2. 經 `synthesise_free_leaf` 傳進 `SeedPlacementRequest`。
   3. 在 1331 行把這些邊界邊也當作 critical。在 `colour_intervals` 裡，critical 的 track 排最前，並貼近消費 gate 的重心。
@@ -712,6 +739,7 @@
 
 #### T6 寬葉候選（09-27 新增；開放問題 4 已決定採用）
 - **狀態（09-27）：已實作。** `LeafCut::WIDE`（`F/packed_recursive.rs`）：grain 48，root 本身放得下時整個當一片葉。只在切法和正式切法不同時（`wide_cut_differs`）附加兩個候選：fabric wide `[4,6]` 和 `[6]`。
+  - （09-28）後續的 T7 把同樣的想法推到 96 gates，但只在 timing guide 下做，見 T7。
   - segment_a 出貨 80 / 4,183，seven_segment 出貨 142 / 15,261，都是 `[4,6]` 那個；`[6]` 沒有更好。
   - 時間相關的落地條件依使用者指示暫停，T0、P1、P2、分 worker 的規則都還沒做。
 - **問題**
@@ -763,6 +791,27 @@
 - **工作量**：M｜**依賴**：Q1、T0、P1、P2，以及分 worker 的靜態規則（做不到就等 P5 或 S1）；seven_segment 在參考機上 ≤ 180 s 才合併（6.4、6.7）。Q1 的 user time 1.5 倍標準對 T6 改看參考機的 wall。
 
 ---
+
+#### T7 整個 root 一片 timed 葉（09-28 新增）
+- **狀態（09-28）：已實作，`producer_revision` v4。**
+- **做法**
+  - `LeafCut::WHOLE`（`F/packed_recursive.rs`）：grain 是 `WHOLE_LEAF_GATES = 2 × WIDE_LEAF_GATES = 96`（`F/recursive.rs`），root 放得下就整個當一片葉，放不下就對半切到 96 以下。
+  - 未釘選清單最後附加「fabric whole timed `[4,6]`」：葉用 T3a 的 timing guide 擺放。只在 whole 切法和 wide 切法不同時加入（`cut_differs`）。
+  - 不加 untimed 版：84-gate 葉不加 guide 會被拒，拆回 42+42，產物和 fabric wide `[4,6]` 相同（09-28 實測 142 / 15,261；T6 當時量到 58 次 seed 嘗試後被拒）。
+  - 由 dominance 選。and4、verilog:and4、full_adder 走直接葉；segment_a 是 46 gates，whole 切法和 wide 相同，不加候選。pinned 清單不動。
+- **實測（4 核容器）**
+  - seven_segment 出貨 **78 / 7,405**（legacy 98 / 16,244），ticks gate 轉綠。這個候選單獨建約 160 s。
+  - 量測工具：`recursive` 的 ignored 測試 `measure_one_fabric_candidate`，只建一個 fabric 候選，再照 acceptance 的方式量。可用 `REDA_CANDIDATE_FIXTURE`、`REDA_CANDIDATE_GRAIN`、`REDA_CANDIDATE_TIMED` 指定。
+  - 被拒時退回「只對齊關鍵輸出」的機制不需要：拿掉以後仍是 78 / 7,405，所以沒有保留。
+- **還不知道的事**：為什麼 guide 讓 84-gate 葉繞得通線，還沒查。可能是關鍵鏈拉直以後，各欄的橫向位置比較規律。
+- **風險**
+  - 能不能 certify 取決於 guide 的擺法，不只取決於大小。96 這個上限只有一個 84-gate 的量測支撐。
+  - 97 gates 以上的 root 會被 whole 切法對半切。它和 wide 切法不同，所以會多建一個候選，多花時間，但不會變差（dominance）。
+  - worker 不變性測試（`one_worker_and_many_compose_the_same_recursive_circuit`）改用 97-gate chain。49-gate chain 現在會出貨單一片葉，沒有東西可以平行。
+- **後續**
+  - pinned decoder 是同一個 84-gate netlist，但 pinned 清單還沒有單葉候選，是下一個值得試的地方（D4 系列）。
+  - 對 seven_segment 來說，T3b 已經不需要；它留給仍有跨越的更大電路。
+- **工作量**：S｜**依賴**：T3a、T6。
 
 ### 3.D 正確性與可信度
 
@@ -1124,7 +1173,7 @@
 
 | case | legacy | 今天 | Phase 1 後 | Phase 2 後 | 若葉 ≥ 42 gates 或走直接葉 |
 |---|---|---|---|---|---|
-| seven_segment | 98 / 16,244 | 198 / 21,847 | ≤ 198 / ≤ 19,700 | ≤ 140 | ~~≈ 92（k=1，勉強過）~~ 實測 142 / 15,261（k=1，09-27） |
+| seven_segment | 98 / 16,244 | 198 / 21,847 | ≤ 198 / ≤ 19,700 | ≤ 140 | ~~≈ 92（k=1，勉強過）~~ 實測 142 / 15,261（k=1，09-27）；**78 / 7,405**（k=0，單一 84-gate timed 葉，T7，09-28） |
 | segment_a | 72 / 6,416 | 124 / 9,305 | ~~≤ 110 / ≤ 7,000~~ ≤ 124 / ≤ 9,305（09-27 更正：原值假設 nested 勝出，但 nested 今天全被拒；T6 落地後 ≤ 80 / ≤ 4,183） | ≤ 105 | ~~≤ 72（k=0）~~ 實測 80 / 4,183（單一 46-gate 葉，k=0，09-27） |
 | full_adder | 46 / 1,784 | 54 / 1,094 | 不變 | ≤ 46 / ≤ 1,784 | — |
 | pinned decoder | — | 190 / 20,410 | ≤ 209 / ≤ 20,410 | ≤ 190 | — |
@@ -1132,6 +1181,7 @@
 - （09-27 更正）最後一欄原本的推估假設「葉內」時間和跨越成本 C 不隨葉變大，實測兩者都會增加，見 §3.C 的預算模型與 T6。
   - `flat_leaves` 一律先對半切 root（`F/packed_recursive.rs:344`），所以沒有任何 grain 值能做出 segment_a 的單葉，k=0 需要 T6 的專用候選。
   - seven_segment 的 98 ticks 在可預見的範圍內不會達到，ticks gate 預期長期維持紅燈。segment_a 的 72 ticks 也沒有項目能達到。見開放問題 4。
+  - （09-28 更正）兩者都已達到：segment_a 66（T3a），seven_segment 78（T7）。
 
 ## 5. 不做的事與已排除的方案
 
@@ -1255,6 +1305,7 @@
     - （09-27 使用者更新）時間相關的落地條件暫停：Q1 和 T6 先直接做，候選依序串行建，每個候選拿全部 worker。T0、P1、P2 和分 worker 的規則等恢復時間限制時再補。
   - (b) D2、T2 只能以附加候選或 6.1 例外的形式進來，照計畫原本「就地取代」的寫法不做。D4.1、D4.3 同樣適用。
   - (c) 接受 seven_segment（98）和 segment_a（72）的 ticks gate 長期紅燈，baseline 不動。改追蹤上面那組不擋合併的目標。
+  - （09-28 更新）兩個 ticks gate 都已轉綠：segment_a 66 / 3,627（T3a），seven_segment 78 / 7,405（T7）。「98 不實際」的依據假設 k=0 的 84 單葉會被拒；加上 timing guide 以後它可以 certify。
 
 ### 6.5 legacy baseline 本身的物理性（已決定：結案）
 

@@ -384,6 +384,24 @@ fn run_recursive(name: &str) {
         worst.settle_game_ticks, acceptance_ticks,
         "the report must reproduce the acceptance ticks"
     );
+    // How flat the worst is: the slowest transitions, and each declared
+    // output's latest arrival over every transition.
+    let every = evaluator
+        .transition_timings(name, compiled, &[])
+        .expect("every transition must measure");
+    let mut settles = every.iter().map(|result| result.settle_game_ticks).collect::<Vec<_>>();
+    settles.sort_unstable_by(|left, right| right.cmp(left));
+    let output_worst = netlist
+        .outputs
+        .iter()
+        .map(|output| {
+            let latest = every
+                .iter()
+                .filter_map(|result| result.nets.get(output)?.arrival_tick())
+                .max();
+            format!("{output}={latest:?}")
+        })
+        .collect::<Vec<_>>();
     let mut arrivals = arrivals_of(&worst);
     arrivals.retain(|label, _| !label.starts_with('@'));
     let path = last_change_path(netlist, &arrivals).expect("a critical path must be readable");
@@ -432,6 +450,12 @@ fn run_recursive(name: &str) {
             println!("  leaf {:?}: {} gates", leaf.chunk, leaf.gates.len());
         }
     }
+    println!(
+        "slowest settles: {:?} of {}; latest arrival per output: {}",
+        &settles[..settles.len().min(12)],
+        settles.len(),
+        output_worst.join(" ")
+    );
     println!("critical path: {}", path.join(" -> "));
     for hop in &attribution.hops {
         let kind = match &hop.kind {

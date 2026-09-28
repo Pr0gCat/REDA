@@ -256,6 +256,26 @@ impl AcceptanceEvaluator {
         compiled: &CompiledCircuit,
         extra_watch: &[(crate::redstone::simulator::position::Position, String)],
     ) -> Result<crate::timing::TransitionResult, String> {
+        let mut worst: Option<crate::timing::TransitionResult> = None;
+        for result in self.transition_timings(name, compiled, extra_watch)? {
+            if worst
+                .as_ref()
+                .is_none_or(|worst| result.settle_game_ticks > worst.settle_game_ticks)
+            {
+                worst = Some(result);
+            }
+        }
+        worst.ok_or_else(|| format!("`{name}` has an empty transition manifest"))
+    }
+
+    /// Every transition of `name`'s manifest on `compiled`, in manifest
+    /// order, measured as [`Self::worst_transition_timing`] measures one.
+    pub fn transition_timings(
+        &self,
+        name: &str,
+        compiled: &CompiledCircuit,
+        extra_watch: &[(crate::redstone::simulator::position::Position, String)],
+    ) -> Result<Vec<crate::timing::TransitionResult>, String> {
         let fixture = self
             .fixture(name)
             .ok_or_else(|| format!("unknown benchmark fixture `{name}`"))?;
@@ -272,29 +292,24 @@ impl AcceptanceEvaluator {
             warm.take_dirty();
             (drivers, warm)
         };
-        let mut worst: Option<crate::timing::TransitionResult> = None;
-        for transition in manifest.transitions() {
-            let mut simulator = Simulator::from_recomputed_world(warm.clone());
-            drive(&mut simulator, &drivers, &transition.from);
-            simulator
-                .run_until_stable(MAX_TRANSITION_GAME_TICKS)
-                .map_err(|error| format!("{} did not settle: {error:?}", fixture.name))?;
-            let mut watched = crate::timing::watch_all_nets(compiled);
-            watched.extend(extra_watch.iter().cloned());
-            simulator.attach_observer(watched);
-            let result =
+        manifest
+            .transitions()
+            .iter()
+            .map(|transition| {
+                let mut simulator = Simulator::from_recomputed_world(warm.clone());
+                drive(&mut simulator, &drivers, &transition.from);
+                simulator
+                    .run_until_stable(MAX_TRANSITION_GAME_TICKS)
+                    .map_err(|error| format!("{} did not settle: {error:?}", fixture.name))?;
+                let mut watched = crate::timing::watch_all_nets(compiled);
+                watched.extend(extra_watch.iter().cloned());
+                simulator.attach_observer(watched);
                 crate::timing::measure_transition(&mut simulator, MAX_TRANSITION_GAME_TICKS, |sim| {
                     drive(sim, &drivers, &transition.to)
                 })
-                .map_err(|error| format!("{} did not settle: {error:?}", fixture.name))?;
-            if worst
-                .as_ref()
-                .is_none_or(|worst| result.settle_game_ticks > worst.settle_game_ticks)
-            {
-                worst = Some(result);
-            }
-        }
-        worst.ok_or_else(|| format!("`{name}` has an empty transition manifest"))
+                .map_err(|error| format!("{} did not settle: {error:?}", fixture.name))
+            })
+            .collect()
     }
 
     pub fn capture_legacy(&self, baseline_commit: String) -> Result<BenchmarkBaseline, String> {
