@@ -484,13 +484,16 @@ fn describe_pending_routes(
 ///
 /// v4: the unpinned list ends with the whole root as one timed leaf, up to
 /// [`WHOLE_LEAF_GATES`].
+///
+/// v5: then the wide and whole cuts again, their columns anchored by
+/// estimated arrival (`arrival_anchors` in `placement`).
 pub(crate) fn producer_revision() -> Fingerprint {
     canonical_fingerprint(
         format!(
-            "recursive-contract-producer-v4:terminal-gates={TERMINAL_GATES}:\
+            "recursive-contract-producer-v5:terminal-gates={TERMINAL_GATES}:\
              wide-leaf-gates={WIDE_LEAF_GATES}:whole-leaf-gates={WHOLE_LEAF_GATES}:\
              selection=dominance:direct-leaf-refresh=reserve,exact:\
-             leaf-timing=critical-anchors"
+             leaf-timing=critical-anchors,arrival-anchors"
         )
         .as_bytes(),
     )
@@ -1031,15 +1034,18 @@ fn compile_with_cutoff(
         // boundary signals the root's critical path crosses (T3a), on the
         // production cut and, when it differs, the wide one.
         // Then the whole root as one timed leaf, when that is not the wide cut
-        // already.
+        // already; and last the wide and whole cuts again with every column
+        // anchored by estimated arrival (`LeafTiming::Arrival`).
         let cuts = [
-            (LeafCut::PRODUCTION, "fabric timed"),
-            (LeafCut::WIDE, "fabric wide timed"),
-            (LeafCut::WHOLE, "fabric whole timed"),
+            (LeafCut::PRODUCTION, "fabric timed", LeafTiming::Critical),
+            (LeafCut::WIDE, "fabric wide timed", LeafTiming::Critical),
+            (LeafCut::WHOLE, "fabric whole timed", LeafTiming::Critical),
+            (LeafCut::WIDE, "fabric wide arrival", LeafTiming::Arrival),
+            (LeafCut::WHOLE, "fabric whole arrival", LeafTiming::Arrival),
         ];
         let wide_differs = wide_cut_differs(lowered, &root)?;
         let whole_differs = cut_differs(lowered, &root, LeafCut::WHOLE, LeafCut::WIDE)?;
-        for (cut, label) in cuts {
+        for (cut, label, timing) in cuts {
             if (cut == LeafCut::WIDE && !wide_differs) || (cut == LeafCut::WHOLE && !whole_differs)
             {
                 continue;
@@ -1058,7 +1064,7 @@ fn compile_with_cutoff(
                         workers,
                         &LEAF_PITCHES,
                         cut,
-                        LeafTiming::Critical,
+                        timing,
                     ))
                 }),
             ));
