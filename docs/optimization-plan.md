@@ -57,6 +57,13 @@
 - 單一片葉沒有 seam、沒有幹線：lead 1 + 葉內 71 + tail 6 = 78，0 次跨越。
 - 最慢的轉換是 78、78、76…（240 次中），7 個輸出的最晚到達是 62–72，分布很平。
 - 剩下最長的一跳是 g34 → g80 的 26 ticks：一個 minterm 在葉內橫走約 130 格，接到最遠的 OR gate。
+
+**09-28 實作 T8 之後**（`producer_revision` v5）
+
+| 案例 | ticks / blocks | legacy | 出貨的候選 | gate |
+|---|---|---|---|---|
+| segment_a | **60 / 3,569** | 72 / 6,416 | fabric wide arrival `[4,6]` | 過 |
+| seven_segment | 待端到端確認（單獨量 74 / 7,789） | 98 / 16,244 | 預期 fabric whole arrival `[4,6]` | 過 |
 - 串行建完全部候選的時間（加上寬葉 `[6]` 之前量的）：segment_a 約 332 s，seven_segment 約 577 s，pinned 約 193 s（4 核容器）。依文件開頭記錄的使用者指示，時間暫不處理。
 
 ### 1.2 已經穩固的部分
@@ -838,6 +845,32 @@
       2. **兩側合法化**（Abacus 式）取代只往一側推的 `legalize_laterals`，和 1 搭配。預估 78 → 約 63–70，blocks 也會少。
       3. 並列時的便宜破同分規則，約 −2 到 −4。
       4. 後面幾項（fanout 置中、折欄、複製 gate）收益不確定、風險較高。
+
+#### T8 依預估到達時間選 anchor（09-28 新增）
+- **狀態（09-28）：已實作，`producer_revision` v5。** 對應 T7 後續追查裡排名第 1 的改法。
+- **做法**
+  - `PlacementGuide.arrival`（`F/placement.rs`），只在 `timing` 也開啟時生效；`LeafTiming { Off, Critical, Arrival }`（`F/packed_recursive.rs`）取代 `synthesise_packed_recursive_fabric` 的 `timing: bool`，原本的 `false` / `true` 對應 `Off` / `Critical`，行為不變。
+  - 逐欄估每個 instance 的到達時間（整數 game ticks）：自身 gate 延遲，加上所有已擺好的前級中最晚的「前級到達 + 2 × ⌈曼哈頓距離 / 14⌉」。14 格一個 repeater 取自實測（每 13–15 格一個）。邊界輸入視為在 −pitch、自己 track 上的 0 時刻來源。
+  - 每個有已擺前級的 instance 對齊「估計最晚到的那個前級」（同分取較小 id），不再只看零 slack 的鏈；欄的平移服務「driver 到達 + 剩餘路徑」最大的那一個；要求位置相同時，較晚的先排。
+  - 邊界輸入的 reader 只在它那條邊 slack 為 0 時才對齊埠（全部 reader 都對齊曾讓 OR 樹葉被拒）。
+  - 仍用只往一側推的 `legalize_laterals`。
+  - 未釘選清單最後附加「fabric wide arrival `[4,6]`」和「fabric whole arrival `[4,6]`」，條件和對應的 timed 候選相同。
+  - 量測工具：`measure_one_fabric_candidate` 支援 `REDA_CANDIDATE_ARRIVAL=1`；ignored 探針 `seven_segment_whole_leaf_anchors_by_arrival` 只做擺放、不繞線，0.03 s 印出關鍵 gate 的位置和各自對齊的 driver。
+- **實測（4 核容器）**
+  - segment_a：**60 / 3,569**（原本 66 / 3,627，legacy 72 / 6,416），端到端出貨 fabric wide arrival `[4,6]`。viewer 的 segment_a 已重烤；and4、full_adder 重新產生後逐位元相同。
+  - seven_segment 單獨量：74 / 7,789（原本 78 / 7,405）。ticks 少 4，blocks 多 384（每個 instance 都對齊最晚的前級，欄比較寬）。dominance 先比 ticks，所以預期它會出貨。
+  - 探針：g80 現在離 g34 約 10 格（原本 130 格）；g0 → g32 那跳沒有改善（g32 對齊到估計較晚的 g6）。
+  - 對照組：segment_a timed 仍是 66 / 3,627、seven_segment timed 仍是 78 / 7,405，舊模式沒有被改到。lib 只剩 6 個已知的 C0 失敗。
+- **沒有採用的變體 B：到達時間 anchor 加兩側合法化**（Abacus 式 cluster 合併，最高 anchor 權重 16、其他 anchor 4、lane 1）
+  - 兩案都變差：seven_segment 92 / 9,533（pitch 4 繞不通，改在 pitch 6 出貨；強制 pitch 4 會拆成 4 片、146 ticks），segment_a 68 / 3,755。
+  - 原因：只對齊「單一最晚前級」忽略其他輸入（例如 g52 對到 g47，離另一個輸入 g49 有 131–181 格）；而且 seven_segment 每個 instance 都是 anchor，一欄約 16 個，最高 anchor 的權重 16 敵不過約 60 的其他權重，整欄落在所有要求的平均，最關鍵的那個反而不在它要求的位置。
+  - 它的到達估計方向和實測一致（timed 估 70、實測 78；B 估 88、實測 92），可以當便宜的擺放變體篩選器。
+  - 程式留在本機分支 `exp/arrival-two-sided`，沒有併入。
+- **後續想法**
+  - 讓 instance 站在「使 max(前級到達 + 線延遲) 最小」的橫向位置，而不是複製單一前級的位置。
+  - 只對最高 anchor 保留剛性平移，其餘用兩側合法化。
+  - 把 g0 → g32 這種跨欄的邊也納入估計。
+- **工作量**：M｜**依賴**：T3a、T7。
 
 ### 3.D 正確性與可信度
 
