@@ -626,7 +626,7 @@ pub enum CandidateCertificationError {
 /// diodes could stay placed, so a world that only works in the simulator
 /// would otherwise certify. The bottom layer is exempt: it stands on whatever
 /// the circuit is pasted onto.
-pub(crate) fn unsupported_component(world: &World) -> Option<(Position, BlockKind)> {
+pub fn unsupported_component(world: &World) -> Option<(Position, BlockKind)> {
     let (size_x, size_y, size_z) = world.size();
     for y in 1..size_y {
         for z in 0..size_z {

@@ -32,6 +32,7 @@ use std::path::Path;
 
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::evaluation::CircuitEvaluation;
+use reda::compile::fragment_synth::certification::unsupported_component;
 use reda::compile::lowering::{lower, lower_optimised};
 use reda::compile::planner::{Anchor, PortPin, PortPlacements, PortRole};
 use reda::compile::{compile, CompileError, CompiledCircuit, Netlist};
@@ -815,6 +816,17 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // `compile` never asks whether dust or diodes can stay placed; `--synth`
+    // certifies that itself. Refuse here rather than write a layout that
+    // Minecraft takes apart.
+    if !synth && !grown {
+        if let Some((at, kind)) = unsupported_component(&compiled.world) {
+            eprintln!(
+                "circuit '{name}' not written: {kind:?} at {at:?} has nothing to stand or hang on"
+            );
+            std::process::exit(1);
+        }
+    }
     let (size_x, size_y, size_z) = compiled.world.size();
     let non_air_blocks = count_non_air(&compiled.world);
 
