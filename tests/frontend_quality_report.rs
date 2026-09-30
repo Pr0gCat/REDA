@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use reda::circuits::{seven_segment::TRUTH_TABLE, verilog};
 use reda::compile::{
-    compile, lowering::lower_optimised, metrics::physical_metrics, Netlist,
+    compile, compile_legacy, lowering::lower_optimised, metrics::physical_metrics, Netlist,
 };
 use reda::frontend::{compile_systemverilog, synthesize_verilog, CompileOptions, SourceInput};
 use reda::redstone::simulator::Simulator;
@@ -90,7 +90,7 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
         let (blocks, volume, ticks) = if top == "and4" {
             (228, 3528, 28)
         } else {
-            (10088, 213816, 84)
+            (7408, 70416, 46)
         };
         assert!(
             metrics.non_air_blocks <= blocks,
@@ -105,11 +105,21 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
             "{top}: settle regression: {worst_ticks}"
         );
     }
+    let legacy_baseline = if top == "seven_segment" {
+        let original = compile_legacy(&lowered).expect("historical channel baseline compiles");
+        let baseline = physical_metrics(&original.world, lowered.gates.len() as u64);
+        assert!(metrics.non_air_blocks < baseline.non_air_blocks);
+        assert!(metrics.occupied_volume < baseline.occupied_volume);
+        Some(json!({"physical": baseline, "world_fingerprint":
+            reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&original.world)}))
+    } else {
+        None
+    };
     let row = json!({
         "case": top, "frontend": frontend,
         "frontend_gates": netlist.gates.len(), "lowered_gates": lowered.gates.len(),
         "lowered_histogram": reda::compile::lowering::format_histogram(&lowered),
-        "physical": metrics, "planner": planner, "world_fingerprint": fingerprint,
+        "physical": metrics, "historical_channel_baseline": legacy_baseline, "planner": planner, "world_fingerprint": fingerprint,
         "lower_and_compile_ms": compile_ms,
         "transitions": 256, "worst_settle_ticks": worst_ticks,
         "worst_transition": worst_pair, "mean_settle_ticks": sum_ticks as f64 / 256.0,

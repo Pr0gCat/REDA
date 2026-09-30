@@ -1066,6 +1066,9 @@ const ENTRY_OFFSET: i32 = 4;
 /// dust staircase, but this is reverted geometry, not new geometry, so it is
 /// left at its old, empirically-safe value rather than retuned.
 const TRACK_SPACING: i32 = 5;
+// Parallel dust tracks need distance 2; leave one extra cell for their
+// staircase taps. The historical spacing remains the legacy oracle.
+const COMPACT_TRACK_SPACING: i32 = 3;
 
 // A dust staircase's diagonal rule (`redstone::simulator::connectivity::
 // dust_connections`) connects one dust cell straight to the next diagonal
@@ -1804,6 +1807,7 @@ impl CompiledCircuit {
 #[derive(Debug, Clone)]
 pub(crate) struct LegacyEmission {
     netlist: Netlist,
+    track_spacing: i32,
     primitive_anchors: Vec<Anchor>,
     primitive_nodes: Vec<PrimitiveNode>,
     routes: Vec<LegacyRoute>,
@@ -3806,6 +3810,7 @@ fn layout_z(
     row_count: usize,
     channel_count: usize,
     track_count: &[usize],
+    track_spacing: i32,
 ) -> (Vec<i32>, Vec<Vec<i32>>) {
     let mut row_z = vec![0i32; row_count];
     let mut track_z: Vec<Vec<i32>> = vec![Vec::new(); channel_count];
@@ -3818,9 +3823,9 @@ fn layout_z(
             // gets its own Z, `TRACK_SPACING` apart, exactly as when this
             // was the only scheme this module had.
             track_z[channel] = (0..track_count[channel])
-                .map(|t| channel_south - TRACK_SPACING * (t as i32 + 1))
+                .map(|t| channel_south - track_spacing * (t as i32 + 1))
                 .collect();
-            let depth = TRACK_SPACING * track_count[channel] as i32;
+            let depth = track_spacing * track_count[channel] as i32;
             row_z[channel + 1] = channel_south - depth - band_ramp_length(0) - 4;
             continue;
         }
@@ -5548,12 +5553,17 @@ fn resolve_bypass_and_geometry(
     row_count: usize,
     channel_count: usize,
     query_limit: i32,
+    track_spacing: i32,
 ) -> (Vec<bool>, Vec<i32>, Vec<Vec<i32>>) {
     let bypass_proven = compute_bypass(nets, plan);
     let baseline_terminals = default_terminal_kinds(nets);
     let baseline_track_count = assign_tracks(plan, nets, channel_count, &bypass_proven);
-    let (baseline_row_z, baseline_track_z) =
-        layout_z(row_count, channel_count, &baseline_track_count);
+    let (baseline_row_z, baseline_track_z) = layout_z(
+        row_count,
+        channel_count,
+        &baseline_track_count,
+        track_spacing,
+    );
 
     let (size_x, size_z) = world_size(plan, nets, &baseline_row_z);
     let mut scratch = World::new(
@@ -5682,7 +5692,7 @@ fn resolve_bypass_and_geometry(
     }
 
     let track_count = assign_tracks(plan, nets, channel_count, &bypass_final);
-    let (row_z, track_z) = layout_z(row_count, channel_count, &track_count);
+    let (row_z, track_z) = layout_z(row_count, channel_count, &track_count, track_spacing);
     (bypass_final, row_z, track_z)
 }
 
@@ -7581,9 +7591,9 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     //    budget routes, and `realise_and_verify` puts the four physical
     //    invariants on the world that would ship.
     // 2. If that succeeds, return it. `planner_kind()` says `Unified3d`.
-    // 3. On any failure -- placement, routing, verification -- fall back to
-    //    the row/channel/track emitter, which is what `compile` was before
-    //    today and is unchanged. `planner_kind()` says `Legacy`.
+    // 3. On any failure, try the compact channel emitter, then its historical
+    //    layout if physical verification rejects the compact candidate.
+    //    `planner_kind()` says `Legacy`.
     // 4. Same netlist, same path, every time. Nothing here reads a clock, a
     //    random number, or an environment variable.
     //
@@ -7615,7 +7625,9 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
             return Ok(planned);
         }
     }
-    compile_legacy(netlist)
+    // Every candidate still passes the same physical verifier pipeline.
+    // A rejected compact geometry retains the historical layout as a fallback.
+    compile_channelled(netlist, COMPACT_TRACK_SPACING).or_else(|_| compile_legacy(netlist))
 }
 
 /// Whether the planner's `PlanCandidate` can represent everything this netlist
@@ -7720,6 +7732,13 @@ fn checked_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileErr
 ///
 /// Stamps `PlannerKind::Legacy`, which nothing constructed before today.
 pub fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    compile_channelled(netlist, TRACK_SPACING)
+}
+
+fn compile_channelled(
+    netlist: &Netlist,
+    track_spacing: i32,
+) -> Result<CompiledCircuit, CompileError> {
     let order = checked_topological_order(netlist)?;
     if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
         return Err(CompileError::CandidateMetadataViolation {
@@ -7746,6 +7765,7 @@ pub fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError
         row_count,
         channel_count,
         BYPASS_QUERY_MAX_DISTANCE,
+        track_spacing,
     );
 
     let (size_x, size_z) = world_size(&plan, &nets, &row_z);
@@ -7872,6 +7892,7 @@ pub fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError
     let primitive_nodes = legacy_primitive_nodes(netlist, &primitive_anchors);
     let legacy_emission = LegacyEmission {
         netlist: netlist.clone(),
+        track_spacing,
         primitive_anchors,
         primitive_nodes,
         routes: legacy_routes,

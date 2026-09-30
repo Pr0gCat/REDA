@@ -59,11 +59,17 @@ NOR, so a change there means something moved that should not have. Which path
 each takes is pinned separately, by
 `every_reference_circuit_records_which_path_produced_it`.
 
+The table above records the historical hybrid switchover. The 2026-09-30
+channel compaction measurements, including native frontend circuits, are in
+[the generator optimization report](docs/generator-optimization-2026-09-30.md).
+
 ### Two placers, one entry point
 
 `compile` tries relaxation placement with A* routing first, and falls back to
 the row/channel/track emitter on any failure -- placement, routing or
-verification. The same netlist always takes the same path; nothing here reads a
+verification. Channel emission tries a verified compact layout before its
+historical layout; `compile_legacy` retains the historical baseline. The same
+netlist always takes the same path; nothing here reads a
 clock or a random number. `CompiledCircuit::planner_kind` records which one ran,
 so a circuit that quietly stops taking the better placer is visible rather than
 invisible.

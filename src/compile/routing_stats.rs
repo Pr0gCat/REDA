@@ -180,7 +180,7 @@ type Geometry = (
 /// world-free; `resolve_bypass_and_geometry` itself builds one throwaway
 /// probe `World` internally (see its own doc comment) purely to decide the
 /// widened bypass set, and never hands that world back out.
-fn recompute_geometry(netlist: &Netlist) -> Result<Geometry, CompileError> {
+fn recompute_geometry(netlist: &Netlist, track_spacing: i32) -> Result<Geometry, CompileError> {
     for gate in &netlist.gates {
         for input in &gate.inputs {
             if !netlist.is_driven(input) {
@@ -215,6 +215,7 @@ fn recompute_geometry(netlist: &Netlist) -> Result<Geometry, CompileError> {
         row_count,
         channel_count,
         BYPASS_QUERY_MAX_DISTANCE,
+        track_spacing,
     );
     let track_count: Vec<usize> = track_z.iter().map(Vec::len).collect();
 
@@ -498,8 +499,9 @@ fn refuse_a_foreign_layout(compiled: &CompiledCircuit, report: &str) -> Result<(
 }
 
 /// Decompose every real netlist edge of a compiled circuit into its physical
-/// route. `compiled` must be the result of calling `compile_legacy(netlist)`
-/// -- this only reads its `World`, it never rebuilds one.
+/// route. `compiled` must use the channel emitter (compact or historical).
+/// Its recorded track spacing selects the matching geometry; this only reads
+/// its `World`, it never rebuilds one.
 ///
 /// Refuses anything the emitter did not lay out; see
 /// [`refuse_a_foreign_layout`] for why that refusal is load-bearing rather
@@ -509,7 +511,13 @@ pub fn analyze(
     compiled: &CompiledCircuit,
 ) -> Result<RoutingReport, CompileError> {
     refuse_a_foreign_layout(compiled, "`routing_stats::analyze`")?;
-    let (plan, nets, row_z, track_z, track_count, bypass) = recompute_geometry(netlist)?;
+    let (plan, nets, row_z, track_z, track_count, bypass) = recompute_geometry(
+        netlist,
+        compiled
+            .legacy_emission()
+            .expect("verified legacy layout")
+            .track_spacing,
+    )?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
 
@@ -670,7 +678,13 @@ pub fn distinct_totals_by_part(
     compiled: &CompiledCircuit,
 ) -> Result<BTreeMap<RoutePart, PartTotals>, CompileError> {
     refuse_a_foreign_layout(compiled, "`routing_stats::distinct_totals_by_part`")?;
-    let (plan, nets, row_z, track_z, track_count, bypass) = recompute_geometry(netlist)?;
+    let (plan, nets, row_z, track_z, track_count, bypass) = recompute_geometry(
+        netlist,
+        compiled
+            .legacy_emission()
+            .expect("verified legacy layout")
+            .track_spacing,
+    )?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
 
@@ -815,6 +829,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compact_channel_repeater_counts_match_the_emitted_world() {
+        let artifact = crate::frontend::compile_systemverilog(
+            &[crate::frontend::SourceInput {
+                name: "seven_segment.sv",
+                text: include_str!("../../tests/fixtures/seven_segment.sv"),
+            }],
+            &crate::frontend::CompileOptions::new("seven_segment"),
+        )
+        .unwrap();
+        let netlist = crate::compile::lowering::lower_optimised(&artifact.netlist).unwrap();
+        let compact = compile(&netlist).unwrap();
+        assert_eq!(compact.planner_kind(), PlannerKind::Legacy);
+        assert_eq!(
+            compact.legacy_emission().unwrap().track_spacing,
+            super::super::COMPACT_TRACK_SPACING
+        );
+        let total = distinct_totals(&netlist, &compact).unwrap();
+        assert_eq!(
+            total.repeaters,
+            compact.world.positions_of(BlockKind::Repeater).count()
+        );
+    }
+
     /// This module refuses a layout it cannot describe, rather than describing
     /// it wrongly or hanging.
     ///
@@ -949,7 +987,8 @@ mod tests {
         let compiled = compile_legacy(&and4).expect("and4 must compile");
         let report = analyze(&and4, &compiled).expect("and4 must analyze");
         let (_plan, nets, _row_z, _track_z, track_count, bypass) =
-            recompute_geometry(&and4).expect("and4 must recompute geometry");
+            recompute_geometry(&and4, super::super::TRACK_SPACING)
+                .expect("and4 must recompute geometry");
 
         // Effective, not raw, bands -- `and4` never gets dense enough to
         // revert any channel (`BAND_CAP`'s doc comment), but resolving

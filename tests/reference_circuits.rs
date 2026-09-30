@@ -513,50 +513,22 @@ fn every_reference_circuit_records_which_path_produced_it() {
     }
 }
 
-/// The size of every hand-written circuit, pinned.
+/// Pin measured generated sizes, so producer changes remain reviewable.
 ///
-/// `2026-08-09-global-polarity-assignment.md` made these a hard constraint --
-/// "the control circuits remain byte-for-byte at their measured values" -- and
-/// nothing asserted them, so the one thing the polarity work was not allowed
-/// to disturb was also the one thing nothing would have noticed it disturbing.
-/// These four are pure NOR and no lowering touches them, which is exactly why
-/// a change here means something moved that should not have.
-///
-/// # Re-pinned at the hybrid switchover, 2026-08-16
-///
-/// Two of the four moved, and that movement **is** the change: `compile` now
-/// tries relaxation placement first and falls back to the row/channel/track
-/// emitter only where the planner cannot deliver a verified circuit.
-///
-/// | circuit | emitter | today | path | change |
-/// |---|---|---|---|---|
-/// | and4 | 472 | **232** | `Unified3d` | -50.8% |
-/// | full_adder | 1,784 | **1,065** | `Unified3d` | -40.3% |
-/// | segment_a | 6,416 | 6,416 | `Legacy` | unmoved -- fell back |
-/// | seven_segment | 16,244 | 16,244 | `Legacy` | unmoved -- fell back |
-///
-/// **A number that did not move is a circuit that fell back**, and that is
-/// what the fourth column is here to make legible: segment_a and seven_segment
-/// place by relaxation and then fail to route (`no safe local route`, at the
-/// trial's 8 rip-up rounds and at the router's full 64 alike), so `compile`
-/// returns the emitter's world for them, byte for byte what it always
-/// returned. Nothing regressed; two things improved.
-/// `every_reference_circuit_records_which_path_produced_it` above is where the
-/// path itself is asserted rather than merely described.
-///
-/// This test's meaning moves from "these must not change" to "these were
-/// measured here, and changing them again needs an explanation" -- which is
-/// what it was always for. The numbers printed alongside are what
-/// `README.md`'s table reports.
+/// At the 2026-08-16 hybrid switchover the planner reduced and4 and full_adder
+/// to 232 and 1,065 blocks. The 2026-09-30 compact channel candidate reduces
+/// segment_a from 6,416 to 5,712, and seven_segment from 16,244 to 13,872.
+/// Gate counts, the two planner results, and compile_legacy's historical
+/// geometry stay unchanged. See docs/generator-optimization-2026-09-30.md.
 #[test]
 fn the_hand_written_circuits_keep_their_measured_size() {
-    // Blocks as measured at the hybrid switchover. The emitter's own numbers
-    // are in the doc table above, beside the path each circuit takes.
+    // Current default-producer measurements; independent legacy baselines
+    // retain their historical values.
     let circuits: [(&str, Netlist, usize, usize); 4] = [
         ("and4", build_and4_netlist().0, 7, 232),
         ("full_adder", build_full_adder_netlist().0, 22, 1065),
-        ("segment_a", build_single_segment_netlist(0).0, 46, 6416),
-        ("seven_segment", build_seven_segment_netlist().0, 84, 16244),
+        ("segment_a", build_single_segment_netlist(0).0, 46, 5712),
+        ("seven_segment", build_seven_segment_netlist().0, 84, 13872),
     ];
 
     for (name, netlist, gates, blocks) in circuits {
