@@ -34,6 +34,39 @@ fn trace_decoder_transition(from_value: usize, to_value: usize, filename: &str) 
             format!("public_{name}"),
         ));
     }
+    let mut sockets = Vec::new();
+    for (gate_index, gate) in lowered.gates.iter().enumerate() {
+        if !matches!(gate.kind, reda::compile::topology::GateKind::Nor(_)) {
+            continue;
+        }
+        let facing = compiled.gate_facings[gate_index];
+        let (x, y, z) = compiled.gate_output_positions[&gate.output];
+        let support = reda::redstone::simulator::position::Position::new(x, y, z)
+            .offset(reda::compile::geometry::output_direction(facing).opposite());
+        for (input_index, direction) in reda::compile::geometry::input_directions(facing)
+            .into_iter()
+            .take(gate.inputs.len())
+            .enumerate()
+        {
+            let socket = support.offset(direction);
+            let kind = compiled.world.get(socket.x, socket.y, socket.z).kind;
+            assert!(
+                matches!(
+                    kind,
+                    reda::redstone::world::block::BlockKind::Repeater
+                        | reda::redstone::world::block::BlockKind::RedstoneWire
+                        | reda::redstone::world::block::BlockKind::Lever
+                ),
+                "unexpected NOR socket for {}: {:?}",
+                gate.output,
+                kind
+            );
+            let label = format!("socket:{}:{}", gate.output, input_index);
+            watched.push((socket, label.clone()));
+            sockets.push(json!({"label":label,"source":gate.inputs[input_index],
+                "position":[socket.x,socket.y,socket.z]}));
+        }
+    }
     let positions: Vec<_> = ["d0", "d1", "d2", "d3"]
         .iter()
         .map(|name| compiled.input_positions[*name])
@@ -69,7 +102,7 @@ fn trace_decoder_transition(from_value: usize, to_value: usize, filename: &str) 
             reda::circuits::seven_segment::TRUTH_TABLE[to_value][index] == 1
         );
     }
-    let report = json!({"from":from_value,"to":to_value,"output_map":outputs,
+    let report = json!({"from":from_value,"to":to_value,"output_map":outputs,"sockets":sockets,
         "gates":lowered.gates.iter().map(|gate| json!({"kind":format!("{:?}",gate.kind),"inputs":gate.inputs,"output":gate.output,"position":compiled.gate_output_positions[&gate.output]})).collect::<Vec<_>>(),
         "changes":timing.nets.iter().map(|(name,net)| (name.clone(),json!(net.changes()))).collect::<std::collections::BTreeMap<_,_>>()});
     let target = std::env::var_os("CARGO_TARGET_DIR")

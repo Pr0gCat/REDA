@@ -1,0 +1,2341 @@
+{
+  "base_commit": "4bef890",
+  "baseline": {
+    "changes": {
+      "d1": [
+        [
+          1,
+          true
+        ]
+      ],
+      "d2": [
+        [
+          1,
+          true
+        ]
+      ],
+      "g1": [
+        [
+          6,
+          false
+        ]
+      ],
+      "g12": [
+        [
+          14,
+          true
+        ]
+      ],
+      "g14": [
+        [
+          22,
+          false
+        ]
+      ],
+      "g2": [
+        [
+          6,
+          false
+        ]
+      ],
+      "g29": [
+        [
+          4,
+          false
+        ]
+      ],
+      "g31": [
+        [
+          20,
+          true
+        ]
+      ],
+      "g4": [
+        [
+          8,
+          true
+        ]
+      ],
+      "public_b": [
+        [
+          26,
+          false
+        ]
+      ],
+      "public_g": [
+        [
+          21,
+          true
+        ]
+      ],
+      "socket:g11:0": [
+        [
+          16,
+          true
+        ]
+      ],
+      "socket:g11:2": [
+        [
+          16,
+          false
+        ]
+      ],
+      "socket:g12:1": [
+        [
+          12,
+          false
+        ]
+      ],
+      "socket:g12:2": [
+        [
+          12,
+          false
+        ]
+      ],
+      "socket:g14:1": [
+        [
+          20,
+          true
+        ]
+      ],
+      "socket:g15:1": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g15:2": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g17:1": [
+        [
+          22,
+          false
+        ]
+      ],
+      "socket:g17:2": [
+        [
+          22,
+          false
+        ]
+      ],
+      "socket:g1:0": [
+        [
+          4,
+          true
+        ]
+      ],
+      "socket:g20:1": [
+        [
+          20,
+          false
+        ]
+      ],
+      "socket:g24:0": [
+        [
+          16,
+          true
+        ]
+      ],
+      "socket:g24:1": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g25:1": [
+        [
+          20,
+          false
+        ]
+      ],
+      "socket:g29:0": [
+        [
+          8,
+          true
+        ]
+      ],
+      "socket:g29:1": [
+        [
+          8,
+          true
+        ]
+      ],
+      "socket:g29:2": [
+        [
+          2,
+          true
+        ]
+      ],
+      "socket:g2:0": [
+        [
+          4,
+          true
+        ]
+      ],
+      "socket:g31:1": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g5:0": [
+        [
+          12,
+          true
+        ]
+      ],
+      "socket:g6:0": [
+        [
+          10,
+          true
+        ]
+      ],
+      "socket:g6:2": [
+        [
+          14,
+          false
+        ]
+      ],
+      "socket:g7:0": [
+        [
+          14,
+          false
+        ]
+      ],
+      "socket:g8:0": [
+        [
+          10,
+          false
+        ]
+      ]
+    },
+    "from": 0,
+    "gates": [
+      {
+        "inputs": [
+          "d0"
+        ],
+        "kind": "Nor(1)",
+        "output": "g0",
+        "position": [
+          112,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d1"
+        ],
+        "kind": "Nor(1)",
+        "output": "g1",
+        "position": [
+          84,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d2"
+        ],
+        "kind": "Nor(1)",
+        "output": "g2",
+        "position": [
+          70,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d3"
+        ],
+        "kind": "Nor(1)",
+        "output": "g3",
+        "position": [
+          56,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Or(3)",
+        "output": "g4",
+        "position": [
+          126,
+          1,
+          80
+        ]
+      },
+      {
+        "inputs": [
+          "g4",
+          "g0"
+        ],
+        "kind": "Nor(2)",
+        "output": "g5",
+        "position": [
+          124,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "d0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g6",
+        "position": [
+          110,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g1",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g7",
+        "position": [
+          54,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g2",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g8",
+        "position": [
+          68,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g5",
+          "g6",
+          "g7"
+        ],
+        "kind": "Or(3)",
+        "output": "g9",
+        "position": [
+          98,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g9",
+          "g8"
+        ],
+        "kind": "Nor(2)",
+        "output": "g10",
+        "position": [
+          68,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "g0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g11",
+        "position": [
+          26,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g12",
+        "position": [
+          96,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g11"
+        ],
+        "kind": "Or(3)",
+        "output": "g13",
+        "position": [
+          56,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g13",
+          "g12"
+        ],
+        "kind": "Nor(2)",
+        "output": "g14",
+        "position": [
+          82,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d2",
+          "d0",
+          "g1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g15",
+        "position": [
+          40,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g15"
+        ],
+        "kind": "Nor(3)",
+        "output": "g16",
+        "position": [
+          70,
+          1,
+          22
+        ]
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g17",
+        "position": [
+          166,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(2)",
+        "output": "g18",
+        "position": [
+          140,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g9",
+          "g18"
+        ],
+        "kind": "Nor(2)",
+        "output": "g19",
+        "position": [
+          124,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "g2"
+        ],
+        "kind": "Nor(2)",
+        "output": "g20",
+        "position": [
+          12,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d0",
+          "g7",
+          "g8"
+        ],
+        "kind": "Or(3)",
+        "output": "g21",
+        "position": [
+          42,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g21",
+          "g20"
+        ],
+        "kind": "Nor(2)",
+        "output": "g22",
+        "position": [
+          54,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "g0"
+        ],
+        "kind": "Nor(3)",
+        "output": "g23",
+        "position": [
+          82,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d2",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g24",
+        "position": [
+          138,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g25",
+        "position": [
+          152,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g23"
+        ],
+        "kind": "Or(3)",
+        "output": "g26",
+        "position": [
+          84,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g24",
+          "g25"
+        ],
+        "kind": "Or(2)",
+        "output": "g27",
+        "position": [
+          112,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g26",
+          "g27"
+        ],
+        "kind": "Nor(2)",
+        "output": "g28",
+        "position": [
+          96,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g29",
+        "position": [
+          98,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(3)",
+        "output": "g30",
+        "position": [
+          126,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g30",
+          "g29"
+        ],
+        "kind": "Nor(2)",
+        "output": "g31",
+        "position": [
+          110,
+          1,
+          4
+        ]
+      }
+    ],
+    "output_map": {
+      "a": "g10",
+      "b": "g14",
+      "c": "g16",
+      "d": "g19",
+      "e": "g22",
+      "f": "g28",
+      "g": "g31"
+    },
+    "sockets": [
+      {
+        "label": "socket:g0:0",
+        "position": [
+          111,
+          1,
+          80
+        ],
+        "source": "d0"
+      },
+      {
+        "label": "socket:g1:0",
+        "position": [
+          83,
+          1,
+          80
+        ],
+        "source": "d1"
+      },
+      {
+        "label": "socket:g2:0",
+        "position": [
+          69,
+          1,
+          80
+        ],
+        "source": "d2"
+      },
+      {
+        "label": "socket:g3:0",
+        "position": [
+          55,
+          1,
+          80
+        ],
+        "source": "d3"
+      },
+      {
+        "label": "socket:g5:0",
+        "position": [
+          123,
+          1,
+          47
+        ],
+        "source": "g4"
+      },
+      {
+        "label": "socket:g5:1",
+        "position": [
+          125,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "label": "socket:g6:0",
+        "position": [
+          109,
+          1,
+          47
+        ],
+        "source": "d1"
+      },
+      {
+        "label": "socket:g6:1",
+        "position": [
+          111,
+          1,
+          47
+        ],
+        "source": "d0"
+      },
+      {
+        "label": "socket:g6:2",
+        "position": [
+          110,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g7:0",
+        "position": [
+          53,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g7:1",
+        "position": [
+          55,
+          1,
+          47
+        ],
+        "source": "g3"
+      },
+      {
+        "label": "socket:g8:0",
+        "position": [
+          67,
+          1,
+          47
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g8:1",
+        "position": [
+          69,
+          1,
+          47
+        ],
+        "source": "g3"
+      },
+      {
+        "label": "socket:g10:0",
+        "position": [
+          67,
+          1,
+          5
+        ],
+        "source": "g9"
+      },
+      {
+        "label": "socket:g10:1",
+        "position": [
+          69,
+          1,
+          5
+        ],
+        "source": "g8"
+      },
+      {
+        "label": "socket:g11:0",
+        "position": [
+          25,
+          1,
+          47
+        ],
+        "source": "d1"
+      },
+      {
+        "label": "socket:g11:1",
+        "position": [
+          27,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "label": "socket:g11:2",
+        "position": [
+          26,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g12:0",
+        "position": [
+          95,
+          1,
+          47
+        ],
+        "source": "d0"
+      },
+      {
+        "label": "socket:g12:1",
+        "position": [
+          97,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g12:2",
+        "position": [
+          96,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g14:0",
+        "position": [
+          81,
+          1,
+          5
+        ],
+        "source": "g13"
+      },
+      {
+        "label": "socket:g14:1",
+        "position": [
+          83,
+          1,
+          5
+        ],
+        "source": "g12"
+      },
+      {
+        "label": "socket:g15:0",
+        "position": [
+          39,
+          1,
+          47
+        ],
+        "source": "d2"
+      },
+      {
+        "label": "socket:g15:1",
+        "position": [
+          41,
+          1,
+          47
+        ],
+        "source": "d0"
+      },
+      {
+        "label": "socket:g15:2",
+        "position": [
+          40,
+          1,
+          48
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g16:0",
+        "position": [
+          69,
+          1,
+          23
+        ],
+        "source": "g7"
+      },
+      {
+        "label": "socket:g16:1",
+        "position": [
+          71,
+          1,
+          23
+        ],
+        "source": "g8"
+      },
+      {
+        "label": "socket:g16:2",
+        "position": [
+          70,
+          1,
+          24
+        ],
+        "source": "g15"
+      },
+      {
+        "label": "socket:g17:0",
+        "position": [
+          165,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "label": "socket:g17:1",
+        "position": [
+          167,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g17:2",
+        "position": [
+          166,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g19:0",
+        "position": [
+          123,
+          1,
+          5
+        ],
+        "source": "g9"
+      },
+      {
+        "label": "socket:g19:1",
+        "position": [
+          125,
+          1,
+          5
+        ],
+        "source": "g18"
+      },
+      {
+        "label": "socket:g20:0",
+        "position": [
+          11,
+          1,
+          47
+        ],
+        "source": "d1"
+      },
+      {
+        "label": "socket:g20:1",
+        "position": [
+          13,
+          1,
+          47
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g22:0",
+        "position": [
+          53,
+          1,
+          5
+        ],
+        "source": "g21"
+      },
+      {
+        "label": "socket:g22:1",
+        "position": [
+          55,
+          1,
+          5
+        ],
+        "source": "g20"
+      },
+      {
+        "label": "socket:g23:0",
+        "position": [
+          81,
+          1,
+          47
+        ],
+        "source": "d3"
+      },
+      {
+        "label": "socket:g23:1",
+        "position": [
+          83,
+          1,
+          47
+        ],
+        "source": "d2"
+      },
+      {
+        "label": "socket:g23:2",
+        "position": [
+          82,
+          1,
+          48
+        ],
+        "source": "g0"
+      },
+      {
+        "label": "socket:g24:0",
+        "position": [
+          137,
+          1,
+          47
+        ],
+        "source": "d2"
+      },
+      {
+        "label": "socket:g24:1",
+        "position": [
+          139,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g25:0",
+        "position": [
+          151,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "label": "socket:g25:1",
+        "position": [
+          153,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g28:0",
+        "position": [
+          95,
+          1,
+          5
+        ],
+        "source": "g26"
+      },
+      {
+        "label": "socket:g28:1",
+        "position": [
+          97,
+          1,
+          5
+        ],
+        "source": "g27"
+      },
+      {
+        "label": "socket:g29:0",
+        "position": [
+          97,
+          1,
+          80
+        ],
+        "source": "d3"
+      },
+      {
+        "label": "socket:g29:1",
+        "position": [
+          99,
+          1,
+          80
+        ],
+        "source": "d2"
+      },
+      {
+        "label": "socket:g29:2",
+        "position": [
+          98,
+          1,
+          81
+        ],
+        "source": "d1"
+      },
+      {
+        "label": "socket:g31:0",
+        "position": [
+          109,
+          1,
+          5
+        ],
+        "source": "g30"
+      },
+      {
+        "label": "socket:g31:1",
+        "position": [
+          111,
+          1,
+          5
+        ],
+        "source": "g29"
+      }
+    ],
+    "to": 6
+  },
+  "rejected_weighted_candidate": {
+    "changes": {
+      "d1": [
+        [
+          1,
+          true
+        ]
+      ],
+      "d2": [
+        [
+          1,
+          true
+        ]
+      ],
+      "g1": [
+        [
+          6,
+          false
+        ]
+      ],
+      "g12": [
+        [
+          16,
+          true
+        ]
+      ],
+      "g14": [
+        [
+          26,
+          false
+        ]
+      ],
+      "g2": [
+        [
+          6,
+          false
+        ]
+      ],
+      "g20": [
+        [
+          18,
+          true
+        ],
+        [
+          20,
+          false
+        ]
+      ],
+      "g22": [
+        [
+          32,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ],
+      "g24": [
+        [
+          16,
+          true
+        ],
+        [
+          18,
+          false
+        ]
+      ],
+      "g27": [
+        [
+          22,
+          true
+        ],
+        [
+          24,
+          false
+        ]
+      ],
+      "g28": [
+        [
+          32,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ],
+      "g29": [
+        [
+          4,
+          false
+        ]
+      ],
+      "g31": [
+        [
+          20,
+          true
+        ]
+      ],
+      "g4": [
+        [
+          8,
+          true
+        ]
+      ],
+      "public_b": [
+        [
+          30,
+          false
+        ]
+      ],
+      "public_g": [
+        [
+          21,
+          true
+        ]
+      ],
+      "socket:g11:0": [
+        [
+          16,
+          true
+        ]
+      ],
+      "socket:g11:2": [
+        [
+          14,
+          false
+        ]
+      ],
+      "socket:g12:1": [
+        [
+          14,
+          false
+        ]
+      ],
+      "socket:g12:2": [
+        [
+          10,
+          false
+        ]
+      ],
+      "socket:g14:0": [
+        [
+          24,
+          true
+        ]
+      ],
+      "socket:g14:1": [
+        [
+          24,
+          true
+        ]
+      ],
+      "socket:g15:1": [
+        [
+          22,
+          false
+        ]
+      ],
+      "socket:g15:2": [
+        [
+          22,
+          false
+        ]
+      ],
+      "socket:g17:1": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g17:2": [
+        [
+          22,
+          false
+        ]
+      ],
+      "socket:g1:0": [
+        [
+          4,
+          true
+        ]
+      ],
+      "socket:g20:0": [
+        [
+          18,
+          true
+        ]
+      ],
+      "socket:g20:1": [
+        [
+          16,
+          false
+        ]
+      ],
+      "socket:g22:1": [
+        [
+          30,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ],
+      "socket:g24:0": [
+        [
+          16,
+          true
+        ]
+      ],
+      "socket:g24:1": [
+        [
+          14,
+          false
+        ]
+      ],
+      "socket:g25:1": [
+        [
+          16,
+          false
+        ]
+      ],
+      "socket:g28:0": [
+        [
+          30,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ],
+      "socket:g28:1": [
+        [
+          30,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ],
+      "socket:g29:0": [
+        [
+          8,
+          true
+        ]
+      ],
+      "socket:g29:1": [
+        [
+          8,
+          true
+        ]
+      ],
+      "socket:g29:2": [
+        [
+          2,
+          true
+        ]
+      ],
+      "socket:g2:0": [
+        [
+          4,
+          true
+        ]
+      ],
+      "socket:g31:1": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g5:0": [
+        [
+          12,
+          true
+        ]
+      ],
+      "socket:g6:0": [
+        [
+          10,
+          true
+        ]
+      ],
+      "socket:g6:2": [
+        [
+          14,
+          false
+        ]
+      ],
+      "socket:g7:0": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g8:0": [
+        [
+          12,
+          false
+        ]
+      ]
+    },
+    "from": 0,
+    "gates": [
+      {
+        "inputs": [
+          "d0"
+        ],
+        "kind": "Nor(1)",
+        "output": "g0",
+        "position": [
+          84,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d1"
+        ],
+        "kind": "Nor(1)",
+        "output": "g1",
+        "position": [
+          112,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d2"
+        ],
+        "kind": "Nor(1)",
+        "output": "g2",
+        "position": [
+          70,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d3"
+        ],
+        "kind": "Nor(1)",
+        "output": "g3",
+        "position": [
+          56,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Or(3)",
+        "output": "g4",
+        "position": [
+          126,
+          1,
+          80
+        ]
+      },
+      {
+        "inputs": [
+          "g4",
+          "g0"
+        ],
+        "kind": "Nor(2)",
+        "output": "g5",
+        "position": [
+          124,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "d0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g6",
+        "position": [
+          110,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g1",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g7",
+        "position": [
+          54,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g2",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g8",
+        "position": [
+          96,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g5",
+          "g6",
+          "g7"
+        ],
+        "kind": "Or(3)",
+        "output": "g9",
+        "position": [
+          98,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g9",
+          "g8"
+        ],
+        "kind": "Nor(2)",
+        "output": "g10",
+        "position": [
+          68,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "g0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g11",
+        "position": [
+          26,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g12",
+        "position": [
+          82,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g11"
+        ],
+        "kind": "Or(3)",
+        "output": "g13",
+        "position": [
+          56,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g13",
+          "g12"
+        ],
+        "kind": "Nor(2)",
+        "output": "g14",
+        "position": [
+          82,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d2",
+          "d0",
+          "g1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g15",
+        "position": [
+          40,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g15"
+        ],
+        "kind": "Nor(3)",
+        "output": "g16",
+        "position": [
+          70,
+          1,
+          22
+        ]
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g17",
+        "position": [
+          166,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(2)",
+        "output": "g18",
+        "position": [
+          140,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g9",
+          "g18"
+        ],
+        "kind": "Nor(2)",
+        "output": "g19",
+        "position": [
+          124,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "g2"
+        ],
+        "kind": "Nor(2)",
+        "output": "g20",
+        "position": [
+          12,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d0",
+          "g7",
+          "g8"
+        ],
+        "kind": "Or(3)",
+        "output": "g21",
+        "position": [
+          42,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g21",
+          "g20"
+        ],
+        "kind": "Nor(2)",
+        "output": "g22",
+        "position": [
+          54,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "g0"
+        ],
+        "kind": "Nor(3)",
+        "output": "g23",
+        "position": [
+          68,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d2",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g24",
+        "position": [
+          138,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g25",
+        "position": [
+          152,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g23"
+        ],
+        "kind": "Or(3)",
+        "output": "g26",
+        "position": [
+          84,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g24",
+          "g25"
+        ],
+        "kind": "Or(2)",
+        "output": "g27",
+        "position": [
+          112,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g26",
+          "g27"
+        ],
+        "kind": "Nor(2)",
+        "output": "g28",
+        "position": [
+          96,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g29",
+        "position": [
+          98,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(3)",
+        "output": "g30",
+        "position": [
+          126,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g30",
+          "g29"
+        ],
+        "kind": "Nor(2)",
+        "output": "g31",
+        "position": [
+          110,
+          1,
+          4
+        ]
+      }
+    ],
+    "output_map": {
+      "a": "g10",
+      "b": "g14",
+      "c": "g16",
+      "d": "g19",
+      "e": "g22",
+      "f": "g28",
+      "g": "g31"
+    },
+    "sockets": [
+      {
+        "label": "socket:g0:0",
+        "position": [
+          83,
+          1,
+          80
+        ],
+        "source": "d0"
+      },
+      {
+        "label": "socket:g1:0",
+        "position": [
+          111,
+          1,
+          80
+        ],
+        "source": "d1"
+      },
+      {
+        "label": "socket:g2:0",
+        "position": [
+          69,
+          1,
+          80
+        ],
+        "source": "d2"
+      },
+      {
+        "label": "socket:g3:0",
+        "position": [
+          55,
+          1,
+          80
+        ],
+        "source": "d3"
+      },
+      {
+        "label": "socket:g5:0",
+        "position": [
+          123,
+          1,
+          47
+        ],
+        "source": "g4"
+      },
+      {
+        "label": "socket:g5:1",
+        "position": [
+          125,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "label": "socket:g6:0",
+        "position": [
+          109,
+          1,
+          47
+        ],
+        "source": "d1"
+      },
+      {
+        "label": "socket:g6:1",
+        "position": [
+          111,
+          1,
+          47
+        ],
+        "source": "d0"
+      },
+      {
+        "label": "socket:g6:2",
+        "position": [
+          110,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g7:0",
+        "position": [
+          53,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g7:1",
+        "position": [
+          55,
+          1,
+          47
+        ],
+        "source": "g3"
+      },
+      {
+        "label": "socket:g8:0",
+        "position": [
+          95,
+          1,
+          47
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g8:1",
+        "position": [
+          97,
+          1,
+          47
+        ],
+        "source": "g3"
+      },
+      {
+        "label": "socket:g10:0",
+        "position": [
+          67,
+          1,
+          5
+        ],
+        "source": "g9"
+      },
+      {
+        "label": "socket:g10:1",
+        "position": [
+          69,
+          1,
+          5
+        ],
+        "source": "g8"
+      },
+      {
+        "label": "socket:g11:0",
+        "position": [
+          25,
+          1,
+          47
+        ],
+        "source": "d1"
+      },
+      {
+        "label": "socket:g11:1",
+        "position": [
+          27,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "label": "socket:g11:2",
+        "position": [
+          26,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g12:0",
+        "position": [
+          81,
+          1,
+          47
+        ],
+        "source": "d0"
+      },
+      {
+        "label": "socket:g12:1",
+        "position": [
+          83,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g12:2",
+        "position": [
+          82,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g14:0",
+        "position": [
+          81,
+          1,
+          5
+        ],
+        "source": "g13"
+      },
+      {
+        "label": "socket:g14:1",
+        "position": [
+          83,
+          1,
+          5
+        ],
+        "source": "g12"
+      },
+      {
+        "label": "socket:g15:0",
+        "position": [
+          39,
+          1,
+          47
+        ],
+        "source": "d2"
+      },
+      {
+        "label": "socket:g15:1",
+        "position": [
+          41,
+          1,
+          47
+        ],
+        "source": "d0"
+      },
+      {
+        "label": "socket:g15:2",
+        "position": [
+          40,
+          1,
+          48
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g16:0",
+        "position": [
+          69,
+          1,
+          23
+        ],
+        "source": "g7"
+      },
+      {
+        "label": "socket:g16:1",
+        "position": [
+          71,
+          1,
+          23
+        ],
+        "source": "g8"
+      },
+      {
+        "label": "socket:g16:2",
+        "position": [
+          70,
+          1,
+          24
+        ],
+        "source": "g15"
+      },
+      {
+        "label": "socket:g17:0",
+        "position": [
+          165,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "label": "socket:g17:1",
+        "position": [
+          167,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g17:2",
+        "position": [
+          166,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g19:0",
+        "position": [
+          123,
+          1,
+          5
+        ],
+        "source": "g9"
+      },
+      {
+        "label": "socket:g19:1",
+        "position": [
+          125,
+          1,
+          5
+        ],
+        "source": "g18"
+      },
+      {
+        "label": "socket:g20:0",
+        "position": [
+          11,
+          1,
+          47
+        ],
+        "source": "d1"
+      },
+      {
+        "label": "socket:g20:1",
+        "position": [
+          13,
+          1,
+          47
+        ],
+        "source": "g2"
+      },
+      {
+        "label": "socket:g22:0",
+        "position": [
+          53,
+          1,
+          5
+        ],
+        "source": "g21"
+      },
+      {
+        "label": "socket:g22:1",
+        "position": [
+          55,
+          1,
+          5
+        ],
+        "source": "g20"
+      },
+      {
+        "label": "socket:g23:0",
+        "position": [
+          67,
+          1,
+          47
+        ],
+        "source": "d3"
+      },
+      {
+        "label": "socket:g23:1",
+        "position": [
+          69,
+          1,
+          47
+        ],
+        "source": "d2"
+      },
+      {
+        "label": "socket:g23:2",
+        "position": [
+          68,
+          1,
+          48
+        ],
+        "source": "g0"
+      },
+      {
+        "label": "socket:g24:0",
+        "position": [
+          137,
+          1,
+          47
+        ],
+        "source": "d2"
+      },
+      {
+        "label": "socket:g24:1",
+        "position": [
+          139,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g25:0",
+        "position": [
+          151,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "label": "socket:g25:1",
+        "position": [
+          153,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "label": "socket:g28:0",
+        "position": [
+          95,
+          1,
+          5
+        ],
+        "source": "g26"
+      },
+      {
+        "label": "socket:g28:1",
+        "position": [
+          97,
+          1,
+          5
+        ],
+        "source": "g27"
+      },
+      {
+        "label": "socket:g29:0",
+        "position": [
+          97,
+          1,
+          80
+        ],
+        "source": "d3"
+      },
+      {
+        "label": "socket:g29:1",
+        "position": [
+          99,
+          1,
+          80
+        ],
+        "source": "d2"
+      },
+      {
+        "label": "socket:g29:2",
+        "position": [
+          98,
+          1,
+          81
+        ],
+        "source": "d1"
+      },
+      {
+        "label": "socket:g31:0",
+        "position": [
+          109,
+          1,
+          5
+        ],
+        "source": "g30"
+      },
+      {
+        "label": "socket:g31:1",
+        "position": [
+          111,
+          1,
+          5
+        ],
+        "source": "g29"
+      }
+    ],
+    "to": 6
+  }
+}
