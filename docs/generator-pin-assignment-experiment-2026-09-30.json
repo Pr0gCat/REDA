@@ -1,0 +1,138 @@
+{
+  "base_commit": "f827027",
+  "prototype_source": "use reda::compile::topology::GateKind;\nuse reda::compile::{CompiledCircuit, Netlist, PlannerKind};\n\n// Experimental transformation of a cloned physical netlist. The source\n// artifact is unchanged; each printed permutation maps physical port to the\n// original logical input. All verification uses the transformed netlist.\npub fn assign(netlist: &mut Netlist, seed: &CompiledCircuit) {\n    if seed.planner_kind() != PlannerKind::Legacy { return; }\n    for gate in &mut netlist.gates {\n        if !matches!(gate.kind, GateKind::Nor(2..=3) | GateKind::Or(2..=3)) {continue;}\n        let n = gate.inputs.len();\n        let permutations = if n == 2 {\n            vec![vec![0,1], vec![1,0]]\n        } else {\n            vec![vec![0,1,2],vec![0,2,1],vec![1,0,2],vec![1,2,0],vec![2,0,1],vec![2,1,0]]\n        };\n        let cx = seed.gate_output_positions[&gate.output].0;\n        // Current channel emitter approach columns: west, east, centre.\n        let offsets = [-4,4,0];\n        let score = |permutation: &Vec<usize>| {\n            let spans: Vec<_> = permutation.iter().enumerate().map(|(port,&input)| {\n                let source = &gate.inputs[input];\n                let x = seed.gate_output_positions.get(source)\n                    .or_else(|| seed.input_positions.get(source)).unwrap().0;\n                (x - (cx + offsets[port])).abs()\n            }).collect();\n            (*spans.iter().max().unwrap(), spans.iter().sum::<i32>())\n        };\n        let identity = &permutations[0];\n        let best = permutations.iter().min_by_key(|p| score(p)).unwrap();\n        if score(best) < score(identity) {\n            let original = gate.inputs.clone();\n            gate.inputs = best.iter().map(|&i| original[i].clone()).collect();\n            eprintln!(\"PIN_ASSIGN {} physical_to_logical={best:?} original={original:?} assigned={:?}\",gate.output,gate.inputs);\n        }\n    }\n}\n",
+  "variants": {
+    "all_2_and_3": {
+      "physical_to_logical_assignments": [
+        "PIN_ASSIGN g5 physical_to_logical=[1, 0] original=[\"g4\", \"g0\"] assigned=[\"g0\", \"g4\"]",
+        "PIN_ASSIGN g6 physical_to_logical=[2, 0, 1] original=[\"d1\", \"d0\", \"g2\"] assigned=[\"g2\", \"d1\", \"d0\"]",
+        "PIN_ASSIGN g7 physical_to_logical=[1, 0] original=[\"g1\", \"g3\"] assigned=[\"g3\", \"g1\"]",
+        "PIN_ASSIGN g8 physical_to_logical=[1, 0] original=[\"g2\", \"g3\"] assigned=[\"g3\", \"g2\"]",
+        "PIN_ASSIGN g9 physical_to_logical=[2, 0, 1] original=[\"g5\", \"g6\", \"g7\"] assigned=[\"g7\", \"g5\", \"g6\"]",
+        "PIN_ASSIGN g10 physical_to_logical=[1, 0] original=[\"g9\", \"g8\"] assigned=[\"g8\", \"g9\"]",
+        "PIN_ASSIGN g12 physical_to_logical=[2, 0, 1] original=[\"d0\", \"g1\", \"g2\"] assigned=[\"g2\", \"d0\", \"g1\"]",
+        "PIN_ASSIGN g13 physical_to_logical=[2, 1, 0] original=[\"g7\", \"g8\", \"g11\"] assigned=[\"g11\", \"g8\", \"g7\"]",
+        "PIN_ASSIGN g16 physical_to_logical=[2, 0, 1] original=[\"g7\", \"g8\", \"g15\"] assigned=[\"g15\", \"g7\", \"g8\"]",
+        "PIN_ASSIGN g17 physical_to_logical=[2, 0, 1] original=[\"g0\", \"g1\", \"g2\"] assigned=[\"g2\", \"g0\", \"g1\"]",
+        "PIN_ASSIGN g20 physical_to_logical=[1, 0] original=[\"d1\", \"g2\"] assigned=[\"g2\", \"d1\"]",
+        "PIN_ASSIGN g21 physical_to_logical=[1, 0, 2] original=[\"d0\", \"g7\", \"g8\"] assigned=[\"g7\", \"d0\", \"g8\"]",
+        "PIN_ASSIGN g22 physical_to_logical=[1, 0] original=[\"g21\", \"g20\"] assigned=[\"g20\", \"g21\"]",
+        "PIN_ASSIGN g23 physical_to_logical=[0, 2, 1] original=[\"d3\", \"d2\", \"g0\"] assigned=[\"d3\", \"g0\", \"d2\"]",
+        "PIN_ASSIGN g25 physical_to_logical=[1, 0] original=[\"g0\", \"g1\"] assigned=[\"g1\", \"g0\"]",
+        "PIN_ASSIGN g30 physical_to_logical=[0, 2, 1] original=[\"g7\", \"g8\", \"g17\"] assigned=[\"g7\", \"g17\", \"g8\"]",
+        "PIN_ASSIGN g31 physical_to_logical=[1, 0] original=[\"g30\", \"g29\"] assigned=[\"g29\", \"g30\"]",
+        "PIN_ASSIGN n3 physical_to_logical=[1, 0] original=[\"n2\", \"d0\"] assigned=[\"d0\", \"n2\"]",
+        "PIN_ASSIGN g9 physical_to_logical=[1, 0] original=[\"d1\", \"d0\"] assigned=[\"d0\", \"d1\"]",
+        "PIN_ASSIGN g22 physical_to_logical=[1, 0] original=[\"d2\", \"d1\"] assigned=[\"d1\", \"d2\"]",
+        "PIN_ASSIGN g1 physical_to_logical=[1, 0] original=[\"n2\", \"n1\"] assigned=[\"n1\", \"n2\"]",
+        "PIN_ASSIGN n8 physical_to_logical=[1, 0] original=[\"n3\", \"n6\"] assigned=[\"n6\", \"n3\"]",
+        "PIN_ASSIGN g7 physical_to_logical=[1, 0] original=[\"g5\", \"g6\"] assigned=[\"g6\", \"g5\"]",
+        "PIN_ASSIGN n10 physical_to_logical=[1, 0] original=[\"n6\", \"n9\"] assigned=[\"n9\", \"n6\"]",
+        "PIN_ASSIGN g14 physical_to_logical=[1, 0] original=[\"d3\", \"g13\"] assigned=[\"g13\", \"d3\"]",
+        "PIN_ASSIGN g27 physical_to_logical=[1, 0] original=[\"n14\", \"n15\"] assigned=[\"n15\", \"n14\"]",
+        "PIN_ASSIGN n19 physical_to_logical=[1, 0] original=[\"n18\", \"d0\"] assigned=[\"d0\", \"n18\"]",
+        "PIN_ASSIGN g25 physical_to_logical=[1, 0] original=[\"n12\", \"n8\"] assigned=[\"n8\", \"n12\"]",
+        "PIN_ASSIGN n23 physical_to_logical=[1, 0] original=[\"n22\", \"n10\"] assigned=[\"n10\", \"n22\"]",
+        "PIN_ASSIGN n24 physical_to_logical=[1, 0] original=[\"n7\", \"g15\"] assigned=[\"g15\", \"n7\"]",
+        "PIN_ASSIGN g21 physical_to_logical=[1, 0] original=[\"n25\", \"n20\"] assigned=[\"n20\", \"n25\"]",
+        "PIN_ASSIGN g28 physical_to_logical=[1, 0] original=[\"n18\", \"n23\"] assigned=[\"n23\", \"n18\"]"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=33.5703125, glitches=94, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=60, output=60, mean=46.08203125, glitches=148, single_input_glitches=16"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: output glitch regression"
+      ]
+    },
+    "two_input_only": {
+      "physical_to_logical_assignments": [
+        "PIN_ASSIGN g5 physical_to_logical=[1, 0] original=[\"g4\", \"g0\"] assigned=[\"g0\", \"g4\"]",
+        "PIN_ASSIGN g7 physical_to_logical=[1, 0] original=[\"g1\", \"g3\"] assigned=[\"g3\", \"g1\"]",
+        "PIN_ASSIGN g8 physical_to_logical=[1, 0] original=[\"g2\", \"g3\"] assigned=[\"g3\", \"g2\"]",
+        "PIN_ASSIGN g10 physical_to_logical=[1, 0] original=[\"g9\", \"g8\"] assigned=[\"g8\", \"g9\"]",
+        "PIN_ASSIGN g20 physical_to_logical=[1, 0] original=[\"d1\", \"g2\"] assigned=[\"g2\", \"d1\"]",
+        "PIN_ASSIGN g22 physical_to_logical=[1, 0] original=[\"g21\", \"g20\"] assigned=[\"g20\", \"g21\"]",
+        "PIN_ASSIGN g25 physical_to_logical=[1, 0] original=[\"g0\", \"g1\"] assigned=[\"g1\", \"g0\"]",
+        "PIN_ASSIGN g31 physical_to_logical=[1, 0] original=[\"g30\", \"g29\"] assigned=[\"g29\", \"g30\"]",
+        "PIN_ASSIGN n3 physical_to_logical=[1, 0] original=[\"n2\", \"d0\"] assigned=[\"d0\", \"n2\"]",
+        "PIN_ASSIGN g9 physical_to_logical=[1, 0] original=[\"d1\", \"d0\"] assigned=[\"d0\", \"d1\"]",
+        "PIN_ASSIGN g22 physical_to_logical=[1, 0] original=[\"d2\", \"d1\"] assigned=[\"d1\", \"d2\"]",
+        "PIN_ASSIGN g1 physical_to_logical=[1, 0] original=[\"n2\", \"n1\"] assigned=[\"n1\", \"n2\"]",
+        "PIN_ASSIGN n8 physical_to_logical=[1, 0] original=[\"n3\", \"n6\"] assigned=[\"n6\", \"n3\"]",
+        "PIN_ASSIGN g7 physical_to_logical=[1, 0] original=[\"g5\", \"g6\"] assigned=[\"g6\", \"g5\"]",
+        "PIN_ASSIGN n10 physical_to_logical=[1, 0] original=[\"n6\", \"n9\"] assigned=[\"n9\", \"n6\"]",
+        "PIN_ASSIGN g14 physical_to_logical=[1, 0] original=[\"d3\", \"g13\"] assigned=[\"g13\", \"d3\"]",
+        "PIN_ASSIGN g27 physical_to_logical=[1, 0] original=[\"n14\", \"n15\"] assigned=[\"n15\", \"n14\"]",
+        "PIN_ASSIGN n19 physical_to_logical=[1, 0] original=[\"n18\", \"d0\"] assigned=[\"d0\", \"n18\"]",
+        "PIN_ASSIGN g25 physical_to_logical=[1, 0] original=[\"n12\", \"n8\"] assigned=[\"n8\", \"n12\"]",
+        "PIN_ASSIGN n23 physical_to_logical=[1, 0] original=[\"n22\", \"n10\"] assigned=[\"n10\", \"n22\"]",
+        "PIN_ASSIGN n24 physical_to_logical=[1, 0] original=[\"n7\", \"g15\"] assigned=[\"g15\", \"n7\"]",
+        "PIN_ASSIGN g21 physical_to_logical=[1, 0] original=[\"n25\", \"n20\"] assigned=[\"n20\", \"n25\"]",
+        "PIN_ASSIGN g28 physical_to_logical=[1, 0] original=[\"n18\", \"n23\"] assigned=[\"n23\", \"n18\"]"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=33.66015625, glitches=84, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=60, output=60, mean=46.08203125, glitches=148, single_input_glitches=16"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: output glitch regression"
+      ]
+    },
+    "nor_two_only": {
+      "physical_to_logical_assignments": [
+        "PIN_ASSIGN g5 physical_to_logical=[1, 0] original=[\"g4\", \"g0\"] assigned=[\"g0\", \"g4\"]",
+        "PIN_ASSIGN g7 physical_to_logical=[1, 0] original=[\"g1\", \"g3\"] assigned=[\"g3\", \"g1\"]",
+        "PIN_ASSIGN g8 physical_to_logical=[1, 0] original=[\"g2\", \"g3\"] assigned=[\"g3\", \"g2\"]",
+        "PIN_ASSIGN g10 physical_to_logical=[1, 0] original=[\"g9\", \"g8\"] assigned=[\"g8\", \"g9\"]",
+        "PIN_ASSIGN g20 physical_to_logical=[1, 0] original=[\"d1\", \"g2\"] assigned=[\"g2\", \"d1\"]",
+        "PIN_ASSIGN g22 physical_to_logical=[1, 0] original=[\"g21\", \"g20\"] assigned=[\"g20\", \"g21\"]",
+        "PIN_ASSIGN g25 physical_to_logical=[1, 0] original=[\"g0\", \"g1\"] assigned=[\"g1\", \"g0\"]",
+        "PIN_ASSIGN g31 physical_to_logical=[1, 0] original=[\"g30\", \"g29\"] assigned=[\"g29\", \"g30\"]",
+        "PIN_ASSIGN g9 physical_to_logical=[1, 0] original=[\"d1\", \"d0\"] assigned=[\"d0\", \"d1\"]",
+        "PIN_ASSIGN n8 physical_to_logical=[1, 0] original=[\"n3\", \"n6\"] assigned=[\"n6\", \"n3\"]",
+        "PIN_ASSIGN n10 physical_to_logical=[1, 0] original=[\"n6\", \"n9\"] assigned=[\"n9\", \"n6\"]",
+        "PIN_ASSIGN g27 physical_to_logical=[1, 0] original=[\"n14\", \"n15\"] assigned=[\"n15\", \"n14\"]",
+        "PIN_ASSIGN n19 physical_to_logical=[1, 0] original=[\"n18\", \"d0\"] assigned=[\"d0\", \"n18\"]",
+        "PIN_ASSIGN g25 physical_to_logical=[1, 0] original=[\"n12\", \"n8\"] assigned=[\"n8\", \"n12\"]"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=33.66015625, glitches=84, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=69, output=69, mean=50.578125, glitches=146, single_input_glitches=16"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: output timing regression"
+      ]
+    },
+    "two_input_no_longer": {
+      "physical_to_logical_assignments": [
+        "PIN_ASSIGN g5 physical_to_logical=[1, 0] original=[\"g4\", \"g0\"] assigned=[\"g0\", \"g4\"]",
+        "PIN_ASSIGN g8 physical_to_logical=[1, 0] original=[\"g2\", \"g3\"] assigned=[\"g3\", \"g2\"]",
+        "PIN_ASSIGN g10 physical_to_logical=[1, 0] original=[\"g9\", \"g8\"] assigned=[\"g8\", \"g9\"]",
+        "PIN_ASSIGN g31 physical_to_logical=[1, 0] original=[\"g30\", \"g29\"] assigned=[\"g29\", \"g30\"]",
+        "PIN_ASSIGN g9 physical_to_logical=[1, 0] original=[\"d1\", \"d0\"] assigned=[\"d0\", \"d1\"]",
+        "PIN_ASSIGN g1 physical_to_logical=[1, 0] original=[\"n2\", \"n1\"] assigned=[\"n1\", \"n2\"]",
+        "PIN_ASSIGN g14 physical_to_logical=[1, 0] original=[\"d3\", \"g13\"] assigned=[\"g13\", \"d3\"]",
+        "PIN_ASSIGN n19 physical_to_logical=[1, 0] original=[\"n18\", \"d0\"] assigned=[\"d0\", \"n18\"]",
+        "PIN_ASSIGN n23 physical_to_logical=[1, 0] original=[\"n22\", \"n10\"] assigned=[\"n10\", \"n22\"]",
+        "PIN_ASSIGN n24 physical_to_logical=[1, 0] original=[\"n7\", \"g15\"] assigned=[\"g15\", \"n7\"]",
+        "PIN_ASSIGN g28 physical_to_logical=[1, 0] original=[\"n18\", \"n23\"] assigned=[\"n23\", \"n18\"]"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=34.48046875, glitches=85, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=60, output=60, mean=45.7578125, glitches=147, single_input_glitches=18"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: output glitch regression"
+      ]
+    }
+  }
+}
