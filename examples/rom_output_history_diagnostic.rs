@@ -1,15 +1,35 @@
-//! Manual diagnostic, not an acceptance test. Stock output lamps misread this history.
+//! Manual route/power diagnostic; optional argument is four comma-separated ROM words.
 use reda::compile::{compile, lowering::lower_optimised};
 use reda::frontend::{compile_systemverilog, CompileOptions, SourceInput};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::BlockKind;
 use std::collections::HashMap;
 fn main() {
-    let text = "module source_rom(input logic a,b,output logic y0,y1,y2); assign y0=b ? (a ? 1'b0 : 1'b0) : (a ? 1'b1 : 1'b1); assign y1=b ? (a ? 1'b0 : 1'b1) : (a ? 1'b1 : 1'b0); assign y2=b ? (a ? 1'b0 : 1'b0) : (a ? 1'b0 : 1'b0); endmodule";
+    let words: [u8; 4] = match std::env::args().nth(1) {
+        Some(arg) => {
+            let values: Vec<u8> = arg
+                .split(',')
+                .map(|n| n.parse().expect("four 3-bit words"))
+                .collect();
+            let words: [u8; 4] = values.try_into().expect("four words required");
+            assert!(words.iter().all(|w| *w < 8));
+            words
+        }
+        None => [1, 3, 2, 0],
+    };
+    let mut text = String::from("module source_rom(input logic a,b,output logic y0,y1,y2);");
+    for bit in 0..3 {
+        let v = words.map(|w| (w >> bit) & 1);
+        text.push_str(&format!(
+            "assign y{bit}=b ? (a ? 1'b{} : 1'b{}) : (a ? 1'b{} : 1'b{});",
+            v[3], v[2], v[1], v[0]
+        ));
+    }
+    text.push_str("endmodule");
     let artifact = compile_systemverilog(
         &[SourceInput {
             name: "diagnostic.sv",
-            text,
+            text: &text,
         }],
         &CompileOptions::new("source_rom"),
     )
@@ -81,6 +101,29 @@ fn main() {
                     values.insert(gate.output.clone(), expected);
                     let (x, y, z) = circuit.gate_output_positions[&gate.output];
                     let state = sim.world().get(x, y, z);
+                    let actual = if state.kind == BlockKind::RedstoneWire {
+                        state.power > 0
+                    } else {
+                        state.lit
+                    };
+                    if actual != expected {
+                        println!("incorrect gate {} from={from},to={to},address={address},at=({x},{y},{z}),expected={expected},state={state:?}", gate.output);
+                        for dy in -1..=1 {
+                            for dz in -2..=2 {
+                                for dx in -2..=2 {
+                                    let cell = sim.world().get(x + dx, y + dy, z + dz);
+                                    if cell.kind != BlockKind::Air {
+                                        println!(
+                                            "gate neighborhood ({},{},{}) {cell:?}",
+                                            x + dx,
+                                            y + dy,
+                                            z + dz
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
                     assert_eq!(
                         if state.kind == BlockKind::RedstoneWire {
                             state.power > 0
