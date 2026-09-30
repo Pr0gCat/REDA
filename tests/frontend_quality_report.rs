@@ -54,13 +54,44 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
     let planner = format!("{:?}", compiled.planner_kind());
     let mut sim = Simulator::new(compiled.world);
     sim.run_until_stable(2000).expect("initial world settles");
+    sim.attach_observer(
+        positions
+            .iter()
+            .zip(output_names)
+            .map(|(&(x, y, z), name)| {
+                (
+                    reda::redstone::simulator::position::Position::new(x, y, z),
+                    (*name).to_string(),
+                )
+            }),
+    );
+    let mut output_traces = Vec::new();
+    let mut worst_output_ticks = 0;
+    let mut glitch_transitions = 0;
     let mut worst_ticks = 0;
     let mut worst_pair = (0, 0);
     let mut sum_ticks = 0;
     for from in 0..16 {
         for to in 0..16 {
             apply(&mut sim, &inputs, from);
+            sim.reset_observer();
+            let start_tick = sim.current_tick();
             let ticks = apply(&mut sim, &inputs, to);
+            let timing =
+                reda::timing::observations_to_result(sim.observations(), start_tick, ticks);
+            let output_ticks = timing
+                .nets
+                .values()
+                .filter_map(|net| net.arrival_tick())
+                .max()
+                .unwrap_or(0);
+            worst_output_ticks = worst_output_ticks.max(output_ticks);
+            let glitched = timing.nets.values().any(|net| net.glitched());
+            glitch_transitions += usize::from(glitched);
+            output_traces.push(json!({"from":from, "to":to,
+                "last_output_change_tick":output_ticks, "glitched":glitched,
+                "changes": timing.nets.iter().map(|(name, net)|
+                    (name.clone(), json!(net.changes()))).collect::<std::collections::BTreeMap<_,_>>() }));
             if ticks > worst_ticks {
                 worst_ticks = ticks;
                 worst_pair = (from, to);
@@ -86,6 +117,42 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
             }
         }
     }
+    let single_input_glitches = output_traces
+        .iter()
+        .filter(|trace| {
+            trace["glitched"] == true
+                && (trace["from"].as_u64().unwrap() ^ trace["to"].as_u64().unwrap()).count_ones()
+                    == 1
+        })
+        .count();
+    let output_baselines: Value = serde_json::from_str(include_str!(
+        "../docs/generator-output-timing-baseline-2026-09-30.json"
+    ))
+    .unwrap();
+    let output_baseline = output_baselines["measurements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["case"] == top && row["frontend"] == frontend)
+        .unwrap();
+    assert!(
+        worst_output_ticks
+            <= output_baseline["worst_output_change_ticks"]
+                .as_u64()
+                .unwrap(),
+        "{top}/{frontend}: output timing regression"
+    );
+    assert!(
+        glitch_transitions as u64 <= output_baseline["glitch_transitions"].as_u64().unwrap(),
+        "{top}/{frontend}: output glitch regression"
+    );
+    assert!(
+        single_input_glitches as u64
+            <= output_baseline["single_input_glitch_transitions"]
+                .as_u64()
+                .unwrap(),
+        "{top}/{frontend}: single input glitch regression"
+    );
     // Fixed pre-experiment timing baselines; material counts are diagnostic only.
     let (tick_limit, total_tick_limit) = match (top, frontend) {
         ("and4", "REDA") => (28, 1681),
@@ -117,6 +184,8 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
         "physical": metrics, "historical_channel_baseline": legacy_baseline, "planner": planner, "world_fingerprint": fingerprint,
         "lower_and_compile_ms": compile_ms,
         "transitions": 256, "worst_settle_ticks": worst_ticks,
+        "worst_output_change_ticks": worst_output_ticks,
+        "glitch_transitions": glitch_transitions, "single_input_glitch_transitions": single_input_glitches, "output_traces": output_traces,
         "worst_transition": worst_pair, "mean_settle_ticks": sum_ticks as f64 / 256.0,
     });
     println!("{row}");

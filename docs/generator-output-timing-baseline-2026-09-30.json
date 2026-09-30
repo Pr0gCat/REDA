@@ -1,0 +1,774 @@
+{
+  "base_commit": "17bb1e4",
+  "sampling": "end of each simulated game tick at public output lamps",
+  "measurements": [
+    {
+      "case": "and4",
+      "frontend": "REDA",
+      "worst_output_change_ticks": 16,
+      "glitch_transitions": 13,
+      "single_input_glitch_transitions": 0,
+      "witnesses": []
+    },
+    {
+      "case": "and4",
+      "frontend": "Yosys-fresh",
+      "worst_output_change_ticks": 12,
+      "glitch_transitions": 0,
+      "single_input_glitch_transitions": 0,
+      "witnesses": []
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "REDA",
+      "worst_output_change_ticks": 46,
+      "glitch_transitions": 109,
+      "single_input_glitch_transitions": 1,
+      "witnesses": [
+        {
+          "changes": {
+            "f": [
+              [
+                35,
+                true
+              ],
+              [
+                42,
+                false
+              ]
+            ]
+          },
+          "from": 14,
+          "glitched": true,
+          "last_output_change_tick": 42,
+          "to": 10
+        }
+      ]
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "Yosys-fresh",
+      "worst_output_change_ticks": 64,
+      "glitch_transitions": 141,
+      "single_input_glitch_transitions": 17,
+      "witnesses": [
+        {
+          "changes": {
+            "a": [
+              [
+                46,
+                false
+              ],
+              [
+                49,
+                true
+              ]
+            ],
+            "c": [
+              [
+                34,
+                false
+              ]
+            ],
+            "d": [
+              [
+                42,
+                false
+              ],
+              [
+                45,
+                true
+              ]
+            ],
+            "f": [
+              [
+                44,
+                false
+              ]
+            ],
+            "g": [
+              [
+                41,
+                true
+              ]
+            ]
+          },
+          "from": 0,
+          "glitched": true,
+          "last_output_change_tick": 49,
+          "to": 2
+        },
+        {
+          "changes": {
+            "a": [
+              [
+                52,
+                false
+              ]
+            ],
+            "b": [
+              [
+                30,
+                false
+              ],
+              [
+                47,
+                true
+              ]
+            ],
+            "d": [
+              [
+                48,
+                false
+              ]
+            ],
+            "e": [
+              [
+                34,
+                false
+              ]
+            ],
+            "g": [
+              [
+                43,
+                true
+              ]
+            ]
+          },
+          "from": 0,
+          "glitched": true,
+          "last_output_change_tick": 52,
+          "to": 4
+        },
+        {
+          "changes": {
+            "a": [
+              [
+                50,
+                false
+              ],
+              [
+                53,
+                true
+              ]
+            ],
+            "d": [
+              [
+                46,
+                false
+              ],
+              [
+                49,
+                true
+              ]
+            ],
+            "f": [
+              [
+                48,
+                false
+              ],
+              [
+                51,
+                true
+              ]
+            ],
+            "g": [
+              [
+                43,
+                true
+              ]
+            ]
+          },
+          "from": 0,
+          "glitched": true,
+          "last_output_change_tick": 53,
+          "to": 8
+        },
+        {
+          "changes": {
+            "a": [
+              [
+                50,
+                false
+              ],
+              [
+                55,
+                true
+              ]
+            ],
+            "b": [
+              [
+                30,
+                false
+              ]
+            ],
+            "c": [
+              [
+                37,
+                true
+              ]
+            ],
+            "d": [
+              [
+                46,
+                false
+              ],
+              [
+                51,
+                true
+              ]
+            ],
+            "f": [
+              [
+                53,
+                true
+              ]
+            ],
+            "g": [
+              [
+                42,
+                false
+              ],
+              [
+                45,
+                true
+              ]
+            ]
+          },
+          "from": 2,
+          "glitched": true,
+          "last_output_change_tick": 55,
+          "to": 6
+        },
+        {
+          "changes": {
+            "a": [
+              [
+                48,
+                false
+              ],
+              [
+                53,
+                true
+              ],
+              [
+                60,
+                false
+              ]
+            ],
+            "b": [
+              [
+                38,
+                false
+              ]
+            ],
+            "d": [
+              [
+                44,
+                false
+              ],
+              [
+                49,
+                true
+              ],
+              [
+                56,
+                false
+              ]
+            ],
+            "e": [
+              [
+                42,
+                false
+              ]
+            ],
+            "f": [
+              [
+                51,
+                true
+              ],
+              [
+                58,
+                false
+              ]
+            ],
+            "g": [
+              [
+                40,
+                false
+              ],
+              [
+                43,
+                true
+              ],
+              [
+                50,
+                false
+              ]
+            ]
+          },
+          "from": 2,
+          "glitched": true,
+          "last_output_change_tick": 60,
+          "to": 10
+        },
+        {
+          "changes": {
+            "b": [
+              [
+                30,
+                false
+              ],
+              [
+                41,
+                true
+              ]
+            ],
+            "d": [
+              [
+                46,
+                false
+              ]
+            ],
+            "g": [
+              [
+                42,
+                false
+              ]
+            ]
+          },
+          "from": 3,
+          "glitched": true,
+          "last_output_change_tick": 46,
+          "to": 7
+        },
+        {
+          "changes": {
+            "a": [
+              [
+                48,
+                false
+              ],
+              [
+                53,
+                true
+              ],
+              [
+                60,
+                false
+              ]
+            ],
+            "b": [
+              [
+                38,
+                false
+              ]
+            ],
+            "c": [
+              [
+                32,
+                false
+              ]
+            ],
+            "d": [
+              [
+                44,
+                false
+              ],
+              [
+                49,
+                true
+              ],
+              [
+                56,
+                false
+              ]
+            ],
+            "f": [
+              [
+                51,
+                true
+              ],
+              [
+                58,
+                false
+              ]
+            ],
+            "g": [
+              [
+                40,
+                false
+              ],
+              [
+                43,
+                true
+              ],
+              [
+                50,
+                false
+              ]
+            ]
+          },
+          "from": 3,
+          "glitched": true,
+          "last_output_change_tick": 60,
+          "to": 11
+        },
+        {
+          "changes": {
+            "a": [
+              [
+                57,
+                true
+              ]
+            ],
+            "b": [
+              [
+                48,
+                false
+              ]
+            ],
+            "d": [
+              [
+                53,
+                true
+              ]
+            ],
+            "e": [
+              [
+                29,
+                true
+              ]
+            ],
+            "f": [
+              [
+                46,
+                false
+              ],
+              [
+                55,
+                true
+              ]
+            ],
+            "g": [
+              [
+                44,
+                false
+              ],
+              [
+                47,
+                true
+              ]
+            ]
+          },
+          "from": 4,
+          "glitched": true,
+          "last_output_change_tick": 57,
+          "to": 6
+        },
+        {
+          "changes": {
+            "a": [
+              [
+                50,
+                false
+              ],
+              [
+                51,
+                true
+              ],
+              [
+                58,
+                false
+              ]
+            ],
+            "b": [
+              [
+                27,
+                true
+              ]
+            ],
+            "d": [
+              [
+                46,
+                false
+              ],
+              [
+                47,
+                true
+              ],
+              [
+                54,
+                false
+              ]
+            ],
+            "f": [
+              [
+                48,
+                false
+              ],
+              [
+                49,
+                true
+              ],
+              [
+                56,
+                false
+              ]
+            ],
+            "g": [
+              [
+                48,
+                false
+              ]
+            ]
+          },
+          "from": 5,
+          "glitched": true,
+          "last_output_change_tick": 58,
+          "to": 1
+        },
+        {
+          "changes": {
+            "a": [
+              [
+                48,
+                false
+              ],
+              [
+                57,
+                true
+              ]
+            ],
+            "b": [
+              [
+                51,
+                true
+              ]
+            ],
+            "d": [
+              [
+                44,
+                false
+              ]
+            ],
+            "f": [
+              [
+                46,
+                false
+              ]
+            ],
+            "g": [
+              [
+                44,
+                false
+              ]
+            ]
+          },
+          "from": 5,
+          "glitched": true,
+          "last_output_change_tick": 57,
+          "to": 7
+        },
+        {
+          "changes": {
+            "d": [
+              [
+                43,
+                true
+              ]
+            ],
+            "f": [
+              [
+                49,
+                true
+              ],
+              [
+                56,
+                false
+              ]
+            ],
+            "g": [
+              [
+                39,
+                true
+              ]
+            ]
+          },
+          "from": 7,
+          "glitched": true,
+          "last_output_change_tick": 56,
+          "to": 3
+        },
+        {
+          "changes": {
+            "a": [
+              [
+                46,
+                false
+              ],
+              [
+                63,
+                true
+              ]
+            ],
+            "b": [
+              [
+                38,
+                false
+              ]
+            ],
+            "d": [
+              [
+                59,
+                true
+              ]
+            ],
+            "e": [
+              [
+                29,
+                true
+              ]
+            ],
+            "f": [
+              [
+                61,
+                true
+              ]
+            ],
+            "g": [
+              [
+                53,
+                true
+              ]
+            ]
+          },
+          "from": 7,
+          "glitched": true,
+          "last_output_change_tick": 63,
+          "to": 6
+        },
+        {
+          "changes": {
+            "a": [
+              [
+                45,
+                true
+              ]
+            ],
+            "b": [
+              [
+                35,
+                true
+              ]
+            ],
+            "c": [
+              [
+                29,
+                true
+              ],
+              [
+                38,
+                false
+              ]
+            ],
+            "d": [
+              [
+                41,
+                true
+              ]
+            ],
+            "e": [
+              [
+                39,
+                true
+              ]
+            ],
+            "g": [
+              [
+                37,
+                true
+              ]
+            ]
+          },
+          "from": 10,
+          "glitched": true,
+          "last_output_change_tick": 45,
+          "to": 2
+        },
+        {
+          "changes": {
+            "b": [
+              [
+                35,
+                true
+              ],
+              [
+                42,
+                false
+              ]
+            ]
+          },
+          "from": 10,
+          "glitched": true,
+          "last_output_change_tick": 42,
+          "to": 11
+        },
+        {
+          "changes": {
+            "b": [
+              [
+                35,
+                true
+              ],
+              [
+                42,
+                false
+              ]
+            ]
+          },
+          "from": 12,
+          "glitched": true,
+          "last_output_change_tick": 42,
+          "to": 13
+        },
+        {
+          "changes": {
+            "e": [
+              [
+                29,
+                true
+              ],
+              [
+                42,
+                false
+              ]
+            ]
+          },
+          "from": 12,
+          "glitched": true,
+          "last_output_change_tick": 42,
+          "to": 14
+        },
+        {
+          "changes": {
+            "b": [
+              [
+                35,
+                true
+              ],
+              [
+                42,
+                false
+              ]
+            ]
+          },
+          "from": 14,
+          "glitched": true,
+          "last_output_change_tick": 42,
+          "to": 15
+        }
+      ]
+    }
+  ]
+}
