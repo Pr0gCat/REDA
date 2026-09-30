@@ -1,0 +1,980 @@
+{
+  "base_commit": "4846520",
+  "decision": "reject and restore",
+  "prototype_diff": "diff --git a/src/frontend/logic.rs b/src/frontend/logic.rs\nindex 0e001b0..28689e0 100644\n--- a/src/frontend/logic.rs\n+++ b/src/frontend/logic.rs\n@@ -258,14 +258,11 @@ impl LogicGraph {\n             // Equal constants were handled by `when_false == when_true`.\n             (Some(_), Some(_)) => unreachable!(\"different constants handled above\"),\n         }\n-        self.add(\n-            LogicNode::Mux {\n-                select,\n-                when_false,\n-                when_true,\n-            },\n-            origin,\n-        )\n+        let not_select = self.table_not(select, origin.clone());\n+        let old_arm = self.table_and(vec![not_select, when_false], origin.clone());\n+        let new_arm = self.table_and(vec![select, when_true], origin.clone());\n+        let shared_high = self.table_and(vec![when_false, when_true], origin.clone());\n+        self.table_or(vec![old_arm, new_arm, shared_high], origin)\n     }\n \n     fn table_not(&mut self, node: LogicNodeId, origin: LogicOrigin) -> LogicNodeId {\n",
+  "baseline": {
+    "case": "mux2",
+    "frontend": "native",
+    "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+    "transitions": 64,
+    "signal_quality": {
+      "lamp": {
+        "glitches": 4,
+        "single_input_glitches": 0,
+        "worst_change_ticks": 12,
+        "total_pulse_ticks": 12,
+        "worst_pulse_ticks": 5
+      },
+      "driver": {
+        "glitches": 6,
+        "single_input_glitches": 1,
+        "worst_change_ticks": 8,
+        "total_pulse_ticks": 16,
+        "worst_pulse_ticks": 4
+      }
+    }
+  },
+  "candidate_metrics": {
+    "driver": {
+      "glitches": 6,
+      "single_input_glitches": 0,
+      "total_pulse_ticks": 16,
+      "worst_change_ticks": 8,
+      "worst_pulse_ticks": 4
+    },
+    "lamp": {
+      "glitches": 6,
+      "single_input_glitches": 0,
+      "total_pulse_ticks": 22,
+      "worst_change_ticks": 12,
+      "worst_pulse_ticks": 5
+    }
+  },
+  "candidate_world_fingerprint": "3daf4053c8849c0f05cb8946e1db9f78bf111256484fa0c501a3eba8b776a16d",
+  "target_transition": {
+    "changes": {},
+    "expected": true,
+    "from": 3,
+    "to": 7
+  },
+  "dff_failure": "SignalStrengthViolation { net: g1, sink: GateInput { gate: g6, support: (24,1,41) } }",
+  "matrix_failure": "mux2/native: lamp glitches regression: 6 > 4",
+  "candidate_traces": [
+    {
+      "changes": {},
+      "expected": false,
+      "from": 0,
+      "to": 0
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            7,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 0,
+      "to": 1
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 0,
+      "to": 2
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            7,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 0,
+      "to": 3
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 0,
+      "to": 4
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 0,
+      "to": 5
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            9,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 0,
+      "to": 6
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            9,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 0,
+      "to": 7
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            10,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 1,
+      "to": 0
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 1,
+      "to": 1
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            10,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 1,
+      "to": 2
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 1,
+      "to": 3
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            4,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            8,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 1,
+      "to": 4
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            4,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            8,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 1,
+      "to": 5
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            4,
+            false
+          ],
+          [
+            8,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            8,
+            false
+          ],
+          [
+            9,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 1,
+      "to": 6
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            4,
+            false
+          ],
+          [
+            8,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            8,
+            false
+          ],
+          [
+            9,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 1,
+      "to": 7
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 2,
+      "to": 0
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            7,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 2,
+      "to": 1
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 2,
+      "to": 2
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            7,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 2,
+      "to": 3
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            true
+          ],
+          [
+            8,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            7,
+            true
+          ],
+          [
+            12,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 2,
+      "to": 4
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            true
+          ],
+          [
+            8,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            7,
+            true
+          ],
+          [
+            12,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 2,
+      "to": 5
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            7,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 2,
+      "to": 6
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            7,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 2,
+      "to": 7
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            10,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 3,
+      "to": 0
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 3,
+      "to": 1
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            10,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 3,
+      "to": 2
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 3,
+      "to": 3
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            12,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 3,
+      "to": 4
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            12,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 3,
+      "to": 5
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 3,
+      "to": 6
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 3,
+      "to": 7
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 4,
+      "to": 0
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            7,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 4,
+      "to": 1
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 4,
+      "to": 2
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            7,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 4,
+      "to": 3
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 4,
+      "to": 4
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 4,
+      "to": 5
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            9,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 4,
+      "to": 6
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            9,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 4,
+      "to": 7
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            4,
+            true
+          ],
+          [
+            6,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            5,
+            true
+          ],
+          [
+            10,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 5,
+      "to": 0
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            4,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            5,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 5,
+      "to": 1
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            4,
+            true
+          ],
+          [
+            6,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            5,
+            true
+          ],
+          [
+            10,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 5,
+      "to": 2
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            4,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            5,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 5,
+      "to": 3
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 5,
+      "to": 4
+    },
+    {
+      "changes": {},
+      "expected": false,
+      "from": 5,
+      "to": 5
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            9,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 5,
+      "to": 6
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            true
+          ]
+        ],
+        "lamp": [
+          [
+            9,
+            true
+          ]
+        ]
+      },
+      "expected": true,
+      "from": 5,
+      "to": 7
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            10,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 6,
+      "to": 0
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 6,
+      "to": 1
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            10,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 6,
+      "to": 2
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 6,
+      "to": 3
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            12,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 6,
+      "to": 4
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            12,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 6,
+      "to": 5
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 6,
+      "to": 6
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 6,
+      "to": 7
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            10,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 7,
+      "to": 0
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 7,
+      "to": 1
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            6,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            10,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 7,
+      "to": 2
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 7,
+      "to": 3
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            12,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 7,
+      "to": 4
+    },
+    {
+      "changes": {
+        "driver": [
+          [
+            8,
+            false
+          ]
+        ],
+        "lamp": [
+          [
+            12,
+            false
+          ]
+        ]
+      },
+      "expected": false,
+      "from": 7,
+      "to": 5
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 7,
+      "to": 6
+    },
+    {
+      "changes": {},
+      "expected": true,
+      "from": 7,
+      "to": 7
+    }
+  ]
+}
