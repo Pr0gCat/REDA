@@ -135,6 +135,7 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
         .iter()
         .find(|row| row["case"] == top && row["frontend"] == frontend)
         .unwrap();
+    eprintln!("{top}/{frontend}: world={worst_ticks}, output={worst_output_ticks}, mean={}, glitches={glitch_transitions}, single_input_glitches={single_input_glitches}",sum_ticks as f64 / 256.0);
     assert!(
         worst_output_ticks
             <= output_baseline["worst_output_change_ticks"]

@@ -5,6 +5,69 @@ use reda::redstone::simulator::Simulator;
 use serde_json::json;
 
 #[test]
+fn trace_slowest_decoder_transition() {
+    let artifact = compile_systemverilog(
+        &[SourceInput {
+            name: "fixture.sv",
+            text: include_str!("fixtures/seven_segment.sv"),
+        }],
+        &CompileOptions::new("seven_segment"),
+    )
+    .unwrap();
+    let outputs = artifact.output_map();
+    let lowered = lower_optimised(&artifact.netlist).unwrap();
+    let compiled = compile(&lowered).unwrap();
+    let mut watched = reda::timing::watch_all_nets(&compiled);
+    for (name, signal) in &outputs {
+        let (x, y, z) = compiled.output_positions[signal];
+        watched.push((
+            reda::redstone::simulator::position::Position::new(x, y, z),
+            format!("public_{name}"),
+        ));
+    }
+    let positions: Vec<_> = ["d0", "d1", "d2", "d3"]
+        .iter()
+        .map(|name| compiled.input_positions[*name])
+        .collect();
+    let mut sim = Simulator::new(compiled.world);
+    sim.run_until_stable(2000).unwrap();
+    for &(x, y, z) in &positions {
+        let mut block = sim.world().get(x, y, z).clone();
+        block.lit = false;
+        sim.world_mut().set(x, y, z, block);
+    }
+    sim.run_until_stable(2000).unwrap();
+    sim.attach_observer(watched);
+    let timing = reda::timing::measure_transition(&mut sim, 2000, |sim| {
+        for (i, &(x, y, z)) in positions.iter().enumerate() {
+            let mut block = sim.world().get(x, y, z).clone();
+            block.lit = 7 & (1 << i) != 0;
+            sim.world_mut().set(x, y, z, block);
+        }
+    })
+    .unwrap();
+    for (index, name) in ["a", "b", "c", "d", "e", "f", "g"].iter().enumerate() {
+        let (x, y, z) = compiled.output_positions[&outputs[*name]];
+        assert_eq!(
+            sim.world().get(x, y, z).lit,
+            reda::circuits::seven_segment::TRUTH_TABLE[7][index] == 1
+        );
+    }
+    let report = json!({"from":0,"to":7,"output_map":outputs,
+        "settle_ticks":timing.settle_game_ticks,
+        "gates":lowered.gates.iter().map(|gate| json!({"kind":format!("{:?}",gate.kind),"inputs":gate.inputs,"output":gate.output,"position":compiled.gate_output_positions[&gate.output]})).collect::<Vec<_>>(),
+        "changes":timing.nets.iter().map(|(name,net)| (name.clone(),json!(net.changes()))).collect::<std::collections::BTreeMap<_,_>>()});
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
+    std::fs::write(
+        target.join("generator_slow_path_trace.json"),
+        serde_json::to_string_pretty(&report).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
 fn trace_single_input_transition() {
     let artifact = compile_systemverilog(
         &[SourceInput {
