@@ -34,12 +34,19 @@ use crate::redstone::simulator::{BoundedSimulationError, SimulationError, Simula
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct QualityKey {
     pub observed_settle: u64,
     pub non_air_blocks: u64,
     pub occupied_volume: u64,
     pub static_routed_delay: ExactDelay,
+}
+
+impl QualityKey {
+    /// Performance used for candidate selection. Size fields remain diagnostics.
+    pub fn performance_key(&self) -> (u64, ExactDelay) {
+        (self.observed_settle, self.static_routed_delay)
+    }
 }
 
 #[cfg(test)]
@@ -535,12 +542,13 @@ pub struct CandidateMetrics {
 
 impl CandidateMetrics {
     pub fn is_strict_improvement_over(&self, incumbent: &Self) -> bool {
-        self.quality < incumbent.quality
+        self.quality.performance_key() < incumbent.quality.performance_key()
     }
 
     pub fn stable_selection_order(&self, other: &Self) -> Ordering {
         self.quality
-            .cmp(&other.quality)
+            .performance_key()
+            .cmp(&other.quality.performance_key())
             .then_with(|| self.candidate_fingerprint.cmp(&other.candidate_fingerprint))
     }
 }
@@ -1729,5 +1737,26 @@ mod tests {
         );
         assert!(!first.is_strict_improvement_over(&second));
         assert!(!second.is_strict_improvement_over(&first));
+
+        let mut smaller = first.clone();
+        smaller.quality.non_air_blocks = 1;
+        smaller.quality.occupied_volume = 1;
+        assert!(!smaller.is_strict_improvement_over(&first));
+        assert!(!first.is_strict_improvement_over(&smaller));
+        assert_eq!(
+            smaller.stable_selection_order(&first),
+            std::cmp::Ordering::Equal
+        );
+
+        let mut faster = first.clone();
+        faster.quality.non_air_blocks = 1000;
+        faster.quality.occupied_volume = 10000;
+        faster.quality.static_routed_delay =
+            crate::compile::fragment_synth::timing_graph::ExactDelay(2);
+        assert!(faster.is_strict_improvement_over(&first));
+        assert_eq!(
+            faster.stable_selection_order(&first),
+            std::cmp::Ordering::Less
+        );
     }
 }

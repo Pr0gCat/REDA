@@ -251,10 +251,9 @@ pub(crate) fn run_budgeted_proposals<T: SearchCandidate>(
         evaluations_used = evaluations_used.saturating_add(1);
 
         let certified_quality = evaluation.certified.as_ref().map(SearchCandidate::quality);
-        let accepted = evaluation
-            .certified
-            .as_ref()
-            .is_some_and(|candidate| candidate.quality() < best.quality());
+        let accepted = evaluation.certified.as_ref().is_some_and(|candidate| {
+            candidate.quality().performance_key() < best.quality().performance_key()
+        });
         if let Some(candidate) = evaluation.certified.take() {
             if accepted {
                 best = candidate;
@@ -508,13 +507,18 @@ mod tests {
             candidate_fingerprint: canonical_fingerprint(b"better"),
             quality: quality(7, 100),
         };
+        let smaller = SearchSeed {
+            candidate_fingerprint: canonical_fingerprint(b"smaller-only"),
+            quality: quality(8, 1),
+        };
         let scripted = vec![
+            ProposalEvaluation::certified(smaller),
             ProposalEvaluation::certified(worse),
             ProposalEvaluation::certified(better.clone()),
         ];
         let result = run_budgeted_proposals(
             seed(),
-            SynthesisBudget::Evaluations(2),
+            SynthesisBudget::Evaluations(3),
             &FakeClock {
                 now_nanos: Rc::new(Cell::new(0)),
             },
@@ -528,7 +532,7 @@ mod tests {
                 .iter()
                 .map(|trace| trace.accepted)
                 .collect::<Vec<_>>(),
-            [false, true]
+            [false, false, true]
         );
     }
 }

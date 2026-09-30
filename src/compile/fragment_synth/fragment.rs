@@ -1157,7 +1157,9 @@ mod tests {
             result.trace[0].terminal,
             ProposalTerminal::NoImprovement | ProposalTerminal::Accepted
         ));
-        assert!(result.best.metrics().quality <= parent_quality);
+        assert!(
+            result.best.metrics().quality.performance_key() <= parent_quality.performance_key()
+        );
     }
 
     #[test]
@@ -1256,7 +1258,10 @@ mod tests {
         assert!(
             certified.metrics().quality.observed_settle < parent.metrics().quality.observed_settle
         );
-        assert!(certified.metrics().quality < parent.metrics().quality);
+        assert!(
+            certified.metrics().quality.performance_key()
+                < parent.metrics().quality.performance_key()
+        );
 
         let parent = compile_sparse_seed_with_services(input, services).unwrap();
         let parent_quality = parent.metrics().quality;
@@ -1268,7 +1273,7 @@ mod tests {
             &mut budgeted,
         );
         assert!(result.trace.iter().any(|trace| trace.accepted));
-        assert!(result.best.metrics().quality < parent_quality);
+        assert!(result.best.metrics().quality.performance_key() < parent_quality.performance_key());
     }
 
     #[test]
@@ -1299,7 +1304,10 @@ mod tests {
         let duplicate = proposals.next(1, &parent).unwrap().certified.unwrap();
 
         assert_eq!(duplicate.candidate().instances.instances.len(), 2);
-        assert!(duplicate.metrics().quality >= parent.metrics().quality);
+        assert!(
+            duplicate.metrics().quality.performance_key()
+                >= parent.metrics().quality.performance_key()
+        );
     }
 
     struct CappedRouter;

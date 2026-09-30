@@ -1015,7 +1015,10 @@ mod tests {
             assert_eq!(result.evaluations_used, budget);
             assert_eq!(result.trace, complete.trace[..budget as usize]);
             assert_eq!(result.case_fingerprint, complete.case_fingerprint);
-            assert!(complete.metrics.quality <= result.metrics.quality);
+            assert!(
+                complete.metrics.quality.performance_key()
+                    <= result.metrics.quality.performance_key()
+            );
         }
     }
 
