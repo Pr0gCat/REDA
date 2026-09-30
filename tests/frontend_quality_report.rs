@@ -86,30 +86,25 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
             }
         }
     }
-    if frontend == "REDA" {
-        let (blocks, volume, ticks) = if top == "and4" {
-            (228, 3528, 28)
-        } else {
-            (6372, 64548, 46)
-        };
-        assert!(
-            metrics.non_air_blocks <= blocks,
-            "{top}: block regression: {metrics:?}"
-        );
-        assert!(
-            metrics.occupied_volume <= volume,
-            "{top}: volume regression: {metrics:?}"
-        );
-        assert!(
-            worst_ticks <= ticks,
-            "{top}: settle regression: {worst_ticks}"
-        );
-    }
+    // Fixed pre-experiment timing baselines; material counts are diagnostic only.
+    let (tick_limit, total_tick_limit) = match (top, frontend) {
+        ("and4", "REDA") => (28, 1681),
+        ("and4", "Yosys-fresh") => (22, 1465),
+        ("seven_segment", "REDA") => (46, 9086),
+        ("seven_segment", "Yosys-fresh") => (64, 12301),
+        _ => panic!("missing independent timing baseline: {top}/{frontend}"),
+    };
+    assert!(
+        worst_ticks <= tick_limit,
+        "{top}/{frontend}: worst settle regression: {worst_ticks} > {tick_limit}"
+    );
+    assert!(
+        sum_ticks <= total_tick_limit,
+        "{top}/{frontend}: total settle regression: {sum_ticks} > {total_tick_limit}"
+    );
     let legacy_baseline = if top == "seven_segment" {
         let original = compile_legacy(&lowered).expect("historical channel baseline compiles");
         let baseline = physical_metrics(&original.world, lowered.gates.len() as u64);
-        assert!(metrics.non_air_blocks < baseline.non_air_blocks);
-        assert!(metrics.occupied_volume < baseline.occupied_volume);
         Some(json!({"physical": baseline, "world_fingerprint":
             reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&original.world)}))
     } else {

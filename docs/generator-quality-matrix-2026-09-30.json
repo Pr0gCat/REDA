@@ -1,0 +1,187 @@
+{
+  "base_commit": "83de6af",
+  "pipeline": "native or fresh Yosys -> lower_optimised -> compile -> full input transition truth tables",
+  "measurements": [
+    {
+      "case": "xor2",
+      "frontend": "native",
+      "lowered_gates": 5,
+      "mean_settle_ticks": 7.4375,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 5,
+          "numerator": 193
+        },
+        "non_air_blocks": 193,
+        "occupied_max": {
+          "x": 31,
+          "y": 4,
+          "z": 39
+        },
+        "occupied_min": {
+          "x": 20,
+          "y": 0,
+          "z": 23
+        },
+        "occupied_volume": 1020
+      },
+      "planner": "Unified3d",
+      "repeaters": 7,
+      "source": "module xor2(input logic a,b, output logic y); assign y=a^b; endmodule",
+      "transitions": 16,
+      "world_fingerprint": "b4d680036c11035e124b82ba20e593c488453dd3a34d15a11d1d2b534471342b",
+      "worst_settle_ticks": 14
+    },
+    {
+      "case": "xor2",
+      "frontend": "yosys",
+      "lowered_gates": 5,
+      "mean_settle_ticks": 7.4375,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 5,
+          "numerator": 193
+        },
+        "non_air_blocks": 193,
+        "occupied_max": {
+          "x": 31,
+          "y": 4,
+          "z": 39
+        },
+        "occupied_min": {
+          "x": 20,
+          "y": 0,
+          "z": 23
+        },
+        "occupied_volume": 1020
+      },
+      "planner": "Unified3d",
+      "repeaters": 7,
+      "source": "module xor2(input logic a,b, output logic y); assign y=a^b; endmodule",
+      "transitions": 16,
+      "world_fingerprint": "b4d680036c11035e124b82ba20e593c488453dd3a34d15a11d1d2b534471342b",
+      "worst_settle_ticks": 14
+    },
+    {
+      "case": "mux2",
+      "frontend": "native",
+      "lowered_gates": 6,
+      "mean_settle_ticks": 6.25,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 6,
+          "numerator": 174
+        },
+        "non_air_blocks": 174,
+        "occupied_max": {
+          "x": 47,
+          "y": 4,
+          "z": 42
+        },
+        "occupied_min": {
+          "x": 22,
+          "y": 0,
+          "z": 24
+        },
+        "occupied_volume": 2470
+      },
+      "planner": "Unified3d",
+      "repeaters": 3,
+      "source": "module mux2(input logic a,b,s, output logic y); assign y=s?b:a; endmodule",
+      "transitions": 64,
+      "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+      "worst_settle_ticks": 12
+    },
+    {
+      "case": "mux2",
+      "frontend": "yosys",
+      "lowered_gates": 6,
+      "mean_settle_ticks": 6.25,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 6,
+          "numerator": 174
+        },
+        "non_air_blocks": 174,
+        "occupied_max": {
+          "x": 47,
+          "y": 4,
+          "z": 42
+        },
+        "occupied_min": {
+          "x": 22,
+          "y": 0,
+          "z": 24
+        },
+        "occupied_volume": 2470
+      },
+      "planner": "Unified3d",
+      "repeaters": 3,
+      "source": "module mux2(input logic a,b,s, output logic y); assign y=s?b:a; endmodule",
+      "transitions": 64,
+      "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+      "worst_settle_ticks": 12
+    },
+    {
+      "case": "majority3",
+      "frontend": "native",
+      "lowered_gates": 8,
+      "mean_settle_ticks": 11.5,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 8,
+          "numerator": 588
+        },
+        "non_air_blocks": 588,
+        "occupied_max": {
+          "x": 44,
+          "y": 5,
+          "z": 53
+        },
+        "occupied_min": {
+          "x": 8,
+          "y": 0,
+          "z": 4
+        },
+        "occupied_volume": 11100
+      },
+      "planner": "Legacy",
+      "repeaters": 15,
+      "source": "module majority3(input logic a,b,c, output logic y); assign y=(a&b)|(a&c)|(b&c); endmodule",
+      "transitions": 64,
+      "world_fingerprint": "d9657b0cba5d2fbdcec75f3e725364d9bd0473af1ca0dc62dff1d8183a1c77fe",
+      "worst_settle_ticks": 18
+    },
+    {
+      "case": "majority3",
+      "frontend": "yosys",
+      "lowered_gates": 8,
+      "mean_settle_ticks": 15.046875,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 8,
+          "numerator": 792
+        },
+        "non_air_blocks": 792,
+        "occupied_max": {
+          "x": 60,
+          "y": 5,
+          "z": 61
+        },
+        "occupied_min": {
+          "x": 10,
+          "y": 0,
+          "z": 4
+        },
+        "occupied_volume": 17748
+      },
+      "planner": "Legacy",
+      "repeaters": 23,
+      "source": "module majority3(input logic a,b,c, output logic y); assign y=(a&b)|(a&c)|(b&c); endmodule",
+      "transitions": 64,
+      "world_fingerprint": "a61e1164bbcffd2882661f2a97092d2974fdac5a51cd2d552d95e5324f046c04",
+      "worst_settle_ticks": 26
+    }
+  ],
+  "observed_issue": "majority3: identical lowered gate count, different factored topology and physical costs"
+}
