@@ -1,0 +1,1542 @@
+{
+  "balanced": {
+    "driver_glitches": 0,
+    "driver_single_input_glitches": 0,
+    "lamp_glitches": 0,
+    "lamp_single_input_glitches": 0,
+    "total_driver_pulse_ticks": 0,
+    "total_settle_ticks": 162,
+    "traces": [
+      {
+        "changes": [],
+        "from": 0,
+        "ticks": 0,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 0,
+        "ticks": 14,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 11,
+            "value": true
+          }
+        ],
+        "from": 0,
+        "ticks": 11,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 11,
+            "value": true
+          }
+        ],
+        "from": 0,
+        "ticks": 11,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp0",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 14,
+            "value": false
+          },
+          {
+            "label": "lamp2",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 14,
+        "to": 0
+      },
+      {
+        "changes": [],
+        "from": 1,
+        "ticks": 0,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp0",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 14,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp0",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 14,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 14,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 14,
+        "to": 1
+      },
+      {
+        "changes": [],
+        "from": 2,
+        "ticks": 0,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 14,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp2",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 3,
+        "ticks": 14,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 3,
+        "ticks": 14,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 3,
+        "ticks": 14,
+        "to": 2
+      },
+      {
+        "changes": [],
+        "from": 3,
+        "ticks": 0,
+        "to": 3
+      }
+    ],
+    "worst_driver_change_ticks": 10,
+    "worst_driver_pulse_ticks": 0,
+    "worst_settle_ticks": 14
+  },
+  "baseline": {
+    "driver_glitches": 2,
+    "driver_single_input_glitches": 0,
+    "lamp_glitches": 2,
+    "lamp_single_input_glitches": 0,
+    "total_driver_pulse_ticks": 8,
+    "total_settle_ticks": 187,
+    "traces": [
+      {
+        "changes": [],
+        "from": 0,
+        "ticks": 0,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 12,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 12,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 13,
+            "value": true
+          }
+        ],
+        "from": 0,
+        "ticks": 13,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 12,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 13,
+            "value": true
+          }
+        ],
+        "from": 0,
+        "ticks": 13,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 12,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 13,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 16,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 20,
+            "value": false
+          }
+        ],
+        "from": 0,
+        "ticks": 20,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 12,
+            "value": false
+          },
+          {
+            "label": "lamp2",
+            "tick": 14,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 16,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 16,
+        "to": 0
+      },
+      {
+        "changes": [],
+        "from": 1,
+        "ticks": 0,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 12,
+            "value": false
+          },
+          {
+            "label": "lamp2",
+            "tick": 14,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 16,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 16,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 17,
+            "value": true
+          }
+        ],
+        "from": 1,
+        "ticks": 17,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 12,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 16,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 16,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 12,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 16,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 16,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 12,
+        "to": 1
+      },
+      {
+        "changes": [],
+        "from": 2,
+        "ticks": 0,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 16,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 20,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 20,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp2",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 3,
+        "ticks": 14,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "lamp0",
+            "tick": 12,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 12,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 13,
+            "value": true
+          }
+        ],
+        "from": 3,
+        "ticks": 13,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp2",
+            "tick": 14,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 16,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 17,
+            "value": true
+          }
+        ],
+        "from": 3,
+        "ticks": 17,
+        "to": 2
+      },
+      {
+        "changes": [],
+        "from": 3,
+        "ticks": 0,
+        "to": 3
+      }
+    ],
+    "worst_driver_change_ticks": 16,
+    "worst_driver_pulse_ticks": 4,
+    "worst_settle_ticks": 20
+  },
+  "candidate": {
+    "driver_glitches": 7,
+    "driver_single_input_glitches": 3,
+    "lamp_glitches": 1,
+    "lamp_single_input_glitches": 0,
+    "total_driver_pulse_ticks": 14,
+    "total_settle_ticks": 150,
+    "traces": [
+      {
+        "changes": [],
+        "from": 0,
+        "ticks": 0,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp0",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 0,
+        "ticks": 14,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 9,
+            "value": true
+          }
+        ],
+        "from": 0,
+        "ticks": 10,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 0,
+        "ticks": 14,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 12,
+            "value": false
+          },
+          {
+            "label": "lamp2",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 12,
+        "to": 0
+      },
+      {
+        "changes": [],
+        "from": 1,
+        "ticks": 0,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 12,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 14,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 12,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 12,
+        "to": 1
+      },
+      {
+        "changes": [],
+        "from": 2,
+        "ticks": 0,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 14,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 3,
+        "ticks": 12,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 3,
+        "ticks": 12,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 3,
+        "ticks": 12,
+        "to": 2
+      },
+      {
+        "changes": [],
+        "from": 3,
+        "ticks": 0,
+        "to": 3
+      }
+    ],
+    "worst_driver_change_ticks": 10,
+    "worst_driver_pulse_ticks": 2,
+    "worst_settle_ticks": 14
+  },
+  "covered": {
+    "driver_glitches": 4,
+    "driver_single_input_glitches": 0,
+    "lamp_glitches": 1,
+    "lamp_single_input_glitches": 0,
+    "total_driver_pulse_ticks": 8,
+    "total_settle_ticks": 151,
+    "traces": [
+      {
+        "changes": [],
+        "from": 0,
+        "ticks": 0,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp0",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 0,
+        "ticks": 14,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 9,
+            "value": true
+          }
+        ],
+        "from": 0,
+        "ticks": 9,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 0,
+        "ticks": 14,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 12,
+            "value": false
+          },
+          {
+            "label": "lamp2",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 12,
+        "to": 0
+      },
+      {
+        "changes": [],
+        "from": 1,
+        "ticks": 0,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "lamp0",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 12,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 14,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 12,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver1",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 14,
+        "to": 1
+      },
+      {
+        "changes": [],
+        "from": 2,
+        "ticks": 0,
+        "to": 2
+      },
+      {
+        "changes": [
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 9,
+            "value": true
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": false
+          },
+          {
+            "label": "lamp1",
+            "tick": 14,
+            "value": false
+          }
+        ],
+        "from": 2,
+        "ticks": 14,
+        "to": 3
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver0",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 3,
+        "ticks": 12,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "label": "driver0",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp0",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 3,
+        "ticks": 12,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "label": "driver2",
+            "tick": 8,
+            "value": false
+          },
+          {
+            "label": "driver1",
+            "tick": 10,
+            "value": true
+          },
+          {
+            "label": "lamp1",
+            "tick": 11,
+            "value": true
+          },
+          {
+            "label": "lamp2",
+            "tick": 12,
+            "value": false
+          }
+        ],
+        "from": 3,
+        "ticks": 12,
+        "to": 2
+      },
+      {
+        "changes": [],
+        "from": 3,
+        "ticks": 0,
+        "to": 3
+      }
+    ],
+    "worst_driver_change_ticks": 10,
+    "worst_driver_pulse_ticks": 2,
+    "worst_settle_ticks": 14
+  },
+  "words": [
+    1,
+    6,
+    3,
+    5
+  ]
+}
