@@ -2228,12 +2228,37 @@ pub(crate) fn plan_bent_path(
     incoming_strength: u8,
     reserve: i32,
 ) -> (Vec<bool>, u8) {
-    let threshold = (MAX_DUST_RUN - reserve) as i64;
+    plan_bent_path_reserved(len, bend_indices, incoming_strength, reserve, false)
+}
+
+/// Preserve the full interior dust budget and reserve strength only at the tail.
+pub(crate) fn plan_bent_path_terminal_reserve(
+    len: usize,
+    bend_indices: &BTreeSet<usize>,
+    incoming_strength: u8,
+    reserve: i32,
+) -> (Vec<bool>, u8) {
+    plan_bent_path_reserved(len, bend_indices, incoming_strength, reserve, true)
+}
+
+fn plan_bent_path_reserved(
+    len: usize,
+    bend_indices: &BTreeSet<usize>,
+    incoming_strength: u8,
+    reserve: i32,
+    terminal_only: bool,
+) -> (Vec<bool>, u8) {
+    let threshold = MAX_DUST_RUN as i64;
     let mut is_repeater = vec![false; len];
     let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);
     let mut i = 0usize;
     while i < len {
-        if (i as i64) - last_refresh <= threshold {
+        let required = if !terminal_only || i + 1 == len {
+            reserve as i64
+        } else {
+            0
+        };
+        if (i as i64) - last_refresh <= threshold - required {
             i += 1;
             continue;
         }

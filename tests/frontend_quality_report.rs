@@ -33,6 +33,10 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
     let metrics = physical_metrics(&compiled.world, lowered.gates.len() as u64);
     let fingerprint =
         reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&compiled.world);
+    let repeated = compile(&lowered).expect("repeat physical compilation succeeds");
+    assert_eq!(fingerprint,
+        reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&repeated.world),
+        "{top}/{frontend}: deterministic generation");
     let input_names: &[&str] = if top == "and4" {
         &["a", "b", "c", "d"]
     } else {

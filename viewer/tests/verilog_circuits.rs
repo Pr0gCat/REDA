@@ -15,11 +15,9 @@
 //!    baked file matches a fresh synthesis -- but both of those need Yosys.
 //!    This drives the baked one through `Session`, all 16 input combinations,
 //!    against the same truth table, on any machine.
-//! 2. **The circuit the viewer loads is the one the size ladder names.**
-//!    `verilog:seven_segment` is 31 logical cells, lowered through the
-//!    official global-polarity path into 47 physical gates and 10088 blocks;
-//!    if any of those moved, the viewer would be showing a different circuit
-//!    from the project’s official artefacts.
+//! 2. **The viewer geometry is the compiler's geometry.** Coordinates,
+//!    block kinds and repeater delays match the independently compiled baked
+//!    decoder, without a fixed material-count quality requirement.
 //!
 //! Like `and4_truth_table.rs`, this never calls `Session::pinout` or
 //! `Session::legend` (both return a `JsValue`, which aborts outside a real
@@ -447,13 +445,9 @@ fn the_verilog_seven_segment_session_matches_its_truth_table_through_the_wasm_ap
     }
 }
 
-/// The synthesised decoder the viewer loads is the same circuit the rest of
-/// this project quotes, at both of its levels: 31 gate-level cells as Yosys
-/// left them, 47 torches and merges once `compile::lowering` has assigned
-/// global polarities, 10088 blocks once the compiler has. `geometry()`'s length is that block
-/// count as the viewer itself sees it: one entry per non-air cell.
+/// Compare the serialized decoder against the compiler's actual world.
 #[test]
-fn the_verilog_seven_segment_is_the_size_the_ladder_says_it_is() {
+fn the_verilog_seven_segment_geometry_matches_the_compiler() {
     let (netlist, _) = verilog::find("verilog:seven_segment")
         .expect("catalog entry")
         .baked_netlist();
@@ -471,13 +465,24 @@ fn the_verilog_seven_segment_is_the_size_the_ladder_says_it_is() {
     let lowered = lower_optimised(&netlist).expect("the decoder lowers");
     assert_eq!(lowered.gates.len(), 47, "lowered gate count has moved");
 
+    let compiled = compile(&lowered).expect("the decoder compiles");
     let session = Session::new("verilog:seven_segment").expect("session builds");
-    let cells = session.geometry().len() / GEOMETRY_BYTES_PER_CELL;
-    assert_eq!(
-        cells, 10088,
-        "the synthesised decoder's block count has moved"
-    );
-    assert_eq!(session.geometry().len() % GEOMETRY_BYTES_PER_CELL, 0);
+    let geometry = session.geometry();
+    assert_eq!(geometry.len() % GEOMETRY_BYTES_PER_CELL, 0);
+    let cells = geometry.len() / GEOMETRY_BYTES_PER_CELL;
+    let expected_cells = reda::compile::metrics::physical_metrics(&compiled.world, 0).non_air_blocks;
+    assert_eq!(cells as u64, expected_cells, "every compiled cell is serialized");
+    let mut seen = BTreeSet::new();
+    for cell in geometry.chunks_exact(GEOMETRY_BYTES_PER_CELL) {
+        let x = u16::from_le_bytes([cell[0], cell[1]]) as i32;
+        let y = u16::from_le_bytes([cell[2], cell[3]]) as i32;
+        let z = u16::from_le_bytes([cell[4], cell[5]]) as i32;
+        assert!(seen.insert((x, y, z)), "duplicate serialized cell");
+        let expected = compiled.world.get(x, y, z);
+        assert_ne!(expected.kind, BlockKind::Air);
+        assert_eq!(cell[6], expected.kind as u8, "block kind at {x},{y},{z}");
+        assert_eq!(cell[9], expected.delay, "delay at {x},{y},{z}");
+    }
     assert_eq!(
         session.strengths().len(),
         cells,

@@ -3673,7 +3673,11 @@ pub(crate) enum ReservePolicy {
     /// stairs saturates the cap, the threshold collapses to two cells, and it
     /// is refreshed roughly every third cell whether or not anything about its
     /// geometry required it.
+    #[cfg_attr(not(test), allow(dead_code))] // Frozen reference used by routing tests.
     TotalStairs,
+    /// Keep the capped staircase reserve at the tail only. Pre-step refreshes
+    /// still protect climbs; historical TotalStairs callers remain unchanged.
+    TerminalStairs,
     /// Nothing held back: each refresh is demanded only where the wire would
     /// otherwise die, and stands on the latest cell before that point where
     /// a straight, flat repeater is legal.
@@ -3702,7 +3706,7 @@ fn reserve_policy(strict_local: bool, seed_rules: bool) -> ReservePolicy {
     if strict_local || seed_rules {
         ReservePolicy::LatestLegalCell
     } else {
-        ReservePolicy::TotalStairs
+        ReservePolicy::TerminalStairs
     }
 }
 
@@ -3821,7 +3825,7 @@ fn realise_branch_cells(
         previous = *cell;
     }
     let (ineligible, reserve) = match reserve_policy {
-        ReservePolicy::TotalStairs => {
+        ReservePolicy::TotalStairs | ReservePolicy::TerminalStairs => {
             let stairs = bends
                 .iter()
                 .filter(|&&index| {
@@ -3850,6 +3854,9 @@ fn realise_branch_cells(
     let exact = reserve_policy == ReservePolicy::LatestLegalCell;
     let mut is_repeater = if exact {
         exact_refreshes(cells.len(), &ineligible, incoming)
+    } else if reserve_policy == ReservePolicy::TerminalStairs {
+        crate::compile::plan_bent_path_terminal_reserve(cells.len(), &ineligible, incoming, reserve)
+            .0
     } else {
         crate::compile::plan_bent_path(cells.len(), &ineligible, incoming, reserve).0
     };
@@ -4746,11 +4753,23 @@ mod tests {
     use crate::compile::MAX_DUST_RUN;
 
     #[test]
+    fn tail_reserve_keeps_strength_without_shortening_every_refresh_cycle() {
+        let bends = BTreeSet::new();
+        let historical = crate::compile::plan_bent_path(24, &bends, 15, 4);
+        let terminal = crate::compile::plan_bent_path_terminal_reserve(24, &bends, 15, 4);
+        assert_eq!(historical.0.iter().enumerate().filter_map(|(i, &r)| r.then_some(i)).collect::<Vec<_>>(), vec![10, 21]);
+        assert_eq!(terminal.0.iter().enumerate().filter_map(|(i, &r)| r.then_some(i)).collect::<Vec<_>>(), vec![14]);
+        assert_eq!(historical.1, 13);
+        assert_eq!(terminal.1, 6);
+        assert!(terminal.1 > 4, "the tail still pays the complete reserve");
+    }
+
+    #[test]
     fn reserve_policy_matches_route_mode() {
         assert_eq!(
             reserve_policy(false, false),
-            ReservePolicy::TotalStairs,
-            "only the non-strict legacy adapter keeps the pinned reserve"
+            ReservePolicy::TerminalStairs,
+            "ordinary routes reserve at the tail; explicit historical routes keep TotalStairs"
         );
         for (strict_local, seed_rules) in [(true, false), (false, true), (true, true)] {
             assert_eq!(

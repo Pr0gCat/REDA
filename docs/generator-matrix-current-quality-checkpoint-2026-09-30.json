@@ -1,0 +1,150 @@
+{
+  "generator_base_commit": "afbd685",
+  "change": "terminal staircase reserve isolated to ordinary router; historical planners preserved",
+  "measurements": [
+    {
+      "case": "xor2",
+      "frontend": "native",
+      "world_fingerprint": "452be711b034b9f3ef938b5013b4e80dc8122410179d29b55d46c4908a21768c",
+      "worst_settle_ticks": 12,
+      "mean_settle_ticks": 6.375,
+      "signal_quality": {
+        "driver": {
+          "glitches": 1,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 2,
+          "worst_change_ticks": 8,
+          "worst_pulse_ticks": 2
+        },
+        "lamp": {
+          "glitches": 0,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 0,
+          "worst_change_ticks": 12,
+          "worst_pulse_ticks": 0
+        }
+      },
+      "transitions": 16
+    },
+    {
+      "case": "xor2",
+      "frontend": "yosys",
+      "world_fingerprint": "452be711b034b9f3ef938b5013b4e80dc8122410179d29b55d46c4908a21768c",
+      "worst_settle_ticks": 12,
+      "mean_settle_ticks": 6.375,
+      "signal_quality": {
+        "driver": {
+          "glitches": 1,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 2,
+          "worst_change_ticks": 8,
+          "worst_pulse_ticks": 2
+        },
+        "lamp": {
+          "glitches": 0,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 0,
+          "worst_change_ticks": 12,
+          "worst_pulse_ticks": 0
+        }
+      },
+      "transitions": 16
+    },
+    {
+      "case": "mux2",
+      "frontend": "native",
+      "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+      "worst_settle_ticks": 12,
+      "mean_settle_ticks": 6.25,
+      "signal_quality": {
+        "driver": {
+          "glitches": 6,
+          "single_input_glitches": 1,
+          "total_pulse_ticks": 16,
+          "worst_change_ticks": 8,
+          "worst_pulse_ticks": 4
+        },
+        "lamp": {
+          "glitches": 4,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 12,
+          "worst_change_ticks": 12,
+          "worst_pulse_ticks": 5
+        }
+      },
+      "transitions": 64
+    },
+    {
+      "case": "mux2",
+      "frontend": "yosys",
+      "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+      "worst_settle_ticks": 12,
+      "mean_settle_ticks": 6.25,
+      "signal_quality": {
+        "driver": {
+          "glitches": 6,
+          "single_input_glitches": 1,
+          "total_pulse_ticks": 16,
+          "worst_change_ticks": 8,
+          "worst_pulse_ticks": 4
+        },
+        "lamp": {
+          "glitches": 4,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 12,
+          "worst_change_ticks": 12,
+          "worst_pulse_ticks": 5
+        }
+      },
+      "transitions": 64
+    },
+    {
+      "case": "majority3",
+      "frontend": "native",
+      "world_fingerprint": "d9657b0cba5d2fbdcec75f3e725364d9bd0473af1ca0dc62dff1d8183a1c77fe",
+      "worst_settle_ticks": 18,
+      "mean_settle_ticks": 11.5,
+      "signal_quality": {
+        "driver": {
+          "glitches": 2,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 4,
+          "worst_change_ticks": 14,
+          "worst_pulse_ticks": 2
+        },
+        "lamp": {
+          "glitches": 0,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 0,
+          "worst_change_ticks": 18,
+          "worst_pulse_ticks": 0
+        }
+      },
+      "transitions": 64
+    },
+    {
+      "case": "majority3",
+      "frontend": "yosys",
+      "world_fingerprint": "a61e1164bbcffd2882661f2a97092d2974fdac5a51cd2d552d95e5324f046c04",
+      "worst_settle_ticks": 26,
+      "mean_settle_ticks": 15.046875,
+      "signal_quality": {
+        "driver": {
+          "glitches": 7,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 32,
+          "worst_change_ticks": 22,
+          "worst_pulse_ticks": 8
+        },
+        "lamp": {
+          "glitches": 5,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 25,
+          "worst_change_ticks": 26,
+          "worst_pulse_ticks": 11
+        }
+      },
+      "transitions": 64
+    }
+  ]
+}

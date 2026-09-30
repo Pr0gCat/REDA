@@ -49,6 +49,10 @@ fn additional_circuit_shapes_match_independent_truth_tables() {
         for (frontend, netlist, outputs) in [("native", artifact.netlist, outputs), ("yosys", oracle.0, oracle.1)] {
             let lowered = lower_optimised(&netlist).unwrap();
             let compiled = compile(&lowered).unwrap();
+            let repeated = compile(&lowered).unwrap();
+            assert_eq!(reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&compiled.world),
+                reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&repeated.world),
+                "{top}/{frontend}: deterministic generation");
             let metrics = physical_metrics(&compiled.world, lowered.gates.len() as u64);
             let fingerprint = reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&compiled.world);
             let repeaters = compiled.world.positions_of(BlockKind::Repeater).count();
@@ -132,6 +136,21 @@ fn additional_circuit_shapes_match_independent_truth_tables() {
             let mean = sum as f64 / (states * states) as f64;
             assert!(mean <= baseline["mean_settle_ticks"].as_f64().unwrap(),
                 "{top}/{frontend}: mean settle regression: {mean}");
+            let checkpoints: serde_json::Value = serde_json::from_str(include_str!(
+                "../docs/generator-matrix-current-quality-checkpoint-2026-09-30.json"
+            )).unwrap();
+            let current = checkpoints["measurements"].as_array().unwrap().iter()
+                .find(|row| row["case"] == top && row["frontend"] == frontend).unwrap();
+            assert!(worst <= current["worst_settle_ticks"].as_u64().unwrap(),
+                "{top}/{frontend}: current worst settle regression");
+            assert!(mean <= current["mean_settle_ticks"].as_f64().unwrap(),
+                "{top}/{frontend}: current mean settle regression");
+            for label in ["lamp","driver"] {
+                for (metric,value) in quality[label].as_object().unwrap() {
+                    assert!(value.as_u64().unwrap() <= current["signal_quality"][label][metric].as_u64().unwrap(),
+                        "{top}/{frontend}: current {label} {metric} regression");
+                }
+            }
             rows.push(json!({"case":top,"source":source,"frontend":frontend,"lowered_gates":lowered.gates.len(),"physical":metrics,"repeaters":repeaters,"planner":planner,"world_fingerprint":fingerprint,"signal_quality":quality,"traces":traces,"transitions":states*states,"worst_settle_ticks":worst,"mean_settle_ticks":sum as f64/(states*states) as f64}));
         }
     }
