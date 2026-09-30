@@ -1,0 +1,82 @@
+diff --git a/src/compile/planner.rs b/src/compile/planner.rs
+index 4e7c4c6..599d050 100644
+--- a/src/compile/planner.rs
++++ b/src/compile/planner.rs
+@@ -5368,6 +5368,9 @@ fn typed_legacy_request_parts(
+                     TerminalRequirement::Exact(RouteTerminalKind::BareMergeRepeater)
+                 } else if netlist.gates[*gate].is_merge() {
+                     TerminalRequirement::Exact(RouteTerminalKind::RepeaterIntoSupport)
++                } else if !netlist.gates.iter().any(|g| g.kind.is_sequential())
++                    && !consumers.iter().any(|c| matches!(c, NetConsumer::Terminal { .. })) {
++                    TerminalRequirement::BufferedDust
+                 } else if feeds_observed_output {
+                     TerminalRequirement::Repeater
+                 } else {
+diff --git a/src/compile/routing.rs b/src/compile/routing.rs
+index 9c2179c..3053924 100644
+--- a/src/compile/routing.rs
++++ b/src/compile/routing.rs
+@@ -186,6 +186,8 @@ pub enum TerminalRequirement {
+     Automatic,
+     Repeater,
+     DirectedDust,
++    /// A private straight repeater immediately before the final dust landing.
++    BufferedDust,
+     Exact(RouteTerminalKind),
+ }
+ 
+@@ -1626,7 +1628,10 @@ where
+                 price,
+                 guidance,
+                 &source_runway,
+-                &ForcedChain::new(runways.sinks, sink.anchor, sink.allowed_entry),
++                &ForcedChain::new(
++                    if sink.terminal.sink_parts().is_some_and(|(_, _, r)| r == TerminalRequirement::BufferedDust) {
++                        TerminalRunway::Forced { cells: runways.sinks.cells().max(2) }
++                    } else { runways.sinks }, sink.anchor, sink.allowed_entry),
+                 planned
+                     .get(ordinal)
+                     .map(|branch| {
+@@ -1827,6 +1832,24 @@ where
+                     category: RouterRefusalCategory::PhysicalInvariant,
+                 });
+             }
++            if sink.terminal.sink_parts().is_some_and(|(_, _, requirement)| requirement == TerminalRequirement::BufferedDust) {
++                let len = path.len();
++                let valid = len >= 3 && shared <= len - 2
++                    && path[len-3].y == path[len-2].y && path[len-2].y == path[len-1].y
++                    && horizontal_direction(path[len-3],path[len-2]) == horizontal_direction(path[len-2],path[len-1]);
++                if !valid {
++                    return Err(RouterFailure::Refused { route: request.id, source: request.source.id,
++                        sink: Some(sink.id), category: RouterRefusalCategory::PhysicalInvariant });
++                }
++                let index = len - 2 - shared;
++                if laid.blocks[index].kind != BlockKind::Repeater { laid.repeaters += 1; }
++                laid.blocks[index] = repeater_toward(horizontal_direction(path[len-3],path[len-2]).unwrap());
++                reserve_terminal_guard(sink.id, path[len-3], path[len-2], path[len-1], &mut reservations,
++                    &mut |at, owner, kind| {
++                        if stage_claims { staged_claims.push((at, owner, kind)); }
++                        else { claim(at, owner, kind); }
++                    });
++            }
+             let budget_needs_repeater = laid
+                 .blocks
+                 .last()
+@@ -2564,7 +2587,7 @@ fn select_terminal_kind(
+         }
+         TerminalRequirement::Exact(kind) => kind,
+         TerminalRequirement::Repeater => RouteTerminalKind::RepeaterIntoSupport,
+-        TerminalRequirement::DirectedDust => RouteTerminalKind::DirectedDustIntoSupport,
++        TerminalRequirement::DirectedDust | TerminalRequirement::BufferedDust => RouteTerminalKind::DirectedDustIntoSupport,
+         TerminalRequirement::Automatic if budget_needs_repeater => {
+             RouteTerminalKind::RepeaterIntoSupport
+         }
+@@ -3464,7 +3487,7 @@ fn sink_connection(sink: &RouteSink) -> Result<ConnectionId, RouterFailure> {
+ fn terminal_may_be_repeater(requirement: TerminalRequirement) -> bool {
+     match requirement {
+         TerminalRequirement::Automatic | TerminalRequirement::Repeater => true,
+-        TerminalRequirement::DirectedDust => false,
++        TerminalRequirement::DirectedDust | TerminalRequirement::BufferedDust => false,
+         TerminalRequirement::Exact(kind) => matches!(
+             kind,
+             RouteTerminalKind::RepeaterIntoSupport
