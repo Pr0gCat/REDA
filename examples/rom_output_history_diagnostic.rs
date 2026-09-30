@@ -150,11 +150,11 @@ fn main() {
                                 }
                             }
                         }
-                        return;
+                        panic!("output history contains an incorrect lamp");
                     }
                 }
             }
         }
     }
-    panic!("recorded failure did not reproduce; verify the fix against the full history");
+    println!("all 32 setup/target history phases have correct gate drivers and output lamps");
 }

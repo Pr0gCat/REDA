@@ -5316,8 +5316,8 @@ fn typed_legacy_request_parts(
     netlist: &Netlist,
     candidate: &PlanCandidate,
 ) -> (RouteEndpoint, NonEmptyRouteSinks) {
-    // THE PINNED-OUTPUT FANOUT RULE. A net that is *also* a pinned declared
-    // output has a sink the caller reads through a diode -- the handover
+    // THE OBSERVED-OUTPUT FANOUT RULE. A net that is also a declared
+    // output has a sink the caller reads through a lamp or a diode -- the handover
     // repeater, which reports whatever its rear cell carries. Every other cell
     // of the net behind that rear is ordinary dust, and dust conducts both
     // ways, so the whole trunk is inside the promise the pin makes.
@@ -5334,14 +5334,15 @@ fn typed_legacy_request_parts(
     // netlist says high.
     //
     // A diode at the gate sink is the isolation that makes the fanout one-way
-    // again, and it is asked for only on nets that carry a pinned output: an
-    // unpinned net's gate sinks keep the dust terminal the approach earns.
+    // again, for both pinned handovers and ordinary output lamps. A lamp
+    // reads the same backfed trunk; omitting unpinned outputs falsely made
+    // their isolation requirement weaker than a pinned output's.
+    // Internal nets keep the terminal their approach earns.
     // `Repeater` and not `Exact`, because the *diode* is the requirement; which
     // repeater kind satisfies it stays the router's decision, the way it is for
     // every other automatically terminated sink.
-    let feeds_pinned_output = consumers
-        .iter()
-        .any(|consumer| matches!(consumer, NetConsumer::Terminal { .. }));
+    let feeds_observed_output = netlist.outputs.iter().any(|output| output == signal)
+        || consumers.iter().any(|consumer| matches!(consumer, NetConsumer::Terminal { .. }));
     let mut sinks = Vec::with_capacity(consumers.len());
     let mut first_approach = None;
     for (ordinal, consumer) in consumers.iter().enumerate() {
@@ -5367,7 +5368,7 @@ fn typed_legacy_request_parts(
                     TerminalRequirement::Exact(RouteTerminalKind::BareMergeRepeater)
                 } else if netlist.gates[*gate].is_merge() {
                     TerminalRequirement::Exact(RouteTerminalKind::RepeaterIntoSupport)
-                } else if feeds_pinned_output {
+                } else if feeds_observed_output {
                     TerminalRequirement::Repeater
                 } else {
                     TerminalRequirement::Automatic
