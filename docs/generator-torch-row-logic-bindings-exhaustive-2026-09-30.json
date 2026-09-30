@@ -1,0 +1,11 @@
+{
+  "all_binding_reconstructions_deterministic": true,
+  "all_instance_graphs_valid": true,
+  "all_internal_settled_truth_correct": true,
+  "all_selected_topologies_symbolically_proved": true,
+  "all_torches_bound_one_to_one": true,
+  "full_physical_candidate_certification": false,
+  "measured_transitions": 43904,
+  "nonconstant_data_tables": 2744,
+  "setup_transitions": 43904
+}

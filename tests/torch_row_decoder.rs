@@ -675,3 +675,233 @@ fn six_row_decoder_refresh_paths_are_balanced_against_frozen_geometry() {
     )
     .unwrap();
 }
+
+/// Bind every actual torch and wire junction; do not relabel the original
+/// frontend gates as though a truth-table rewrite preserved their topology.
+fn matrix_logic_binding(
+    words: [u8; 4],
+) -> (
+    reda::compile::Netlist,
+    std::collections::BTreeMap<String, Position>,
+) {
+    use reda::compile::{Gate, Netlist};
+    let mut rows = std::collections::BTreeMap::new();
+    for bit in 0..3 {
+        let table: Vec<_> = words.iter().map(|w| w & (1 << bit) != 0).collect();
+        for cube in cover::cover(&table, true) {
+            *rows.entry((cube.bits, cube.mask)).or_insert(0u8) |= 1 << bit;
+        }
+    }
+    assert!(
+        rows.keys().all(|(_, mask)| *mask != 0),
+        "constant support needs an explicit constant-driver implementation"
+    );
+    let mut gates = Vec::new();
+    let mut positions = std::collections::BTreeMap::new();
+    for (bit, name) in ["a", "b"].into_iter().enumerate() {
+        let inverse = format!("inverse{bit}");
+        gates.push(Gate::nor(&inverse, &[name]));
+        positions.insert(inverse, Position::new(4 + 6 * bit as i32, 4, 1));
+    }
+    let mut terms: [Vec<String>; 3] = std::array::from_fn(|_| Vec::new());
+    let output_end = 4 + 3 * (rows.len() as i32 - 1) + 3;
+    for (row, ((address, mask), word)) in rows.into_iter().enumerate() {
+        let z = 4 + 3 * row as i32;
+        let mut mismatches = Vec::new();
+        for (bit, name) in ["a", "b"].into_iter().enumerate() {
+            if mask & (1 << bit) == 0 {
+                continue;
+            }
+            let true_literal = address & (1 << bit) != 0;
+            let source = if true_literal {
+                name.to_string()
+            } else {
+                format!("inverse{bit}")
+            };
+            let mismatch = format!("row{row}_mismatch{bit}");
+            gates.push(Gate::nor(&mismatch, &[&source]));
+            positions.insert(
+                mismatch.clone(),
+                Position::new(4 + 6 * bit as i32 + if true_literal { 0 } else { 3 }, 4, z),
+            );
+            mismatches.push(mismatch);
+        }
+        let control = if mismatches.len() == 1 {
+            mismatches[0].clone()
+        } else {
+            let control = format!("row{row}_control");
+            let inputs: Vec<_> = mismatches.iter().map(String::as_str).collect();
+            gates.push(Gate::merge(&control, &inputs));
+            positions.insert(control.clone(), Position::new(15, 3, z));
+            control
+        };
+        for (bit, bit_terms) in terms.iter_mut().enumerate() {
+            if word & (1 << bit) == 0 {
+                continue;
+            }
+            let term = format!("row{row}_bit{bit}");
+            gates.push(Gate::nor(&term, &[&control]));
+            positions.insert(term.clone(), Position::new(18 + 3 * bit as i32, 2, z + 1));
+            bit_terms.push(term);
+        }
+    }
+    let mut outputs = Vec::new();
+    for (bit, terms) in terms.into_iter().enumerate() {
+        assert!(
+            !terms.is_empty(),
+            "empty output requires an explicit constant-zero driver"
+        );
+        let output = if terms.len() == 1 {
+            terms[0].clone()
+        } else {
+            let output = format!("output{bit}");
+            let inputs: Vec<_> = terms.iter().map(String::as_str).collect();
+            gates.push(Gate::merge(&output, &inputs));
+            positions.insert(
+                output.clone(),
+                Position::new(18 + 3 * bit as i32, 1, output_end),
+            );
+            output
+        };
+        outputs.push(output);
+    }
+    (
+        Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs,
+            gates,
+        },
+        positions,
+    )
+}
+
+#[test]
+fn every_matrix_logic_node_has_a_real_observation_site_and_exact_settled_meaning() {
+    let result = verify_matrix_logic_binding([1, 6, 3, 5]);
+    std::fs::write(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/torch_row_logic_bindings.json"),
+        serde_json::to_string_pretty(&result).unwrap(),
+    )
+    .unwrap();
+}
+
+fn verify_matrix_logic_binding(words: [u8; 4]) -> serde_json::Value {
+    use reda::compile::fragment_synth::instance_graph::InstanceGraph;
+    use reda::compile::topology::{GateKind, Library};
+    let (netlist, positions) = matrix_logic_binding(words);
+    assert_eq!(
+        (netlist.clone(), positions.clone()),
+        matrix_logic_binding(words)
+    );
+    let instances = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+    instances.validate(&netlist).unwrap();
+    for instance in &instances.instances {
+        reda::compile::fragment_synth::topology::prove_topology_semantics(
+            &instance.expanded.topology,
+            netlist.gates[instance.logical_gate.0 as usize].kind,
+        )
+        .unwrap();
+    }
+    let (world, inputs, _, _) = matrix_four_words_with_aligned_refresh(words, true, true, true);
+    assert_eq!(positions.len(), netlist.gates.len());
+    let torch_positions: std::collections::BTreeSet<_> =
+        world.positions_of(BlockKind::WallTorch).collect();
+    let bound_torches: std::collections::BTreeSet<_> = netlist
+        .gates
+        .iter()
+        .filter(|g| matches!(g.kind, GateKind::Nor(_)))
+        .map(|g| {
+            let p = positions[&g.output];
+            world.index(p.x, p.y, p.z).unwrap()
+        })
+        .collect();
+    assert_eq!(
+        torch_positions, bound_torches,
+        "no hidden or fictitious logic torch"
+    );
+    let order = netlist.combinational_order().unwrap();
+    let mut sim = Simulator::new(world);
+    sim.run_until_stable(2000).unwrap();
+    for from in 0..4 {
+        for to in 0..4 {
+            for address in [from, to] {
+                for (bit, p) in inputs.iter().enumerate() {
+                    let mut b = sim.world().get(p.x, p.y, p.z).clone();
+                    b.lit = address & (1 << bit) != 0;
+                    sim.world_mut().set(p.x, p.y, p.z, b);
+                }
+                sim.run_until_stable(2000).unwrap();
+                let mut values: std::collections::BTreeMap<_, _> = netlist
+                    .inputs
+                    .iter()
+                    .enumerate()
+                    .map(|(bit, n)| (n.clone(), address & (1 << bit) != 0))
+                    .collect();
+                for &index in &order {
+                    let gate = &netlist.gates[index];
+                    let any = gate.inputs.iter().any(|n| values[n]);
+                    let expected = match gate.kind {
+                        GateKind::Nor(_) => !any,
+                        GateKind::Or(_) => any,
+                        _ => unreachable!(),
+                    };
+                    let p = positions[&gate.output];
+                    let b = sim.world().get(p.x, p.y, p.z);
+                    assert_eq!(
+                        b.kind,
+                        if matches!(gate.kind, GateKind::Nor(_)) {
+                            BlockKind::WallTorch
+                        } else {
+                            BlockKind::RedstoneWire
+                        }
+                    );
+                    assert_eq!(
+                        if b.kind == BlockKind::RedstoneWire {
+                            b.power > 0
+                        } else {
+                            b.lit
+                        },
+                        expected,
+                        "{from}->{to}, address={address}, node={}",
+                        gate.output
+                    );
+                    values.insert(gate.output.clone(), expected);
+                }
+                for (bit, n) in netlist.outputs.iter().enumerate() {
+                    assert_eq!(values[n], words[address] & (1 << bit) != 0);
+                }
+            }
+        }
+    }
+    let result = json!({"netlist":format!("{netlist:?}"),"gate_count":netlist.gates.len(),"physical_torches":bound_torches.len(),"instances":instances.instances.len(),"all_internal_settled_truth_correct":true,"no_unmapped_torches":true,
+        "bindings":positions.iter().map(|(n,p)|json!({"net":n,"x":p.x,"y":p.y,"z":p.z})).collect::<Vec<_>>()});
+    result
+}
+
+#[test]
+fn all_nonconstant_matrix_functions_have_complete_logic_bindings() {
+    let mut verified = 0;
+    for encoding in 0..4096u32 {
+        let words: [u8; 4] = std::array::from_fn(|i| ((encoding >> (3 * i)) & 7) as u8);
+        if (0..3).any(|bit| {
+            words.iter().all(|w| w & (1 << bit) == 0) || words.iter().all(|w| w & (1 << bit) != 0)
+        }) {
+            continue;
+        }
+        let _ = verify_matrix_logic_binding(words);
+        verified += 1;
+        if verified % 512 == 0 {
+            println!("verified complete bindings for {verified} data tables");
+        }
+    }
+    assert_eq!(verified, 2744);
+    let report = json!({"nonconstant_data_tables":verified,"measured_transitions":verified*16,"setup_transitions":verified*16,"all_internal_settled_truth_correct":true,"all_torches_bound_one_to_one":true,"all_instance_graphs_valid":true,"all_selected_topologies_symbolically_proved":true,"all_binding_reconstructions_deterministic":true,"full_physical_candidate_certification":false});
+    println!("{report}");
+    std::fs::write(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/torch_row_logic_bindings_exhaustive.json"),
+        serde_json::to_string_pretty(&report).unwrap(),
+    )
+    .unwrap();
+}

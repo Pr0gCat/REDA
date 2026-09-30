@@ -1,0 +1,118 @@
+{
+  "all_internal_settled_truth_correct": true,
+  "bindings": [
+    {
+      "net": "inverse0",
+      "x": 4,
+      "y": 4,
+      "z": 1
+    },
+    {
+      "net": "inverse1",
+      "x": 10,
+      "y": 4,
+      "z": 1
+    },
+    {
+      "net": "output0",
+      "x": 18,
+      "y": 1,
+      "z": 19
+    },
+    {
+      "net": "output1",
+      "x": 21,
+      "y": 1,
+      "z": 19
+    },
+    {
+      "net": "row0_bit0",
+      "x": 18,
+      "y": 2,
+      "z": 5
+    },
+    {
+      "net": "row0_mismatch0",
+      "x": 7,
+      "y": 4,
+      "z": 4
+    },
+    {
+      "net": "row1_bit2",
+      "x": 24,
+      "y": 2,
+      "z": 8
+    },
+    {
+      "net": "row1_mismatch0",
+      "x": 4,
+      "y": 4,
+      "z": 7
+    },
+    {
+      "net": "row2_bit1",
+      "x": 21,
+      "y": 2,
+      "z": 11
+    },
+    {
+      "net": "row2_control",
+      "x": 15,
+      "y": 3,
+      "z": 10
+    },
+    {
+      "net": "row2_mismatch0",
+      "x": 4,
+      "y": 4,
+      "z": 10
+    },
+    {
+      "net": "row2_mismatch1",
+      "x": 13,
+      "y": 4,
+      "z": 10
+    },
+    {
+      "net": "row3_bit0",
+      "x": 18,
+      "y": 2,
+      "z": 14
+    },
+    {
+      "net": "row3_mismatch1",
+      "x": 10,
+      "y": 4,
+      "z": 13
+    },
+    {
+      "net": "row4_bit1",
+      "x": 21,
+      "y": 2,
+      "z": 17
+    },
+    {
+      "net": "row4_control",
+      "x": 15,
+      "y": 3,
+      "z": 16
+    },
+    {
+      "net": "row4_mismatch0",
+      "x": 7,
+      "y": 4,
+      "z": 16
+    },
+    {
+      "net": "row4_mismatch1",
+      "x": 10,
+      "y": 4,
+      "z": 16
+    }
+  ],
+  "gate_count": 18,
+  "instances": 18,
+  "netlist": "Netlist { inputs: [\"a\", \"b\"], outputs: [\"output0\", \"output1\", \"row1_bit2\"], gates: [Gate { name: \"inverse0\", inputs: [\"a\"], output: \"inverse0\", kind: Nor(1) }, Gate { name: \"inverse1\", inputs: [\"b\"], output: \"inverse1\", kind: Nor(1) }, Gate { name: \"row0_mismatch0\", inputs: [\"inverse0\"], output: \"row0_mismatch0\", kind: Nor(1) }, Gate { name: \"row0_bit0\", inputs: [\"row0_mismatch0\"], output: \"row0_bit0\", kind: Nor(1) }, Gate { name: \"row1_mismatch0\", inputs: [\"a\"], output: \"row1_mismatch0\", kind: Nor(1) }, Gate { name: \"row1_bit2\", inputs: [\"row1_mismatch0\"], output: \"row1_bit2\", kind: Nor(1) }, Gate { name: \"row2_mismatch0\", inputs: [\"a\"], output: \"row2_mismatch0\", kind: Nor(1) }, Gate { name: \"row2_mismatch1\", inputs: [\"inverse1\"], output: \"row2_mismatch1\", kind: Nor(1) }, Gate { name: \"row2_control\", inputs: [\"row2_mismatch0\", \"row2_mismatch1\"], output: \"row2_control\", kind: Or(2) }, Gate { name: \"row2_bit1\", inputs: [\"row2_control\"], output: \"row2_bit1\", kind: Nor(1) }, Gate { name: \"row3_mismatch1\", inputs: [\"b\"], output: \"row3_mismatch1\", kind: Nor(1) }, Gate { name: \"row3_bit0\", inputs: [\"row3_mismatch1\"], output: \"row3_bit0\", kind: Nor(1) }, Gate { name: \"row4_mismatch0\", inputs: [\"inverse0\"], output: \"row4_mismatch0\", kind: Nor(1) }, Gate { name: \"row4_mismatch1\", inputs: [\"b\"], output: \"row4_mismatch1\", kind: Nor(1) }, Gate { name: \"row4_control\", inputs: [\"row4_mismatch0\", \"row4_mismatch1\"], output: \"row4_control\", kind: Or(2) }, Gate { name: \"row4_bit1\", inputs: [\"row4_control\"], output: \"row4_bit1\", kind: Nor(1) }, Gate { name: \"output0\", inputs: [\"row0_bit0\", \"row3_bit0\"], output: \"output0\", kind: Or(2) }, Gate { name: \"output1\", inputs: [\"row2_bit1\", \"row4_bit1\"], output: \"output1\", kind: Or(2) }] }",
+  "no_unmapped_torches": true,
+  "physical_torches": 14
+}
