@@ -1,0 +1,191 @@
+{
+  "candidate_b_wire_always_correct": true,
+  "control_backfeed_phases": 8,
+  "different_target_traces": 3,
+  "physical_truth_correct": true,
+  "setup_phases_per_arm": 16,
+  "target_transitions_per_arm": 16,
+  "traces": [
+    {
+      "control": [],
+      "different": false,
+      "from": 0,
+      "to": 0,
+      "weak": []
+    },
+    {
+      "control": [
+        [
+          4,
+          false
+        ]
+      ],
+      "different": false,
+      "from": 0,
+      "to": 1,
+      "weak": [
+        [
+          4,
+          false
+        ]
+      ]
+    },
+    {
+      "control": [
+        [
+          2,
+          false
+        ]
+      ],
+      "different": false,
+      "from": 0,
+      "to": 2,
+      "weak": [
+        [
+          2,
+          false
+        ]
+      ]
+    },
+    {
+      "control": [
+        [
+          2,
+          false
+        ]
+      ],
+      "different": false,
+      "from": 0,
+      "to": 3,
+      "weak": [
+        [
+          2,
+          false
+        ]
+      ]
+    },
+    {
+      "control": [
+        [
+          4,
+          true
+        ]
+      ],
+      "different": false,
+      "from": 1,
+      "to": 0,
+      "weak": [
+        [
+          4,
+          true
+        ]
+      ]
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 1,
+      "to": 1,
+      "weak": []
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 1,
+      "to": 2,
+      "weak": []
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 1,
+      "to": 3,
+      "weak": []
+    },
+    {
+      "control": [
+        [
+          2,
+          true
+        ]
+      ],
+      "different": true,
+      "from": 2,
+      "to": 0,
+      "weak": [
+        [
+          34,
+          true
+        ]
+      ]
+    },
+    {
+      "control": [],
+      "different": true,
+      "from": 2,
+      "to": 1,
+      "weak": [
+        [
+          2,
+          true
+        ],
+        [
+          4,
+          false
+        ]
+      ]
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 2,
+      "to": 2,
+      "weak": []
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 2,
+      "to": 3,
+      "weak": []
+    },
+    {
+      "control": [
+        [
+          26,
+          true
+        ]
+      ],
+      "different": true,
+      "from": 3,
+      "to": 0,
+      "weak": [
+        [
+          4,
+          true
+        ]
+      ]
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 3,
+      "to": 1,
+      "weak": []
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 3,
+      "to": 2,
+      "weak": []
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 3,
+      "to": 3,
+      "weak": []
+    }
+  ]
+}
