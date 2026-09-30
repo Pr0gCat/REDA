@@ -1,0 +1,10633 @@
+{
+  "base_commit": "3d2271c",
+  "variants": {
+    "greedy_root_capacity": [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "lowered_gates": 7,
+        "worst_settle_ticks": 28,
+        "worst_output_change_ticks": 16,
+        "mean_settle_ticks": 6.56640625,
+        "glitch_transitions": 13,
+        "single_input_glitch_transitions": 0
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "lowered_gates": 7,
+        "worst_settle_ticks": 22,
+        "worst_output_change_ticks": 12,
+        "mean_settle_ticks": 5.72265625,
+        "glitch_transitions": 0,
+        "single_input_glitch_transitions": 0
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "world_fingerprint": "951e095e0042f10b23ba9d56b7971f02086672d199e2069bb5da5648b06479cc",
+        "lowered_gates": 30,
+        "worst_settle_ticks": 42,
+        "worst_output_change_ticks": 42,
+        "mean_settle_ticks": 33.23828125,
+        "glitch_transitions": 96,
+        "single_input_glitch_transitions": 0
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "world_fingerprint": "9839637a3ae76d2c45fc50def2b4d21d984ff88fc85beca5f4593ebcb7dbce63",
+        "lowered_gates": 47,
+        "worst_settle_ticks": 64,
+        "worst_output_change_ticks": 64,
+        "mean_settle_ticks": 48.05078125,
+        "glitch_transitions": 141,
+        "single_input_glitch_transitions": 17
+      }
+    ],
+    "five_only_sorted": [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "lowered_gates": 7,
+        "worst_settle_ticks": 28,
+        "worst_output_change_ticks": 16,
+        "mean_settle_ticks": 6.56640625,
+        "glitch_transitions": 13,
+        "single_input_glitch_transitions": 0
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "lowered_gates": 7,
+        "worst_settle_ticks": 22,
+        "worst_output_change_ticks": 12,
+        "mean_settle_ticks": 5.72265625,
+        "glitch_transitions": 0,
+        "single_input_glitch_transitions": 0
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "world_fingerprint": "7b175974d1aa100446dc102000046fd91fd3b189411798798d15c31e5671f111",
+        "lowered_gates": 30,
+        "worst_settle_ticks": 40,
+        "worst_output_change_ticks": 40,
+        "mean_settle_ticks": 31.90234375,
+        "glitch_transitions": 93,
+        "single_input_glitch_transitions": 0
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "world_fingerprint": "9839637a3ae76d2c45fc50def2b4d21d984ff88fc85beca5f4593ebcb7dbce63",
+        "lowered_gates": 47,
+        "worst_settle_ticks": 64,
+        "worst_output_change_ticks": 64,
+        "mean_settle_ticks": 48.05078125,
+        "glitch_transitions": 141,
+        "single_input_glitch_transitions": 17
+      }
+    ],
+    "five_only_prefix": [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "lowered_gates": 7,
+        "worst_settle_ticks": 28,
+        "worst_output_change_ticks": 16,
+        "mean_settle_ticks": 6.56640625,
+        "glitch_transitions": 13,
+        "single_input_glitch_transitions": 0
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "lowered_gates": 7,
+        "worst_settle_ticks": 22,
+        "worst_output_change_ticks": 12,
+        "mean_settle_ticks": 5.72265625,
+        "glitch_transitions": 0,
+        "single_input_glitch_transitions": 0
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "world_fingerprint": "cb7a091b22561dbd58b8a98dfae8241bf2c1cd70b696e67870f6ce9728925074",
+        "lowered_gates": 30,
+        "worst_settle_ticks": 42,
+        "worst_output_change_ticks": 42,
+        "mean_settle_ticks": 32.49609375,
+        "glitch_transitions": 92,
+        "single_input_glitch_transitions": 0
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "world_fingerprint": "9839637a3ae76d2c45fc50def2b4d21d984ff88fc85beca5f4593ebcb7dbce63",
+        "lowered_gates": 47,
+        "worst_settle_ticks": 64,
+        "worst_output_change_ticks": 64,
+        "mean_settle_ticks": 48.05078125,
+        "glitch_transitions": 141,
+        "single_input_glitch_transitions": 17
+      }
+    ]
+  },
+  "prefix_prototype": "    fn table_or(&mut self, args: Vec<LogicNodeId>, origin: LogicOrigin) -> LogicNodeId {\n        use crate::compile::topology::GateKind;\n        let mut flat = Vec::new();\n        for arg in args {\n            match self.node(arg) {\n                LogicNode::Const(true) => return self.constant(true, origin),\n                LogicNode::Const(false) => {}\n                LogicNode::Cell(GateKind::Or(_), children) => flat.extend(children),\n                _ => flat.push(arg),\n            }\n        }\n        flat.sort();\n        flat.dedup();\n        if flat.is_empty() {\n            return self.constant(false, origin);\n        }\n        while flat.len() > 3 {\n            if flat.len() == 5 {\n                let joined = self.add(\n                    LogicNode::Cell(GateKind::Or(3), flat[..3].to_vec()),\n                    origin.clone(),\n                );\n                flat = vec![joined, flat[3], flat[4]];\n                break;\n            }\n            flat = flat\n                .chunks(3)\n                .map(|chunk| {\n                    if chunk.len() == 1 {\n                        chunk[0]\n                    } else {\n                        self.add(\n                            LogicNode::Cell(GateKind::Or(chunk.len()), chunk.to_vec()),\n                            origin.clone(),\n                        )\n                    }\n                })\n                .collect();\n        }\n        if flat.len() == 1 {\n            flat[0]\n        } else {\n            self.add(LogicNode::Cell(GateKind::Or(flat.len()), flat), origin)\n        }\n    }\n\n",
+  "prefix_native_traces": [
+    {
+      "changes": {},
+      "from": 0,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 0
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 2
+    },
+    {
+      "changes": {
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            36,
+            false
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 4
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            36,
+            false
+          ],
+          [
+            37,
+            true
+          ]
+        ],
+        "b": [
+          [
+            38,
+            false
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ],
+          [
+            39,
+            true
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": true,
+      "last_output_change_tick": 39,
+      "to": 5
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 6
+    },
+    {
+      "changes": {
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "g": [
+          [
+            29,
+            true
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": false,
+      "last_output_change_tick": 29,
+      "to": 8
+    },
+    {
+      "changes": {
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            29,
+            true
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 9
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 10
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 11
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            34,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 12
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 13
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            34,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 14
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 0,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 15
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            27,
+            true
+          ]
+        ],
+        "d": [
+          [
+            29,
+            true
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": false,
+      "last_output_change_tick": 29,
+      "to": 0
+    },
+    {
+      "changes": {},
+      "from": 1,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 1
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            25,
+            true
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            27,
+            true
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": true,
+      "last_output_change_tick": 34,
+      "to": 2
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            27,
+            true
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": false,
+      "last_output_change_tick": 27,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            25,
+            true
+          ],
+          [
+            40,
+            false
+          ]
+        ],
+        "b": [
+          [
+            34,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "d": [
+          [
+            27,
+            true
+          ],
+          [
+            42,
+            false
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": true,
+      "last_output_change_tick": 42,
+      "to": 4
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            25,
+            true
+          ]
+        ],
+        "b": [
+          [
+            34,
+            false
+          ]
+        ],
+        "d": [
+          [
+            27,
+            true
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 5
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            25,
+            true
+          ]
+        ],
+        "b": [
+          [
+            38,
+            false
+          ]
+        ],
+        "d": [
+          [
+            27,
+            true
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 6
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            27,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ]
+        ],
+        "g": [
+          [
+            29,
+            true
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": false,
+      "last_output_change_tick": 29,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            29,
+            true
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": false,
+      "last_output_change_tick": 29,
+      "to": 9
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 10
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 11
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ],
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 12
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ],
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 13
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ],
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 14
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ],
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            27,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            25,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 1,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 15
+    },
+    {
+      "changes": {
+        "c": [
+          [
+            23,
+            true
+          ]
+        ],
+        "f": [
+          [
+            31,
+            true
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": false,
+      "last_output_change_tick": 31,
+      "to": 0
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "c": [
+          [
+            17,
+            true
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {},
+      "from": 2,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 2
+    },
+    {
+      "changes": {
+        "c": [
+          [
+            17,
+            true
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            38,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            40,
+            false
+          ]
+        ],
+        "e": [
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": true,
+      "last_output_change_tick": 40,
+      "to": 4
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            28,
+            false
+          ],
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "c": [
+          [
+            17,
+            true
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 5
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "f": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": false,
+      "last_output_change_tick": 31,
+      "to": 6
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            28,
+            false
+          ],
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            17,
+            true
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            31,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            34,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            34,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ],
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            17,
+            true
+          ],
+          [
+            22,
+            false
+          ],
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            34,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ],
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 9
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            32,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "d": [
+          [
+            34,
+            false
+          ]
+        ],
+        "e": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 10
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            32,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            17,
+            true
+          ],
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            34,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": true,
+      "last_output_change_tick": 34,
+      "to": 11
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 12
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            17,
+            true
+          ],
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 13
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 14
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            17,
+            true
+          ],
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 2,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 15
+    },
+    {
+      "changes": {
+        "c": [
+          [
+            20,
+            false
+          ],
+          [
+            23,
+            true
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 0
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 30,
+      "to": 1
+    },
+    {
+      "changes": {
+        "c": [
+          [
+            20,
+            false
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 29,
+      "to": 2
+    },
+    {
+      "changes": {},
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            40,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "c": [
+          [
+            20,
+            false
+          ],
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            42,
+            false
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": true,
+      "last_output_change_tick": 42,
+      "to": 4
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            36,
+            false
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 36,
+      "to": 5
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            20,
+            false
+          ],
+          [
+            21,
+            true
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 6
+    },
+    {
+      "changes": {
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            20,
+            false
+          ],
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            34,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ],
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ],
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            34,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ],
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 9
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            32,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            20,
+            false
+          ]
+        ],
+        "d": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 10
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            32,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 11
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            20,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 12
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            28,
+            false
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 13
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            20,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 14
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 3,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 15
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 0
+    },
+    {
+      "changes": {
+        "f": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 30,
+      "to": 1
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 2
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 3
+    },
+    {
+      "changes": {},
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 4
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            37,
+            true
+          ]
+        ],
+        "b": [
+          [
+            38,
+            false
+          ]
+        ],
+        "d": [
+          [
+            39,
+            true
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 39,
+      "to": 5
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            35,
+            true
+          ]
+        ],
+        "b": [
+          [
+            38,
+            false
+          ]
+        ],
+        "d": [
+          [
+            37,
+            true
+          ]
+        ],
+        "e": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 6
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ],
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ],
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ],
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ],
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ],
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ],
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 9
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            28,
+            false
+          ],
+          [
+            29,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 10
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            28,
+            false
+          ],
+          [
+            29,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 11
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 12
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 13
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 14
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 15
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": false,
+      "last_output_change_tick": 33,
+      "to": 0
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            28,
+            false
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "d": [
+          [
+            30,
+            false
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": false,
+      "last_output_change_tick": 31,
+      "to": 1
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 2
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "d": [
+          [
+            30,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            40,
+            false
+          ]
+        ],
+        "b": [
+          [
+            35,
+            true
+          ]
+        ],
+        "d": [
+          [
+            42,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": false,
+      "last_output_change_tick": 42,
+      "to": 4
+    },
+    {
+      "changes": {},
+      "from": 5,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 5
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            33,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 6
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "d": [
+          [
+            30,
+            false
+          ]
+        ],
+        "f": [
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ],
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ],
+          [
+            29,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ],
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": true,
+      "last_output_change_tick": 33,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ],
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ],
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ],
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": true,
+      "last_output_change_tick": 33,
+      "to": 9
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ],
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 10
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 11
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 12
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 13
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 14
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 5,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 15
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            25,
+            true
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": false,
+      "last_output_change_tick": 30,
+      "to": 0
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            25,
+            true
+          ]
+        ],
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 2
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            30,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            38,
+            false
+          ]
+        ],
+        "b": [
+          [
+            35,
+            true
+          ]
+        ],
+        "d": [
+          [
+            40,
+            false
+          ]
+        ],
+        "e": [
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": false,
+      "last_output_change_tick": 40,
+      "to": 4
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 5
+    },
+    {
+      "changes": {},
+      "from": 6,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 6
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "d": [
+          [
+            30,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ],
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            30,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ],
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ],
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            30,
+            false
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ],
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 9
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "e": [
+          [
+            30,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 10
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "e": [
+          [
+            30,
+            false
+          ]
+        ],
+        "f": [
+          [
+            30,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 11
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "e": [
+          [
+            30,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 12
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "e": [
+          [
+            30,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 13
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "e": [
+          [
+            30,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 14
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "e": [
+          [
+            30,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            30,
+            false
+          ]
+        ]
+      },
+      "from": 6,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 15
+    },
+    {
+      "changes": {
+        "d": [
+          [
+            29,
+            true
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 0
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            28,
+            false
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 28,
+      "to": 1
+    },
+    {
+      "changes": {
+        "c": [
+          [
+            24,
+            false
+          ]
+        ],
+        "d": [
+          [
+            27,
+            true
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 29,
+      "to": 2
+    },
+    {
+      "changes": {
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            40,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "d": [
+          [
+            27,
+            true
+          ],
+          [
+            42,
+            false
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": true,
+      "last_output_change_tick": 42,
+      "to": 4
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            36,
+            false
+          ]
+        ],
+        "d": [
+          [
+            27,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 36,
+      "to": 5
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "d": [
+          [
+            27,
+            true
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 6
+    },
+    {
+      "changes": {},
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ],
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ],
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ],
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 9
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 10
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 11
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 28,
+      "to": 12
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 28,
+      "to": 13
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 28,
+      "to": 14
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "b": [
+          [
+            28,
+            false
+          ]
+        ],
+        "c": [
+          [
+            22,
+            false
+          ]
+        ]
+      },
+      "from": 7,
+      "glitched": false,
+      "last_output_change_tick": 28,
+      "to": 15
+    },
+    {
+      "changes": {
+        "g": [
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 0
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 2
+    },
+    {
+      "changes": {
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            36,
+            false
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            36,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 4
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            36,
+            false
+          ],
+          [
+            37,
+            true
+          ]
+        ],
+        "b": [
+          [
+            38,
+            false
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ],
+          [
+            39,
+            true
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": true,
+      "last_output_change_tick": 39,
+      "to": 5
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 6
+    },
+    {
+      "changes": {
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {},
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 8
+    },
+    {
+      "changes": {
+        "e": [
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 9
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 10
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 11
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            34,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 36,
+      "to": 12
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 36,
+      "to": 13
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            34,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 36,
+      "to": 14
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "e": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 8,
+      "glitched": false,
+      "last_output_change_tick": 36,
+      "to": 15
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ],
+          [
+            27,
+            true
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ],
+          [
+            29,
+            true
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 0
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            28,
+            false
+          ]
+        ],
+        "f": [
+          [
+            32,
+            false
+          ]
+        ],
+        "g": [
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 2
+    },
+    {
+      "changes": {
+        "f": [
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 32,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            40,
+            false
+          ]
+        ],
+        "b": [
+          [
+            34,
+            false
+          ],
+          [
+            35,
+            true
+          ]
+        ],
+        "d": [
+          [
+            42,
+            false
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": true,
+      "last_output_change_tick": 42,
+      "to": 4
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 34,
+      "to": 5
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 6
+    },
+    {
+      "changes": {
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "e": [
+          [
+            29,
+            true
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 29,
+      "to": 8
+    },
+    {
+      "changes": {},
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 9
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "e": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 10
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 38,
+      "to": 11
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 36,
+      "to": 12
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            28,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 36,
+      "to": 13
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 36,
+      "to": 14
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            30,
+            false
+          ]
+        ],
+        "b": [
+          [
+            32,
+            false
+          ]
+        ],
+        "c": [
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            32,
+            false
+          ]
+        ],
+        "f": [
+          [
+            36,
+            false
+          ]
+        ],
+        "g": [
+          [
+            34,
+            false
+          ]
+        ]
+      },
+      "from": 9,
+      "glitched": false,
+      "last_output_change_tick": 36,
+      "to": 15
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            31,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 10,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 0
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            19,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 10,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 31,
+      "to": 2
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            19,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 31,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "b": [
+          [
+            35,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ],
+          [
+            40,
+            false
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            31,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 10,
+      "glitched": true,
+      "last_output_change_tick": 40,
+      "to": 4
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "c": [
+          [
+            19,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            31,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 10,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 5
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            31,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 31,
+      "to": 6
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            19,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            31,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 10,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 9
+    },
+    {
+      "changes": {},
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 10
+    },
+    {
+      "changes": {},
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 11
+    },
+    {
+      "changes": {},
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 12
+    },
+    {
+      "changes": {},
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 13
+    },
+    {
+      "changes": {},
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 14
+    },
+    {
+      "changes": {},
+      "from": 10,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 15
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 11,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 0
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            19,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 11,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 31,
+      "to": 2
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            19,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 31,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ],
+          [
+            40,
+            false
+          ]
+        ],
+        "b": [
+          [
+            35,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ],
+          [
+            42,
+            false
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 11,
+      "glitched": true,
+      "last_output_change_tick": 42,
+      "to": 4
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            19,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 11,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 5
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 6
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            19,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 11,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            23,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 9
+    },
+    {
+      "changes": {},
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 10
+    },
+    {
+      "changes": {},
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 11
+    },
+    {
+      "changes": {},
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 12
+    },
+    {
+      "changes": {},
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 13
+    },
+    {
+      "changes": {},
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 14
+    },
+    {
+      "changes": {},
+      "from": 11,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 15
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            25,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 0
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            25,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            25,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ],
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 2
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            25,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 3
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            25,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": false,
+      "last_output_change_tick": 29,
+      "to": 4
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            37,
+            true
+          ]
+        ],
+        "b": [
+          [
+            25,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            39,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": true,
+      "last_output_change_tick": 39,
+      "to": 5
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            35,
+            true
+          ]
+        ],
+        "b": [
+          [
+            25,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            37,
+            true
+          ]
+        ],
+        "e": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 6
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            35,
+            true
+          ]
+        ],
+        "b": [
+          [
+            25,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "f": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 9
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            29,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 10
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            29,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ]
+      },
+      "from": 12,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 11
+    },
+    {
+      "changes": {},
+      "from": 12,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 12
+    },
+    {
+      "changes": {},
+      "from": 12,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 13
+    },
+    {
+      "changes": {},
+      "from": 12,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 14
+    },
+    {
+      "changes": {},
+      "from": 12,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 15
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            29,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": true,
+      "last_output_change_tick": 33,
+      "to": 0
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ],
+          [
+            28,
+            false
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ],
+          [
+            26,
+            false
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": true,
+      "last_output_change_tick": 34,
+      "to": 2
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ],
+          [
+            40,
+            false
+          ]
+        ],
+        "b": [
+          [
+            35,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ],
+          [
+            42,
+            false
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": true,
+      "last_output_change_tick": 42,
+      "to": 4
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": false,
+      "last_output_change_tick": 29,
+      "to": 5
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            25,
+            true
+          ]
+        ],
+        "e": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 6
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            23,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            27,
+            true
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "c": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            29,
+            true
+          ]
+        ],
+        "e": [
+          [
+            33,
+            true
+          ]
+        ],
+        "f": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": false,
+      "last_output_change_tick": 33,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            27,
+            true
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ]
+        ],
+        "c": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            29,
+            true
+          ]
+        ],
+        "f": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": false,
+      "last_output_change_tick": 33,
+      "to": 9
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            27,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "d": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 10
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            27,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "b": [
+          [
+            31,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ]
+      },
+      "from": 13,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 11
+    },
+    {
+      "changes": {},
+      "from": 13,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 12
+    },
+    {
+      "changes": {},
+      "from": 13,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 13
+    },
+    {
+      "changes": {},
+      "from": 13,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 14
+    },
+    {
+      "changes": {},
+      "from": 13,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 15
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 14,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 0
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 14,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ],
+          [
+            34,
+            false
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 14,
+      "glitched": true,
+      "last_output_change_tick": 34,
+      "to": 2
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 14,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "b": [
+          [
+            35,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ],
+          [
+            40,
+            false
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 14,
+      "glitched": true,
+      "last_output_change_tick": 40,
+      "to": 4
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 14,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 5
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 14,
+      "glitched": false,
+      "last_output_change_tick": 31,
+      "to": 6
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "f": [
+          [
+            29,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ]
+      },
+      "from": 14,
+      "glitched": true,
+      "last_output_change_tick": 38,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 14,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            33,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 14,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 9
+    },
+    {
+      "changes": {},
+      "from": 14,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 10
+    },
+    {
+      "changes": {},
+      "from": 14,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 11
+    },
+    {
+      "changes": {},
+      "from": 14,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 12
+    },
+    {
+      "changes": {},
+      "from": 14,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 13
+    },
+    {
+      "changes": {},
+      "from": 14,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 14
+    },
+    {
+      "changes": {},
+      "from": 14,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 15
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 15,
+      "glitched": true,
+      "last_output_change_tick": 35,
+      "to": 0
+    },
+    {
+      "changes": {
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ],
+          [
+            32,
+            false
+          ]
+        ]
+      },
+      "from": 15,
+      "glitched": true,
+      "last_output_change_tick": 32,
+      "to": 1
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 31,
+      "to": 2
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            35,
+            true
+          ]
+        ]
+      },
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 3
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ],
+          [
+            40,
+            false
+          ]
+        ],
+        "b": [
+          [
+            35,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ],
+          [
+            42,
+            false
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ],
+          [
+            38,
+            false
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 15,
+      "glitched": true,
+      "last_output_change_tick": 42,
+      "to": 4
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ],
+          [
+            36,
+            false
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 15,
+      "glitched": true,
+      "last_output_change_tick": 36,
+      "to": 5
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ],
+        "d": [
+          [
+            31,
+            true
+          ]
+        ],
+        "e": [
+          [
+            31,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            27,
+            true
+          ]
+        ]
+      },
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 6
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            29,
+            true
+          ]
+        ],
+        "b": [
+          [
+            29,
+            true
+          ]
+        ],
+        "c": [
+          [
+            21,
+            true
+          ]
+        ]
+      },
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 29,
+      "to": 7
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "e": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 8
+    },
+    {
+      "changes": {
+        "a": [
+          [
+            33,
+            true
+          ]
+        ],
+        "b": [
+          [
+            33,
+            true
+          ]
+        ],
+        "c": [
+          [
+            25,
+            true
+          ]
+        ],
+        "d": [
+          [
+            35,
+            true
+          ]
+        ],
+        "f": [
+          [
+            35,
+            true
+          ]
+        ],
+        "g": [
+          [
+            31,
+            true
+          ]
+        ]
+      },
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 35,
+      "to": 9
+    },
+    {
+      "changes": {},
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 10
+    },
+    {
+      "changes": {},
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 11
+    },
+    {
+      "changes": {},
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 12
+    },
+    {
+      "changes": {},
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 13
+    },
+    {
+      "changes": {},
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 14
+    },
+    {
+      "changes": {},
+      "from": 15,
+      "glitched": false,
+      "last_output_change_tick": 0,
+      "to": 15
+    }
+  ],
+  "new_glitched_output_witnesses": [
+    {
+      "from": 1,
+      "to": 4,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          35,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 10,
+      "output": "e",
+      "before": [],
+      "after": [
+        [
+          29,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 12,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          23,
+          true
+        ],
+        [
+          30,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 13,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          23,
+          true
+        ],
+        [
+          30,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 14,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          23,
+          true
+        ],
+        [
+          30,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 15,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          23,
+          true
+        ],
+        [
+          30,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 4,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          35,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 5,
+      "output": "b",
+      "before": [
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          29,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 7,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          29,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 7,
+      "output": "f",
+      "before": [],
+      "after": [
+        [
+          31,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 9,
+      "output": "c",
+      "before": [
+        [
+          27,
+          true
+        ]
+      ],
+      "after": [
+        [
+          17,
+          true
+        ],
+        [
+          22,
+          false
+        ],
+        [
+          23,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 11,
+      "output": "c",
+      "before": [],
+      "after": [
+        [
+          17,
+          true
+        ],
+        [
+          22,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 13,
+      "output": "c",
+      "before": [],
+      "after": [
+        [
+          17,
+          true
+        ],
+        [
+          22,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 15,
+      "output": "c",
+      "before": [],
+      "after": [
+        [
+          17,
+          true
+        ],
+        [
+          22,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 0,
+      "output": "c",
+      "before": [],
+      "after": [
+        [
+          20,
+          false
+        ],
+        [
+          23,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 4,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          32,
+          false
+        ],
+        [
+          35,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 4,
+      "output": "c",
+      "before": [],
+      "after": [
+        [
+          20,
+          false
+        ],
+        [
+          21,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 6,
+      "output": "c",
+      "before": [],
+      "after": [
+        [
+          20,
+          false
+        ],
+        [
+          21,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 3,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          30,
+          false
+        ],
+        [
+          35,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 8,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          29,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 8,
+      "output": "c",
+      "before": [],
+      "after": [
+        [
+          24,
+          false
+        ],
+        [
+          25,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 8,
+      "output": "f",
+      "before": [],
+      "after": [
+        [
+          32,
+          false
+        ],
+        [
+          33,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 8,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          30,
+          false
+        ],
+        [
+          31,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 9,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          29,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 9,
+      "output": "c",
+      "before": [],
+      "after": [
+        [
+          24,
+          false
+        ],
+        [
+          25,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 9,
+      "output": "f",
+      "before": [],
+      "after": [
+        [
+          30,
+          false
+        ],
+        [
+          33,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 9,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          30,
+          false
+        ],
+        [
+          31,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 10,
+      "output": "b",
+      "before": [
+        [
+          32,
+          false
+        ]
+      ],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          29,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 11,
+      "output": "b",
+      "before": [
+        [
+          32,
+          false
+        ]
+      ],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          29,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 3,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          30,
+          false
+        ],
+        [
+          35,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 3,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          30,
+          false
+        ],
+        [
+          35,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 6,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          33,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 8,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          26,
+          false
+        ],
+        [
+          27,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 8,
+      "output": "c",
+      "before": [],
+      "after": [
+        [
+          24,
+          false
+        ],
+        [
+          25,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 8,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          29,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 8,
+      "output": "f",
+      "before": [],
+      "after": [
+        [
+          32,
+          false
+        ],
+        [
+          33,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 8,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          30,
+          false
+        ],
+        [
+          31,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 9,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          26,
+          false
+        ],
+        [
+          27,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 9,
+      "output": "c",
+      "before": [],
+      "after": [
+        [
+          24,
+          false
+        ],
+        [
+          25,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 9,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          29,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 9,
+      "output": "f",
+      "before": [],
+      "after": [
+        [
+          30,
+          false
+        ],
+        [
+          33,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 9,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          30,
+          false
+        ],
+        [
+          31,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 10,
+      "output": "a",
+      "before": [
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          26,
+          false
+        ],
+        [
+          27,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 10,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          31,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 10,
+      "output": "d",
+      "before": [
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          29,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 11,
+      "output": "a",
+      "before": [
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          26,
+          false
+        ],
+        [
+          27,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 11,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          31,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 10,
+      "output": "a",
+      "before": [
+        [
+          36,
+          false
+        ]
+      ],
+      "after": [
+        [
+          26,
+          false
+        ],
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 11,
+      "output": "a",
+      "before": [
+        [
+          36,
+          false
+        ]
+      ],
+      "after": [
+        [
+          26,
+          false
+        ],
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 4,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          32,
+          false
+        ],
+        [
+          35,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 4,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          42,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 10,
+      "output": "a",
+      "before": [
+        [
+          36,
+          false
+        ]
+      ],
+      "after": [
+        [
+          26,
+          false
+        ],
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 11,
+      "output": "a",
+      "before": [
+        [
+          36,
+          false
+        ]
+      ],
+      "after": [
+        [
+          26,
+          false
+        ],
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 5,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          37,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 5,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          39,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 0,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          26,
+          false
+        ],
+        [
+          27,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 0,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          29,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 4,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          35,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 10,
+      "output": "e",
+      "before": [],
+      "after": [
+        [
+          29,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 0,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 1,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 4,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          29,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 4,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          31,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 7,
+      "output": "f",
+      "before": [],
+      "after": [
+        [
+          31,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 11,
+      "to": 0,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 11,
+      "to": 1,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 11,
+      "to": 4,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          29,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 11,
+      "to": 4,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          31,
+          true
+        ],
+        [
+          42,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 0,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 1,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 6,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          25,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 0,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 1,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 4,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          25,
+          true
+        ],
+        [
+          42,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 6,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          33,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 10,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          31,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 11,
+      "output": "b",
+      "before": [],
+      "after": [
+        [
+          31,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 0,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 1,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 4,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          29,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 4,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          31,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 0,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 1,
+      "output": "g",
+      "before": [],
+      "after": [
+        [
+          27,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 4,
+      "output": "a",
+      "before": [],
+      "after": [
+        [
+          29,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 4,
+      "output": "d",
+      "before": [],
+      "after": [
+        [
+          31,
+          true
+        ],
+        [
+          42,
+          false
+        ]
+      ]
+    }
+  ]
+}
