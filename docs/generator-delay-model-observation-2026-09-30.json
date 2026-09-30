@@ -1,0 +1,3232 @@
+{
+  "trace": {
+    "changes": {
+      "d1": [
+        [
+          1,
+          true
+        ]
+      ],
+      "d2": [
+        [
+          1,
+          true
+        ]
+      ],
+      "g1": [
+        [
+          6,
+          false
+        ]
+      ],
+      "g12": [
+        [
+          14,
+          true
+        ]
+      ],
+      "g14": [
+        [
+          22,
+          false
+        ]
+      ],
+      "g2": [
+        [
+          6,
+          false
+        ]
+      ],
+      "g29": [
+        [
+          4,
+          false
+        ]
+      ],
+      "g31": [
+        [
+          20,
+          true
+        ]
+      ],
+      "g4": [
+        [
+          8,
+          true
+        ]
+      ],
+      "public_b": [
+        [
+          26,
+          false
+        ]
+      ],
+      "public_g": [
+        [
+          21,
+          true
+        ]
+      ],
+      "socket:g11:0": [
+        [
+          16,
+          true
+        ]
+      ],
+      "socket:g11:2": [
+        [
+          16,
+          false
+        ]
+      ],
+      "socket:g12:1": [
+        [
+          12,
+          false
+        ]
+      ],
+      "socket:g12:2": [
+        [
+          12,
+          false
+        ]
+      ],
+      "socket:g14:1": [
+        [
+          20,
+          true
+        ]
+      ],
+      "socket:g15:1": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g15:2": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g17:1": [
+        [
+          22,
+          false
+        ]
+      ],
+      "socket:g17:2": [
+        [
+          22,
+          false
+        ]
+      ],
+      "socket:g1:0": [
+        [
+          4,
+          true
+        ]
+      ],
+      "socket:g20:1": [
+        [
+          20,
+          false
+        ]
+      ],
+      "socket:g24:0": [
+        [
+          16,
+          true
+        ]
+      ],
+      "socket:g24:1": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g25:1": [
+        [
+          20,
+          false
+        ]
+      ],
+      "socket:g29:0": [
+        [
+          8,
+          true
+        ]
+      ],
+      "socket:g29:1": [
+        [
+          8,
+          true
+        ]
+      ],
+      "socket:g29:2": [
+        [
+          2,
+          true
+        ]
+      ],
+      "socket:g2:0": [
+        [
+          4,
+          true
+        ]
+      ],
+      "socket:g31:1": [
+        [
+          18,
+          false
+        ]
+      ],
+      "socket:g5:0": [
+        [
+          12,
+          true
+        ]
+      ],
+      "socket:g6:0": [
+        [
+          10,
+          true
+        ]
+      ],
+      "socket:g6:2": [
+        [
+          14,
+          false
+        ]
+      ],
+      "socket:g7:0": [
+        [
+          14,
+          false
+        ]
+      ],
+      "socket:g8:0": [
+        [
+          10,
+          false
+        ]
+      ]
+    },
+    "from": 0,
+    "gates": [
+      {
+        "inputs": [
+          "d0"
+        ],
+        "kind": "Nor(1)",
+        "output": "g0",
+        "position": [
+          112,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d1"
+        ],
+        "kind": "Nor(1)",
+        "output": "g1",
+        "position": [
+          84,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d2"
+        ],
+        "kind": "Nor(1)",
+        "output": "g2",
+        "position": [
+          70,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d3"
+        ],
+        "kind": "Nor(1)",
+        "output": "g3",
+        "position": [
+          56,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Or(3)",
+        "output": "g4",
+        "position": [
+          126,
+          1,
+          80
+        ]
+      },
+      {
+        "inputs": [
+          "g4",
+          "g0"
+        ],
+        "kind": "Nor(2)",
+        "output": "g5",
+        "position": [
+          124,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "d0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g6",
+        "position": [
+          110,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g1",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g7",
+        "position": [
+          54,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g2",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g8",
+        "position": [
+          68,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g5",
+          "g6",
+          "g7"
+        ],
+        "kind": "Or(3)",
+        "output": "g9",
+        "position": [
+          98,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g9",
+          "g8"
+        ],
+        "kind": "Nor(2)",
+        "output": "g10",
+        "position": [
+          68,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "g0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g11",
+        "position": [
+          26,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g12",
+        "position": [
+          96,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g11"
+        ],
+        "kind": "Or(3)",
+        "output": "g13",
+        "position": [
+          56,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g13",
+          "g12"
+        ],
+        "kind": "Nor(2)",
+        "output": "g14",
+        "position": [
+          82,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d2",
+          "d0",
+          "g1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g15",
+        "position": [
+          40,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g15"
+        ],
+        "kind": "Nor(3)",
+        "output": "g16",
+        "position": [
+          70,
+          1,
+          22
+        ]
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g17",
+        "position": [
+          166,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(2)",
+        "output": "g18",
+        "position": [
+          140,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g9",
+          "g18"
+        ],
+        "kind": "Nor(2)",
+        "output": "g19",
+        "position": [
+          124,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "g2"
+        ],
+        "kind": "Nor(2)",
+        "output": "g20",
+        "position": [
+          12,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d0",
+          "g7",
+          "g8"
+        ],
+        "kind": "Or(3)",
+        "output": "g21",
+        "position": [
+          42,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g21",
+          "g20"
+        ],
+        "kind": "Nor(2)",
+        "output": "g22",
+        "position": [
+          54,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "g0"
+        ],
+        "kind": "Nor(3)",
+        "output": "g23",
+        "position": [
+          82,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d2",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g24",
+        "position": [
+          138,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g25",
+        "position": [
+          152,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g23"
+        ],
+        "kind": "Or(3)",
+        "output": "g26",
+        "position": [
+          84,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g24",
+          "g25"
+        ],
+        "kind": "Or(2)",
+        "output": "g27",
+        "position": [
+          112,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g26",
+          "g27"
+        ],
+        "kind": "Nor(2)",
+        "output": "g28",
+        "position": [
+          96,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g29",
+        "position": [
+          98,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(3)",
+        "output": "g30",
+        "position": [
+          126,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g30",
+          "g29"
+        ],
+        "kind": "Nor(2)",
+        "output": "g31",
+        "position": [
+          110,
+          1,
+          4
+        ]
+      }
+    ],
+    "output_map": {
+      "a": "g10",
+      "b": "g14",
+      "c": "g16",
+      "d": "g19",
+      "e": "g22",
+      "f": "g28",
+      "g": "g31"
+    },
+    "routes": [
+      {
+        "parts": {
+          "Column": {
+            "length": 12,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 7,
+            "repeaters": 0
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 2,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 1,
+        "sink": "g0.in[0]",
+        "source": "d0"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 35,
+            "repeaters": 2
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 66,
+            "repeaters": 5
+          }
+        },
+        "repeaters": 8,
+        "sink": "g15.in[1]",
+        "source": "d0"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 35,
+            "repeaters": 2
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 16,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 6,
+        "sink": "g6.in[1]",
+        "source": "d0"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 35,
+            "repeaters": 2
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 18,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 5,
+        "sink": "g12.in[0]",
+        "source": "d0"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 52,
+            "repeaters": 3
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 12,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 72,
+            "repeaters": 6
+          }
+        },
+        "repeaters": 11,
+        "sink": "g21.in[0]",
+        "source": "d0"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 9,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 16,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 2,
+        "sink": "g1.in[0]",
+        "source": "d1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 9,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 6,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 30,
+            "repeaters": 3
+          }
+        },
+        "repeaters": 4,
+        "sink": "g4.in[2]",
+        "source": "d1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 9,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 6,
+            "repeaters": 0
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 2,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 1,
+        "sink": "g29.in[2]",
+        "source": "d1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 20,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 28,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 22,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 5,
+        "sink": "g6.in[0]",
+        "source": "d1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 20,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 28,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 74,
+            "repeaters": 5
+          }
+        },
+        "repeaters": 8,
+        "sink": "g11.in[0]",
+        "source": "d1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 20,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 28,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 88,
+            "repeaters": 6
+          }
+        },
+        "repeaters": 9,
+        "sink": "g20.in[0]",
+        "source": "d1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 6,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 16,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 2,
+        "sink": "g2.in[0]",
+        "source": "d2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 6,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 48,
+            "repeaters": 4
+          }
+        },
+        "repeaters": 6,
+        "sink": "g4.in[1]",
+        "source": "d2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 6,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 20,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 4,
+        "sink": "g29.in[1]",
+        "source": "d2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 29,
+            "repeaters": 2
+          },
+          "GateEntry": {
+            "length": 19,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 16,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 5,
+        "sink": "g23.in[1]",
+        "source": "d2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 29,
+            "repeaters": 2
+          },
+          "GateEntry": {
+            "length": 19,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 46,
+            "repeaters": 3
+          }
+        },
+        "repeaters": 7,
+        "sink": "g15.in[0]",
+        "source": "d2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 29,
+            "repeaters": 2
+          },
+          "GateEntry": {
+            "length": 19,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 64,
+            "repeaters": 5
+          }
+        },
+        "repeaters": 8,
+        "sink": "g24.in[0]",
+        "source": "d2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 3,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 16,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 2,
+        "sink": "g3.in[0]",
+        "source": "d3"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 3,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 54,
+            "repeaters": 4
+          }
+        },
+        "repeaters": 6,
+        "sink": "g4.in[0]",
+        "source": "d3"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 3,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 26,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 3,
+        "sink": "g29.in[0]",
+        "source": "d3"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 41,
+            "repeaters": 3
+          },
+          "GateEntry": {
+            "length": 7,
+            "repeaters": 0
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 22,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 5,
+        "sink": "g23.in[0]",
+        "source": "d3"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 18,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 30,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 4,
+        "sink": "g23.in[2]",
+        "source": "g0"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 22,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 36,
+            "repeaters": 3
+          }
+        },
+        "repeaters": 4,
+        "sink": "g25.in[0]",
+        "source": "g0"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 22,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 82,
+            "repeaters": 6
+          }
+        },
+        "repeaters": 7,
+        "sink": "g11.in[1]",
+        "source": "g0"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 22,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 50,
+            "repeaters": 4
+          }
+        },
+        "repeaters": 5,
+        "sink": "g17.in[0]",
+        "source": "g0"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 22,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 16,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 3,
+        "sink": "g5.in[1]",
+        "source": "g0"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 12,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 44,
+            "repeaters": 3
+          }
+        },
+        "repeaters": 6,
+        "sink": "g15.in[2]",
+        "source": "g1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 58,
+            "repeaters": 4
+          }
+        },
+        "repeaters": 6,
+        "sink": "g24.in[1]",
+        "source": "g1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 72,
+            "repeaters": 5
+          }
+        },
+        "repeaters": 7,
+        "sink": "g25.in[1]",
+        "source": "g1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 16,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 3,
+        "sink": "g12.in[1]",
+        "source": "g1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 86,
+            "repeaters": 6
+          }
+        },
+        "repeaters": 8,
+        "sink": "g17.in[1]",
+        "source": "g1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 34,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 4,
+        "sink": "g7.in[0]",
+        "source": "g1"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 5,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 21,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 40,
+            "repeaters": 3
+          }
+        },
+        "repeaters": 4,
+        "sink": "g6.in[2]",
+        "source": "g2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 5,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 21,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 44,
+            "repeaters": 3
+          }
+        },
+        "repeaters": 5,
+        "sink": "g11.in[2]",
+        "source": "g2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 5,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 21,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 26,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 3,
+        "sink": "g12.in[2]",
+        "source": "g2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 5,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 21,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 96,
+            "repeaters": 7
+          }
+        },
+        "repeaters": 8,
+        "sink": "g17.in[2]",
+        "source": "g2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 5,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 25,
+            "repeaters": 3
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 54,
+            "repeaters": 4
+          }
+        },
+        "repeaters": 7,
+        "sink": "g20.in[1]",
+        "source": "g2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 5,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 25,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 6,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 2,
+        "sink": "g8.in[0]",
+        "source": "g2"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 20,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 2,
+            "repeaters": 0
+          }
+        },
+        "repeaters": 2,
+        "sink": "g7.in[1]",
+        "source": "g3"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 20,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 16,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 3,
+        "sink": "g8.in[1]",
+        "source": "g3"
+      },
+      {
+        "parts": {
+          "Bypass": {
+            "length": 41,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 2,
+        "sink": "g5.in[0]",
+        "source": "g4"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 30,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 3,
+        "sink": "g27.in[0]",
+        "source": "g24"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 2,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 19,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 36,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 4,
+        "sink": "g27.in[1]",
+        "source": "g25"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 7,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 2,
+            "repeaters": 0
+          }
+        },
+        "repeaters": 2,
+        "sink": "g13.in[0]",
+        "source": "g7"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 7,
+            "repeaters": 0
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 12,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 2,
+        "sink": "g16.in[0]",
+        "source": "g7"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 7,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 8,
+            "repeaters": 0
+          }
+        },
+        "repeaters": 3,
+        "sink": "g21.in[1]",
+        "source": "g7"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 7,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 26,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 4,
+        "sink": "g26.in[0]",
+        "source": "g7"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 7,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 68,
+            "repeaters": 5
+          }
+        },
+        "repeaters": 7,
+        "sink": "g30.in[0]",
+        "source": "g7"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 14,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 3,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 44,
+            "repeaters": 3
+          }
+        },
+        "repeaters": 5,
+        "sink": "g9.in[2]",
+        "source": "g7"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 11,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 8,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 3,
+        "sink": "g13.in[1]",
+        "source": "g8"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 11,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 6,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 3,
+        "sink": "g16.in[1]",
+        "source": "g8"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 11,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 68,
+            "repeaters": 5
+          }
+        },
+        "repeaters": 7,
+        "sink": "g18.in[0]",
+        "source": "g8"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 11,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 6,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 26,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 4,
+        "sink": "g21.in[2]",
+        "source": "g8"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 11,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 20,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 3,
+        "sink": "g26.in[1]",
+        "source": "g8"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 11,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 62,
+            "repeaters": 5
+          }
+        },
+        "repeaters": 6,
+        "sink": "g30.in[1]",
+        "source": "g8"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 28,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 7,
+            "repeaters": 0
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 12,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 3,
+        "sink": "g10.in[1]",
+        "source": "g8"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 2,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 15,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 30,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 3,
+        "sink": "g13.in[2]",
+        "source": "g11"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 9,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 30,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 3,
+        "sink": "g16.in[2]",
+        "source": "g15"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 5,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 22,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 4,
+        "sink": "g18.in[1]",
+        "source": "g17"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 5,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 12,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 40,
+            "repeaters": 3
+          }
+        },
+        "repeaters": 5,
+        "sink": "g30.in[2]",
+        "source": "g17"
+      },
+      {
+        "parts": {
+          "Bypass": {
+            "length": 23,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 1,
+        "sink": "g26.in[2]",
+        "source": "g23"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 5,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 16,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 30,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 3,
+        "sink": "g9.in[0]",
+        "source": "g5"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 2,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 19,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 8,
+            "repeaters": 0
+          }
+        },
+        "repeaters": 2,
+        "sink": "g9.in[1]",
+        "source": "g6"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 6,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 22,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 3,
+        "sink": "g14.in[0]",
+        "source": "g13"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 28,
+            "repeaters": 2
+          },
+          "GateEntry": {
+            "length": 7,
+            "repeaters": 0
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 10,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 3,
+        "sink": "g14.in[1]",
+        "source": "g12"
+      },
+      {
+        "parts": {
+          "Bypass": {
+            "length": 28,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 1,
+        "sink": "g22.in[0]",
+        "source": "g21"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 22,
+            "repeaters": 2
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 46,
+            "repeaters": 3
+          }
+        },
+        "repeaters": 6,
+        "sink": "g22.in[1]",
+        "source": "g20"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 6,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 0
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 8,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 2,
+        "sink": "g28.in[0]",
+        "source": "g26"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 6,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 2
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 12,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 4,
+        "sink": "g28.in[1]",
+        "source": "g27"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 9,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 7,
+            "repeaters": 0
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 20,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 2,
+        "sink": "g31.in[0]",
+        "source": "g30"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 58,
+            "repeaters": 4
+          },
+          "GateEntry": {
+            "length": 10,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 8,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 24,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 7,
+        "sink": "g31.in[1]",
+        "source": "g29"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 3,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 34,
+            "repeaters": 2
+          }
+        },
+        "repeaters": 4,
+        "sink": "g10.in[0]",
+        "source": "g9"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 3,
+            "repeaters": 1
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 22,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 3,
+        "sink": "g19.in[0]",
+        "source": "g9"
+      },
+      {
+        "parts": {
+          "Column": {
+            "length": 3,
+            "repeaters": 0
+          },
+          "GateEntry": {
+            "length": 13,
+            "repeaters": 1
+          },
+          "Ramp": {
+            "length": 4,
+            "repeaters": 0
+          },
+          "Track": {
+            "length": 12,
+            "repeaters": 1
+          }
+        },
+        "repeaters": 2,
+        "sink": "g19.in[1]",
+        "source": "g18"
+      }
+    ],
+    "sockets": [
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g0:0",
+        "position": [
+          111,
+          1,
+          80
+        ],
+        "source": "d0"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g1:0",
+        "position": [
+          83,
+          1,
+          80
+        ],
+        "source": "d1"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g2:0",
+        "position": [
+          69,
+          1,
+          80
+        ],
+        "source": "d2"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g3:0",
+        "position": [
+          55,
+          1,
+          80
+        ],
+        "source": "d3"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g5:0",
+        "position": [
+          123,
+          1,
+          47
+        ],
+        "source": "g4"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g5:1",
+        "position": [
+          125,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g6:0",
+        "position": [
+          109,
+          1,
+          47
+        ],
+        "source": "d1"
+      },
+      {
+        "initial_high": false,
+        "kind": "Repeater",
+        "label": "socket:g6:1",
+        "position": [
+          111,
+          1,
+          47
+        ],
+        "source": "d0"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g6:2",
+        "position": [
+          110,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g7:0",
+        "position": [
+          53,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g7:1",
+        "position": [
+          55,
+          1,
+          47
+        ],
+        "source": "g3"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g8:0",
+        "position": [
+          67,
+          1,
+          47
+        ],
+        "source": "g2"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g8:1",
+        "position": [
+          69,
+          1,
+          47
+        ],
+        "source": "g3"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g10:0",
+        "position": [
+          67,
+          1,
+          5
+        ],
+        "source": "g9"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g10:1",
+        "position": [
+          69,
+          1,
+          5
+        ],
+        "source": "g8"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g11:0",
+        "position": [
+          25,
+          1,
+          47
+        ],
+        "source": "d1"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g11:1",
+        "position": [
+          27,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g11:2",
+        "position": [
+          26,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g12:0",
+        "position": [
+          95,
+          1,
+          47
+        ],
+        "source": "d0"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g12:1",
+        "position": [
+          97,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g12:2",
+        "position": [
+          96,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g14:0",
+        "position": [
+          81,
+          1,
+          5
+        ],
+        "source": "g13"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g14:1",
+        "position": [
+          83,
+          1,
+          5
+        ],
+        "source": "g12"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g15:0",
+        "position": [
+          39,
+          1,
+          47
+        ],
+        "source": "d2"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g15:1",
+        "position": [
+          41,
+          1,
+          47
+        ],
+        "source": "d0"
+      },
+      {
+        "initial_high": true,
+        "kind": "Repeater",
+        "label": "socket:g15:2",
+        "position": [
+          40,
+          1,
+          48
+        ],
+        "source": "g1"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g16:0",
+        "position": [
+          69,
+          1,
+          23
+        ],
+        "source": "g7"
+      },
+      {
+        "initial_high": false,
+        "kind": "Repeater",
+        "label": "socket:g16:1",
+        "position": [
+          71,
+          1,
+          23
+        ],
+        "source": "g8"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g16:2",
+        "position": [
+          70,
+          1,
+          24
+        ],
+        "source": "g15"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g17:0",
+        "position": [
+          165,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g17:1",
+        "position": [
+          167,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g17:2",
+        "position": [
+          166,
+          1,
+          48
+        ],
+        "source": "g2"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g19:0",
+        "position": [
+          123,
+          1,
+          5
+        ],
+        "source": "g9"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g19:1",
+        "position": [
+          125,
+          1,
+          5
+        ],
+        "source": "g18"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g20:0",
+        "position": [
+          11,
+          1,
+          47
+        ],
+        "source": "d1"
+      },
+      {
+        "initial_high": true,
+        "kind": "Repeater",
+        "label": "socket:g20:1",
+        "position": [
+          13,
+          1,
+          47
+        ],
+        "source": "g2"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g22:0",
+        "position": [
+          53,
+          1,
+          5
+        ],
+        "source": "g21"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g22:1",
+        "position": [
+          55,
+          1,
+          5
+        ],
+        "source": "g20"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g23:0",
+        "position": [
+          81,
+          1,
+          47
+        ],
+        "source": "d3"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g23:1",
+        "position": [
+          83,
+          1,
+          47
+        ],
+        "source": "d2"
+      },
+      {
+        "initial_high": true,
+        "kind": "Repeater",
+        "label": "socket:g23:2",
+        "position": [
+          82,
+          1,
+          48
+        ],
+        "source": "g0"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g24:0",
+        "position": [
+          137,
+          1,
+          47
+        ],
+        "source": "d2"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g24:1",
+        "position": [
+          139,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g25:0",
+        "position": [
+          151,
+          1,
+          47
+        ],
+        "source": "g0"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g25:1",
+        "position": [
+          153,
+          1,
+          47
+        ],
+        "source": "g1"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g28:0",
+        "position": [
+          95,
+          1,
+          5
+        ],
+        "source": "g26"
+      },
+      {
+        "initial_high": false,
+        "kind": "Repeater",
+        "label": "socket:g28:1",
+        "position": [
+          97,
+          1,
+          5
+        ],
+        "source": "g27"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g29:0",
+        "position": [
+          97,
+          1,
+          80
+        ],
+        "source": "d3"
+      },
+      {
+        "initial_high": false,
+        "kind": "Repeater",
+        "label": "socket:g29:1",
+        "position": [
+          99,
+          1,
+          80
+        ],
+        "source": "d2"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g29:2",
+        "position": [
+          98,
+          1,
+          81
+        ],
+        "source": "d1"
+      },
+      {
+        "initial_high": false,
+        "kind": "RedstoneWire",
+        "label": "socket:g31:0",
+        "position": [
+          109,
+          1,
+          5
+        ],
+        "source": "g30"
+      },
+      {
+        "initial_high": true,
+        "kind": "RedstoneWire",
+        "label": "socket:g31:1",
+        "position": [
+          111,
+          1,
+          5
+        ],
+        "source": "g29"
+      }
+    ],
+    "to": 6
+  },
+  "static_model": [
+    {
+      "output": "g0",
+      "predicted_input_ticks": [
+        2
+      ],
+      "predicted_output_tick": 4,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g1",
+      "predicted_input_ticks": [
+        4
+      ],
+      "predicted_output_tick": 6,
+      "observed_output_changes": [
+        [
+          6,
+          false
+        ]
+      ]
+    },
+    {
+      "output": "g2",
+      "predicted_input_ticks": [
+        4
+      ],
+      "predicted_output_tick": 6,
+      "observed_output_changes": [
+        [
+          6,
+          false
+        ]
+      ]
+    },
+    {
+      "output": "g3",
+      "predicted_input_ticks": [
+        4
+      ],
+      "predicted_output_tick": 6,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g4",
+      "predicted_input_ticks": [
+        12,
+        12,
+        8
+      ],
+      "predicted_output_tick": 12,
+      "observed_output_changes": [
+        [
+          8,
+          true
+        ]
+      ]
+    },
+    {
+      "output": "g5",
+      "predicted_input_ticks": [
+        16,
+        10
+      ],
+      "predicted_output_tick": 18,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g6",
+      "predicted_input_ticks": [
+        10,
+        12,
+        14
+      ],
+      "predicted_output_tick": 16,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g7",
+      "predicted_input_ticks": [
+        14,
+        10
+      ],
+      "predicted_output_tick": 16,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g8",
+      "predicted_input_ticks": [
+        10,
+        12
+      ],
+      "predicted_output_tick": 14,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g9",
+      "predicted_input_ticks": [
+        24,
+        20,
+        26
+      ],
+      "predicted_output_tick": 26,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g10",
+      "predicted_input_ticks": [
+        34,
+        20
+      ],
+      "predicted_output_tick": 36,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g11",
+      "predicted_input_ticks": [
+        16,
+        18,
+        16
+      ],
+      "predicted_output_tick": 20,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g12",
+      "predicted_input_ticks": [
+        10,
+        12,
+        12
+      ],
+      "predicted_output_tick": 14,
+      "observed_output_changes": [
+        [
+          14,
+          true
+        ]
+      ]
+    },
+    {
+      "output": "g13",
+      "predicted_input_ticks": [
+        20,
+        20,
+        26
+      ],
+      "predicted_output_tick": 26,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g14",
+      "predicted_input_ticks": [
+        32,
+        20
+      ],
+      "predicted_output_tick": 34,
+      "observed_output_changes": [
+        [
+          22,
+          false
+        ]
+      ]
+    },
+    {
+      "output": "g15",
+      "predicted_input_ticks": [
+        14,
+        16,
+        18
+      ],
+      "predicted_output_tick": 20,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g16",
+      "predicted_input_ticks": [
+        20,
+        20,
+        26
+      ],
+      "predicted_output_tick": 28,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g17",
+      "predicted_input_ticks": [
+        14,
+        22,
+        22
+      ],
+      "predicted_output_tick": 24,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g18",
+      "predicted_input_ticks": [
+        28,
+        32
+      ],
+      "predicted_output_tick": 32,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g19",
+      "predicted_input_ticks": [
+        32,
+        36
+      ],
+      "predicted_output_tick": 38,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g20",
+      "predicted_input_ticks": [
+        18,
+        20
+      ],
+      "predicted_output_tick": 22,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g21",
+      "predicted_input_ticks": [
+        22,
+        22,
+        22
+      ],
+      "predicted_output_tick": 22,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g22",
+      "predicted_input_ticks": [
+        24,
+        34
+      ],
+      "predicted_output_tick": 36,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g23",
+      "predicted_input_ticks": [
+        10,
+        10,
+        12
+      ],
+      "predicted_output_tick": 14,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g24",
+      "predicted_input_ticks": [
+        16,
+        18
+      ],
+      "predicted_output_tick": 20,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g25",
+      "predicted_input_ticks": [
+        12,
+        20
+      ],
+      "predicted_output_tick": 22,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g26",
+      "predicted_input_ticks": [
+        24,
+        20,
+        16
+      ],
+      "predicted_output_tick": 24,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g27",
+      "predicted_input_ticks": [
+        26,
+        30
+      ],
+      "predicted_output_tick": 30,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g28",
+      "predicted_input_ticks": [
+        28,
+        38
+      ],
+      "predicted_output_tick": 40,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g29",
+      "predicted_input_ticks": [
+        6,
+        8,
+        2
+      ],
+      "predicted_output_tick": 10,
+      "observed_output_changes": [
+        [
+          4,
+          false
+        ]
+      ]
+    },
+    {
+      "output": "g30",
+      "predicted_input_ticks": [
+        30,
+        26,
+        34
+      ],
+      "predicted_output_tick": 34,
+      "observed_output_changes": []
+    },
+    {
+      "output": "g31",
+      "predicted_input_ticks": [
+        38,
+        24
+      ],
+      "predicted_output_tick": 40,
+      "observed_output_changes": [
+        [
+          20,
+          true
+        ]
+      ]
+    }
+  ]
+}

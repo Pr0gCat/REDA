@@ -26,6 +26,19 @@ fn trace_decoder_transition(from_value: usize, to_value: usize, filename: &str) 
     let outputs = artifact.output_map();
     let lowered = lower_optimised(&artifact.netlist).unwrap();
     let compiled = compile(&lowered).unwrap();
+    let routes = reda::compile::routing_stats::analyze(&lowered, &compiled).unwrap();
+    let routes: Vec<_> = routes
+        .edges
+        .iter()
+        .map(|edge| {
+            json!({
+                "source":edge.source,"sink":edge.sink,"repeaters":edge.total().repeaters,
+                "parts":edge.parts.iter().map(|(part,cost)| (format!("{part:?}"),
+                    json!({"length":cost.length,"repeaters":cost.repeaters})))
+                    .collect::<std::collections::BTreeMap<_,_>>()
+            })
+        })
+        .collect();
     let mut watched = reda::timing::watch_all_nets(&compiled);
     for (name, signal) in &outputs {
         let output = compiled.output_positions[signal];
@@ -64,7 +77,7 @@ fn trace_decoder_transition(from_value: usize, to_value: usize, filename: &str) 
             let label = format!("socket:{}:{}", gate.output, input_index);
             watched.push((socket, label.clone()));
             sockets.push(json!({"label":label,"source":gate.inputs[input_index],
-                "position":[socket.x,socket.y,socket.z]}));
+                "position":[socket.x,socket.y,socket.z],"kind":format!("{kind:?}")} ));
         }
     }
     let positions: Vec<_> = ["d0", "d1", "d2", "d3"]
@@ -92,6 +105,21 @@ fn trace_decoder_transition(from_value: usize, to_value: usize, filename: &str) 
     }
     apply(&mut sim, from_value);
     sim.run_until_stable(2000).unwrap();
+    for socket in &mut sockets {
+        let p = socket["position"].as_array().unwrap();
+        let state = sim.world().get(
+            p[0].as_i64().unwrap() as i32,
+            p[1].as_i64().unwrap() as i32,
+            p[2].as_i64().unwrap() as i32,
+        );
+        socket["initial_high"] = json!(if state.kind
+            == reda::redstone::world::block::BlockKind::RedstoneWire
+        {
+            state.power > 0
+        } else {
+            state.lit
+        });
+    }
     sim.attach_observer(watched);
     let timing =
         reda::timing::measure_transition(&mut sim, 2000, |sim| apply(sim, to_value)).unwrap();
@@ -102,7 +130,7 @@ fn trace_decoder_transition(from_value: usize, to_value: usize, filename: &str) 
             reda::circuits::seven_segment::TRUTH_TABLE[to_value][index] == 1
         );
     }
-    let report = json!({"from":from_value,"to":to_value,"output_map":outputs,"sockets":sockets,
+    let report = json!({"from":from_value,"to":to_value,"output_map":outputs,"sockets":sockets,"routes":routes,
         "gates":lowered.gates.iter().map(|gate| json!({"kind":format!("{:?}",gate.kind),"inputs":gate.inputs,"output":gate.output,"position":compiled.gate_output_positions[&gate.output]})).collect::<Vec<_>>(),
         "changes":timing.nets.iter().map(|(name,net)| (name.clone(),json!(net.changes()))).collect::<std::collections::BTreeMap<_,_>>()});
     let target = std::env::var_os("CARGO_TARGET_DIR")
