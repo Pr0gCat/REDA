@@ -34,6 +34,7 @@ pub(crate) mod services;
 pub(crate) mod terminal_geometry;
 pub mod timing_graph;
 pub mod topology;
+pub mod torch_row;
 pub mod verify;
 
 pub use api::{

@@ -75,7 +75,7 @@ pub mod evaluate;
 pub mod source;
 
 mod ast;
-mod cover;
+pub(crate) mod cover;
 mod elaborate;
 mod lexer;
 mod logic;

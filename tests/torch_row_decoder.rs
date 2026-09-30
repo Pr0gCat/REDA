@@ -1818,7 +1818,6 @@ fn verify_typed_matrix_internal_truth(
 }
 
 fn verify_typed_matrix_family(include_constants: bool) {
-    let library = typed_matrix_library();
     let mut verified = 0;
     let mut improved = 0;
     let mut control_sum = 0u64;
@@ -1853,16 +1852,9 @@ fn verify_typed_matrix_family(include_constants: bool) {
         }
         let (netlist, original, candidate) = typed_matrix_candidate(words);
         let source = matrix_frontend_source(words);
-        let result = reda::compile::fragment_synth::rewrite::realise_physical_rewrite(
-            &source,
-            &netlist,
-            &candidate,
-            &library,
-            &source.inputs,
-            &netlist.outputs,
-            1_000_000,
-        )
-        .unwrap_or_else(|e| panic!("words={words:?}, encoding={encoding}: {e:?}"));
+        let result =
+            reda::compile::fragment_synth::torch_row::compile_torch_row(&source, 1_000_000)
+                .unwrap_or_else(|e| panic!("words={words:?}, encoding={encoding}: {e:?}"));
         let rewrite = result.rewrite_certificate();
         let physical = result.equivalence_certificate();
         assert_eq!(result.source(), &source);
@@ -2042,16 +2034,10 @@ fn matrix_rewrite_chain_checks_fresh_yosys_and_rejects_wrong_source_data() {
             .map(|bit| ports[&format!("y{bit}")].clone())
             .collect();
         let (normalized, _, candidate) = typed_matrix_candidate(words);
-        let result = reda::compile::fragment_synth::rewrite::realise_physical_rewrite(
-            &source,
-            &normalized,
-            &candidate,
-            &typed_matrix_library(),
-            &source.inputs,
-            &normalized.outputs,
-            1_000_000,
-        )
-        .unwrap();
+        let result =
+            reda::compile::fragment_synth::torch_row::compile_torch_row(&source, 1_000_000)
+                .unwrap();
+        assert_eq!(result.implemented(), &normalized);
         let rewrite = result.rewrite_certificate();
         let physical = result.equivalence_certificate();
         assert_eq!(
@@ -2252,4 +2238,116 @@ fn physical_rewrite_preserves_ordered_boundaries_and_rejects_partial_proofs() {
             }
         ))
     ));
+}
+
+#[test]
+fn torch_row_recognition_uses_functions_and_refuses_invalid_or_unqualified_sources() {
+    use reda::compile::fragment_synth::torch_row::{compile_torch_row, TorchRowError};
+    let mut source = matrix_frontend_source([1, 6, 3, 5]);
+    let rename = |name: &str| format!("arbitrary_{name}");
+    for gate in &mut source.gates {
+        gate.name = rename(&gate.name);
+        gate.output = rename(&gate.output);
+        gate.inputs = gate.inputs.iter().map(|s| rename(s)).collect();
+    }
+    source.inputs = source.inputs.iter().map(|s| rename(s)).collect();
+    source.outputs = source.outputs.iter().map(|s| rename(s)).collect();
+    source.inputs.reverse();
+    source.outputs.reverse();
+    let result = compile_torch_row(&source, 1_000_000).unwrap();
+    assert_eq!(result.source(), &source);
+    assert_eq!(result.source_input_positions().len(), 2);
+    assert_eq!(result.source_output_positions().len(), 3);
+    let repeated = compile_torch_row(&source, 1_000_000).unwrap();
+    assert_eq!(
+        result.equivalence_certificate(),
+        repeated.equivalence_certificate()
+    );
+    assert!(compile_torch_row(&source, 0).is_err());
+    let mut omitted = source.clone();
+    omitted.outputs.pop();
+    assert!(matches!(
+        compile_torch_row(&omitted, 1_000_000),
+        Err(TorchRowError::UnsupportedBoundary)
+    ));
+    let mut invalid = source.clone();
+    invalid.gates[0].inputs.push("undriven".into());
+    assert!(compile_torch_row(&invalid, 1_000_000).is_err());
+    let mut stateful = source.clone();
+    stateful.gates[0].kind = reda::compile::topology::GateKind::DffPosedge;
+    assert!(compile_torch_row(&stateful, 1_000_000).is_err());
+}
+
+#[test]
+fn torch_row_entry_records_quality_against_current_shipping_layouts() {
+    let mut cases = Vec::new();
+    for words in [
+        [1, 6, 3, 5],
+        [3, 6, 6, 1],
+        [0, 1, 2, 3],
+        [0, 0, 0, 7],
+        [0; 4],
+        [7; 4],
+    ] {
+        let source = matrix_frontend_source(words);
+        // Frontend artifacts keep public aliases in output_map, while the
+        // shipping physical netlist has one declaration per driven signal.
+        let mut shipping_netlist = source.clone();
+        let mut seen = std::collections::BTreeSet::new();
+        shipping_netlist
+            .outputs
+            .retain(|name| seen.insert(name.clone()));
+        let shipping = compile(&shipping_netlist).unwrap();
+        let row = reda::compile::fragment_synth::torch_row::compile_torch_row(&source, 1_000_000)
+            .unwrap();
+        let position = |p: (i32, i32, i32)| Position::new(p.0, p.1, p.2);
+        let current = measure_rom(
+            shipping.world.clone(),
+            source
+                .inputs
+                .iter()
+                .map(|n| position(shipping.input_positions[n]))
+                .collect(),
+            source
+                .outputs
+                .iter()
+                .map(|n| position(shipping.gate_output_positions[n]))
+                .collect(),
+            source
+                .outputs
+                .iter()
+                .map(|n| position(shipping.output_positions[n]))
+                .collect(),
+            &words,
+        );
+        let candidate = measure_rom(
+            row.physical().world().clone(),
+            row.source_input_positions()
+                .iter()
+                .copied()
+                .map(position)
+                .collect(),
+            row.source_output_driver_positions()
+                .iter()
+                .copied()
+                .map(position)
+                .collect(),
+            row.source_output_positions()
+                .iter()
+                .copied()
+                .map(position)
+                .collect(),
+            &words,
+        );
+        cases.push(json!({"words":words,"shipping":current,"torch_row":candidate}));
+    }
+    let report = json!({"comparison_commit":"5d9d64c","measured_transitions_per_arm":96,"cases":cases,
+        "automatic_selection_enabled":false});
+    println!("{report}");
+    std::fs::write(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/torch_row_shipping_comparison.json"),
+        serde_json::to_string_pretty(&report).unwrap(),
+    )
+    .unwrap();
 }
