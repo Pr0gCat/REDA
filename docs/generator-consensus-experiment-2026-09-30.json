@@ -1,0 +1,711 @@
+{
+  "base_commit": "1d03534",
+  "problem_transition": [
+    14,
+    10
+  ],
+  "before_internal_trace": {
+    "changes": {
+      "d2": [
+        [
+          1,
+          false
+        ]
+      ],
+      "g12": [
+        [
+          14,
+          false
+        ]
+      ],
+      "g15": [
+        [
+          14,
+          true
+        ]
+      ],
+      "g18": [
+        [
+          24,
+          false
+        ]
+      ],
+      "g2": [
+        [
+          8,
+          true
+        ]
+      ],
+      "g23": [
+        [
+          22,
+          true
+        ]
+      ],
+      "g25": [
+        [
+          26,
+          false
+        ],
+        [
+          30,
+          true
+        ]
+      ],
+      "g26": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "g8": [
+        [
+          20,
+          false
+        ]
+      ]
+    },
+    "gates": [
+      {
+        "inputs": [
+          "d0"
+        ],
+        "kind": "Nor(1)",
+        "output": "g0"
+      },
+      {
+        "inputs": [
+          "d1"
+        ],
+        "kind": "Nor(1)",
+        "output": "g1"
+      },
+      {
+        "inputs": [
+          "d2"
+        ],
+        "kind": "Nor(1)",
+        "output": "g2"
+      },
+      {
+        "inputs": [
+          "d3"
+        ],
+        "kind": "Nor(1)",
+        "output": "g3"
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Or(3)",
+        "output": "g4"
+      },
+      {
+        "inputs": [
+          "g4",
+          "g0"
+        ],
+        "kind": "Nor(2)",
+        "output": "g5"
+      },
+      {
+        "inputs": [
+          "d1",
+          "d0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g6"
+      },
+      {
+        "inputs": [
+          "g1",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g7"
+      },
+      {
+        "inputs": [
+          "g2",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g8"
+      },
+      {
+        "inputs": [
+          "g5",
+          "g6",
+          "g7"
+        ],
+        "kind": "Or(3)",
+        "output": "g9"
+      },
+      {
+        "inputs": [
+          "g9",
+          "g8"
+        ],
+        "kind": "Nor(2)",
+        "output": "g10"
+      },
+      {
+        "inputs": [
+          "d1",
+          "g0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g11"
+      },
+      {
+        "inputs": [
+          "d0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g12"
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g11"
+        ],
+        "kind": "Or(3)",
+        "output": "g13"
+      },
+      {
+        "inputs": [
+          "g13",
+          "g12"
+        ],
+        "kind": "Nor(2)",
+        "output": "g14"
+      },
+      {
+        "inputs": [
+          "d2",
+          "d0",
+          "g1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g15"
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g15"
+        ],
+        "kind": "Nor(3)",
+        "output": "g16"
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g17"
+      },
+      {
+        "inputs": [
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(2)",
+        "output": "g18"
+      },
+      {
+        "inputs": [
+          "g9",
+          "g18"
+        ],
+        "kind": "Nor(2)",
+        "output": "g19"
+      },
+      {
+        "inputs": [
+          "d1",
+          "g2"
+        ],
+        "kind": "Nor(2)",
+        "output": "g20"
+      },
+      {
+        "inputs": [
+          "d0",
+          "g7",
+          "g20"
+        ],
+        "kind": "Nor(3)",
+        "output": "g21"
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "g0"
+        ],
+        "kind": "Nor(3)",
+        "output": "g22"
+      },
+      {
+        "inputs": [
+          "d2",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g23"
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g24"
+      },
+      {
+        "inputs": [
+          "g8",
+          "g22",
+          "g23"
+        ],
+        "kind": "Or(3)",
+        "output": "g25"
+      },
+      {
+        "inputs": [
+          "g25",
+          "g24"
+        ],
+        "kind": "Nor(2)",
+        "output": "g26"
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g27"
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(3)",
+        "output": "g28"
+      },
+      {
+        "inputs": [
+          "g28",
+          "g27"
+        ],
+        "kind": "Nor(2)",
+        "output": "g29"
+      }
+    ],
+    "output_map": {
+      "a": "g10",
+      "b": "g14",
+      "c": "g16",
+      "d": "g19",
+      "e": "g21",
+      "f": "g26",
+      "g": "g29"
+    }
+  },
+  "after_internal_trace": {
+    "changes": {
+      "d2": [
+        [
+          1,
+          false
+        ]
+      ],
+      "g12": [
+        [
+          14,
+          false
+        ]
+      ],
+      "g15": [
+        [
+          16,
+          true
+        ]
+      ],
+      "g18": [
+        [
+          26,
+          false
+        ]
+      ],
+      "g2": [
+        [
+          6,
+          true
+        ]
+      ],
+      "g24": [
+        [
+          18,
+          true
+        ]
+      ],
+      "g27": [
+        [
+          24,
+          true
+        ]
+      ],
+      "g8": [
+        [
+          12,
+          false
+        ]
+      ]
+    },
+    "debug_hash": "7e0669a265b13e383a86485d7b4fc3356766270b13e1fe6f4e774c85c452f7c5",
+    "gates": [
+      {
+        "inputs": [
+          "d0"
+        ],
+        "kind": "Nor(1)",
+        "output": "g0"
+      },
+      {
+        "inputs": [
+          "d1"
+        ],
+        "kind": "Nor(1)",
+        "output": "g1"
+      },
+      {
+        "inputs": [
+          "d2"
+        ],
+        "kind": "Nor(1)",
+        "output": "g2"
+      },
+      {
+        "inputs": [
+          "d3"
+        ],
+        "kind": "Nor(1)",
+        "output": "g3"
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Or(3)",
+        "output": "g4"
+      },
+      {
+        "inputs": [
+          "g4",
+          "g0"
+        ],
+        "kind": "Nor(2)",
+        "output": "g5"
+      },
+      {
+        "inputs": [
+          "d1",
+          "d0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g6"
+      },
+      {
+        "inputs": [
+          "g1",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g7"
+      },
+      {
+        "inputs": [
+          "g2",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g8"
+      },
+      {
+        "inputs": [
+          "g5",
+          "g6",
+          "g7"
+        ],
+        "kind": "Or(3)",
+        "output": "g9"
+      },
+      {
+        "inputs": [
+          "g9",
+          "g8"
+        ],
+        "kind": "Nor(2)",
+        "output": "g10"
+      },
+      {
+        "inputs": [
+          "d1",
+          "g0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g11"
+      },
+      {
+        "inputs": [
+          "d0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g12"
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g11"
+        ],
+        "kind": "Or(3)",
+        "output": "g13"
+      },
+      {
+        "inputs": [
+          "g13",
+          "g12"
+        ],
+        "kind": "Nor(2)",
+        "output": "g14"
+      },
+      {
+        "inputs": [
+          "d2",
+          "d0",
+          "g1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g15"
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g15"
+        ],
+        "kind": "Nor(3)",
+        "output": "g16"
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g17"
+      },
+      {
+        "inputs": [
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(2)",
+        "output": "g18"
+      },
+      {
+        "inputs": [
+          "g9",
+          "g18"
+        ],
+        "kind": "Nor(2)",
+        "output": "g19"
+      },
+      {
+        "inputs": [
+          "d1",
+          "g2"
+        ],
+        "kind": "Nor(2)",
+        "output": "g20"
+      },
+      {
+        "inputs": [
+          "d0",
+          "g7",
+          "g8"
+        ],
+        "kind": "Or(3)",
+        "output": "g21"
+      },
+      {
+        "inputs": [
+          "g21",
+          "g20"
+        ],
+        "kind": "Nor(2)",
+        "output": "g22"
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "g0"
+        ],
+        "kind": "Nor(3)",
+        "output": "g23"
+      },
+      {
+        "inputs": [
+          "d2",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g24"
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g25"
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g23"
+        ],
+        "kind": "Or(3)",
+        "output": "g26"
+      },
+      {
+        "inputs": [
+          "g24",
+          "g25"
+        ],
+        "kind": "Or(2)",
+        "output": "g27"
+      },
+      {
+        "inputs": [
+          "g26",
+          "g27"
+        ],
+        "kind": "Nor(2)",
+        "output": "g28"
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g29"
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(3)",
+        "output": "g30"
+      },
+      {
+        "inputs": [
+          "g30",
+          "g29"
+        ],
+        "kind": "Nor(2)",
+        "output": "g31"
+      }
+    ],
+    "netlist_hash": "f430a376ad3940e1245848d01b0cce09ce9af2e1d28bc09c8c7dfd14a38165b8",
+    "output_map": {
+      "a": "g10",
+      "b": "g14",
+      "c": "g16",
+      "d": "g19",
+      "e": "g22",
+      "f": "g28",
+      "g": "g31"
+    }
+  },
+  "measurements": [
+    {
+      "case": "and4",
+      "frontend": "REDA",
+      "lowered_gates": 7,
+      "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+      "worst_settle_ticks": 28,
+      "mean_settle_ticks": 6.56640625,
+      "worst_output_change_ticks": 16,
+      "glitch_transitions": 13,
+      "single_input_glitch_transitions": 0
+    },
+    {
+      "case": "and4",
+      "frontend": "Yosys-fresh",
+      "lowered_gates": 7,
+      "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+      "worst_settle_ticks": 22,
+      "mean_settle_ticks": 5.72265625,
+      "worst_output_change_ticks": 12,
+      "glitch_transitions": 0,
+      "single_input_glitch_transitions": 0
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "REDA",
+      "lowered_gates": 32,
+      "world_fingerprint": "7c6c51d831ca72e249d590fd11b7306bdddd1c1f8f76c73bac13ada0e6cb39d4",
+      "worst_settle_ticks": 44,
+      "mean_settle_ticks": 34.46484375,
+      "worst_output_change_ticks": 44,
+      "glitch_transitions": 85,
+      "single_input_glitch_transitions": 0
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "Yosys-fresh",
+      "lowered_gates": 47,
+      "world_fingerprint": "9839637a3ae76d2c45fc50def2b4d21d984ff88fc85beca5f4593ebcb7dbce63",
+      "worst_settle_ticks": 64,
+      "mean_settle_ticks": 48.05078125,
+      "worst_output_change_ticks": 64,
+      "glitch_transitions": 141,
+      "single_input_glitch_transitions": 17
+    }
+  ]
+}

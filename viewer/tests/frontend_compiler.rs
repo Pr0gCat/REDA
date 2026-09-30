@@ -16,8 +16,8 @@ fn compiler_netlists_and_source_maps_agree_across_targets() {
         (
             "seven_segment",
             include_str!("../../tests/fixtures/seven_segment.sv"),
-            "e37552944a6763942ff3d8f8b1ba5a62e3e351c51c0febc344f4c83b0e3ed2df",
-            "25dc3b4313aef0861d5ae8501c6b6cd2173833f949c0670feb57cd12a5414d06",
+            "f430a376ad3940e1245848d01b0cce09ce9af2e1d28bc09c8c7dfd14a38165b8",
+            "7e0669a265b13e383a86485d7b4fc3356766270b13e1fe6f4e774c85c452f7c5",
         ),
         (
             "dff",
@@ -73,6 +73,6 @@ fn compact_channel_world_agrees_across_targets() {
     assert_eq!(
         reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&compiled.world)
             .as_str(),
-        "700e2d4cebb096e3b79f18009237f0d7875b706f7665e4ec36ecdf7974946091"
+        "7c6c51d831ca72e249d590fd11b7306bdddd1c1f8f76c73bac13ada0e6cb39d4"
     );
 }
