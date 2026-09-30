@@ -54,3 +54,25 @@ fn compiler_netlists_and_source_maps_agree_across_targets() {
         assert!(artifact.debug.matches(&artifact.netlist));
     }
 }
+
+/// Check the actual emitted channel world, beyond frontend netlist parity.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn compact_channel_world_agrees_across_targets() {
+    let artifact = compile_systemverilog(
+        &[SourceInput {
+            name: "seven_segment.sv",
+            text: include_str!("../../tests/fixtures/seven_segment.sv"),
+        }],
+        &CompileOptions::new("seven_segment"),
+    )
+    .unwrap();
+    let lowered = reda::compile::lowering::lower_optimised(&artifact.netlist).unwrap();
+    let compiled = reda::compile::compile(&lowered).unwrap();
+    assert_eq!(compiled.planner_kind(), reda::compile::PlannerKind::Legacy);
+    assert_eq!(
+        reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&compiled.world)
+            .as_str(),
+        "bfd76bdc2f3ba3bb5c453457b70346adc18a26a2d49191f5b5c6afd8dbd6eb6a"
+    );
+}

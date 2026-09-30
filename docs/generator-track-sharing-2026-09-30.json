@@ -1,0 +1,1490 @@
+{
+  "base_commit": "302c1e7",
+  "pipeline": "same frontend -> lower_optimised -> compile -> physical simulator; 256 transitions per case",
+  "observation": {
+    "rows": [
+      110,
+      89,
+      56,
+      23,
+      5
+    ],
+    "track_counts": [
+      4,
+      8,
+      8,
+      3
+    ],
+    "gap_experiments": [
+      {
+        "channel": 0,
+        "gap": 4,
+        "tracks": 4,
+        "spans": [
+          [
+            52,
+            122,
+            3,
+            0
+          ],
+          [
+            56,
+            126,
+            1,
+            0
+          ],
+          [
+            60,
+            130,
+            2,
+            0
+          ],
+          [
+            104,
+            110,
+            0,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 0,
+        "gap": 3,
+        "tracks": 4,
+        "spans": [
+          [
+            52,
+            122,
+            3,
+            0
+          ],
+          [
+            56,
+            126,
+            1,
+            0
+          ],
+          [
+            60,
+            130,
+            2,
+            0
+          ],
+          [
+            104,
+            110,
+            0,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 0,
+        "gap": 2,
+        "tracks": 4,
+        "spans": [
+          [
+            52,
+            122,
+            3,
+            0
+          ],
+          [
+            56,
+            126,
+            1,
+            0
+          ],
+          [
+            60,
+            130,
+            2,
+            0
+          ],
+          [
+            104,
+            110,
+            0,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 1,
+        "gap": 4,
+        "tracks": 8,
+        "spans": [
+          [
+            8,
+            162,
+            1,
+            1
+          ],
+          [
+            12,
+            170,
+            6,
+            0
+          ],
+          [
+            16,
+            148,
+            4,
+            0
+          ],
+          [
+            22,
+            118,
+            0,
+            1
+          ],
+          [
+            30,
+            156,
+            5,
+            0
+          ],
+          [
+            36,
+            134,
+            2,
+            1
+          ],
+          [
+            48,
+            56,
+            24,
+            0
+          ],
+          [
+            58,
+            72,
+            7,
+            0
+          ],
+          [
+            62,
+            120,
+            3,
+            1
+          ],
+          [
+            106,
+            126,
+            8,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 1,
+        "gap": 3,
+        "tracks": 8,
+        "spans": [
+          [
+            8,
+            162,
+            1,
+            1
+          ],
+          [
+            12,
+            170,
+            6,
+            0
+          ],
+          [
+            16,
+            148,
+            4,
+            0
+          ],
+          [
+            22,
+            118,
+            0,
+            1
+          ],
+          [
+            30,
+            156,
+            5,
+            0
+          ],
+          [
+            36,
+            134,
+            2,
+            1
+          ],
+          [
+            48,
+            56,
+            24,
+            0
+          ],
+          [
+            58,
+            72,
+            7,
+            0
+          ],
+          [
+            62,
+            120,
+            3,
+            1
+          ],
+          [
+            106,
+            126,
+            8,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 1,
+        "gap": 2,
+        "tracks": 8,
+        "spans": [
+          [
+            8,
+            162,
+            1,
+            1
+          ],
+          [
+            12,
+            170,
+            6,
+            0
+          ],
+          [
+            16,
+            148,
+            4,
+            0
+          ],
+          [
+            22,
+            118,
+            0,
+            1
+          ],
+          [
+            30,
+            156,
+            5,
+            0
+          ],
+          [
+            36,
+            134,
+            2,
+            1
+          ],
+          [
+            48,
+            56,
+            24,
+            0
+          ],
+          [
+            58,
+            72,
+            7,
+            0
+          ],
+          [
+            62,
+            120,
+            3,
+            1
+          ],
+          [
+            106,
+            126,
+            8,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 2,
+        "gap": 4,
+        "tracks": 8,
+        "spans": [
+          [
+            12,
+            56,
+            12,
+            0
+          ],
+          [
+            26,
+            28,
+            20,
+            0
+          ],
+          [
+            38,
+            116,
+            9,
+            0
+          ],
+          [
+            40,
+            70,
+            13,
+            0
+          ],
+          [
+            42,
+            130,
+            14,
+            0
+          ],
+          [
+            46,
+            122,
+            11,
+            0
+          ],
+          [
+            80,
+            110,
+            17,
+            0
+          ],
+          [
+            82,
+            88,
+            18,
+            0
+          ],
+          [
+            98,
+            138,
+            16,
+            0
+          ],
+          [
+            102,
+            124,
+            15,
+            0
+          ],
+          [
+            108,
+            118,
+            0,
+            2
+          ],
+          [
+            112,
+            166,
+            10,
+            0
+          ],
+          [
+            152,
+            154,
+            22,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 2,
+        "gap": 3,
+        "tracks": 8,
+        "spans": [
+          [
+            12,
+            56,
+            12,
+            0
+          ],
+          [
+            26,
+            28,
+            20,
+            0
+          ],
+          [
+            38,
+            116,
+            9,
+            0
+          ],
+          [
+            40,
+            70,
+            13,
+            0
+          ],
+          [
+            42,
+            130,
+            14,
+            0
+          ],
+          [
+            46,
+            122,
+            11,
+            0
+          ],
+          [
+            80,
+            110,
+            17,
+            0
+          ],
+          [
+            82,
+            88,
+            18,
+            0
+          ],
+          [
+            98,
+            138,
+            16,
+            0
+          ],
+          [
+            102,
+            124,
+            15,
+            0
+          ],
+          [
+            108,
+            118,
+            0,
+            2
+          ],
+          [
+            112,
+            166,
+            10,
+            0
+          ],
+          [
+            152,
+            154,
+            22,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 2,
+        "gap": 2,
+        "tracks": 7,
+        "spans": [
+          [
+            12,
+            56,
+            12,
+            0
+          ],
+          [
+            26,
+            28,
+            20,
+            0
+          ],
+          [
+            38,
+            116,
+            9,
+            0
+          ],
+          [
+            40,
+            70,
+            13,
+            0
+          ],
+          [
+            42,
+            130,
+            14,
+            0
+          ],
+          [
+            46,
+            122,
+            11,
+            0
+          ],
+          [
+            80,
+            110,
+            17,
+            0
+          ],
+          [
+            82,
+            88,
+            18,
+            0
+          ],
+          [
+            98,
+            138,
+            16,
+            0
+          ],
+          [
+            102,
+            124,
+            15,
+            0
+          ],
+          [
+            108,
+            118,
+            0,
+            2
+          ],
+          [
+            112,
+            166,
+            10,
+            0
+          ],
+          [
+            152,
+            154,
+            22,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 3,
+        "gap": 4,
+        "tracks": 3,
+        "spans": [
+          [
+            28,
+            72,
+            20,
+            1
+          ],
+          [
+            42,
+            50,
+            23,
+            0
+          ],
+          [
+            48,
+            58,
+            24,
+            1
+          ],
+          [
+            56,
+            64,
+            19,
+            0
+          ],
+          [
+            62,
+            86,
+            11,
+            1
+          ],
+          [
+            78,
+            106,
+            25,
+            0
+          ],
+          [
+            100,
+            154,
+            22,
+            1
+          ],
+          [
+            114,
+            126,
+            26,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 3,
+        "gap": 3,
+        "tracks": 3,
+        "spans": [
+          [
+            28,
+            72,
+            20,
+            1
+          ],
+          [
+            42,
+            50,
+            23,
+            0
+          ],
+          [
+            48,
+            58,
+            24,
+            1
+          ],
+          [
+            56,
+            64,
+            19,
+            0
+          ],
+          [
+            62,
+            86,
+            11,
+            1
+          ],
+          [
+            78,
+            106,
+            25,
+            0
+          ],
+          [
+            100,
+            154,
+            22,
+            1
+          ],
+          [
+            114,
+            126,
+            26,
+            0
+          ]
+        ]
+      },
+      {
+        "channel": 3,
+        "gap": 2,
+        "tracks": 3,
+        "spans": [
+          [
+            28,
+            72,
+            20,
+            1
+          ],
+          [
+            42,
+            50,
+            23,
+            0
+          ],
+          [
+            48,
+            58,
+            24,
+            1
+          ],
+          [
+            56,
+            64,
+            19,
+            0
+          ],
+          [
+            62,
+            86,
+            11,
+            1
+          ],
+          [
+            78,
+            106,
+            25,
+            0
+          ],
+          [
+            100,
+            154,
+            22,
+            1
+          ],
+          [
+            114,
+            126,
+            26,
+            0
+          ]
+        ]
+      }
+    ]
+  },
+  "before": [
+    {
+      "case": "and4",
+      "frontend": "REDA",
+      "frontend_gates": 3,
+      "historical_channel_baseline": null,
+      "lower_and_compile_ms": 12.729901,
+      "lowered_gates": 7,
+      "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+      "mean_settle_ticks": 6.56640625,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 7,
+          "numerator": 228
+        },
+        "non_air_blocks": 228,
+        "occupied_max": {
+          "x": 69,
+          "y": 3,
+          "z": 57
+        },
+        "occupied_min": {
+          "x": 21,
+          "y": 0,
+          "z": 40
+        },
+        "occupied_volume": 3528
+      },
+      "planner": "Unified3d",
+      "transitions": 256,
+      "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+      "worst_settle_ticks": 28,
+      "worst_transition": [
+        9,
+        5
+      ]
+    },
+    {
+      "case": "and4",
+      "frontend": "Yosys-fresh",
+      "frontend_gates": 3,
+      "historical_channel_baseline": null,
+      "lower_and_compile_ms": 10.859388,
+      "lowered_gates": 7,
+      "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+      "mean_settle_ticks": 5.72265625,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 7,
+          "numerator": 214
+        },
+        "non_air_blocks": 214,
+        "occupied_max": {
+          "x": 68,
+          "y": 3,
+          "z": 42
+        },
+        "occupied_min": {
+          "x": 21,
+          "y": 0,
+          "z": 28
+        },
+        "occupied_volume": 2880
+      },
+      "planner": "Unified3d",
+      "transitions": 256,
+      "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+      "worst_settle_ticks": 22,
+      "worst_transition": [
+        8,
+        5
+      ]
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "REDA",
+      "frontend_gates": 30,
+      "historical_channel_baseline": {
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 8980
+          },
+          "non_air_blocks": 8980,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 156
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 100408
+        },
+        "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79"
+      },
+      "lower_and_compile_ms": 156.03960999999998,
+      "lowered_gates": 30,
+      "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+      "mean_settle_ticks": 36.34765625,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 30,
+          "numerator": 7408
+        },
+        "non_air_blocks": 7408,
+        "occupied_max": {
+          "x": 170,
+          "y": 3,
+          "z": 110
+        },
+        "occupied_min": {
+          "x": 8,
+          "y": 0,
+          "z": 3
+        },
+        "occupied_volume": 70416
+      },
+      "planner": "Legacy",
+      "transitions": 256,
+      "world_fingerprint": "0a8771077c8f4095f88e6aa1757bce524d40f9297e8661d5de23b1be2a828ae6",
+      "worst_settle_ticks": 46,
+      "worst_transition": [
+        4,
+        1
+      ]
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "Yosys-fresh",
+      "frontend_gates": 31,
+      "historical_channel_baseline": {
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 10088
+          },
+          "non_air_blocks": 10088,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 239
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 213816
+        },
+        "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5"
+      },
+      "lower_and_compile_ms": 333.25561700000003,
+      "lowered_gates": 47,
+      "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+      "mean_settle_ticks": 56.3984375,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 47,
+          "numerator": 8588
+        },
+        "non_air_blocks": 8588,
+        "occupied_max": {
+          "x": 158,
+          "y": 5,
+          "z": 185
+        },
+        "occupied_min": {
+          "x": 8,
+          "y": 0,
+          "z": 4
+        },
+        "occupied_volume": 164892
+      },
+      "planner": "Legacy",
+      "transitions": 256,
+      "world_fingerprint": "36ba6e161ef4894622d8d0857a0ab2b8bd2bd62b9b422f19f30bdecb4d25d7cb",
+      "worst_settle_ticks": 76,
+      "worst_transition": [
+        0,
+        4
+      ]
+    }
+  ],
+  "after_runs": [
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 12.646704,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 11.076906,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 30,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 30,
+              "numerator": 8980
+            },
+            "non_air_blocks": 8980,
+            "occupied_max": {
+              "x": 170,
+              "y": 3,
+              "z": 156
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 3
+            },
+            "occupied_volume": 100408
+          },
+          "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79"
+        },
+        "lower_and_compile_ms": 151.492761,
+        "lowered_gates": 30,
+        "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+        "mean_settle_ticks": 35.81640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 7270
+          },
+          "non_air_blocks": 7270,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 107
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 68460
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "bfd76bdc2f3ba3bb5c453457b70346adc18a26a2d49191f5b5c6afd8dbd6eb6a",
+        "worst_settle_ticks": 46,
+        "worst_transition": [
+          4,
+          1
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 47,
+              "numerator": 10088
+            },
+            "non_air_blocks": 10088,
+            "occupied_max": {
+              "x": 158,
+              "y": 5,
+              "z": 239
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 4
+            },
+            "occupied_volume": 213816
+          },
+          "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5"
+        },
+        "lower_and_compile_ms": 326.432328,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 54.15234375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 8402
+          },
+          "non_air_blocks": 8402,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 179
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 159456
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "1cba4776bbf9ae129335fb8e93db77289484a29b5aff050db884baf4b37e01fe",
+        "worst_settle_ticks": 72,
+        "worst_transition": [
+          0,
+          4
+        ]
+      }
+    ],
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 21.38302,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 11.070537999999999,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 30,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 30,
+              "numerator": 8980
+            },
+            "non_air_blocks": 8980,
+            "occupied_max": {
+              "x": 170,
+              "y": 3,
+              "z": 156
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 3
+            },
+            "occupied_volume": 100408
+          },
+          "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79"
+        },
+        "lower_and_compile_ms": 152.661662,
+        "lowered_gates": 30,
+        "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+        "mean_settle_ticks": 35.81640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 7270
+          },
+          "non_air_blocks": 7270,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 107
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 68460
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "bfd76bdc2f3ba3bb5c453457b70346adc18a26a2d49191f5b5c6afd8dbd6eb6a",
+        "worst_settle_ticks": 46,
+        "worst_transition": [
+          4,
+          1
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 47,
+              "numerator": 10088
+            },
+            "non_air_blocks": 10088,
+            "occupied_max": {
+              "x": 158,
+              "y": 5,
+              "z": 239
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 4
+            },
+            "occupied_volume": 213816
+          },
+          "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5"
+        },
+        "lower_and_compile_ms": 326.661336,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 54.15234375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 8402
+          },
+          "non_air_blocks": 8402,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 179
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 159456
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "1cba4776bbf9ae129335fb8e93db77289484a29b5aff050db884baf4b37e01fe",
+        "worst_settle_ticks": 72,
+        "worst_transition": [
+          0,
+          4
+        ]
+      }
+    ],
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 20.570139,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 10.891882,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 30,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 30,
+              "numerator": 8980
+            },
+            "non_air_blocks": 8980,
+            "occupied_max": {
+              "x": 170,
+              "y": 3,
+              "z": 156
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 3
+            },
+            "occupied_volume": 100408
+          },
+          "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79"
+        },
+        "lower_and_compile_ms": 150.628001,
+        "lowered_gates": 30,
+        "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+        "mean_settle_ticks": 35.81640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 7270
+          },
+          "non_air_blocks": 7270,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 107
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 68460
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "bfd76bdc2f3ba3bb5c453457b70346adc18a26a2d49191f5b5c6afd8dbd6eb6a",
+        "worst_settle_ticks": 46,
+        "worst_transition": [
+          4,
+          1
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 47,
+              "numerator": 10088
+            },
+            "non_air_blocks": 10088,
+            "occupied_max": {
+              "x": 158,
+              "y": 5,
+              "z": 239
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 4
+            },
+            "occupied_volume": 213816
+          },
+          "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5"
+        },
+        "lower_and_compile_ms": 324.434188,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 54.15234375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 8402
+          },
+          "non_air_blocks": 8402,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 179
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 159456
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "1cba4776bbf9ae129335fb8e93db77289484a29b5aff050db884baf4b37e01fe",
+        "worst_settle_ticks": 72,
+        "worst_transition": [
+          0,
+          4
+        ]
+      }
+    ]
+  ],
+  "historical_baselines_preserved": true,
+  "source_sha256": {
+    "src/compile/mod.rs": "434ae24efbfc4def6b537882e49c812a9b3a5110861a813553d6bb7080e5642b",
+    "src/compile/routing_stats.rs": "ae1dbe8bb7e6fc8bfe40728853f063f4ebf50ba6e437f7cba6f63daa811eda2c",
+    "tests/frontend_quality_report.rs": "01da0075786b51dade6da7558af508bb2b874ba7be6848c8c9fd09a00539ee89",
+    "tests/reference_circuits.rs": "692911f37ed23f3bfb271175e165b2d6237e59df019b2412c7a5fe4c7a8b66e7",
+    "tests/mc_dump.rs": "dad9220c008854a1e7e1f2357896123a110607a96e0d02c96de9186d492aa05b",
+    "viewer/tests/frontend_compiler.rs": "58d1117f5445e2479e8709ffcb618fe72e316ad319719c12b5b4c3fa5c6a8f94"
+  }
+}

@@ -180,7 +180,11 @@ type Geometry = (
 /// world-free; `resolve_bypass_and_geometry` itself builds one throwaway
 /// probe `World` internally (see its own doc comment) purely to decide the
 /// widened bypass set, and never hands that world back out.
-fn recompute_geometry(netlist: &Netlist, track_spacing: i32) -> Result<Geometry, CompileError> {
+fn recompute_geometry(
+    netlist: &Netlist,
+    track_spacing: i32,
+    track_share_gap: i32,
+) -> Result<Geometry, CompileError> {
     for gate in &netlist.gates {
         for input in &gate.inputs {
             if !netlist.is_driven(input) {
@@ -216,6 +220,7 @@ fn recompute_geometry(netlist: &Netlist, track_spacing: i32) -> Result<Geometry,
         channel_count,
         BYPASS_QUERY_MAX_DISTANCE,
         track_spacing,
+        track_share_gap,
     );
     let track_count: Vec<usize> = track_z.iter().map(Vec::len).collect();
 
@@ -500,7 +505,7 @@ fn refuse_a_foreign_layout(compiled: &CompiledCircuit, report: &str) -> Result<(
 
 /// Decompose every real netlist edge of a compiled circuit into its physical
 /// route. `compiled` must use the channel emitter (compact or historical).
-/// Its recorded track spacing selects the matching geometry; this only reads
+/// Its recorded track spacing and sharing gap select the matching geometry; this only reads
 /// its `World`, it never rebuilds one.
 ///
 /// Refuses anything the emitter did not lay out; see
@@ -517,6 +522,10 @@ pub fn analyze(
             .legacy_emission()
             .expect("verified legacy layout")
             .track_spacing,
+        compiled
+            .legacy_emission()
+            .expect("verified legacy layout")
+            .track_share_gap,
     )?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
@@ -684,6 +693,10 @@ pub fn distinct_totals_by_part(
             .legacy_emission()
             .expect("verified legacy layout")
             .track_spacing,
+        compiled
+            .legacy_emission()
+            .expect("verified legacy layout")
+            .track_share_gap,
     )?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
@@ -846,6 +859,22 @@ mod tests {
             compact.legacy_emission().unwrap().track_spacing,
             super::super::COMPACT_TRACK_SPACING
         );
+        assert_eq!(
+            compact.legacy_emission().unwrap().track_share_gap,
+            super::super::COMPACT_TRACK_SHARE_GAP
+        );
+        let previous = super::super::compile_channelled(
+            &netlist,
+            super::super::COMPACT_TRACK_SPACING,
+            super::super::TRACK_SHARE_GAP,
+        )
+        .unwrap();
+        let before =
+            crate::compile::metrics::physical_metrics(&previous.world, netlist.gates.len() as u64);
+        let after =
+            crate::compile::metrics::physical_metrics(&compact.world, netlist.gates.len() as u64);
+        assert!(after.non_air_blocks < before.non_air_blocks);
+        assert!(after.occupied_volume < before.occupied_volume);
         let total = distinct_totals(&netlist, &compact).unwrap();
         assert_eq!(
             total.repeaters,
@@ -986,9 +1015,12 @@ mod tests {
         let (and4, _) = build_and4_netlist();
         let compiled = compile_legacy(&and4).expect("and4 must compile");
         let report = analyze(&and4, &compiled).expect("and4 must analyze");
-        let (_plan, nets, _row_z, _track_z, track_count, bypass) =
-            recompute_geometry(&and4, super::super::TRACK_SPACING)
-                .expect("and4 must recompute geometry");
+        let (_plan, nets, _row_z, _track_z, track_count, bypass) = recompute_geometry(
+            &and4,
+            super::super::TRACK_SPACING,
+            super::super::TRACK_SHARE_GAP,
+        )
+        .expect("and4 must recompute geometry");
 
         // Effective, not raw, bands -- `and4` never gets dense enough to
         // revert any channel (`BAND_CAP`'s doc comment), but resolving

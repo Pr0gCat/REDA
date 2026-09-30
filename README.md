@@ -62,6 +62,8 @@ each takes is pinned separately, by
 The table above records the historical hybrid switchover. The 2026-09-30
 channel compaction measurements, including native frontend circuits, are in
 [the generator optimization report](docs/generator-optimization-2026-09-30.md).
+The subsequent shared-track compaction is measured in
+[the track-sharing report](docs/generator-track-sharing-2026-09-30.md).
 
 ### Two placers, one entry point
 
