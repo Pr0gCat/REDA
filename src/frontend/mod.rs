@@ -75,13 +75,16 @@ pub mod evaluate;
 pub mod source;
 
 mod ast;
+mod cover;
 mod elaborate;
 mod lexer;
 mod logic;
 mod netlist;
 mod parser;
 mod rtl;
+mod selection;
 mod yosys_json;
+pub use selection::{synthesize_selected, FrontendMode, SelectedFrontend};
 
 pub use ast::{PortDirection, SourceKind, SourceNode, SourceNodeId};
 pub use debug::DebugDatabase;
@@ -174,9 +177,18 @@ pub enum Severity {
 /// coordinate systems it mostly does not use.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diagnostic {
+    pub kind: DiagnosticKind,
     pub severity: Severity,
     pub message: String,
     pub span: Span,
+}
+
+/// Only explicit capability limitations allow automatic fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiagnosticKind {
+    Source,
+    Unsupported,
+    Internal,
 }
 
 impl Diagnostic {
@@ -288,6 +300,7 @@ pub fn compile_systemverilog(
     // reported as one instead of being left for the placer to trip over.
     if let Err(error) = evaluate::validate(&emitted.netlist) {
         return Err(vec![Diagnostic {
+            kind: DiagnosticKind::Internal,
             severity: Severity::Error,
             message: format!("internal compiler error: emitted netlist is invalid: {error}"),
             span: Span::new(FileId(0), 0, 0),

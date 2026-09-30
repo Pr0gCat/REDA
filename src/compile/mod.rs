@@ -428,6 +428,13 @@ pub(crate) fn place_dff_gate(
         Position::new(origin.x + x, origin.y + y, origin.z + z)
     };
     let turned = |direction| geometry::turn(direction, facing);
+    // The generic routing repeater starts powered. Storage repeaters must
+    // instead start at Q=0, with C=0 leaving only the slave lock powered.
+    let unpowered_repeater = |direction| {
+        let mut state = repeater(direction);
+        state.lit = false;
+        state
+    };
 
     let m_data = at((0, 0, 0));
     let s_data = at((0, 0, -1));
@@ -446,15 +453,22 @@ pub(crate) fn place_dff_gate(
         m_data.x,
         m_data.y,
         m_data.z,
-        repeater(turned(Facing::North)),
+        unpowered_repeater(turned(Facing::North)),
     );
     world.set(
         s_data.x,
         s_data.y,
         s_data.z,
-        repeater(turned(Facing::North)),
+        unpowered_repeater(turned(Facing::North)),
     );
-    world.set(m_lock.x, m_lock.y, m_lock.z, repeater(turned(Facing::West)));
+    world.set(
+        m_lock.x,
+        m_lock.y,
+        m_lock.z,
+        unpowered_repeater(turned(Facing::West)),
+    );
+    // C starts low: the complementary-clock slave lock must already be
+    // powered, so startup propagation cannot overwrite the stored zero.
     world.set(s_lock.x, s_lock.y, s_lock.z, repeater(turned(Facing::West)));
     world.set(clock_support.x, clock_support.y, clock_support.z, stone());
     world.set(
@@ -8588,10 +8602,31 @@ mod tests {
                 world.set(socket.x, socket.y, socket.z, lever(false));
             }
 
+            assert!(
+                !world
+                    .get(
+                        cell.output_component.x,
+                        cell.output_component.y,
+                        cell.output_component.z
+                    )
+                    .lit,
+                "serialized Q starts at zero, rotation {index}"
+            );
             let mut simulator = Simulator::new(world);
             simulator
                 .run_until_stable(200)
                 .expect("initial DFF settles");
+            assert!(
+                !simulator
+                    .world()
+                    .get(
+                        cell.output_component.x,
+                        cell.output_component.y,
+                        cell.output_component.z
+                    )
+                    .lit,
+                "Q stays zero before the first edge, rotation {index}"
+            );
             let mut set = |input: usize, on: bool| {
                 let at = cell.input_sockets[input];
                 let mut state = simulator.world().get(at.x, at.y, at.z).clone();

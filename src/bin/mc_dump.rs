@@ -183,7 +183,7 @@ fn usage(circuits: &[NamedCircuit]) -> String {
         "usage: mc_dump <circuit-name>\n       mc_dump verilog <file.v> <top-module>\n\n\
          hand-written circuits: {}\n\
          verilog circuits:      {}\n\n\
-         The `verilog:` ones are synthesized through yosys and need `python` with \
+         HDL uses --frontend auto|native|yosys (default auto); Yosys fallback needs `python` with \
          `yowasp-yosys` installed.",
         hand_written.join(", "),
         synthesized.join(", "),
@@ -198,7 +198,11 @@ fn usage(circuits: &[NamedCircuit]) -> String {
 /// returns the frontend's own error text rather than unwrapping it. That is
 /// the whole reason selection is a fallible function here and a plain lookup
 /// in `build_circuit`'s older shape.
-fn select(args: &[String], circuits: &[NamedCircuit]) -> Result<SelectedCircuit, String> {
+fn select(
+    args: &[String],
+    circuits: &[NamedCircuit],
+    mode: reda::frontend::FrontendMode,
+) -> Result<SelectedCircuit, String> {
     // `mc_dump verilog <file.v> <top-module>`: a Verilog source this project
     // does not ship. Spelled as separate arguments rather than folded into
     // the `verilog:` name syntax because a Windows path (`C:\...`) already
@@ -207,7 +211,9 @@ fn select(args: &[String], circuits: &[NamedCircuit]) -> Result<SelectedCircuit,
         let (Some(path), Some(top_module)) = (args.get(1), args.get(2)) else {
             return Err("usage: mc_dump verilog <file.v> <top-module>".to_string());
         };
-        let (netlist, output_labels) = verilog::synthesize_file(Path::new(path), top_module)
+        let (netlist, output_labels) = std::fs::read_to_string(Path::new(path))
+            .map_err(|err| err.to_string())
+            .and_then(|source| verilog::synthesize_with_frontend(&source, path, top_module, mode))
             .map_err(|err| format!("could not synthesize {path} ({top_module}): {err}"))?;
         return Ok(SelectedCircuit {
             name: format!("verilog {path}:{top_module}"),
@@ -222,9 +228,13 @@ fn select(args: &[String], circuits: &[NamedCircuit]) -> Result<SelectedCircuit,
         .expect("select is only called with at least one argument");
 
     if let Some(circuit) = verilog::find(requested) {
-        let (netlist, output_labels) = circuit
-            .synthesize()
-            .map_err(|err| format!("could not synthesize '{}': {err}", circuit.name))?;
+        let (netlist, output_labels) = verilog::synthesize_with_frontend(
+            circuit.source,
+            circuit.source_path,
+            circuit.top_module,
+            mode,
+        )
+        .map_err(|err| format!("could not synthesize '{}': {err}", circuit.name))?;
         return Ok(SelectedCircuit {
             name: circuit.name.to_string(),
             netlist,
@@ -319,7 +329,11 @@ fn dump_world(world: &World) {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mode = reda::frontend::FrontendMode::take_argument(&mut args).unwrap_or_else(|why| {
+        eprintln!("{why}");
+        std::process::exit(1);
+    });
     let circuits = available_circuits();
 
     if args.is_empty() {
@@ -332,7 +346,7 @@ fn main() {
         netlist,
         output_labels,
         lowering_path,
-    } = match select(&args, &circuits) {
+    } = match select(&args, &circuits, mode) {
         Ok(selected) => selected,
         Err(message) => {
             eprintln!("{message}");

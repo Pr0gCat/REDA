@@ -1,0 +1,457 @@
+{
+  "base_commit": "d8f3af049f2396f29023a4d62cdb15583d3e8035",
+  "rustc": "1.98.1",
+  "yowasp_yosys": "0.69.0.0.post1233",
+  "profile": "release",
+  "pipeline": "lower_optimised -> compile",
+  "runs": [
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 19.919256999999998,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 11.200543999999999,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 82,
+        "lower_and_compile_ms": 1101.515094,
+        "lowered_gates": 94,
+        "lowered_histogram": "nor1:26 nor2:12 merge2:56",
+        "mean_settle_ticks": 99.609375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 94,
+            "numerator": 17814
+          },
+          "non_air_blocks": 17814,
+          "occupied_max": {
+            "x": 142,
+            "y": 5,
+            "z": 441
+          },
+          "occupied_min": {
+            "x": 6,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 360036
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "827eccd092ff44092ae971b872d1ca8d8dced3f3c2ace4794c6a1c79970f8e77",
+        "worst_settle_ticks": 133,
+        "worst_transition": [
+          0,
+          9
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "lower_and_compile_ms": 401.278197,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 65.12109375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 10088
+          },
+          "non_air_blocks": 10088,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 239
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 213816
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5",
+        "worst_settle_ticks": 84,
+        "worst_transition": [
+          0,
+          4
+        ]
+      }
+    ],
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 12.723452,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 11.03335,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 82,
+        "lower_and_compile_ms": 1103.9221,
+        "lowered_gates": 94,
+        "lowered_histogram": "nor1:26 nor2:12 merge2:56",
+        "mean_settle_ticks": 99.609375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 94,
+            "numerator": 17814
+          },
+          "non_air_blocks": 17814,
+          "occupied_max": {
+            "x": 142,
+            "y": 5,
+            "z": 441
+          },
+          "occupied_min": {
+            "x": 6,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 360036
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "827eccd092ff44092ae971b872d1ca8d8dced3f3c2ace4794c6a1c79970f8e77",
+        "worst_settle_ticks": 133,
+        "worst_transition": [
+          0,
+          9
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "lower_and_compile_ms": 403.405234,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 65.12109375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 10088
+          },
+          "non_air_blocks": 10088,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 239
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 213816
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5",
+        "worst_settle_ticks": 84,
+        "worst_transition": [
+          0,
+          4
+        ]
+      }
+    ],
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 20.982125,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 11.666457,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 82,
+        "lower_and_compile_ms": 1100.729326,
+        "lowered_gates": 94,
+        "lowered_histogram": "nor1:26 nor2:12 merge2:56",
+        "mean_settle_ticks": 99.609375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 94,
+            "numerator": 17814
+          },
+          "non_air_blocks": 17814,
+          "occupied_max": {
+            "x": 142,
+            "y": 5,
+            "z": 441
+          },
+          "occupied_min": {
+            "x": 6,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 360036
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "827eccd092ff44092ae971b872d1ca8d8dced3f3c2ace4794c6a1c79970f8e77",
+        "worst_settle_ticks": 133,
+        "worst_transition": [
+          0,
+          9
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "lower_and_compile_ms": 407.207515,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 65.12109375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 10088
+          },
+          "non_air_blocks": 10088,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 239
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 213816
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5",
+        "worst_settle_ticks": 84,
+        "worst_transition": [
+          0,
+          4
+        ]
+      }
+    ]
+  ],
+  "median_timings": [
+    {
+      "case": "and4",
+      "frontend": "REDA",
+      "lower_and_compile_ms": 19.919256999999998
+    },
+    {
+      "case": "and4",
+      "frontend": "Yosys-fresh",
+      "lower_and_compile_ms": 11.200543999999999
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "REDA",
+      "lower_and_compile_ms": 1101.515094
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "Yosys-fresh",
+      "lower_and_compile_ms": 403.405234
+    }
+  ]
+}

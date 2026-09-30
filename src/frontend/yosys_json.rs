@@ -208,8 +208,7 @@ impl<'a> Context<'a> {
         }
         if !self.in_progress.insert(net_id) {
             return Err(unsupported(format!(
-                "combinational cycle through net {net_id} -- this frontend only supports \
-                 combinational logic, and yosys should never emit a cycle for it"
+                "combinational cycle through net {net_id} -- no register cuts this cycle"
             )));
         }
 
@@ -218,7 +217,7 @@ impl<'a> Context<'a> {
                 "net {net_id} is driven by neither a primary input nor a cell"
             ))
         })?;
-        let name = self.build_cell(&cell)?;
+        let name = self.build_cell(&cell, None)?;
 
         self.in_progress.remove(&net_id);
         self.signal_of.insert(net_id, name.clone());
@@ -279,7 +278,11 @@ impl<'a> Context<'a> {
     /// A cell type the table has never heard of is a hard, loud error naming
     /// the cell and its type: a dropped cell is a netlist that still
     /// compiles, to the wrong circuit.
-    fn build_cell(&mut self, cell: &CellInfo<'a>) -> Result<String, FrontendError> {
+    fn build_cell(
+        &mut self,
+        cell: &CellInfo<'a>,
+        reserved: Option<String>,
+    ) -> Result<String, FrontendError> {
         let Some(kind) = topology::gate_kind_for_yosys_cell(cell.cell_type) else {
             let known: Vec<&str> = topology::known_yosys_cell_types()
                 .map(|(name, _)| name)
@@ -350,7 +353,11 @@ impl<'a> Context<'a> {
                         ))
                     })?);
                 }
-                Ok(self.builder.cell(kind, &inputs))
+                if let Some(name) = reserved {
+                    Ok(self.builder.cell_named(&name, kind, &inputs))
+                } else {
+                    Ok(self.builder.cell(kind, &inputs))
+                }
             }
         }
     }
@@ -493,6 +500,28 @@ pub(super) fn netlist_from_json(
         buffer_of_input: HashMap::new(),
         builder: NetlistBuilder::new(),
     };
+
+    // Publish every register's Q before walking any D cone. Feedback and
+    // mutually dependent registers cross a state boundary, not a cycle.
+    let mut registers: Vec<_> = ctx
+        .driver_of
+        .iter()
+        .filter(|(_, cell)| cell.cell_type == "$_DFF_P_")
+        .map(|(&id, _)| id)
+        .collect();
+    registers.sort_unstable();
+    let pending: Vec<_> = registers
+        .into_iter()
+        .map(|id| {
+            let cell = ctx.driver_of.remove(&id).expect("indexed register");
+            let name = ctx.builder.reserve_name();
+            ctx.signal_of.insert(id, name.clone());
+            (cell, name)
+        })
+        .collect();
+    for (cell, name) in pending {
+        ctx.build_cell(&cell, Some(name))?;
+    }
 
     let mut outputs: Vec<String> = Vec::new();
     let mut seen_outputs: HashSet<String> = HashSet::new();
@@ -688,6 +717,45 @@ mod tests {
         );
         assert_eq!(output_labels["q"], netlist.gates[0].output);
         assert_eq!(crate::compile::lowering::lower(&netlist).unwrap(), netlist);
+    }
+
+    #[test]
+    fn dff_feedback_is_stateful_but_combinational_cycles_still_fail() {
+        let mut json = json!({"modules": {"top": {
+            "ports": {
+                "d": {"direction": "input", "bits": [2]},
+                "clk": {"direction": "input", "bits": [3]},
+                "en": {"direction": "input", "bits": [4]},
+                "q": {"direction": "output", "bits": [5]},
+                "r": {"direction": "output", "bits": [6]},
+                "y": {"direction": "output", "bits": [7]}
+            },
+            "cells": {
+                "ff0": {"type": "$_DFF_P_", "connections": {"D": [7], "C": [3], "Q": [5]}},
+                "ff1": {"type": "$_DFF_P_", "connections": {"D": [5], "C": [3], "Q": [6]}},
+                "hold": {"type": "$_MUX_", "connections": {"A": [5], "B": [2], "S": [4], "Y": [7]}}
+            }
+        }}});
+        let (netlist, outputs) = netlist_from_json(&json, "top").unwrap();
+        let mut evaluator = crate::frontend::evaluate::Evaluator::new(&netlist).unwrap();
+        for (d, clk, en, q, r) in [
+            (true, false, true, false, false),
+            (true, true, true, true, false),
+            (false, false, false, true, false),
+            (false, true, false, true, true),
+        ] {
+            let inputs = [("d".into(), d), ("clk".into(), clk), ("en".into(), en)]
+                .into_iter()
+                .collect();
+            let actual = evaluator.step(&inputs).unwrap();
+            assert_eq!(actual[&outputs["q"]], q);
+            assert_eq!(actual[&outputs["r"]], r);
+        }
+        json["modules"]["top"]["cells"]["hold"]["connections"]["A"] = json!([7]);
+        assert!(netlist_from_json(&json, "top")
+            .unwrap_err()
+            .to_string()
+            .contains("combinational cycle"));
     }
 
     /// A gate-level cell keeps its kind and its pin order verbatim.

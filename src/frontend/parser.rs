@@ -79,10 +79,21 @@ impl<'n> Parser<'n> {
 
     fn error_at(&self, span: Span, message: impl Into<String>) -> Diagnostic {
         Diagnostic {
+            kind: super::DiagnosticKind::Source,
             severity: Severity::Error,
             message: message.into(),
             span,
         }
+    }
+
+    fn unsupported_at(&self, span: Span, message: impl Into<String>) -> Diagnostic {
+        let mut diagnostic = self.error_at(span, message);
+        diagnostic.kind = super::DiagnosticKind::Unsupported;
+        diagnostic
+    }
+
+    fn unsupported_here(&self, message: &str) -> Diagnostic {
+        self.unsupported_at(self.peek().span, message)
     }
 
     fn error_here(&self, expected: &str) -> Diagnostic {
@@ -167,7 +178,7 @@ impl<'n> Parser<'n> {
         let name = self.expect_ident()?;
 
         if self.is_punct(Punct::Hash) {
-            return Err(self.error_here("`(` or `;`: parameter ports are not supported"));
+            return Err(self.unsupported_here("`(` or `;`: parameter ports are not supported"));
         }
 
         let mut ports = Vec::new();
@@ -221,7 +232,9 @@ impl<'n> Parser<'n> {
                 Some(PortDirection::Output)
             }
             TokenKind::Keyword(Keyword::Inout) => {
-                return Err(self.error_here("`input` or `output`: `inout` ports are not supported"));
+                return Err(
+                    self.unsupported_here("`input` or `output`: `inout` ports are not supported")
+                );
             }
             _ => None,
         };
@@ -264,7 +277,7 @@ impl<'n> Parser<'n> {
                 Some(NetType::Logic)
             }
             TokenKind::Keyword(Keyword::Reg) => {
-                return Err(self.error_here("`logic`: legacy `reg` is not supported"));
+                return Err(self.unsupported_here("`logic`: legacy `reg` is not supported"));
             }
             _ => None,
         })
@@ -321,9 +334,9 @@ impl<'n> Parser<'n> {
                 Ok(())
             }
             TokenKind::Keyword(Keyword::Reg) => {
-                Err(self.error_here("`logic`: legacy `reg` is not supported"))
+                Err(self.unsupported_here("`logic`: legacy `reg` is not supported"))
             }
-            TokenKind::Keyword(Keyword::Always) => Err(self.error_here(
+            TokenKind::Keyword(Keyword::Always) => Err(self.unsupported_here(
                 "`always_comb` or `always_ff`: legacy `always` is not supported",
             )),
             TokenKind::Keyword(Keyword::AlwaysComb) => {
@@ -346,13 +359,13 @@ impl<'n> Parser<'n> {
                 self.always_ff(items)
             }
             TokenKind::Keyword(Keyword::Parameter) | TokenKind::Keyword(Keyword::Localparam) => {
-                Err(self.error_here("a module item: parameters are not supported"))
+                Err(self.unsupported_here("a module item: parameters are not supported"))
             }
             TokenKind::Keyword(Keyword::Input) | TokenKind::Keyword(Keyword::Output) => Err(self
-                .error_here(
+                .unsupported_here(
                     "a module item: non-ANSI port declarations are not supported; declare ports in the module header",
                 )),
-            TokenKind::Ident(_) => Err(self.error_here(
+            TokenKind::Ident(_) if matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Ident(_))) => Err(self.unsupported_here(
                 "a module item: module instances are not supported",
             )),
             _ => Err(self.error_here("a module item")),
@@ -365,7 +378,7 @@ impl<'n> Parser<'n> {
         self.expect_punct(Punct::LParen)?;
         if self.is_keyword(Keyword::Negedge) {
             let span = self.advance().span;
-            return Err(self.error_at(
+            return Err(self.unsupported_at(
                 span,
                 "unsupported: `always_ff` only supports `posedge`; negative-edge clocks are not supported",
             ));
@@ -374,7 +387,7 @@ impl<'n> Parser<'n> {
         let clock = self.expr(0)?;
         if self.is_keyword(Keyword::Or) {
             let span = self.advance().span;
-            return Err(self.error_at(
+            return Err(self.unsupported_at(
                 span,
                 "unsupported: `always_ff` allows exactly one clock; multiple clocks and asynchronous resets are not supported",
             ));
@@ -425,7 +438,7 @@ impl<'n> Parser<'n> {
             return Ok(Stmt::If(self.if_assign_statement()?));
         }
         if self.is_keyword(Keyword::Case) {
-            return Err(self.error_at(
+            return Err(self.unsupported_at(
                 self.peek().span,
                 "unsupported: `case` logic in `always_ff` is not supported; use one feed-forward `q <= d` assignment",
             ));
@@ -441,7 +454,7 @@ impl<'n> Parser<'n> {
         let lhs = self.expr(0)?;
         if self.is_punct(Punct::Assign) {
             let span = self.advance().span;
-            return Err(self.error_at(
+            return Err(self.unsupported_at(
                 span,
                 "unsupported: `always_ff` requires a nonblocking `<=` assignment",
             ));
@@ -472,7 +485,7 @@ impl<'n> Parser<'n> {
         };
         if self.is_keyword(Keyword::Else) {
             let span = self.advance().span;
-            return Err(self.error_at(
+            return Err(self.unsupported_at(
                 span,
                 "unsupported: `else` in `always_ff` is not supported; only one enable-style \
                  `if (en) q <= d;` is supported",
@@ -526,12 +539,12 @@ impl<'n> Parser<'n> {
             let statement = match self.statement()? {
                 Stmt::BlockingAssign(assign) => assign,
                 Stmt::Case(_) => {
-                    return Err(self.error_here(
+                    return Err(self.unsupported_here(
                         "a blocking assignment in a case arm; nested case is not supported",
                     ))
                 }
                 Stmt::NonblockingAssign(_) => {
-                    return Err(self.error_here(
+                    return Err(self.unsupported_here(
                         "a blocking assignment in a case arm; nonblocking assignment is not supported here",
                     ))
                 }

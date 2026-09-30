@@ -123,6 +123,19 @@ echo "== viewer: wasm test =="
       if (s<1 || f>0 || s!=host) exit 1
     }')
 
+# The frontend's netlist and source-map fingerprints must also agree between
+# native and wasm. Keep a separate count so placement tests cannot hide a skip.
+echo "== frontend: wasm parity =="
+(cd viewer &&
+  host=$(cargo test --release --test frontend_compiler 2>&1 |
+    awk '/^test result/{print $4; exit}') &&
+  wasm-pack test --node --release -- --test frontend_compiler 2>&1 |
+    grep -E "^test result" |
+    awk -v host="$host" '{s+=$4; f+=$6} END {
+      print "passed="s, "failed="f, "(host runs "host" in that file)"
+      if (s<1 || f>0 || s!=host) exit 1
+    }')
+
 # `wasm-pack`, not `cargo build --target wasm32`: the latter proves the crate
 # compiles and leaves `viewer/pkg/` exactly as stale as it was. The page loads
 # `pkg/`, so a green check with a seven-hour-old bundle is the same failure

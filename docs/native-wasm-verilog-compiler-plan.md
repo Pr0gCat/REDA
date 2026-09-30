@@ -158,6 +158,27 @@ still use `synthesize_verilog` exclusively.
 
 #### Milestone 5 readiness
 
+**2026-09-29 implementation update:** the bounded constant-case optimizer now
+meets the user-set physical quality target for the decoder: 8,980 blocks,
+100,408 occupied volume, and 52 worst-case game ticks, versus fresh Yosys's
+10,088 / 213,816 / 84 on the same backend and transition protocol. The native
+and4 world is unchanged. See [implementation and validation](frontend-optimization-2026-09-29.md).
+This is a frontend quality improvement, not a production cutover or a waiver
+of the remaining generator, CI, DFF power-on, and owner-record requirements.
+
+**2026-09-29 quality reassessment:** fresh Yosys 0.69 versus the REDA
+frontend, both through `lower_optimised -> compile`, confirms the decoder's
+94 vs 47 lowered gates. These comprise 38 vs 30 NOR gates and 56 vs 17 wire
+merges, so total gates alone overstates the NOR gap. Physical measurements
+still regress: 17,814 vs 10,088 blocks, occupied volume 360,036 vs 213,816,
+and worst whole-world settle 133 vs 84 game ticks across all 256 simultaneous
+input-state transitions. Three runs agree on world fingerprints and these
+metrics. The earlier checkpoint's and4 "3 gates both frontend and lowered"
+claim should read 3 frontend and 7 optimised-lowered gates for each frontend;
+their physical layouts differ. See [the full report](frontend-quality-2026-09-29.md)
+for methodology, scope and reproducible samples. No quality bound is accepted
+by this reassessment, and the M5 cutover status below remains unchanged.
+
 Milestone 5 (switch production callers) has **not** started. Checking this
 document's own cutover checklist against the current state:
 

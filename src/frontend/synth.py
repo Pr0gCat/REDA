@@ -71,13 +71,16 @@ def main() -> int:
         # the script language's own escaping rules on Windows paths.
         return '"' + path.replace("\\", "/") + '"'
 
+    # Clock-enable cells use the same hold-mux + plain DFF representation
+    # supported by REDA; do not leave $_DFFE_* cells for the JSON bridge.
     script = f"""
-read_verilog {quoted(verilog_file)}
+read_verilog -sv {quoted(verilog_file)}
 hierarchy -check -top {top_module}
 proc -norom
 opt
 techmap
 opt
+dffunmap -ce-only
 abc
 opt_clean -purge
 write_json {quoted(output_json)}

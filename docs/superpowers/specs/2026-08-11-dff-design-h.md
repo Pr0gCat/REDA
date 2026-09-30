@@ -37,6 +37,29 @@ where both locking repeaters receive the same non-inverted clock is invalid:
 both stages are transparent or locked together and it is not a positive-edge
 DFF.
 
+## Emitted initial state and clock pacing
+
+The emitted artifact starts with `C=0`, `M_DATA=0`, `S_DATA=0`,
+`M_LOCK=0`, and `S_LOCK=1`; `INV_C` is lit. This implements the logical
+Evaluator's all-zero Q contract before the first edge. Generic routing
+repeaters start powered, so storage repeaters must override that default.
+The four approved rotations must preserve Q=0 both before and after the
+first settle, without a priming clock pulse.
+
+Design H's complementary clock uses a torch and therefore retains the
+simulator's burnout rule. Settling is not a substitute for elapsed clock
+time: many rapid edges can burn out the inverter even when each transition
+settles. The end-to-end regression leaves 16 game ticks of dwell after each
+settled input state; this is a conservative test operating point, not a
+certified maximum clock frequency. Data and enable settle before each
+rising edge, and changes while high must not feed through to Q.
+
+`tests/dff_physical.rs` checks native and fresh-Yosys plain/enabled DFFs
+through save/load of the emitted litematic, including power-on, capture,
+high-level hold, falling-edge hold, and disabled rising edges. Yosys clock
+enables are unmapped into an input hold mux and a plain positive-edge DFF
+with `dffunmap -ce-only`; asynchronous reset remains outside this slice.
+
 ## Required proof
 
 The simulator must trace `D,C = 0,0; C↑; C↓; D↑; C↑; D↓; C↓; C↑` and prove Q

@@ -3,11 +3,12 @@
 //! The mapping is deliberately direct and deliberately narrow. `Not` becomes
 //! `Nor(1)`, `And`/`Xor`/`Mux` become their own gate-level kinds, `Or`
 //! becomes a declared wire merge, and a passthrough output becomes `Buf`.
-//! Nothing here emits `Nand`, `Xnor`, `AndNot`, `Aoi*`, or `Nor(2)`:
-//! polarity assignment and optimised lowering are `compile::lowering`'s
-//! decisions, made against its own redstone cost model, and making them here
-//! would be the exact mistake the old `redstone_nor.genlib` made -- handing
-//! the topology library a design whose realisation had already been chosen.
+//! Constant case tables can also supply native NOR/merge cells of arity <= 3.
+//! General expressions retain their gate-level kinds for optimised lowering.
+//! Bounded constant tables deliberately use the existing native NOR/merge
+//! vocabulary: their measured quality depends on shallow fan-in up to three
+//! and driven outputs. This adds no library recipe or physical placement
+//! decision, and does not change the downstream Netlist contract.
 //!
 //! Gate names come from the shared [`NetlistBuilder`], so this frontend and
 //! the Yosys one cannot drift into two naming policies. Because those names
@@ -117,6 +118,7 @@ pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnosti
             let name = bit_name(&signal.name, signal.width, bit);
             if let Some(value) = graph.const_value(node) {
                 errors.push(Diagnostic {
+                    kind: super::DiagnosticKind::Internal,
                     severity: Severity::Error,
                     message: format!(
                         "unsupported: output `{name}` folds to the constant {}; REDA has no \
@@ -267,6 +269,17 @@ fn resolve(
     let output = match graph.node(id).clone() {
         LogicNode::Input(_) | LogicNode::Const(_) => {
             unreachable!("leaves are resolved before `resolve` is ever called")
+        }
+        LogicNode::Cell(kind, args) => {
+            let inputs: Vec<_> = args
+                .into_iter()
+                .map(|arg| resolve(arg, graph, builder, signal_of, realisations))
+                .collect();
+            match kind {
+                GateKind::Nor(_) => builder.nor(&inputs),
+                GateKind::Or(_) => builder.merge(&inputs),
+                _ => unreachable!("table mapping emits only native NOR and merge cells"),
+            }
         }
         LogicNode::Not(a) => {
             let a = resolve(a, graph, builder, signal_of, realisations);

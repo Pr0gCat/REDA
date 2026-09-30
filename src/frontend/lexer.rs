@@ -123,6 +123,7 @@ pub enum Punct {
     Colon,
     Dot,
     At,
+    Star,
     Hash,
     Question,
     /// `=`
@@ -164,6 +165,7 @@ impl Punct {
             Punct::Colon => ":",
             Punct::Dot => ".",
             Punct::At => "@",
+            Punct::Star => "*",
             Punct::Hash => "#",
             Punct::Question => "?",
             Punct::Assign => "=",
@@ -241,6 +243,7 @@ pub fn tokenize(file: FileId, text: &str) -> Result<Vec<Token>, Diagnostic> {
     let mut pos = 0usize;
 
     let error = |start: usize, end: usize, message: String| Diagnostic {
+        kind: super::DiagnosticKind::Source,
         severity: Severity::Error,
         message,
         span: Span::new(file, start as u32, end as u32),
@@ -385,6 +388,7 @@ pub fn tokenize(file: FileId, text: &str) -> Result<Vec<Token>, Diagnostic> {
                 b':' => (Punct::Colon, 1),
                 b'.' => (Punct::Dot, 1),
                 b'@' => (Punct::At, 1),
+                b'*' => (Punct::Star, 1),
                 b'#' => (Punct::Hash, 1),
                 b'?' => (Punct::Question, 1),
                 b'=' => (Punct::Assign, 1),

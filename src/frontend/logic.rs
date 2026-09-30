@@ -10,11 +10,11 @@
 //! for (constant folding, `x & x`, double negation, commutative operand
 //! ordering, degenerate muxes) and records what it did. This is not an ABC
 //! replacement and is not trying to be one: structural hashing plus local
-//! identities is what establishes the cross-platform compiler, and measured
-//! physical cost -- not guesswork -- is what will justify any rewrite beyond
-//! it.
+//! identities establishes the cross-platform compiler. Small constant case
+//! tables additionally use bounded implicant covers and native redstone cells;
+//! physical quality is gated separately from logical equivalence.
 //!
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +33,8 @@ pub struct LogicNodeId(pub u32);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LogicNode {
     Input(String),
+    /// A redstone-native combinational cell used by bounded table mapping.
+    Cell(crate::compile::topology::GateKind, Vec<LogicNodeId>),
     Const(bool),
     Not(LogicNodeId),
     And(LogicNodeId, LogicNodeId),
@@ -64,6 +66,7 @@ pub struct LogicGraph {
     /// Reachability from the output roots, filled in by [`LogicGraph::mark_live`].
     pub live: Vec<bool>,
     intern: HashMap<LogicNode, LogicNodeId>,
+    table_used: HashSet<LogicNodeId>,
 }
 
 impl LogicGraph {
@@ -265,6 +268,110 @@ impl LogicGraph {
         )
     }
 
+    fn table_not(&mut self, node: LogicNodeId, origin: LogicOrigin) -> LogicNodeId {
+        use crate::compile::topology::GateKind;
+        match self.node(node).clone() {
+            LogicNode::Cell(GateKind::Or(n), args) => {
+                self.add(LogicNode::Cell(GateKind::Nor(n), args), origin)
+            }
+            LogicNode::Cell(GateKind::Nor(_), args) => self.table_or(args, origin),
+            _ => self.not(node, origin),
+        }
+    }
+
+    fn table_or(&mut self, args: Vec<LogicNodeId>, origin: LogicOrigin) -> LogicNodeId {
+        use crate::compile::topology::GateKind;
+        let mut flat = Vec::new();
+        for arg in args {
+            match self.node(arg) {
+                LogicNode::Const(true) => return self.constant(true, origin),
+                LogicNode::Const(false) => {}
+                LogicNode::Cell(GateKind::Or(_), children) => flat.extend(children),
+                _ => flat.push(arg),
+            }
+        }
+        flat.sort();
+        flat.dedup();
+        if flat.is_empty() {
+            return self.constant(false, origin);
+        }
+        while flat.len() > 3 {
+            flat = flat
+                .chunks(3)
+                .map(|chunk| {
+                    if chunk.len() == 1 {
+                        chunk[0]
+                    } else {
+                        self.add(
+                            LogicNode::Cell(GateKind::Or(chunk.len()), chunk.to_vec()),
+                            origin.clone(),
+                        )
+                    }
+                })
+                .collect();
+        }
+        if flat.len() == 1 {
+            flat[0]
+        } else {
+            self.add(LogicNode::Cell(GateKind::Or(flat.len()), flat), origin)
+        }
+    }
+
+    fn table_and(&mut self, args: Vec<LogicNodeId>, origin: LogicOrigin) -> LogicNodeId {
+        let inverted = args
+            .into_iter()
+            .map(|arg| self.table_not(arg, origin.clone()))
+            .collect();
+        let joined = self.table_or(inverted, origin.clone());
+        self.table_not(joined, origin)
+    }
+
+    /// Map each implicant to native NOR/merge cells and share identical terms
+    /// through the interner. Keep the cover shallow instead of introducing
+    /// extra inversions by factoring through a binary AND/OR network.
+    fn sum_of_products(
+        &mut self,
+        cubes: &[super::cover::Cube],
+        inputs: &[LogicNodeId],
+        origin: LogicOrigin,
+    ) -> LogicNodeId {
+        let mut terms = Vec::new();
+        for cube in cubes {
+            let literals = inputs
+                .iter()
+                .enumerate()
+                .filter_map(|(bit, &input)| {
+                    if cube.mask & (1 << bit) == 0 {
+                        None
+                    } else if cube.bits & (1 << bit) != 0 {
+                        Some(input)
+                    } else {
+                        Some(self.table_not(input, origin.clone()))
+                    }
+                })
+                .collect();
+            terms.push(self.table_and(literals, origin.clone()));
+        }
+        self.table_or(terms, origin)
+    }
+
+    fn table_cone(&self, root: LogicNodeId) -> HashSet<LogicNodeId> {
+        let mut seen = HashSet::new();
+        let mut pending = vec![root];
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            match self.node(id) {
+                LogicNode::Cell(_, args) => pending.extend(args),
+                LogicNode::Not(a) => pending.push(*a),
+                LogicNode::Input(_) | LogicNode::Const(_) => {}
+                _ => {} // selector logic is shared by both polarities
+            }
+        }
+        seen
+    }
+
     /// Reserve a DFF's identity before its `data` operand exists. A hold
     /// mux's `en ? d : q` reads the register's own current value, so `q`
     /// must already resolve to *this* node while `d` is still being built --
@@ -313,6 +420,7 @@ impl LogicGraph {
             }
             match self.nodes[index].clone() {
                 LogicNode::Input(_) | LogicNode::Const(_) => {}
+                LogicNode::Cell(_, operands) => stack.extend(operands),
                 LogicNode::Not(a) => stack.push(a),
                 LogicNode::And(a, b) | LogicNode::Or(a, b) | LogicNode::Xor(a, b) => {
                     stack.push(a);
@@ -409,6 +517,7 @@ pub fn build(design: &Design) -> Result<Blasted, Vec<Diagnostic>> {
             if let Some(&(previous, _)) = builder.drivers.get(&key) {
                 let earlier: &super::elaborate::ElabAssign = &design.assigns[previous];
                 builder.errors.push(Diagnostic {
+                    kind: super::DiagnosticKind::Source,
                     severity: Severity::Error,
                     message: format!(
                         "`{}` is driven by more than one assignment (the first is at \
@@ -475,6 +584,7 @@ struct Builder<'d> {
 impl Builder<'_> {
     fn fail(&mut self, span: Span, message: impl Into<String>) -> LogicNodeId {
         self.errors.push(Diagnostic {
+            kind: super::DiagnosticKind::Source,
             severity: Severity::Error,
             message: message.into(),
             span,
@@ -625,6 +735,76 @@ impl Builder<'_> {
                     Some(different) => self.graph.not(different, origin),
                     None => self.graph.constant(true, origin),
                 }
+            }
+            RtlKind::Table {
+                selector,
+                arms,
+                default,
+            } => {
+                let RtlKind::Const(default_bits) = &default.kind else {
+                    unreachable!()
+                };
+                let mut table = vec![default_bits[bit as usize]; 1 << selector.width];
+                for (index, _, value) in arms {
+                    let RtlKind::Const(bits) = &value.kind else {
+                        unreachable!()
+                    };
+                    table[*index] = bits[bit as usize];
+                }
+                let positive = super::cover::cover(&table, true);
+                let negative = super::cover::cover(&table, false);
+                let inputs: Vec<_> = (0..selector.width)
+                    .map(|i| self.blast_bit(selector, i))
+                    .collect();
+                let positive = self
+                    .graph
+                    .sum_of_products(&positive, &inputs, origin.clone());
+                let negative = self
+                    .graph
+                    .sum_of_products(&negative, &inputs, origin.clone());
+                let negative = self.graph.table_not(negative, origin.clone());
+                // Prefer a driven output to a passive wire merge: electrical
+                // isolation matters more than a smaller Boolean node count.
+                // Among equally driven forms, reuse already selected table logic.
+                // Only membership/counts are read from HashSets, never their order.
+                let candidates = [positive, negative];
+                let result = *candidates
+                    .iter()
+                    .min_by_key(|&&root| {
+                        let cells = self
+                            .graph
+                            .table_cone(root)
+                            .iter()
+                            .filter(|id| {
+                                !self.graph.table_used.contains(id)
+                                    && !matches!(
+                                        self.graph.node(**id),
+                                        LogicNode::Input(_) | LogicNode::Const(_)
+                                    )
+                            })
+                            .count();
+                        let passive_output = matches!(
+                            self.graph.node(root),
+                            LogicNode::Cell(crate::compile::topology::GateKind::Or(_), _)
+                        );
+                        (passive_output, cells)
+                    })
+                    .unwrap();
+                self.graph.table_used.extend(self.graph.table_cone(result));
+                // A minimized output represents several original case arms.
+                // Keep each source value reachable through the debug sidecar.
+                for (_, condition, value) in arms {
+                    self.graph.note_origin(result, self.origin(condition, 0));
+                    if let RtlKind::Equal(_, label) = &condition.kind {
+                        for label_bit in 0..label.width {
+                            self.graph
+                                .note_origin(result, self.origin(label, label_bit));
+                        }
+                    }
+                    self.graph.note_origin(result, self.origin(value, bit));
+                }
+                self.graph.note_origin(result, self.origin(default, bit));
+                result
             }
             RtlKind::Mux {
                 select,

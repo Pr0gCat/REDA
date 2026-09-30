@@ -48,6 +48,12 @@ pub enum RtlKind {
     ReduceOr(Box<RtlExpr>),
     /// Equality of two equal-width operands, one bit wide.
     Equal(Box<RtlExpr>, Box<RtlExpr>),
+    /// Fully specified constant case table; support is bounded by elaboration.
+    Table {
+        selector: Box<RtlExpr>,
+        arms: Vec<(usize, RtlExpr, RtlExpr)>,
+        default: Box<RtlExpr>,
+    },
     Mux {
         select: Box<RtlExpr>,
         when_true: Box<RtlExpr>,

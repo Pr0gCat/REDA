@@ -1,0 +1,469 @@
+{
+  "base_commit": "d8f3af049f2396f29023a4d62cdb15583d3e8035",
+  "rustc": "1.98.1",
+  "yowasp_yosys": "0.69.0.0.post1233",
+  "profile": "release",
+  "pipeline": "lower_optimised -> compile",
+  "source_sha256": {
+    "src/frontend/mod.rs": "68751b7826d840146e0ec18ce07597b9873a160b8f97e88c9b99dcda4d7c71be",
+    "src/frontend/elaborate.rs": "4277a71b1d60e7473e68d7286769b85ae1ffba6686cb1954736d2c785421314a",
+    "src/frontend/rtl.rs": "cf861ada28f3bb18e7e723c224f38d4a94df03b6755028540c64186e52097a9b",
+    "src/frontend/logic.rs": "368f90469b780fdd06e43ddfd55ca761beb4a1fc13813a4e64caa8f19c76b091",
+    "src/frontend/cover.rs": "2b7a089e964522f4de9ea655f8abd8565226ce1d856e951b119236c346018198",
+    "src/frontend/netlist.rs": "c98bac718b338eb52d51e4522b6383befd932e6af69b05903e435ad6598cd917",
+    "tests/frontend_quality_report.rs": "4480afe2c3c3041df60d71a84e1e3830fdbe45696b16f563284e7d1e6ce1a461",
+    "tests/systemverilog_seven_segment.rs": "951cd490df11dd113f35a2b4e162691fb45aab65b4accf68be5b821e095bbb14",
+    "viewer/tests/frontend_compiler.rs": "0e38b182e14c9e400876e265e61978889885198314b68102ee91d184bf349148",
+    "check.sh": "fa3b08b65a24b3c081fe0c0e4526ad8737533eea17d600e392ee9e7cda72e2f4"
+  },
+  "runs": [
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 12.731747,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 13.959601000000001,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 30,
+        "lower_and_compile_ms": 196.945738,
+        "lowered_gates": 30,
+        "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+        "mean_settle_ticks": 41.41796875,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 8980
+          },
+          "non_air_blocks": 8980,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 156
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 100408
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79",
+        "worst_settle_ticks": 52,
+        "worst_transition": [
+          0,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "lower_and_compile_ms": 418.598549,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 65.12109375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 10088
+          },
+          "non_air_blocks": 10088,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 239
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 213816
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5",
+        "worst_settle_ticks": 84,
+        "worst_transition": [
+          0,
+          4
+        ]
+      }
+    ],
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 20.383021,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 11.151335999999999,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 30,
+        "lower_and_compile_ms": 194.71677400000002,
+        "lowered_gates": 30,
+        "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+        "mean_settle_ticks": 41.41796875,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 8980
+          },
+          "non_air_blocks": 8980,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 156
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 100408
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79",
+        "worst_settle_ticks": 52,
+        "worst_transition": [
+          0,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "lower_and_compile_ms": 403.18821199999996,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 65.12109375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 10088
+          },
+          "non_air_blocks": 10088,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 239
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 213816
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5",
+        "worst_settle_ticks": 84,
+        "worst_transition": [
+          0,
+          4
+        ]
+      }
+    ],
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 12.694814000000001,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "lower_and_compile_ms": 11.448979,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 30,
+        "lower_and_compile_ms": 196.391111,
+        "lowered_gates": 30,
+        "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+        "mean_settle_ticks": 41.41796875,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 8980
+          },
+          "non_air_blocks": 8980,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 156
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 100408
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79",
+        "worst_settle_ticks": 52,
+        "worst_transition": [
+          0,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "lower_and_compile_ms": 407.954223,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 65.12109375,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 10088
+          },
+          "non_air_blocks": 10088,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 239
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 213816
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5",
+        "worst_settle_ticks": 84,
+        "worst_transition": [
+          0,
+          4
+        ]
+      }
+    ]
+  ],
+  "median_timings": [
+    {
+      "case": "and4",
+      "frontend": "REDA",
+      "lower_and_compile_ms": 12.731747
+    },
+    {
+      "case": "and4",
+      "frontend": "Yosys-fresh",
+      "lower_and_compile_ms": 11.448979
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "REDA",
+      "lower_and_compile_ms": 196.391111
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "Yosys-fresh",
+      "lower_and_compile_ms": 407.954223
+    }
+  ]
+}

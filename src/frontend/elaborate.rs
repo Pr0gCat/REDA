@@ -125,6 +125,7 @@ impl Design {
 
 fn error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic {
+        kind: super::DiagnosticKind::Source,
         severity: Severity::Error,
         message: message.into(),
         span,
@@ -202,6 +203,12 @@ impl Elaborator {
         self.errors.push(error(span, message));
     }
 
+    fn unsupported(&mut self, span: Span, message: impl Into<String>) {
+        let mut diagnostic = error(span, message);
+        diagnostic.kind = super::DiagnosticKind::Unsupported;
+        self.errors.push(diagnostic);
+    }
+
     fn module(&mut self, module: &Module) -> Design {
         // The module's own node comes first, so elaborated IDs run in the
         // same order as the syntax they came from.
@@ -262,7 +269,7 @@ impl Elaborator {
             .iter()
             .any(|signal| signal.direction == Some(PortDirection::Output))
         {
-            self.fail(
+            self.unsupported(
                 module.name.span,
                 format!(
                     "unsupported: module `{}` declares no output ports, so it has nothing to \
@@ -456,7 +463,7 @@ impl Elaborator {
         };
         let target_name = self.signals[signal].name.clone();
         if let Some(span) = referenced_signal_span(&case.expr, &target_name) {
-            self.fail(
+            self.unsupported(
                 span,
                 format!(
                     "unsupported: read-before-write in `always_comb`; `{target_name}` is read before it is assigned, which would infer storage"
@@ -466,7 +473,7 @@ impl Elaborator {
         }
         for item in &case.items {
             if let Some(span) = referenced_signal_span(&item.statement.rhs, &target_name) {
-                self.fail(
+                self.unsupported(
                     span,
                     format!(
                         "unsupported: read-before-write in `always_comb`; `{target_name}` is read before it is assigned, which would infer storage"
@@ -479,7 +486,65 @@ impl Elaborator {
             return None;
         }
 
-        let value =
+        // Small constant tables retain their mutually exclusive labels until
+        // bit blasting, where implicants can be minimized per output bit.
+        // Exact, distinct case labels are mutually exclusive. With a zero
+        // default, each arm can be gated independently and the results ORed;
+        // carrying the other arms' priority conditions only adds logic.
+        let value = if selector.width <= 6
+            && matches!(&default.kind, RtlKind::Const(_))
+            && arms
+                .iter()
+                .all(|(_, _, value)| matches!(value.kind, RtlKind::Const(_)))
+        {
+            let elab = self.node(always.id, ElabKind::Expr, width);
+            RtlExpr {
+                kind: RtlKind::Table {
+                    selector: Box::new(selector),
+                    arms: arms
+                        .into_iter()
+                        .map(|(_, condition, value)| {
+                            let RtlKind::Equal(_, label) = &condition.kind else {
+                                unreachable!()
+                            };
+                            let RtlKind::Const(bits) = &label.kind else {
+                                unreachable!()
+                            };
+                            let index = bits
+                                .iter()
+                                .enumerate()
+                                .fold(0, |acc, (i, bit)| acc | (usize::from(*bit) << i));
+                            (index, condition, value)
+                        })
+                        .collect(),
+                    default: Box::new(default),
+                },
+                width,
+                elab,
+                synthetic: Some(SyntheticOrigin::CaseFold),
+            }
+        } else if matches!(&default.kind, RtlKind::Const(bits) if bits.iter().all(|bit| !bit)) {
+            arms.into_iter()
+                .fold(default.clone(), |acc, (source, select, when_true)| {
+                    let elab = self.node(source, ElabKind::Expr, width);
+                    let gated = RtlExpr {
+                        kind: RtlKind::Mux {
+                            select: Box::new(select),
+                            when_true: Box::new(when_true),
+                            when_false: Box::new(default.clone()),
+                        },
+                        width,
+                        elab,
+                        synthetic: Some(SyntheticOrigin::BranchJoin),
+                    };
+                    RtlExpr {
+                        kind: RtlKind::Binary(RtlBinaryOp::Or, Box::new(acc), Box::new(gated)),
+                        width,
+                        elab,
+                        synthetic: Some(SyntheticOrigin::BranchJoin),
+                    }
+                })
+        } else {
             arms.into_iter()
                 .rev()
                 .fold(default, |when_false, (source, select, when_true)| {
@@ -494,7 +559,8 @@ impl Elaborator {
                         elab,
                         synthetic: Some(SyntheticOrigin::BranchJoin),
                     }
-                });
+                })
+        };
         let elab = self.node(always.id, ElabKind::Assign, width);
         Some(ElabAssign {
             elab,
@@ -511,7 +577,7 @@ impl Elaborator {
         let clock = match &always.clock.kind {
             ExprKind::Ident(name) => self.lookup(name, always.clock.span),
             _ => {
-                self.fail(
+                self.unsupported(
                     always.clock.span,
                     "unsupported: `always_ff` clock must be one top-level input identifier",
                 );
@@ -519,7 +585,7 @@ impl Elaborator {
             }
         }?;
         if self.signals[clock].direction != Some(PortDirection::Input) {
-            self.fail(
+            self.unsupported(
                 always.clock.span,
                 format!(
                     "unsupported: `always_ff` clock `{}` must be a top-level input port",
@@ -529,7 +595,7 @@ impl Elaborator {
             return None;
         }
         if self.signals[clock].width != 1 {
-            self.fail(
+            self.unsupported(
                 always.clock.span,
                 format!(
                     "unsupported: `always_ff` clock `{}` must be one bit wide",
@@ -540,7 +606,7 @@ impl Elaborator {
         }
         if let Some(previous) = self.ff_clock {
             if previous != clock {
-                self.fail(
+                self.unsupported(
                     always.clock.span,
                     "unsupported: all `always_ff` blocks must use the same clock; multiple clocks are not supported",
                 );
@@ -558,7 +624,7 @@ impl Elaborator {
                 self.always_ff_assignment(always, &if_assign.assign, clock, Some(if_assign))
             }
             _ => {
-                self.fail(
+                self.unsupported(
                     always.span,
                     "unsupported: `always_ff` must contain exactly one nonblocking assignment, \
                      optionally guarded by one enable-style `if`; reset, `else`, and multiple \
@@ -589,7 +655,7 @@ impl Elaborator {
     ) -> Option<ElabAssign> {
         let (signal, lsb, width) = self.target(&assign.lhs)?;
         if references_signal(&assign.rhs, &self.signals[signal].name) {
-            self.fail(
+            self.unsupported(
                 assign.rhs.span,
                 format!(
                     "unsupported: feedback in `always_ff` is not supported; `{}` must be driven from a feed-forward value",
@@ -614,7 +680,7 @@ impl Elaborator {
             None => value,
             Some(if_assign) => {
                 if references_signal(&if_assign.cond, &self.signals[signal].name) {
-                    self.fail(
+                    self.unsupported(
                         if_assign.cond.span,
                         format!(
                             "unsupported: feedback in `always_ff` is not supported; `{}` must not appear in its own enable condition",

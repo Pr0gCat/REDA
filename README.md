@@ -14,8 +14,8 @@ library and a cost model that say what redstone actually costs.
 
 ```
 Verilog
-  |  src/frontend        yosys + abc, via yowasp-yosys. ABC optimises logic
-  |                      and stops; it does no technology mapping.
+  |  src/frontend        native first (auto); unsupported features fall back
+  |                      to yosys + abc via yowasp-yosys.
 gate-level Netlist       $_AND_ $_NAND_ $_XOR_ $_MUX_ ... carried in Gate::kind
   |  src/compile/lowering
   |                      applies src/compile/topology's own recipes.
@@ -96,6 +96,19 @@ end.
 
 ## Running it
 
+With Rust (including clippy, rustfmt and the `wasm32-unknown-unknown` target),
+wasm-pack and Node.js installed, create the Python environment once:
+
+```sh
+uv venv .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+```
+
+In each Bash session, run `source tools/env.sh` from the repo root. This selects
+the Python environment and keeps Cargo build output and YoWASP's cache in this
+checkout's `target/`. It also places scratch files there so YoWASP's private
+`/tmp` mount does not hide the Verilog frontend's inputs and outputs on Linux.
+
 ```sh
 ./check.sh                                        # everything that must be true
 cargo run --release --bin build_circuit           # list circuits
@@ -118,3 +131,15 @@ they are not rewritten when the code moves past them -- a stale fact inside one
 gets marked, the reasoning stays as it was. Start with
 `2026-08-05-redstone-eda-design.md` for the founding thesis and
 `2026-08-09-polarity-assignment.md` for what is open now.
+
+### CLI 前端選擇
+
+`build_circuit` 與 `mc_dump` 的 HDL 輸入預設使用 `--frontend auto`：先嘗試原生編譯器，只有明確分類為不支援的功能才回退 Yosys。語法、語意、內部驗證與後續實體編譯錯誤會直接失敗。`--frontend native` 禁止回退；`--frontend yosys` 強制使用 Yosys。實際前端與回退原因輸出到 stderr。
+
+```bash
+source tools/env.sh
+cargo run --release --bin mc_dump -- verilog tests/fixtures/and4.v and4 --frontend auto
+cargo run --release --bin build_circuit -- verilog tests/fixtures/seven_segment.sv seven_segment --frontend native
+```
+
+舊的 `synthesize_verilog` API 與烘焙流程仍固定使用 Yosys，供獨立基準比較。此 CLI 模式不代表已完成正式生產切換的所有驗收。

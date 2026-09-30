@@ -829,3 +829,29 @@ mod tests {
         }
     }
 }
+
+/// Host CLI selection; the legacy synthesis API remains the Yosys oracle.
+pub fn synthesize_with_frontend(
+    source: &str,
+    name: &str,
+    top: &str,
+    mode: crate::frontend::FrontendMode,
+) -> Result<(Netlist, Vec<(String, String)>), String> {
+    let selected = crate::frontend::synthesize_selected(
+        crate::frontend::SourceInput { name, text: source },
+        top,
+        mode,
+    )?;
+    eprintln!(
+        "frontend: {}",
+        match selected.frontend {
+            crate::frontend::FrontendMode::Native => "native",
+            crate::frontend::FrontendMode::Yosys => "yosys",
+            crate::frontend::FrontendMode::Auto => unreachable!(),
+        }
+    );
+    if let Some(reason) = selected.fallback_reason {
+        eprintln!("fallback reason: {reason}");
+    }
+    Ok((selected.netlist, sorted_output_labels(selected.outputs)))
+}

@@ -415,12 +415,18 @@ enum LoweringPath {
 /// Turn the command line into a circuit, or into a message explaining why it
 /// could not be one. Only the `verilog` forms can fail -- see
 /// `reda::circuits::verilog`, and `mc_dump`'s identical `select`.
-fn select(args: &[String], circuits: &[CircuitInfo]) -> Result<SelectedCircuit, String> {
+fn select(
+    args: &[String],
+    circuits: &[CircuitInfo],
+    mode: reda::frontend::FrontendMode,
+) -> Result<SelectedCircuit, String> {
     if args.first().map(String::as_str) == Some("verilog") {
         let (Some(path), Some(top_module)) = (args.get(1), args.get(2)) else {
             return Err("usage: build_circuit verilog <file.v> <top-module>".to_string());
         };
-        let (netlist, output_labels) = verilog::synthesize_file(Path::new(path), top_module)
+        let (netlist, output_labels) = std::fs::read_to_string(Path::new(path))
+            .map_err(|err| err.to_string())
+            .and_then(|source| verilog::synthesize_with_frontend(&source, path, top_module, mode))
             .map_err(|err| format!("could not synthesize {path} ({top_module}): {err}"))?;
         return Ok(SelectedCircuit {
             name: top_module.clone(),
@@ -435,9 +441,13 @@ fn select(args: &[String], circuits: &[CircuitInfo]) -> Result<SelectedCircuit, 
         .expect("select is only called with at least one argument");
 
     if let Some(circuit) = verilog::find(requested) {
-        let (netlist, output_labels) = circuit
-            .synthesize()
-            .map_err(|err| format!("could not synthesize '{}': {err}", circuit.name))?;
+        let (netlist, output_labels) = verilog::synthesize_with_frontend(
+            circuit.source,
+            circuit.source_path,
+            circuit.top_module,
+            mode,
+        )
+        .map_err(|err| format!("could not synthesize '{}': {err}", circuit.name))?;
         // `verilog:seven_segment` would be a colon in a filename -- illegal
         // on Windows, and an alternate-data-stream separator at that. The
         // written file is `verilog_seven_segment.litematic`.
@@ -621,6 +631,7 @@ fn facing_name(facing: Facing) -> &'static str {
 }
 
 fn list_circuits(circuits: &[CircuitInfo]) {
+    println!("HDL frontend: --frontend auto|native|yosys (default auto)");
     println!("Usage: build_circuit <name> [--grown|--synth [--pins <file.json>]] [--evaluation text|json]");
     println!("       build_circuit verilog <file.v> <top-module>");
     println!("--evaluation writes output/<name>[.grown].evaluation.txt or .json.");
@@ -646,7 +657,7 @@ fn list_circuits(circuits: &[CircuitInfo]) {
     // and synthesizing means a Yosys run per entry -- see this file's module
     // doc comment for why a listing must not do that.
     println!();
-    println!("Verilog circuits (synthesized on demand; need `python` with `yowasp-yosys`):");
+    println!("Verilog circuits (--frontend auto|native|yosys; auto prefers native):");
     for circuit in verilog::CIRCUITS {
         println!("  {:<22} module {}", circuit.name, circuit.top_module);
     }
@@ -671,6 +682,10 @@ fn take_evaluation_format(args: &mut Vec<String>) -> Result<Option<&'static str>
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mode = reda::frontend::FrontendMode::take_argument(&mut args).unwrap_or_else(|why| {
+        eprintln!("{why}");
+        std::process::exit(1);
+    });
     let evaluation_format = take_evaluation_format(&mut args).unwrap_or_else(|why| {
         eprintln!("{why}");
         std::process::exit(1);
@@ -708,9 +723,7 @@ fn main() {
         None => None,
     };
     if pins_path.is_some() && !grown && !synth {
-        eprintln!(
-            "--pins requires --grown or --synth: pinned ports compile through a generator"
-        );
+        eprintln!("--pins requires --grown or --synth: pinned ports compile through a generator");
         std::process::exit(1);
     }
     let circuits = available_circuits();
@@ -729,7 +742,7 @@ fn main() {
         netlist,
         output_labels,
         lowering_path,
-    } = match select(&args, &circuits) {
+    } = match select(&args, &circuits, mode) {
         Ok(selected) => selected,
         Err(message) => {
             eprintln!("{message}");
