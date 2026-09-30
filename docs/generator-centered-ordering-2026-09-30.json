@@ -1,0 +1,761 @@
+{
+  "base_commit": "d185f12",
+  "pipeline": "same frontend -> lower_optimised -> compile -> simulator, 256 transitions per case",
+  "before": [
+    {
+      "case": "and4",
+      "frontend": "REDA",
+      "frontend_gates": 3,
+      "historical_channel_baseline": null,
+      "lower_and_compile_ms": 20.155738,
+      "lowered_gates": 7,
+      "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+      "mean_settle_ticks": 6.56640625,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 7,
+          "numerator": 228
+        },
+        "non_air_blocks": 228,
+        "occupied_max": {
+          "x": 69,
+          "y": 3,
+          "z": 57
+        },
+        "occupied_min": {
+          "x": 21,
+          "y": 0,
+          "z": 40
+        },
+        "occupied_volume": 3528
+      },
+      "planner": "Unified3d",
+      "transitions": 256,
+      "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+      "worst_settle_ticks": 28,
+      "worst_transition": [
+        9,
+        5
+      ]
+    },
+    {
+      "case": "and4",
+      "frontend": "Yosys-fresh",
+      "frontend_gates": 3,
+      "historical_channel_baseline": null,
+      "lower_and_compile_ms": 11.51185,
+      "lowered_gates": 7,
+      "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+      "mean_settle_ticks": 5.72265625,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 7,
+          "numerator": 214
+        },
+        "non_air_blocks": 214,
+        "occupied_max": {
+          "x": 68,
+          "y": 3,
+          "z": 42
+        },
+        "occupied_min": {
+          "x": 21,
+          "y": 0,
+          "z": 28
+        },
+        "occupied_volume": 2880
+      },
+      "planner": "Unified3d",
+      "transitions": 256,
+      "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+      "worst_settle_ticks": 22,
+      "worst_transition": [
+        8,
+        5
+      ]
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "REDA",
+      "frontend_gates": 30,
+      "historical_channel_baseline": {
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 8980
+          },
+          "non_air_blocks": 8980,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 156
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 100408
+        },
+        "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79"
+      },
+      "lower_and_compile_ms": 149.77715,
+      "lowered_gates": 30,
+      "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+      "mean_settle_ticks": 32.921875,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 30,
+          "numerator": 7136
+        },
+        "non_air_blocks": 7136,
+        "occupied_max": {
+          "x": 170,
+          "y": 3,
+          "z": 107
+        },
+        "occupied_min": {
+          "x": 8,
+          "y": 0,
+          "z": 3
+        },
+        "occupied_volume": 68460
+      },
+      "planner": "Legacy",
+      "transitions": 256,
+      "world_fingerprint": "17361078fbe536a1812db8b3a7b8433d53057fb1f582e7430cd70f3aef2e955c",
+      "worst_settle_ticks": 46,
+      "worst_transition": [
+        2,
+        5
+      ]
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "Yosys-fresh",
+      "frontend_gates": 31,
+      "historical_channel_baseline": {
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 10088
+          },
+          "non_air_blocks": 10088,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 239
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 213816
+        },
+        "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5"
+      },
+      "lower_and_compile_ms": 329.067868,
+      "lowered_gates": 47,
+      "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+      "mean_settle_ticks": 52.61328125,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 47,
+          "numerator": 8342
+        },
+        "non_air_blocks": 8342,
+        "occupied_max": {
+          "x": 158,
+          "y": 5,
+          "z": 182
+        },
+        "occupied_min": {
+          "x": 10,
+          "y": 0,
+          "z": 4
+        },
+        "occupied_volume": 160026
+      },
+      "planner": "Legacy",
+      "transitions": 256,
+      "world_fingerprint": "298e9f22e7dd5d2c07fb63ee300e2308356562d1f92a6b1abe29323c909bf3aa",
+      "worst_settle_ticks": 66,
+      "worst_transition": [
+        0,
+        10
+      ]
+    }
+  ],
+  "after_runs": [
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 12.810948000000002,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 10.975855,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 30,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 30,
+              "numerator": 8980
+            },
+            "non_air_blocks": 8980,
+            "occupied_max": {
+              "x": 170,
+              "y": 3,
+              "z": 156
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 3
+            },
+            "occupied_volume": 100408
+          },
+          "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79"
+        },
+        "lower_and_compile_ms": 136.287305,
+        "lowered_gates": 30,
+        "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+        "mean_settle_ticks": 35.4921875,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 6372
+          },
+          "non_air_blocks": 6372,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 101
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 64548
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "700e2d4cebb096e3b79f18009237f0d7875b706f7665e4ec36ecdf7974946091",
+        "worst_settle_ticks": 46,
+        "worst_transition": [
+          0,
+          10
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 47,
+              "numerator": 10088
+            },
+            "non_air_blocks": 10088,
+            "occupied_max": {
+              "x": 158,
+              "y": 5,
+              "z": 239
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 4
+            },
+            "occupied_volume": 213816
+          },
+          "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5"
+        },
+        "lower_and_compile_ms": 327.36156500000004,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 48.05078125,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 7976
+          },
+          "non_air_blocks": 7976,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 179
+          },
+          "occupied_min": {
+            "x": 10,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 157344
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "9839637a3ae76d2c45fc50def2b4d21d984ff88fc85beca5f4593ebcb7dbce63",
+        "worst_settle_ticks": 64,
+        "worst_transition": [
+          0,
+          7
+        ]
+      }
+    ],
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 12.212029,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 10.876643999999999,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 30,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 30,
+              "numerator": 8980
+            },
+            "non_air_blocks": 8980,
+            "occupied_max": {
+              "x": 170,
+              "y": 3,
+              "z": 156
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 3
+            },
+            "occupied_volume": 100408
+          },
+          "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79"
+        },
+        "lower_and_compile_ms": 136.71153999999999,
+        "lowered_gates": 30,
+        "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+        "mean_settle_ticks": 35.4921875,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 6372
+          },
+          "non_air_blocks": 6372,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 101
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 64548
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "700e2d4cebb096e3b79f18009237f0d7875b706f7665e4ec36ecdf7974946091",
+        "worst_settle_ticks": 46,
+        "worst_transition": [
+          0,
+          10
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 47,
+              "numerator": 10088
+            },
+            "non_air_blocks": 10088,
+            "occupied_max": {
+              "x": 158,
+              "y": 5,
+              "z": 239
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 4
+            },
+            "occupied_volume": 213816
+          },
+          "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5"
+        },
+        "lower_and_compile_ms": 323.49822900000004,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 48.05078125,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 7976
+          },
+          "non_air_blocks": 7976,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 179
+          },
+          "occupied_min": {
+            "x": 10,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 157344
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "9839637a3ae76d2c45fc50def2b4d21d984ff88fc85beca5f4593ebcb7dbce63",
+        "worst_settle_ticks": 64,
+        "worst_transition": [
+          0,
+          7
+        ]
+      }
+    ],
+    [
+      {
+        "case": "and4",
+        "frontend": "REDA",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 12.727824,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 6.56640625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 228
+          },
+          "non_air_blocks": 228,
+          "occupied_max": {
+            "x": 69,
+            "y": 3,
+            "z": 57
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 40
+          },
+          "occupied_volume": 3528
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+        "worst_settle_ticks": 28,
+        "worst_transition": [
+          9,
+          5
+        ]
+      },
+      {
+        "case": "and4",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 3,
+        "historical_channel_baseline": null,
+        "lower_and_compile_ms": 12.860246,
+        "lowered_gates": 7,
+        "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+        "mean_settle_ticks": 5.72265625,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 7,
+            "numerator": 214
+          },
+          "non_air_blocks": 214,
+          "occupied_max": {
+            "x": 68,
+            "y": 3,
+            "z": 42
+          },
+          "occupied_min": {
+            "x": 21,
+            "y": 0,
+            "z": 28
+          },
+          "occupied_volume": 2880
+        },
+        "planner": "Unified3d",
+        "transitions": 256,
+        "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+        "worst_settle_ticks": 22,
+        "worst_transition": [
+          8,
+          5
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "REDA",
+        "frontend_gates": 30,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 30,
+              "numerator": 8980
+            },
+            "non_air_blocks": 8980,
+            "occupied_max": {
+              "x": 170,
+              "y": 3,
+              "z": 156
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 3
+            },
+            "occupied_volume": 100408
+          },
+          "world_fingerprint": "2c12a2b8c795b0db5034b6b0f0878243bc9f6f423002b1dc3934c5d1bf7cbf79"
+        },
+        "lower_and_compile_ms": 136.187682,
+        "lowered_gates": 30,
+        "lowered_histogram": "nor1:4 nor2:11 nor3:9 merge2:1 merge3:5",
+        "mean_settle_ticks": 35.4921875,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 30,
+            "numerator": 6372
+          },
+          "non_air_blocks": 6372,
+          "occupied_max": {
+            "x": 170,
+            "y": 3,
+            "z": 101
+          },
+          "occupied_min": {
+            "x": 8,
+            "y": 0,
+            "z": 3
+          },
+          "occupied_volume": 64548
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "700e2d4cebb096e3b79f18009237f0d7875b706f7665e4ec36ecdf7974946091",
+        "worst_settle_ticks": 46,
+        "worst_transition": [
+          0,
+          10
+        ]
+      },
+      {
+        "case": "seven_segment",
+        "frontend": "Yosys-fresh",
+        "frontend_gates": 31,
+        "historical_channel_baseline": {
+          "physical": {
+            "blocks_per_lowered_gate": {
+              "denominator": 47,
+              "numerator": 10088
+            },
+            "non_air_blocks": 10088,
+            "occupied_max": {
+              "x": 158,
+              "y": 5,
+              "z": 239
+            },
+            "occupied_min": {
+              "x": 8,
+              "y": 0,
+              "z": 4
+            },
+            "occupied_volume": 213816
+          },
+          "world_fingerprint": "b6ee52258263cc54c72a27833b665b30351fa2ff20e22fd0794c6d9a455273b5"
+        },
+        "lower_and_compile_ms": 328.657426,
+        "lowered_gates": 47,
+        "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+        "mean_settle_ticks": 48.05078125,
+        "physical": {
+          "blocks_per_lowered_gate": {
+            "denominator": 47,
+            "numerator": 7976
+          },
+          "non_air_blocks": 7976,
+          "occupied_max": {
+            "x": 158,
+            "y": 5,
+            "z": 179
+          },
+          "occupied_min": {
+            "x": 10,
+            "y": 0,
+            "z": 4
+          },
+          "occupied_volume": 157344
+        },
+        "planner": "Legacy",
+        "transitions": 256,
+        "world_fingerprint": "9839637a3ae76d2c45fc50def2b4d21d984ff88fc85beca5f4593ebcb7dbce63",
+        "worst_settle_ticks": 64,
+        "worst_transition": [
+          0,
+          7
+        ]
+      }
+    ]
+  ],
+  "deterministic_physical_and_timing": true,
+  "historical_baselines_preserved": true,
+  "tradeoff": "native seven_segment mean settle increases from 32.921875 to 35.4921875, worst stays 46; blocks and volume decrease",
+  "source_sha256": {
+    "src/compile/mod.rs": "22c2965c6b0a7d83e6088db9760979a4a352a2647f27a525aa10083a018b501a",
+    "src/compile/routing_stats.rs": "736a9aa982ad7824c1082f3195d109f63cd44c7e71a69aa90314466fbd681281",
+    "tests/frontend_quality_report.rs": "d46c9eb519da5b98ae70af257c2981b41c36a93d7ffa395574850f81c53a9362",
+    "tests/reference_circuits.rs": "e308a33688f9ceb52905ebc7b429fa58177a37428719eb9af39301481afb5c27",
+    "tests/mc_dump.rs": "52269ebfc4ad0bb1675d5177bd1f20aa82669da9605cd4a86a570bafd2a0420a",
+    "viewer/tests/frontend_compiler.rs": "52d080672baa0aaf008cae9ce8718c2c0ca90ac69f5741d2011df180d1ea44c2"
+  }
+}

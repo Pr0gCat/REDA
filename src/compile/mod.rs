@@ -1813,6 +1813,7 @@ pub(crate) struct LegacyEmission {
     track_share_gap: i32,
     span_aware_feedthrough: bool,
     tap_only_reserve: bool,
+    centered_ordering: bool,
     primitive_anchors: Vec<Anchor>,
     primitive_nodes: Vec<PrimitiveNode>,
     routes: Vec<LegacyRoute>,
@@ -3357,6 +3358,7 @@ fn build_floorplan(
     netlist: &Netlist,
     order: &[usize],
     producer_of: &HashMap<&str, usize>,
+    centered_ordering: bool,
 ) -> Floorplan {
     let gate_count = netlist.gates.len();
 
@@ -3406,8 +3408,14 @@ fn build_floorplan(
     // position of what it feeds. Both reduce crossings, and fewer crossings
     // mean narrower net spans -- which is exactly what lets the left-edge
     // track assignment below pack more nets onto one track.
+    // Compact ordering uses the same integer centering as X placement.
+    // Preserve stretched coordinates for the historical layout and fallback.
     let spread = |position: usize, len: usize| -> f64 {
-        (position as f64 + 0.5) * (widest as f64 / len.max(1) as f64)
+        if centered_ordering {
+            position as f64 + ((widest - len) / 2) as f64
+        } else {
+            (position as f64 + 0.5) * (widest as f64 / len.max(1) as f64)
+        }
     };
     let lever_spread = |name: &str| -> Option<f64> {
         input_slot
@@ -7703,7 +7711,18 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         COMPACT_TRACK_SHARE_GAP,
         true,
         true,
+        true,
     )
+    .or_else(|_| {
+        compile_channelled_with_reserve(
+            netlist,
+            COMPACT_TRACK_SPACING,
+            COMPACT_TRACK_SHARE_GAP,
+            true,
+            true,
+            false,
+        )
+    })
     .or_else(|_| {
         compile_channelled(
             netlist,
@@ -7841,6 +7860,7 @@ fn compile_channelled(
         track_share_gap,
         span_aware_feedthrough,
         false,
+        false,
     )
 }
 
@@ -7850,6 +7870,7 @@ fn compile_channelled_with_reserve(
     track_share_gap: i32,
     span_aware_feedthrough: bool,
     tap_only_reserve: bool,
+    centered_ordering: bool,
 ) -> Result<CompiledCircuit, CompileError> {
     let order = checked_topological_order(netlist)?;
     if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
@@ -7864,7 +7885,7 @@ fn compile_channelled_with_reserve(
         producer_of.insert(gate.output.as_str(), index);
     }
 
-    let plan = build_floorplan(netlist, &order, &producer_of);
+    let plan = build_floorplan(netlist, &order, &producer_of, centered_ordering);
     let row_count = plan.rows.len();
     let channel_count = row_count.saturating_sub(1);
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
@@ -8018,6 +8039,7 @@ fn compile_channelled_with_reserve(
         track_share_gap,
         span_aware_feedthrough,
         tap_only_reserve,
+        centered_ordering,
         primitive_anchors,
         primitive_nodes,
         routes: legacy_routes,

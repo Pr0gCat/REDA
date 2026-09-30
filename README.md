@@ -68,6 +68,8 @@ Feed-through target refinement and its measured tradeoff are in
 [the feed-through report](docs/generator-feedthrough-2026-09-30.md).
 The subsequent branch strength budgeting refinement is measured in
 [the tap reserve report](docs/generator-tap-reserve-2026-09-30.md).
+Centered row ordering on that baseline is measured in
+[the centered ordering report](docs/generator-centered-ordering-2026-09-30.md).
 
 ### Two placers, one entry point
 
