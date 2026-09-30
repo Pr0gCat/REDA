@@ -1811,6 +1811,7 @@ pub(crate) struct LegacyEmission {
     netlist: Netlist,
     track_spacing: i32,
     track_share_gap: i32,
+    span_aware_feedthrough: bool,
     primitive_anchors: Vec<Anchor>,
     primitive_nodes: Vec<PrimitiveNode>,
     routes: Vec<LegacyRoute>,
@@ -3686,7 +3687,13 @@ fn row_body_zones(plan: &Floorplan, row_count: usize) -> Vec<Vec<(i32, i32)>> {
 /// Extracted verbatim from `compile`'s "Column reservation" section; see the
 /// comment there (still in place) for why the forced columns come first and
 /// feed-throughs are placed last, against everything else.
-fn reserve_columns(plan: &Floorplan, nets: &mut [Net], row_count: usize, channel_count: usize) {
+fn reserve_columns(
+    plan: &Floorplan,
+    nets: &mut [Net],
+    row_count: usize,
+    channel_count: usize,
+    span_aware_feedthrough: bool,
+) {
     let mut used_columns: Vec<BTreeSet<i32>> = vec![BTreeSet::new(); channel_count.max(1)];
     let row_blocked = row_body_zones(plan, row_count);
 
@@ -3703,7 +3710,31 @@ fn reserve_columns(plan: &Floorplan, nets: &mut [Net], row_count: usize, channel
         for slot in 0..net.channels.len().saturating_sub(1) {
             let from = net.channels[slot];
             let to = net.channels[slot + 1];
-            let target = net.entry_column(slot);
+            let mut target = net.entry_column(slot);
+            if span_aware_feedthrough {
+                let (lo, hi) =
+                    net.sinks[slot]
+                        .iter()
+                        .fold((target, target), |(lo, hi), &(gate, input)| {
+                            let x = approach_column(plan.centre_x[gate], input);
+                            (lo.min(x), hi.max(x))
+                        });
+                let next = net.sinks[slot + 1]
+                    .iter()
+                    .map(|&(gate, input)| approach_column(plan.centre_x[gate], input))
+                    .fold(None::<(i32, i32)>, |bounds, x| {
+                        Some(match bounds {
+                            None => (x, x),
+                            Some((lo, hi)) => (lo.min(x), hi.max(x)),
+                        })
+                    });
+                if let Some((next_lo, next_hi)) = next {
+                    // Stay inside this segment's existing span while approaching
+                    // the next segment's terminals. The same clearance search
+                    // still decides which nearby column is physically legal.
+                    target = target.clamp(next_lo, next_hi).clamp(lo, hi);
+                }
+            }
             let column = reserve_feedthrough(
                 target,
                 from..=to,
@@ -7633,9 +7664,22 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     }
     // Every candidate still passes the same physical verifier pipeline.
     // A rejected compact geometry retains the historical layout as a fallback.
-    compile_channelled(netlist, COMPACT_TRACK_SPACING, COMPACT_TRACK_SHARE_GAP)
-        .or_else(|_| compile_channelled(netlist, COMPACT_TRACK_SPACING, TRACK_SHARE_GAP))
-        .or_else(|_| compile_legacy(netlist))
+    compile_channelled(
+        netlist,
+        COMPACT_TRACK_SPACING,
+        COMPACT_TRACK_SHARE_GAP,
+        true,
+    )
+    .or_else(|_| {
+        compile_channelled(
+            netlist,
+            COMPACT_TRACK_SPACING,
+            COMPACT_TRACK_SHARE_GAP,
+            false,
+        )
+    })
+    .or_else(|_| compile_channelled(netlist, COMPACT_TRACK_SPACING, TRACK_SHARE_GAP, false))
+    .or_else(|_| compile_legacy(netlist))
 }
 
 /// Whether the planner's `PlanCandidate` can represent everything this netlist
@@ -7740,13 +7784,14 @@ fn checked_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileErr
 ///
 /// Stamps `PlannerKind::Legacy`, which nothing constructed before today.
 pub fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
-    compile_channelled(netlist, TRACK_SPACING, TRACK_SHARE_GAP)
+    compile_channelled(netlist, TRACK_SPACING, TRACK_SHARE_GAP, false)
 }
 
 fn compile_channelled(
     netlist: &Netlist,
     track_spacing: i32,
     track_share_gap: i32,
+    span_aware_feedthrough: bool,
 ) -> Result<CompiledCircuit, CompileError> {
     let order = checked_topological_order(netlist)?;
     if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
@@ -7766,7 +7811,13 @@ fn compile_channelled(
     let channel_count = row_count.saturating_sub(1);
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
-    reserve_columns(&plan, &mut nets, row_count, channel_count);
+    reserve_columns(
+        &plan,
+        &mut nets,
+        row_count,
+        channel_count,
+        span_aware_feedthrough,
+    );
     let (bypass, row_z, track_z) = resolve_bypass_and_geometry(
         netlist,
         &plan,
@@ -7904,6 +7955,7 @@ fn compile_channelled(
         netlist: netlist.clone(),
         track_spacing,
         track_share_gap,
+        span_aware_feedthrough,
         primitive_anchors,
         primitive_nodes,
         routes: legacy_routes,

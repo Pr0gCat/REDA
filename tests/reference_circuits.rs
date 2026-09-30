@@ -519,6 +519,7 @@ fn every_reference_circuit_records_which_path_produced_it() {
 /// to 232 and 1,065 blocks. The 2026-09-30 compact channel candidate reduces
 /// segment_a from 6,416 to 5,712, and seven_segment from 16,244 to 13,872.
 /// Shared-track gap compaction further reduces them to 5,664 and 13,758.
+/// Span-aware feed-through targets then reduce seven_segment to 13,488.
 /// Gate counts, the two planner results, and compile_legacy's historical
 /// geometry stay unchanged. See docs/generator-optimization-2026-09-30.md.
 #[test]
@@ -529,7 +530,7 @@ fn the_hand_written_circuits_keep_their_measured_size() {
         ("and4", build_and4_netlist().0, 7, 232),
         ("full_adder", build_full_adder_netlist().0, 22, 1065),
         ("segment_a", build_single_segment_netlist(0).0, 46, 5664),
-        ("seven_segment", build_seven_segment_netlist().0, 84, 13758),
+        ("seven_segment", build_seven_segment_netlist().0, 84, 13488),
     ];
 
     for (name, netlist, gates, blocks) in circuits {

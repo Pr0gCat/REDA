@@ -184,6 +184,7 @@ fn recompute_geometry(
     netlist: &Netlist,
     track_spacing: i32,
     track_share_gap: i32,
+    span_aware_feedthrough: bool,
 ) -> Result<Geometry, CompileError> {
     for gate in &netlist.gates {
         for input in &gate.inputs {
@@ -211,7 +212,13 @@ fn recompute_geometry(
     let channel_count = row_count.saturating_sub(1);
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
-    reserve_columns(&plan, &mut nets, row_count, channel_count);
+    reserve_columns(
+        &plan,
+        &mut nets,
+        row_count,
+        channel_count,
+        span_aware_feedthrough,
+    );
     let (bypass, row_z, track_z) = resolve_bypass_and_geometry(
         netlist,
         &plan,
@@ -526,6 +533,10 @@ pub fn analyze(
             .legacy_emission()
             .expect("verified legacy layout")
             .track_share_gap,
+        compiled
+            .legacy_emission()
+            .expect("verified legacy layout")
+            .span_aware_feedthrough,
     )?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
@@ -697,6 +708,10 @@ pub fn distinct_totals_by_part(
             .legacy_emission()
             .expect("verified legacy layout")
             .track_share_gap,
+        compiled
+            .legacy_emission()
+            .expect("verified legacy layout")
+            .span_aware_feedthrough,
     )?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
@@ -867,6 +882,7 @@ mod tests {
             &netlist,
             super::super::COMPACT_TRACK_SPACING,
             super::super::TRACK_SHARE_GAP,
+            false,
         )
         .unwrap();
         let before =
@@ -875,6 +891,7 @@ mod tests {
             crate::compile::metrics::physical_metrics(&compact.world, netlist.gates.len() as u64);
         assert!(after.non_air_blocks < before.non_air_blocks);
         assert!(after.occupied_volume < before.occupied_volume);
+        assert!(compact.legacy_emission().unwrap().span_aware_feedthrough);
         let total = distinct_totals(&netlist, &compact).unwrap();
         assert_eq!(
             total.repeaters,
@@ -1019,6 +1036,7 @@ mod tests {
             &and4,
             super::super::TRACK_SPACING,
             super::super::TRACK_SHARE_GAP,
+            false,
         )
         .expect("and4 must recompute geometry");
 

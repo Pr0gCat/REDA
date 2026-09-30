@@ -73,6 +73,6 @@ fn compact_channel_world_agrees_across_targets() {
     assert_eq!(
         reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&compiled.world)
             .as_str(),
-        "bfd76bdc2f3ba3bb5c453457b70346adc18a26a2d49191f5b5c6afd8dbd6eb6a"
+        "9b4e5b8b53c413c871deb9a55d822704a1d9bc63e7f727996043f2671329d0ab"
     );
 }

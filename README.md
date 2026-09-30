@@ -64,6 +64,8 @@ channel compaction measurements, including native frontend circuits, are in
 [the generator optimization report](docs/generator-optimization-2026-09-30.md).
 The subsequent shared-track compaction is measured in
 [the track-sharing report](docs/generator-track-sharing-2026-09-30.md).
+Feed-through target refinement and its measured tradeoff are in
+[the feed-through report](docs/generator-feedthrough-2026-09-30.md).
 
 ### Two placers, one entry point
 

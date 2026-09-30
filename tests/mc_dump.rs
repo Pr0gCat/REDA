@@ -26,5 +26,5 @@ fn official_verilog_seven_segment_dump_uses_optimised_lowering() {
     let dump = String::from_utf8(output.stdout).expect("mc_dump must emit UTF-8 text");
     assert_eq!(record_count(&dump, "GATE "), 47);
     assert_eq!(record_count(&dump, "GATEOUT "), 47);
-    assert_eq!(record_count(&dump, "BLOCK "), 8_402);
+    assert_eq!(record_count(&dump, "BLOCK "), 8_342);
 }

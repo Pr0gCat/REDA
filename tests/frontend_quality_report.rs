@@ -90,7 +90,7 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
         let (blocks, volume, ticks) = if top == "and4" {
             (228, 3528, 28)
         } else {
-            (7270, 68460, 46)
+            (7136, 68460, 46)
         };
         assert!(
             metrics.non_air_blocks <= blocks,

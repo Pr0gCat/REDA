@@ -225,3 +225,32 @@ fn a_repeater_terminated_socket_does_not_cross_talk_even_when_a_foreign_net_touc
         "net a's own signal must still reach past its own repeater once driven"
     );
 }
+
+/// A neighbouring track can join the intermediate step of a two-level ramp.
+/// Flat-track distance 2 is sufficient only when no ramp occupies the gap.
+#[test]
+fn a_two_level_staircase_requires_three_cells_from_a_parallel_track() {
+    for (gap, coupled) in [(2, true), (3, false)] {
+        let mut world = World::new(10, 6, 10);
+        let source = (3, 3, 4 + gap);
+        let track = (4, 3, 4 + gap);
+        let ramp_top = (4, 3, 4);
+        let ramp_step = (4, 2, 5);
+        world.set(source.0, source.1, source.2, raw_lever(true));
+        for (x, y, z) in [track, ramp_top, ramp_step] {
+            floor_under(&mut world, x, y, z);
+            world.set(x, y, z, dust());
+        }
+        let mut simulator = Simulator::new(world);
+        simulator.run_until_stable(MAX_TICKS).expect("must settle");
+        assert_eq!(
+            simulator
+                .world()
+                .get(ramp_top.0, ramp_top.1, ramp_top.2)
+                .power
+                > 0,
+            coupled,
+            "parallel track gap {gap}: the intermediate ramp step can bridge separate nets"
+        );
+    }
+}

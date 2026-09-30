@@ -1,0 +1,1808 @@
+[
+  {
+    "pitch": 14,
+    "edges": [
+      {
+        "frontend": "REDA",
+        "length": 25,
+        "parts": "{Column: PartTotals { length: 12, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 1 }, GateEntry: PartTotals { length: 7, repeaters: 0 }}",
+        "repeaters": 1,
+        "sink": "g0.in[0]",
+        "source": "d0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 122,
+        "parts": "{Column: PartTotals { length: 29, repeaters: 1 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 66, repeaters: 6 }, GateEntry: PartTotals { length: 19, repeaters: 1 }}",
+        "repeaters": 8,
+        "sink": "g15.in[1]",
+        "source": "d0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 80,
+        "parts": "{Column: PartTotals { length: 29, repeaters: 1 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 24, repeaters: 3 }, GateEntry: PartTotals { length: 19, repeaters: 1 }}",
+        "repeaters": 5,
+        "sink": "g6.in[1]",
+        "source": "d0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 144,
+        "parts": "{Column: PartTotals { length: 29, repeaters: 1 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 88, repeaters: 8 }, GateEntry: PartTotals { length: 19, repeaters: 1 }}",
+        "repeaters": 10,
+        "sink": "g12.in[0]",
+        "source": "d0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 116,
+        "parts": "{Column: PartTotals { length: 67, repeaters: 4 }, Ramp: PartTotals { length: 12, repeaters: 0 }, Track: PartTotals { length: 30, repeaters: 4 }, GateEntry: PartTotals { length: 7, repeaters: 0 }}",
+        "repeaters": 8,
+        "sink": "g21.in[0]",
+        "source": "d0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 25,
+        "parts": "{Column: PartTotals { length: 6, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 1,
+        "sink": "g1.in[0]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 49,
+        "parts": "{Column: PartTotals { length: 6, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 30, repeaters: 2 }, GateEntry: PartTotals { length: 9, repeaters: 2 }}",
+        "repeaters": 4,
+        "sink": "g4.in[2]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 59,
+        "parts": "{Column: PartTotals { length: 6, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 40, repeaters: 3 }, GateEntry: PartTotals { length: 9, repeaters: 1 }}",
+        "repeaters": 4,
+        "sink": "g27.in[2]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 74,
+        "parts": "{Column: PartTotals { length: 20, repeaters: 1 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 18, repeaters: 2 }, GateEntry: PartTotals { length: 28, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g6.in[0]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 144,
+        "parts": "{Column: PartTotals { length: 20, repeaters: 1 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 88, repeaters: 7 }, GateEntry: PartTotals { length: 28, repeaters: 2 }}",
+        "repeaters": 10,
+        "sink": "g11.in[0]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 134,
+        "parts": "{Column: PartTotals { length: 20, repeaters: 1 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 78, repeaters: 7 }, GateEntry: PartTotals { length: 28, repeaters: 3 }}",
+        "repeaters": 11,
+        "sink": "g20.in[0]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 25,
+        "parts": "{Column: PartTotals { length: 9, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 1 }, GateEntry: PartTotals { length: 10, repeaters: 0 }}",
+        "repeaters": 1,
+        "sink": "g2.in[0]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 71,
+        "parts": "{Column: PartTotals { length: 9, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 48, repeaters: 4 }, GateEntry: PartTotals { length: 10, repeaters: 2 }}",
+        "repeaters": 6,
+        "sink": "g4.in[1]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 45,
+        "parts": "{Column: PartTotals { length: 9, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 22, repeaters: 2 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 3,
+        "sink": "g27.in[1]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 114,
+        "parts": "{Column: PartTotals { length: 35, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 58, repeaters: 5 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 8,
+        "sink": "g22.in[1]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 102,
+        "parts": "{Column: PartTotals { length: 35, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 46, repeaters: 4 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 7,
+        "sink": "g15.in[0]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 120,
+        "parts": "{Column: PartTotals { length: 35, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 64, repeaters: 6 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 9,
+        "sink": "g23.in[0]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 25,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 1,
+        "sink": "g3.in[0]",
+        "source": "d3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 77,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 54, repeaters: 4 }, GateEntry: PartTotals { length: 16, repeaters: 2 }}",
+        "repeaters": 6,
+        "sink": "g4.in[0]",
+        "source": "d3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 39,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 16, repeaters: 1 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g27.in[0]",
+        "source": "d3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 120,
+        "parts": "{Column: PartTotals { length: 41, repeaters: 3 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 64, repeaters: 5 }, GateEntry: PartTotals { length: 7, repeaters: 0 }}",
+        "repeaters": 8,
+        "sink": "g22.in[0]",
+        "source": "d3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 42,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 12, repeaters: 1 }, GateEntry: PartTotals { length: 18, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g22.in[2]",
+        "source": "g0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 70,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 36, repeaters: 3 }, GateEntry: PartTotals { length: 22, repeaters: 3 }}",
+        "repeaters": 6,
+        "sink": "g24.in[0]",
+        "source": "g0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 130,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 96, repeaters: 8 }, GateEntry: PartTotals { length: 22, repeaters: 1 }}",
+        "repeaters": 9,
+        "sink": "g11.in[1]",
+        "source": "g0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 54,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 20, repeaters: 2 }, GateEntry: PartTotals { length: 22, repeaters: 1 }}",
+        "repeaters": 3,
+        "sink": "g17.in[0]",
+        "source": "g0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 36,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 22, repeaters: 2 }}",
+        "repeaters": 2,
+        "sink": "g5.in[1]",
+        "source": "g0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 88,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 58, repeaters: 4 }, GateEntry: PartTotals { length: 12, repeaters: 1 }}",
+        "repeaters": 6,
+        "sink": "g15.in[2]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 78,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 44, repeaters: 3 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 5,
+        "sink": "g23.in[1]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 92,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 58, repeaters: 4 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 6,
+        "sink": "g24.in[1]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 102,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 68, repeaters: 5 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 7,
+        "sink": "g12.in[1]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 36,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g17.in[1]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 82,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 48, repeaters: 3 }, GateEntry: PartTotals { length: 16, repeaters: 2 }}",
+        "repeaters": 6,
+        "sink": "g7.in[0]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 32,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 21, repeaters: 2 }}",
+        "repeaters": 2,
+        "sink": "g6.in[2]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 102,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 72, repeaters: 6 }, GateEntry: PartTotals { length: 21, repeaters: 1 }}",
+        "repeaters": 7,
+        "sink": "g11.in[2]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 88,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 58, repeaters: 5 }, GateEntry: PartTotals { length: 21, repeaters: 1 }}",
+        "repeaters": 6,
+        "sink": "g12.in[2]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 42,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 12, repeaters: 1 }, GateEntry: PartTotals { length: 21, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g17.in[2]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 120,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 86, repeaters: 7 }, GateEntry: PartTotals { length: 25, repeaters: 1 }}",
+        "repeaters": 8,
+        "sink": "g20.in[1]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 54,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 20, repeaters: 2 }, GateEntry: PartTotals { length: 25, repeaters: 1 }}",
+        "repeaters": 3,
+        "sink": "g8.in[0]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 46,
+        "parts": "{Column: PartTotals { length: 20, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 12, repeaters: 1 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 3,
+        "sink": "g7.in[1]",
+        "source": "g3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 36,
+        "parts": "{Column: PartTotals { length: 20, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g8.in[1]",
+        "source": "g3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 55,
+        "parts": "{Column: PartTotals { length: 21, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 20, repeaters: 2 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 4,
+        "sink": "g5.in[0]",
+        "source": "g4"
+      },
+      {
+        "frontend": "REDA",
+        "length": 93,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 62, repeaters: 5 }, GateEntry: PartTotals { length: 22, repeaters: 1 }}",
+        "repeaters": 6,
+        "sink": "g21.in[1]",
+        "source": "g7"
+      },
+      {
+        "frontend": "REDA",
+        "length": 33,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 22, repeaters: 3 }}",
+        "repeaters": 3,
+        "sink": "g13.in[0]",
+        "source": "g7"
+      },
+      {
+        "frontend": "REDA",
+        "length": 43,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 12, repeaters: 1 }, GateEntry: PartTotals { length: 22, repeaters: 2 }}",
+        "repeaters": 3,
+        "sink": "g16.in[0]",
+        "source": "g7"
+      },
+      {
+        "frontend": "REDA",
+        "length": 47,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 16, repeaters: 1 }, GateEntry: PartTotals { length: 22, repeaters: 3 }}",
+        "repeaters": 4,
+        "sink": "g28.in[0]",
+        "source": "g7"
+      },
+      {
+        "frontend": "REDA",
+        "length": 57,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 30, repeaters: 2 }, GateEntry: PartTotals { length: 18, repeaters: 3 }}",
+        "repeaters": 5,
+        "sink": "g9.in[2]",
+        "source": "g7"
+      },
+      {
+        "frontend": "REDA",
+        "length": 81,
+        "parts": "{Column: PartTotals { length: 2, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 54, repeaters: 4 }, GateEntry: PartTotals { length: 21, repeaters: 1 }}",
+        "repeaters": 5,
+        "sink": "g21.in[2]",
+        "source": "g20"
+      },
+      {
+        "frontend": "REDA",
+        "length": 39,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 8, repeaters: 0 }, GateEntry: PartTotals { length: 13, repeaters: 2 }}",
+        "repeaters": 3,
+        "sink": "g13.in[1]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 37,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 6, repeaters: 0 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g16.in[1]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 85,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 54, repeaters: 4 }, GateEntry: PartTotals { length: 13, repeaters: 2 }}",
+        "repeaters": 7,
+        "sink": "g18.in[0]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 57,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 26, repeaters: 2 }, GateEntry: PartTotals { length: 13, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g25.in[0]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 53,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 22, repeaters: 1 }, GateEntry: PartTotals { length: 13, repeaters: 2 }}",
+        "repeaters": 4,
+        "sink": "g28.in[1]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 79,
+        "parts": "{Column: PartTotals { length: 34, repeaters: 3 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 30, repeaters: 2 }, GateEntry: PartTotals { length: 7, repeaters: 0 }}",
+        "repeaters": 5,
+        "sink": "g10.in[1]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 71,
+        "parts": "{Column: PartTotals { length: 2, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 44, repeaters: 3 }, GateEntry: PartTotals { length: 21, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g13.in[2]",
+        "source": "g11"
+      },
+      {
+        "frontend": "REDA",
+        "length": 57,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 30, repeaters: 3 }, GateEntry: PartTotals { length: 15, repeaters: 1 }}",
+        "repeaters": 4,
+        "sink": "g16.in[2]",
+        "source": "g15"
+      },
+      {
+        "frontend": "REDA",
+        "length": 65,
+        "parts": "{Column: PartTotals { length: 11, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 34, repeaters: 3 }, GateEntry: PartTotals { length: 16, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g18.in[1]",
+        "source": "g17"
+      },
+      {
+        "frontend": "REDA",
+        "length": 81,
+        "parts": "{Column: PartTotals { length: 11, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 54, repeaters: 5 }, GateEntry: PartTotals { length: 12, repeaters: 1 }}",
+        "repeaters": 6,
+        "sink": "g28.in[2]",
+        "source": "g17"
+      },
+      {
+        "frontend": "REDA",
+        "length": 53,
+        "parts": "{Column: PartTotals { length: 17, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 22, repeaters: 2 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 4,
+        "sink": "g25.in[1]",
+        "source": "g22"
+      },
+      {
+        "frontend": "REDA",
+        "length": 67,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 40, repeaters: 3 }, GateEntry: PartTotals { length: 15, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g25.in[2]",
+        "source": "g23"
+      },
+      {
+        "frontend": "REDA",
+        "length": 61,
+        "parts": "{Column: PartTotals { length: 2, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 30, repeaters: 2 }, GateEntry: PartTotals { length: 25, repeaters: 2 }}",
+        "repeaters": 4,
+        "sink": "g9.in[0]",
+        "source": "g5"
+      },
+      {
+        "frontend": "REDA",
+        "length": 37,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 6, repeaters: 1 }, GateEntry: PartTotals { length: 19, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g9.in[1]",
+        "source": "g6"
+      },
+      {
+        "frontend": "REDA",
+        "length": 28,
+        "parts": "{Column: PartTotals { length: 6, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 8, repeaters: 0 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g14.in[0]",
+        "source": "g13"
+      },
+      {
+        "frontend": "REDA",
+        "length": 95,
+        "parts": "{Column: PartTotals { length: 28, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 46, repeaters: 4 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 7,
+        "sink": "g14.in[1]",
+        "source": "g12"
+      },
+      {
+        "frontend": "REDA",
+        "length": 26,
+        "parts": "{Bypass: PartTotals { length: 26, repeaters: 1 }}",
+        "repeaters": 1,
+        "sink": "g26.in[0]",
+        "source": "g25"
+      },
+      {
+        "frontend": "REDA",
+        "length": 105,
+        "parts": "{Column: PartTotals { length: 31, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 56, repeaters: 5 }, GateEntry: PartTotals { length: 10, repeaters: 0 }}",
+        "repeaters": 7,
+        "sink": "g26.in[1]",
+        "source": "g24"
+      },
+      {
+        "frontend": "REDA",
+        "length": 28,
+        "parts": "{Column: PartTotals { length: 6, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 8, repeaters: 1 }, GateEntry: PartTotals { length: 10, repeaters: 2 }}",
+        "repeaters": 3,
+        "sink": "g29.in[0]",
+        "source": "g28"
+      },
+      {
+        "frontend": "REDA",
+        "length": 100,
+        "parts": "{Column: PartTotals { length: 67, repeaters: 5 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 18, repeaters: 2 }, GateEntry: PartTotals { length: 7, repeaters: 0 }}",
+        "repeaters": 7,
+        "sink": "g29.in[1]",
+        "source": "g27"
+      },
+      {
+        "frontend": "REDA",
+        "length": 26,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 6, repeaters: 0 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g10.in[0]",
+        "source": "g9"
+      },
+      {
+        "frontend": "REDA",
+        "length": 42,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 22, repeaters: 2 }, GateEntry: PartTotals { length: 13, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g19.in[0]",
+        "source": "g9"
+      },
+      {
+        "frontend": "REDA",
+        "length": 32,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 12, repeaters: 1 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g19.in[1]",
+        "source": "g18"
+      }
+    ],
+    "events": [
+      {
+        "from": 2,
+        "signal": "d2",
+        "tick": 1,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "d1",
+        "tick": 1,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "d0",
+        "tick": 1,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g2",
+        "tick": 4,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g1",
+        "tick": 4,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g0",
+        "tick": 4,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g4",
+        "tick": 8,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g22",
+        "tick": 10,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g4",
+        "tick": 12,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g15",
+        "tick": 16,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g23",
+        "tick": 16,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g12",
+        "tick": 18,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g5",
+        "tick": 18,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g21",
+        "tick": 18,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g22",
+        "tick": 18,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g12",
+        "tick": 20,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g5",
+        "tick": 22,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g11",
+        "tick": 24,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g20",
+        "tick": 24,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g16",
+        "tick": 26,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g9",
+        "tick": 26,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g25",
+        "tick": 26,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g9",
+        "tick": 30,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g26",
+        "tick": 30,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g10",
+        "tick": 32,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g13",
+        "tick": 34,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g14",
+        "tick": 34,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g14",
+        "tick": 36,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g10",
+        "tick": 36,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g19",
+        "tick": 38,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g14",
+        "tick": 40,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g19",
+        "tick": 42,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "d2",
+        "tick": 1,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "d0",
+        "tick": 1,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g2",
+        "tick": 4,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g0",
+        "tick": 4,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g27",
+        "tick": 8,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g6",
+        "tick": 10,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g4",
+        "tick": 12,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g9",
+        "tick": 14,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g22",
+        "tick": 18,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g10",
+        "tick": 20,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g5",
+        "tick": 22,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g20",
+        "tick": 22,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g29",
+        "tick": 24,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g25",
+        "tick": 26,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g19",
+        "tick": 26,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g9",
+        "tick": 30,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g26",
+        "tick": 30,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g10",
+        "tick": 36,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g19",
+        "tick": 42,
+        "to": 1,
+        "value": false
+      }
+    ]
+  },
+  {
+    "pitch": 12,
+    "edges": [
+      {
+        "frontend": "REDA",
+        "length": 25,
+        "parts": "{Column: PartTotals { length: 12, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 1 }, GateEntry: PartTotals { length: 7, repeaters: 0 }}",
+        "repeaters": 1,
+        "sink": "g0.in[0]",
+        "source": "d0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 156,
+        "parts": "{Column: PartTotals { length: 29, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 100, repeaters: 8 }, GateEntry: PartTotals { length: 19, repeaters: 1 }}",
+        "repeaters": 11,
+        "sink": "g15.in[1]",
+        "source": "d0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 120,
+        "parts": "{Column: PartTotals { length: 29, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 64, repeaters: 5 }, GateEntry: PartTotals { length: 19, repeaters: 1 }}",
+        "repeaters": 8,
+        "sink": "g6.in[1]",
+        "source": "d0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 176,
+        "parts": "{Column: PartTotals { length: 29, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 120, repeaters: 9 }, GateEntry: PartTotals { length: 19, repeaters: 3 }}",
+        "repeaters": 14,
+        "sink": "g12.in[0]",
+        "source": "d0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 148,
+        "parts": "{Column: PartTotals { length: 67, repeaters: 5 }, Ramp: PartTotals { length: 12, repeaters: 0 }, Track: PartTotals { length: 62, repeaters: 5 }, GateEntry: PartTotals { length: 7, repeaters: 0 }}",
+        "repeaters": 10,
+        "sink": "g21.in[0]",
+        "source": "d0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 25,
+        "parts": "{Column: PartTotals { length: 9, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 1 }, GateEntry: PartTotals { length: 10, repeaters: 0 }}",
+        "repeaters": 1,
+        "sink": "g1.in[0]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 45,
+        "parts": "{Column: PartTotals { length: 9, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 26, repeaters: 2 }, GateEntry: PartTotals { length: 6, repeaters: 2 }}",
+        "repeaters": 4,
+        "sink": "g4.in[2]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 53,
+        "parts": "{Column: PartTotals { length: 9, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 34, repeaters: 3 }, GateEntry: PartTotals { length: 6, repeaters: 1 }}",
+        "repeaters": 4,
+        "sink": "g27.in[2]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 144,
+        "parts": "{Column: PartTotals { length: 20, repeaters: 1 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 88, repeaters: 7 }, GateEntry: PartTotals { length: 28, repeaters: 2 }}",
+        "repeaters": 10,
+        "sink": "g6.in[0]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 204,
+        "parts": "{Column: PartTotals { length: 20, repeaters: 1 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 148, repeaters: 12 }, GateEntry: PartTotals { length: 28, repeaters: 2 }}",
+        "repeaters": 15,
+        "sink": "g11.in[0]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 112,
+        "parts": "{Column: PartTotals { length: 20, repeaters: 1 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 56, repeaters: 5 }, GateEntry: PartTotals { length: 28, repeaters: 2 }}",
+        "repeaters": 8,
+        "sink": "g20.in[0]",
+        "source": "d1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 25,
+        "parts": "{Column: PartTotals { length: 6, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 1,
+        "sink": "g2.in[0]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 65,
+        "parts": "{Column: PartTotals { length: 6, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 42, repeaters: 3 }, GateEntry: PartTotals { length: 13, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g4.in[1]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 41,
+        "parts": "{Column: PartTotals { length: 6, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 18, repeaters: 2 }, GateEntry: PartTotals { length: 13, repeaters: 2 }}",
+        "repeaters": 4,
+        "sink": "g27.in[1]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 156,
+        "parts": "{Column: PartTotals { length: 38, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 100, repeaters: 9 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 12,
+        "sink": "g22.in[1]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 96,
+        "parts": "{Column: PartTotals { length: 38, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 40, repeaters: 4 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 7,
+        "sink": "g15.in[0]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 160,
+        "parts": "{Column: PartTotals { length: 38, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 104, repeaters: 9 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 12,
+        "sink": "g23.in[0]",
+        "source": "d2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 25,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 1,
+        "sink": "g3.in[0]",
+        "source": "d3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 69,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 46, repeaters: 3 }, GateEntry: PartTotals { length: 16, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g4.in[0]",
+        "source": "d3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 37,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 14, repeaters: 1 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g27.in[0]",
+        "source": "d3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 144,
+        "parts": "{Column: PartTotals { length: 41, repeaters: 3 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 88, repeaters: 7 }, GateEntry: PartTotals { length: 7, repeaters: 0 }}",
+        "repeaters": 10,
+        "sink": "g22.in[0]",
+        "source": "d3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 40,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 10, repeaters: 1 }, GateEntry: PartTotals { length: 18, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g22.in[2]",
+        "source": "g0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 64,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 30, repeaters: 3 }, GateEntry: PartTotals { length: 22, repeaters: 1 }}",
+        "repeaters": 4,
+        "sink": "g24.in[0]",
+        "source": "g0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 116,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 82, repeaters: 7 }, GateEntry: PartTotals { length: 22, repeaters: 1 }}",
+        "repeaters": 8,
+        "sink": "g11.in[1]",
+        "source": "g0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 52,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 18, repeaters: 2 }, GateEntry: PartTotals { length: 22, repeaters: 1 }}",
+        "repeaters": 3,
+        "sink": "g17.in[0]",
+        "source": "g0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 36,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 22, repeaters: 2 }}",
+        "repeaters": 2,
+        "sink": "g5.in[1]",
+        "source": "g0"
+      },
+      {
+        "frontend": "REDA",
+        "length": 80,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 50, repeaters: 4 }, GateEntry: PartTotals { length: 12, repeaters: 1 }}",
+        "repeaters": 6,
+        "sink": "g15.in[2]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 72,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 38, repeaters: 3 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 5,
+        "sink": "g23.in[1]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 84,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 50, repeaters: 4 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 6,
+        "sink": "g24.in[1]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 92,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 58, repeaters: 4 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 6,
+        "sink": "g12.in[1]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 36,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g17.in[1]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 76,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 42, repeaters: 3 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 5,
+        "sink": "g7.in[0]",
+        "source": "g1"
+      },
+      {
+        "frontend": "REDA",
+        "length": 32,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 21, repeaters: 2 }}",
+        "repeaters": 2,
+        "sink": "g6.in[2]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 92,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 62, repeaters: 5 }, GateEntry: PartTotals { length: 21, repeaters: 1 }}",
+        "repeaters": 6,
+        "sink": "g11.in[2]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 80,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 50, repeaters: 4 }, GateEntry: PartTotals { length: 21, repeaters: 1 }}",
+        "repeaters": 5,
+        "sink": "g12.in[2]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 40,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 10, repeaters: 1 }, GateEntry: PartTotals { length: 21, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g17.in[2]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 108,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 74, repeaters: 6 }, GateEntry: PartTotals { length: 25, repeaters: 2 }}",
+        "repeaters": 8,
+        "sink": "g20.in[1]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 52,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 18, repeaters: 1 }, GateEntry: PartTotals { length: 25, repeaters: 2 }}",
+        "repeaters": 3,
+        "sink": "g8.in[0]",
+        "source": "g2"
+      },
+      {
+        "frontend": "REDA",
+        "length": 44,
+        "parts": "{Column: PartTotals { length: 17, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 10, repeaters: 1 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 3,
+        "sink": "g7.in[1]",
+        "source": "g3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 36,
+        "parts": "{Column: PartTotals { length: 17, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g8.in[1]",
+        "source": "g3"
+      },
+      {
+        "frontend": "REDA",
+        "length": 53,
+        "parts": "{Column: PartTotals { length: 18, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 18, repeaters: 2 }, GateEntry: PartTotals { length: 13, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g5.in[0]",
+        "source": "g4"
+      },
+      {
+        "frontend": "REDA",
+        "length": 85,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 54, repeaters: 4 }, GateEntry: PartTotals { length: 19, repeaters: 2 }}",
+        "repeaters": 6,
+        "sink": "g21.in[1]",
+        "source": "g7"
+      },
+      {
+        "frontend": "REDA",
+        "length": 33,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 2, repeaters: 0 }, GateEntry: PartTotals { length: 19, repeaters: 3 }}",
+        "repeaters": 3,
+        "sink": "g13.in[0]",
+        "source": "g7"
+      },
+      {
+        "frontend": "REDA",
+        "length": 41,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 10, repeaters: 1 }, GateEntry: PartTotals { length: 19, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g16.in[0]",
+        "source": "g7"
+      },
+      {
+        "frontend": "REDA",
+        "length": 45,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 14, repeaters: 1 }, GateEntry: PartTotals { length: 19, repeaters: 3 }}",
+        "repeaters": 4,
+        "sink": "g28.in[0]",
+        "source": "g7"
+      },
+      {
+        "frontend": "REDA",
+        "length": 53,
+        "parts": "{Column: PartTotals { length: 8, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 26, repeaters: 2 }, GateEntry: PartTotals { length: 15, repeaters: 2 }}",
+        "repeaters": 4,
+        "sink": "g9.in[2]",
+        "source": "g7"
+      },
+      {
+        "frontend": "REDA",
+        "length": 73,
+        "parts": "{Column: PartTotals { length: 2, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 46, repeaters: 3 }, GateEntry: PartTotals { length: 21, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g21.in[2]",
+        "source": "g20"
+      },
+      {
+        "frontend": "REDA",
+        "length": 37,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 6, repeaters: 1 }, GateEntry: PartTotals { length: 22, repeaters: 2 }}",
+        "repeaters": 3,
+        "sink": "g13.in[1]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 37,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 6, repeaters: 1 }, GateEntry: PartTotals { length: 22, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g16.in[1]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 77,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 46, repeaters: 4 }, GateEntry: PartTotals { length: 22, repeaters: 2 }}",
+        "repeaters": 6,
+        "sink": "g18.in[0]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 53,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 22, repeaters: 2 }, GateEntry: PartTotals { length: 22, repeaters: 2 }}",
+        "repeaters": 4,
+        "sink": "g25.in[0]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 49,
+        "parts": "{Column: PartTotals { length: 5, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 18, repeaters: 2 }, GateEntry: PartTotals { length: 22, repeaters: 2 }}",
+        "repeaters": 4,
+        "sink": "g28.in[1]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 121,
+        "parts": "{Column: PartTotals { length: 34, repeaters: 3 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 72, repeaters: 5 }, GateEntry: PartTotals { length: 7, repeaters: 1 }}",
+        "repeaters": 9,
+        "sink": "g10.in[1]",
+        "source": "g8"
+      },
+      {
+        "frontend": "REDA",
+        "length": 65,
+        "parts": "{Column: PartTotals { length: 2, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 38, repeaters: 3 }, GateEntry: PartTotals { length: 21, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g13.in[2]",
+        "source": "g11"
+      },
+      {
+        "frontend": "REDA",
+        "length": 53,
+        "parts": "{Column: PartTotals { length: 11, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 26, repeaters: 2 }, GateEntry: PartTotals { length: 12, repeaters: 1 }}",
+        "repeaters": 3,
+        "sink": "g16.in[2]",
+        "source": "g15"
+      },
+      {
+        "frontend": "REDA",
+        "length": 61,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 30, repeaters: 2 }, GateEntry: PartTotals { length: 13, repeaters: 2 }}",
+        "repeaters": 5,
+        "sink": "g18.in[1]",
+        "source": "g17"
+      },
+      {
+        "frontend": "REDA",
+        "length": 73,
+        "parts": "{Column: PartTotals { length: 14, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 46, repeaters: 3 }, GateEntry: PartTotals { length: 9, repeaters: 2 }}",
+        "repeaters": 6,
+        "sink": "g28.in[2]",
+        "source": "g17"
+      },
+      {
+        "frontend": "REDA",
+        "length": 49,
+        "parts": "{Column: PartTotals { length: 17, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 18, repeaters: 1 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 3,
+        "sink": "g25.in[1]",
+        "source": "g22"
+      },
+      {
+        "frontend": "REDA",
+        "length": 61,
+        "parts": "{Column: PartTotals { length: 11, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 34, repeaters: 3 }, GateEntry: PartTotals { length: 12, repeaters: 1 }}",
+        "repeaters": 4,
+        "sink": "g25.in[2]",
+        "source": "g23"
+      },
+      {
+        "frontend": "REDA",
+        "length": 57,
+        "parts": "{Column: PartTotals { length: 2, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 26, repeaters: 2 }, GateEntry: PartTotals { length: 25, repeaters: 2 }}",
+        "repeaters": 4,
+        "sink": "g9.in[0]",
+        "source": "g5"
+      },
+      {
+        "frontend": "REDA",
+        "length": 37,
+        "parts": "{Column: PartTotals { length: 11, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 6, repeaters: 1 }, GateEntry: PartTotals { length: 16, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g9.in[1]",
+        "source": "g6"
+      },
+      {
+        "frontend": "REDA",
+        "length": 26,
+        "parts": "{Bypass: PartTotals { length: 26, repeaters: 1 }}",
+        "repeaters": 1,
+        "sink": "g14.in[0]",
+        "source": "g13"
+      },
+      {
+        "frontend": "REDA",
+        "length": 89,
+        "parts": "{Column: PartTotals { length: 28, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 40, repeaters: 3 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 6,
+        "sink": "g14.in[1]",
+        "source": "g12"
+      },
+      {
+        "frontend": "REDA",
+        "length": 26,
+        "parts": "{Bypass: PartTotals { length: 26, repeaters: 2 }}",
+        "repeaters": 2,
+        "sink": "g26.in[0]",
+        "source": "g25"
+      },
+      {
+        "frontend": "REDA",
+        "length": 97,
+        "parts": "{Column: PartTotals { length: 31, repeaters: 2 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 48, repeaters: 4 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 7,
+        "sink": "g26.in[1]",
+        "source": "g24"
+      },
+      {
+        "frontend": "REDA",
+        "length": 26,
+        "parts": "{Bypass: PartTotals { length: 26, repeaters: 1 }}",
+        "repeaters": 1,
+        "sink": "g29.in[0]",
+        "source": "g28"
+      },
+      {
+        "frontend": "REDA",
+        "length": 124,
+        "parts": "{Column: PartTotals { length: 64, repeaters: 4 }, Ramp: PartTotals { length: 8, repeaters: 0 }, Track: PartTotals { length: 42, repeaters: 4 }, GateEntry: PartTotals { length: 10, repeaters: 1 }}",
+        "repeaters": 9,
+        "sink": "g29.in[1]",
+        "source": "g27"
+      },
+      {
+        "frontend": "REDA",
+        "length": 26,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 6, repeaters: 0 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g10.in[0]",
+        "source": "g9"
+      },
+      {
+        "frontend": "REDA",
+        "length": 38,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 1 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 18, repeaters: 1 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 3,
+        "sink": "g19.in[0]",
+        "source": "g9"
+      },
+      {
+        "frontend": "REDA",
+        "length": 30,
+        "parts": "{Column: PartTotals { length: 3, repeaters: 0 }, Ramp: PartTotals { length: 4, repeaters: 0 }, Track: PartTotals { length: 10, repeaters: 1 }, GateEntry: PartTotals { length: 13, repeaters: 1 }}",
+        "repeaters": 2,
+        "sink": "g19.in[1]",
+        "source": "g18"
+      }
+    ],
+    "events": [
+      {
+        "from": 2,
+        "signal": "d2",
+        "tick": 1,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "d1",
+        "tick": 1,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "d0",
+        "tick": 1,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g2",
+        "tick": 4,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g1",
+        "tick": 4,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g0",
+        "tick": 4,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g4",
+        "tick": 8,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g22",
+        "tick": 10,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g4",
+        "tick": 10,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g24",
+        "tick": 14,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g12",
+        "tick": 16,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g15",
+        "tick": 16,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g23",
+        "tick": 16,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g12",
+        "tick": 18,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g24",
+        "tick": 18,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g21",
+        "tick": 22,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g20",
+        "tick": 22,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g16",
+        "tick": 24,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g22",
+        "tick": 26,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g14",
+        "tick": 30,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g11",
+        "tick": 32,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g14",
+        "tick": 32,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g25",
+        "tick": 32,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 2,
+        "signal": "g26",
+        "tick": 38,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g13",
+        "tick": 42,
+        "to": 5,
+        "value": true
+      },
+      {
+        "from": 2,
+        "signal": "g14",
+        "tick": 46,
+        "to": 5,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "d2",
+        "tick": 1,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "d0",
+        "tick": 1,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g2",
+        "tick": 4,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g0",
+        "tick": 4,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g27",
+        "tick": 10,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g6",
+        "tick": 10,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g4",
+        "tick": 10,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g9",
+        "tick": 14,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g10",
+        "tick": 20,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g19",
+        "tick": 22,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g5",
+        "tick": 22,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g20",
+        "tick": 22,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g22",
+        "tick": 26,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g29",
+        "tick": 30,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g9",
+        "tick": 30,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g25",
+        "tick": 32,
+        "to": 1,
+        "value": true
+      },
+      {
+        "from": 4,
+        "signal": "g10",
+        "tick": 36,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g26",
+        "tick": 38,
+        "to": 1,
+        "value": false
+      },
+      {
+        "from": 4,
+        "signal": "g19",
+        "tick": 38,
+        "to": 1,
+        "value": false
+      }
+    ]
+  }
+]
