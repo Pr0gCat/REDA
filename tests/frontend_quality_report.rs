@@ -278,6 +278,47 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
         sum_ticks <= total_tick_limit,
         "{top}/{frontend}: total settle regression: {sum_ticks} > {total_tick_limit}"
     );
+    // Keep the historical controls above, and also preserve every improvement
+    // in the committed generator. This checkpoint is frozen independently of
+    // the candidate and contains timing/glitches only, never material counts.
+    let checkpoint: Value = serde_json::from_str(include_str!(
+        "../docs/generator-current-quality-checkpoint-2026-09-30.json"
+    ))
+    .unwrap();
+    assert_eq!(checkpoint["transitions_per_case"].as_u64(), Some(256));
+    let current = checkpoint["measurements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["case"] == top && row["frontend"] == frontend)
+        .unwrap();
+    for (name, measured) in [
+        ("worst_settle_ticks", worst_ticks),
+        ("total_settle_ticks", sum_ticks),
+        ("worst_output_change_ticks", worst_output_ticks),
+        ("glitch_transitions", glitch_transitions as u64),
+        (
+            "single_input_glitch_transitions",
+            single_input_glitches as u64,
+        ),
+        ("worst_driver_change_ticks", worst_driver_ticks),
+        (
+            "driver_glitch_transitions",
+            driver_glitch_transitions as u64,
+        ),
+        (
+            "driver_single_input_glitches",
+            driver_single_input_glitches as u64,
+        ),
+        ("worst_driver_pulse_ticks", worst_driver_pulse_ticks),
+        ("total_driver_pulse_ticks", total_driver_pulse_ticks),
+    ] {
+        let limit = current[name].as_u64().unwrap();
+        assert!(
+            measured <= limit,
+            "{top}/{frontend}: current generator quality regression: {name}: {measured} > {limit}"
+        );
+    }
     let legacy_baseline = if top == "seven_segment" {
         let original = compile_legacy(&lowered).expect("historical channel baseline compiles");
         let baseline = physical_metrics(&original.world, lowered.gates.len() as u64);
