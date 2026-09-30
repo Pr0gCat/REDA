@@ -1812,6 +1812,7 @@ pub(crate) struct LegacyEmission {
     track_spacing: i32,
     track_share_gap: i32,
     span_aware_feedthrough: bool,
+    tap_only_reserve: bool,
     primitive_anchors: Vec<Anchor>,
     primitive_nodes: Vec<PrimitiveNode>,
     routes: Vec<LegacyRoute>,
@@ -2849,18 +2850,20 @@ fn move_between_layers(
 /// repeater onto a tap, it goes on the last non-tap cell before it instead;
 /// the run after it is then shorter than the budget, never longer. Pure,
 /// like `plan_straight_run`, so it can be replayed during strength planning
-/// without a `World`.
+/// without a `World`. The compact candidate reserves extra strength only
+/// at taps; the historical policy reserves it throughout the entire run.
 fn plan_track_run(
     cells: &[i32],
     incoming_strength: u8,
     reserve: i32,
     taps: &BTreeSet<i32>,
+    tap_only_reserve: bool,
 ) -> (Vec<bool>, Vec<u8>) {
     debug_assert!(
         incoming_strength > 0,
         "a run cannot start from an already-dead signal"
     );
-    let threshold = (MAX_DUST_RUN - reserve) as i64;
+    let threshold = (MAX_DUST_RUN - if tap_only_reserve { 0 } else { reserve }) as i64;
 
     // Pick the repeater cells before writing anything: where one repeater
     // ends up decides how much budget the cells after it have.
@@ -2868,7 +2871,14 @@ fn plan_track_run(
     let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);
     let mut i = 0usize;
     while i < cells.len() {
-        if (i as i64) - last_refresh <= threshold {
+        if (i as i64) - last_refresh
+            <= threshold
+                - if tap_only_reserve && taps.contains(&cells[i]) {
+                    reserve as i64
+                } else {
+                    0
+                }
+        {
             i += 1;
             continue;
         }
@@ -2915,6 +2925,7 @@ fn track_exit_strengths(
     taps: &BTreeSet<i32>,
     incoming_strength: u8,
     reserve: i32,
+    tap_only_reserve: bool,
 ) -> BTreeMap<i32, u8> {
     let mut exit_strength = BTreeMap::new();
     for (end, step) in [(min_x, -1i32), (max_x, 1i32)] {
@@ -2923,7 +2934,8 @@ fn track_exit_strengths(
             continue;
         }
         let cells: Vec<i32> = (1..=length).map(|k| source_x + k * step).collect();
-        let (_is_repeater, strengths) = plan_track_run(&cells, incoming_strength, reserve, taps);
+        let (_is_repeater, strengths) =
+            plan_track_run(&cells, incoming_strength, reserve, taps, tap_only_reserve);
         for (k, &x) in cells.iter().enumerate() {
             if taps.contains(&x) {
                 exit_strength.insert(x, strengths[k]);
@@ -2941,10 +2953,9 @@ fn track_exit_strengths(
 ///
 /// `taps` are the X positions where a ramp joins or leaves the track; every
 /// one of them reserves `ramp_reserve(band)` strength for the ramp it feeds
-/// (see `MAX_DUST_RUN`'s comment) -- applied to the whole track rather than
-/// just at each tap, which is simpler and only ever costs an occasional
-/// early repeater on a run that was already close to the 14-cell limit,
-/// never a correctness problem. Only the *reserve* -- the first leg up to
+/// (see `MAX_DUST_RUN`'s comment). The compact policy applies this budget
+/// at each tap; the historical policy applies it to the whole track and
+/// can insert an unnecessary early repeater. Only the *reserve* -- the first leg up to
 /// the ramp's own first mandatory rest stop -- matters here, not the whole
 /// `band_ramp_length(band)`: once a rest stop refreshes the signal, nothing
 /// this track did beforehand affects it any more.
@@ -2963,6 +2974,7 @@ fn lay_track(
     span: (i32, i32),
     taps: &BTreeSet<i32>,
     incoming_strength: u8,
+    tap_only_reserve: bool,
     route: &mut Route,
 ) -> BTreeMap<i32, u8> {
     let (band, z, source_x) = origin;
@@ -2977,7 +2989,8 @@ fn lay_track(
         }
         let direction = if step > 0 { Facing::East } else { Facing::West };
         let cells: Vec<i32> = (1..=length).map(|k| source_x + k * step).collect();
-        let (is_repeater, strengths) = plan_track_run(&cells, incoming_strength, reserve, taps);
+        let (is_repeater, strengths) =
+            plan_track_run(&cells, incoming_strength, reserve, taps, tap_only_reserve);
 
         // One track feeds every tap on it, and each one leaves by a
         // different prefix of this run -- so this reports a *cumulative*
@@ -3940,6 +3953,7 @@ fn plan_strengths(
     gate_pin: &[Position],
     bypass: &[bool],
     net_source_strength: &[u8],
+    tap_only_reserve: bool,
 ) -> StrengthPlan {
     let mut entry_strength: Vec<Vec<u8>> = Vec::with_capacity(nets.len());
     let mut exit_strength: Vec<Vec<BTreeMap<i32, u8>>> = Vec::with_capacity(nets.len());
@@ -4003,7 +4017,15 @@ fn plan_strengths(
             for exit in net.exits(slot, &plan.centre_x) {
                 taps.insert(exit.x());
             }
-            net_exit[slot] = track_exit_strengths(source_x, lo, hi, &taps, track_incoming, reserve);
+            net_exit[slot] = track_exit_strengths(
+                source_x,
+                lo,
+                hi,
+                &taps,
+                track_incoming,
+                reserve,
+                tap_only_reserve,
+            );
         }
 
         entry_strength.push(net_entry);
@@ -4049,6 +4071,7 @@ fn bare_branch_landing_strength(
     lever_pin: &[Position],
     gate_pin: &[Position],
     facing: geometry::CellFacing,
+    tap_only_reserve: bool,
 ) -> u8 {
     let (gate, input_index) = target;
     let reserve = bare_reserve_for_merge(netlist, nets, gate);
@@ -4098,6 +4121,7 @@ fn bare_branch_landing_strength(
         gate_pin,
         &[false],
         &[source_strength],
+        tap_only_reserve,
     );
     let channel = net.channels[slot];
     let band = net.tracks[slot];
@@ -4155,6 +4179,7 @@ fn compute_net_source_strengths(
     gate_pin: &[Position],
     gate_cell: &[NorCell],
     facing: geometry::CellFacing,
+    tap_only_reserve: bool,
 ) -> Vec<u8> {
     let mut net_source_strength = vec![MAX_SIGNAL_STRENGTH; nets.len()];
 
@@ -4242,6 +4267,7 @@ fn compute_net_source_strengths(
                     lever_pin,
                     gate_pin,
                     facing,
+                    tap_only_reserve,
                 )
                 .saturating_sub(1)
             } else {
@@ -4298,6 +4324,7 @@ struct RoutingGeometry<'a> {
     bypass: &'a [bool],
     /// Per routed socket: whether its final cell is dust or a repeater.
     terminals: &'a TerminalKinds,
+    tap_only_reserve: bool,
 }
 
 /// Whether a route terminating at `gate`'s `input_index`-th socket should
@@ -4355,6 +4382,7 @@ fn emit(
         track_count,
         bypass,
         terminals,
+        tap_only_reserve,
     } = *geometry;
     // The legacy emitter builds every gate north. This binding is where that
     // is *decided* -- every cell placed below, and every face read off one,
@@ -4507,6 +4535,7 @@ fn emit(
         &gate_pin,
         &gate_cell,
         facing,
+        tap_only_reserve,
     );
 
     // Strength planning: work out what every ramp's entry and every track's
@@ -4522,6 +4551,7 @@ fn emit(
         &gate_pin,
         bypass,
         &net_source_strength,
+        tap_only_reserve,
     );
 
     // Every net's own pin -- the first cell of its route -- belongs to that
@@ -4829,6 +4859,7 @@ fn emit(
                 (lo, hi),
                 &taps,
                 track_incoming,
+                tap_only_reserve,
                 &mut route,
             );
         }
@@ -5590,6 +5621,7 @@ fn resolve_bypass_and_geometry(
     query_limit: i32,
     track_spacing: i32,
     track_share_gap: i32,
+    tap_only_reserve: bool,
 ) -> (Vec<bool>, Vec<i32>, Vec<Vec<i32>>) {
     let bypass_proven = compute_bypass(nets, plan);
     let baseline_terminals = default_terminal_kinds(nets);
@@ -5618,6 +5650,7 @@ fn resolve_bypass_and_geometry(
             track_count: &baseline_track_count,
             bypass: &bypass_proven,
             terminals: &baseline_terminals,
+            tap_only_reserve,
         };
         emit(&mut scratch, netlist, &geometry, &mut footprint);
     }
@@ -7664,12 +7697,21 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     }
     // Every candidate still passes the same physical verifier pipeline.
     // A rejected compact geometry retains the historical layout as a fallback.
-    compile_channelled(
+    compile_channelled_with_reserve(
         netlist,
         COMPACT_TRACK_SPACING,
         COMPACT_TRACK_SHARE_GAP,
         true,
+        true,
     )
+    .or_else(|_| {
+        compile_channelled(
+            netlist,
+            COMPACT_TRACK_SPACING,
+            COMPACT_TRACK_SHARE_GAP,
+            true,
+        )
+    })
     .or_else(|_| {
         compile_channelled(
             netlist,
@@ -7793,6 +7835,22 @@ fn compile_channelled(
     track_share_gap: i32,
     span_aware_feedthrough: bool,
 ) -> Result<CompiledCircuit, CompileError> {
+    compile_channelled_with_reserve(
+        netlist,
+        track_spacing,
+        track_share_gap,
+        span_aware_feedthrough,
+        false,
+    )
+}
+
+fn compile_channelled_with_reserve(
+    netlist: &Netlist,
+    track_spacing: i32,
+    track_share_gap: i32,
+    span_aware_feedthrough: bool,
+    tap_only_reserve: bool,
+) -> Result<CompiledCircuit, CompileError> {
     let order = checked_topological_order(netlist)?;
     if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
         return Err(CompileError::CandidateMetadataViolation {
@@ -7827,6 +7885,7 @@ fn compile_channelled(
         BYPASS_QUERY_MAX_DISTANCE,
         track_spacing,
         track_share_gap,
+        tap_only_reserve,
     );
 
     let (size_x, size_z) = world_size(&plan, &nets, &row_z);
@@ -7845,6 +7904,7 @@ fn compile_channelled(
         track_count: &track_count,
         bypass: &bypass,
         terminals: &baseline_terminals,
+        tap_only_reserve,
     };
     let mut baseline_world = World::new(size_x.max(8), size_y, size_z.max(8));
     let mut baseline_footprint = Footprint::record();
@@ -7887,6 +7947,7 @@ fn compile_channelled(
         track_count: &track_count,
         bypass: &bypass,
         terminals: &terminals,
+        tap_only_reserve,
     };
 
     let mut scratch = World::new(size_x.max(8), size_y, size_z.max(8));
@@ -7956,6 +8017,7 @@ fn compile_channelled(
         track_spacing,
         track_share_gap,
         span_aware_feedthrough,
+        tap_only_reserve,
         primitive_anchors,
         primitive_nodes,
         routes: legacy_routes,
@@ -8497,6 +8559,38 @@ mod tests {
     /// hand them here; if a turned cell were assembled from its own arithmetic
     /// rather than from north's, the two would drift apart exactly where nobody
     /// looks -- at the three facings no reference circuit uses yet.
+    #[test]
+    fn tap_reservation_keeps_tracks_live_and_branches_supplied() {
+        let cells: Vec<i32> = (1..=48).collect();
+        for reserve in [0, 2, 4, 13] {
+            for incoming in 1..=15 {
+                for mask in 0..64 {
+                    let taps: BTreeSet<i32> = (0..6)
+                        .filter(|i| mask & (1 << i) != 0)
+                        .map(|i| 4 * (i + 1))
+                        .collect();
+                    let (repeaters, strengths) =
+                        plan_track_run(&cells, incoming, reserve, &taps, true);
+                    for (i, &x) in cells.iter().enumerate() {
+                        assert!(strengths[i] > 0, "track loses power at {x}");
+                        if taps.contains(&x) {
+                            assert!(!repeaters[i], "a branch cannot turn on a repeater");
+                            assert!(
+                                strengths[i] as i32 > reserve,
+                                "branch lacks ramp budget at {x}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let cells: Vec<i32> = (1..=26).collect();
+        let taps = BTreeSet::new();
+        let (old, _) = plan_track_run(&cells, 15, 2, &taps, false);
+        let (new, _) = plan_track_run(&cells, 15, 2, &taps, true);
+        assert!(new.iter().filter(|&&r| r).count() < old.iter().filter(|&&r| r).count());
+    }
+
     #[test]
     fn a_turned_gate_cell_is_the_north_one_turned() {
         use crate::compile::geometry::{self, CellFacing};

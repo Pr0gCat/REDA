@@ -185,6 +185,7 @@ fn recompute_geometry(
     track_spacing: i32,
     track_share_gap: i32,
     span_aware_feedthrough: bool,
+    tap_only_reserve: bool,
 ) -> Result<Geometry, CompileError> {
     for gate in &netlist.gates {
         for input in &gate.inputs {
@@ -228,6 +229,7 @@ fn recompute_geometry(
         BYPASS_QUERY_MAX_DISTANCE,
         track_spacing,
         track_share_gap,
+        tap_only_reserve,
     );
     let track_count: Vec<usize> = track_z.iter().map(Vec::len).collect();
 
@@ -537,6 +539,10 @@ pub fn analyze(
             .legacy_emission()
             .expect("verified legacy layout")
             .span_aware_feedthrough,
+        compiled
+            .legacy_emission()
+            .expect("verified legacy layout")
+            .tap_only_reserve,
     )?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
@@ -712,6 +718,10 @@ pub fn distinct_totals_by_part(
             .legacy_emission()
             .expect("verified legacy layout")
             .span_aware_feedthrough,
+        compiled
+            .legacy_emission()
+            .expect("verified legacy layout")
+            .tap_only_reserve,
     )?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
@@ -1036,6 +1046,7 @@ mod tests {
             &and4,
             super::super::TRACK_SPACING,
             super::super::TRACK_SHARE_GAP,
+            false,
             false,
         )
         .expect("and4 must recompute geometry");
