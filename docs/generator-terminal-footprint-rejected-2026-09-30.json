@@ -1,0 +1,5997 @@
+{
+  "reference_commit": "1c616cc",
+  "xor_candidate": {
+    "case": "xor2",
+    "frontend": "native",
+    "signal_quality": {
+      "driver": {
+        "glitches": 2,
+        "single_input_glitches": 0,
+        "total_pulse_ticks": 4,
+        "worst_change_ticks": 6,
+        "worst_pulse_ticks": 2
+      },
+      "lamp": {
+        "glitches": 1,
+        "single_input_glitches": 0,
+        "total_pulse_ticks": 5,
+        "worst_change_ticks": 10,
+        "worst_pulse_ticks": 5
+      }
+    },
+    "traces": [
+      {
+        "changes": {},
+        "expected": false,
+        "from": 0,
+        "to": 0
+      },
+      {
+        "changes": {
+          "driver": [
+            [
+              6,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ]
+        },
+        "expected": true,
+        "from": 0,
+        "to": 1
+      },
+      {
+        "changes": {
+          "driver": [
+            [
+              6,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ]
+        },
+        "expected": true,
+        "from": 0,
+        "to": 2
+      },
+      {
+        "changes": {},
+        "expected": false,
+        "from": 0,
+        "to": 3
+      },
+      {
+        "changes": {
+          "driver": [
+            [
+              6,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ]
+        },
+        "expected": false,
+        "from": 1,
+        "to": 0
+      },
+      {
+        "changes": {},
+        "expected": true,
+        "from": 1,
+        "to": 1
+      },
+      {
+        "changes": {
+          "driver": [
+            [
+              4,
+              false
+            ],
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "expected": true,
+        "from": 1,
+        "to": 2
+      },
+      {
+        "changes": {
+          "driver": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "expected": false,
+        "from": 1,
+        "to": 3
+      },
+      {
+        "changes": {
+          "driver": [
+            [
+              6,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ]
+        },
+        "expected": false,
+        "from": 2,
+        "to": 0
+      },
+      {
+        "changes": {},
+        "expected": true,
+        "from": 2,
+        "to": 1
+      },
+      {
+        "changes": {},
+        "expected": true,
+        "from": 2,
+        "to": 2
+      },
+      {
+        "changes": {
+          "driver": [
+            [
+              6,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ]
+        },
+        "expected": false,
+        "from": 2,
+        "to": 3
+      },
+      {
+        "changes": {
+          "driver": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              5,
+              true
+            ],
+            [
+              10,
+              false
+            ]
+          ]
+        },
+        "expected": false,
+        "from": 3,
+        "to": 0
+      },
+      {
+        "changes": {
+          "driver": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              5,
+              true
+            ]
+          ]
+        },
+        "expected": true,
+        "from": 3,
+        "to": 1
+      },
+      {
+        "changes": {
+          "driver": [
+            [
+              6,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ]
+        },
+        "expected": true,
+        "from": 3,
+        "to": 2
+      },
+      {
+        "changes": {},
+        "expected": false,
+        "from": 3,
+        "to": 3
+      }
+    ],
+    "world_fingerprint": "cd44dabf547c2dd4a6902534e17cbadb6c49399a622d58f0a8e8c6851390a4a8"
+  },
+  "mux_candidate": {
+    "netlist": "Netlist { inputs: [\"a\", \"b\", \"s\"], outputs: [\"g0\"], gates: [Gate { name: \"n0\", inputs: [\"b\"], output: \"n0\", kind: Nor(1) }, Gate { name: \"n1\", inputs: [\"s\"], output: \"n1\", kind: Nor(1) }, Gate { name: \"n2\", inputs: [\"n0\", \"n1\"], output: \"n2\", kind: Nor(2) }, Gate { name: \"n3\", inputs: [\"a\"], output: \"n3\", kind: Nor(1) }, Gate { name: \"n4\", inputs: [\"n3\", \"s\"], output: \"n4\", kind: Nor(2) }, Gate { name: \"g0\", inputs: [\"n2\", \"n4\"], output: \"g0\", kind: Or(2) }] }",
+    "phases": [
+      {
+        "changes": {},
+        "from": 0,
+        "phase": 0,
+        "ticks": 0,
+        "to": 0,
+        "value": 0
+      },
+      {
+        "changes": {},
+        "from": 0,
+        "phase": 1,
+        "ticks": 0,
+        "to": 0,
+        "value": 0
+      },
+      {
+        "changes": {},
+        "from": 0,
+        "phase": 0,
+        "ticks": 0,
+        "to": 1,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 1,
+        "ticks": 7,
+        "to": 1,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 0,
+        "ticks": 10,
+        "to": 2,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 1,
+        "ticks": 4,
+        "to": 2,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 0,
+        "ticks": 4,
+        "to": 3,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 1,
+        "ticks": 7,
+        "to": 3,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 0,
+        "ticks": 10,
+        "to": 4,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 1,
+        "ticks": 2,
+        "to": 4,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 0,
+        "ticks": 2,
+        "to": 5,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 1,
+        "ticks": 2,
+        "to": 5,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ],
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              5,
+              true
+            ],
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 0,
+        "ticks": 10,
+        "to": 6,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 1,
+        "ticks": 9,
+        "to": 6,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 0,
+        "ticks": 10,
+        "to": 7,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 0,
+        "phase": 1,
+        "ticks": 9,
+        "to": 7,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 0,
+        "ticks": 6,
+        "to": 0,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 1,
+        "ticks": 10,
+        "to": 0,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 0,
+        "ticks": 7,
+        "to": 1,
+        "value": 1
+      },
+      {
+        "changes": {},
+        "from": 1,
+        "phase": 1,
+        "ticks": 0,
+        "to": 1,
+        "value": 1
+      },
+      {
+        "changes": {},
+        "from": 1,
+        "phase": 0,
+        "ticks": 0,
+        "to": 2,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 1,
+        "ticks": 10,
+        "to": 2,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 0,
+        "ticks": 7,
+        "to": 3,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 1,
+        "ticks": 4,
+        "to": 3,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 0,
+        "ticks": 4,
+        "to": 4,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              8,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 1,
+        "ticks": 8,
+        "to": 4,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 0,
+        "ticks": 7,
+        "to": 5,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              8,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 1,
+        "ticks": 8,
+        "to": 5,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              5,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 0,
+        "ticks": 5,
+        "to": 6,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              8,
+              false
+            ],
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 1,
+        "ticks": 9,
+        "to": 6,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 0,
+        "ticks": 6,
+        "to": 7,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              8,
+              false
+            ],
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 1,
+        "phase": 1,
+        "ticks": 9,
+        "to": 7,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ],
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 0,
+        "ticks": 10,
+        "to": 0,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 1,
+        "ticks": 4,
+        "to": 0,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 0,
+        "ticks": 4,
+        "to": 1,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 1,
+        "ticks": 7,
+        "to": 1,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 0,
+        "ticks": 10,
+        "to": 2,
+        "value": 2
+      },
+      {
+        "changes": {},
+        "from": 2,
+        "phase": 1,
+        "ticks": 0,
+        "to": 2,
+        "value": 2
+      },
+      {
+        "changes": {},
+        "from": 2,
+        "phase": 0,
+        "ticks": 0,
+        "to": 3,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 1,
+        "ticks": 7,
+        "to": 3,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 0,
+        "ticks": 10,
+        "to": 4,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ],
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 1,
+        "ticks": 12,
+        "to": 4,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 0,
+        "ticks": 4,
+        "to": 5,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ],
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 1,
+        "ticks": 12,
+        "to": 5,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ],
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              5,
+              true
+            ],
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 0,
+        "ticks": 10,
+        "to": 6,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 1,
+        "ticks": 7,
+        "to": 6,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 0,
+        "ticks": 10,
+        "to": 7,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 2,
+        "phase": 1,
+        "ticks": 7,
+        "to": 7,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 0,
+        "ticks": 6,
+        "to": 0,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 1,
+        "ticks": 10,
+        "to": 0,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 0,
+        "ticks": 7,
+        "to": 1,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 1,
+        "ticks": 4,
+        "to": 1,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 0,
+        "ticks": 4,
+        "to": 2,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 1,
+        "ticks": 10,
+        "to": 2,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 0,
+        "ticks": 7,
+        "to": 3,
+        "value": 3
+      },
+      {
+        "changes": {},
+        "from": 3,
+        "phase": 1,
+        "ticks": 0,
+        "to": 3,
+        "value": 3
+      },
+      {
+        "changes": {},
+        "from": 3,
+        "phase": 0,
+        "ticks": 0,
+        "to": 4,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 1,
+        "ticks": 12,
+        "to": 4,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 0,
+        "ticks": 7,
+        "to": 5,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 1,
+        "ticks": 12,
+        "to": 5,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              5,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 0,
+        "ticks": 5,
+        "to": 6,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 1,
+        "ticks": 8,
+        "to": 6,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 0,
+        "ticks": 6,
+        "to": 7,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 3,
+        "phase": 1,
+        "ticks": 8,
+        "to": 7,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 0,
+        "ticks": 12,
+        "to": 0,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 1,
+        "ticks": 2,
+        "to": 0,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 0,
+        "ticks": 2,
+        "to": 1,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 1,
+        "ticks": 7,
+        "to": 1,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              8,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 0,
+        "ticks": 8,
+        "to": 2,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 1,
+        "ticks": 4,
+        "to": 2,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ],
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 0,
+        "ticks": 12,
+        "to": 3,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 1,
+        "ticks": 7,
+        "to": 3,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 0,
+        "ticks": 12,
+        "to": 4,
+        "value": 4
+      },
+      {
+        "changes": {},
+        "from": 4,
+        "phase": 1,
+        "ticks": 0,
+        "to": 4,
+        "value": 4
+      },
+      {
+        "changes": {},
+        "from": 4,
+        "phase": 0,
+        "ticks": 0,
+        "to": 5,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 1,
+        "ticks": 2,
+        "to": 5,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 0,
+        "ticks": 2,
+        "to": 6,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 1,
+        "ticks": 9,
+        "to": 6,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 0,
+        "ticks": 12,
+        "to": 7,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 4,
+        "phase": 1,
+        "ticks": 9,
+        "to": 7,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 0,
+        "ticks": 12,
+        "to": 0,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ],
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              5,
+              true
+            ],
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 1,
+        "ticks": 10,
+        "to": 0,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 0,
+        "ticks": 2,
+        "to": 1,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              5,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 1,
+        "ticks": 5,
+        "to": 1,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              8,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 0,
+        "ticks": 8,
+        "to": 2,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ],
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              5,
+              true
+            ],
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 1,
+        "ticks": 10,
+        "to": 2,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ],
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 0,
+        "ticks": 12,
+        "to": 3,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              5,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 1,
+        "ticks": 5,
+        "to": 3,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ],
+            [
+              8,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 0,
+        "ticks": 12,
+        "to": 4,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 1,
+        "ticks": 2,
+        "to": 4,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 0,
+        "ticks": 2,
+        "to": 5,
+        "value": 5
+      },
+      {
+        "changes": {},
+        "from": 5,
+        "phase": 1,
+        "ticks": 0,
+        "to": 5,
+        "value": 5
+      },
+      {
+        "changes": {},
+        "from": 5,
+        "phase": 0,
+        "ticks": 0,
+        "to": 6,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 1,
+        "ticks": 9,
+        "to": 6,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 0,
+        "ticks": 12,
+        "to": 7,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 5,
+        "phase": 1,
+        "ticks": 9,
+        "to": 7,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 0,
+        "ticks": 2,
+        "to": 0,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 1,
+        "ticks": 10,
+        "to": 0,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 0,
+        "ticks": 9,
+        "to": 1,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 1,
+        "ticks": 6,
+        "to": 1,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              8,
+              false
+            ],
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 0,
+        "ticks": 9,
+        "to": 2,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 1,
+        "ticks": 10,
+        "to": 2,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 0,
+        "ticks": 7,
+        "to": 3,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 1,
+        "ticks": 6,
+        "to": 3,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 0,
+        "ticks": 8,
+        "to": 4,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 1,
+        "ticks": 12,
+        "to": 4,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 0,
+        "ticks": 9,
+        "to": 5,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 1,
+        "ticks": 12,
+        "to": 5,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 0,
+        "ticks": 9,
+        "to": 6,
+        "value": 6
+      },
+      {
+        "changes": {},
+        "from": 6,
+        "phase": 1,
+        "ticks": 0,
+        "to": 6,
+        "value": 6
+      },
+      {
+        "changes": {},
+        "from": 6,
+        "phase": 0,
+        "ticks": 0,
+        "to": 7,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ]
+        },
+        "from": 6,
+        "phase": 1,
+        "ticks": 2,
+        "to": 7,
+        "value": 7
+      },
+      {
+        "changes": {},
+        "from": 7,
+        "phase": 0,
+        "ticks": 0,
+        "to": 0,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ],
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 1,
+        "ticks": 10,
+        "to": 0,
+        "value": 0
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 0,
+        "ticks": 9,
+        "to": 1,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 1,
+        "ticks": 6,
+        "to": 1,
+        "value": 1
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              8,
+              false
+            ],
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 0,
+        "ticks": 9,
+        "to": 2,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ],
+            [
+              4,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              10,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ],
+            [
+              6,
+              false
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 1,
+        "ticks": 10,
+        "to": 2,
+        "value": 2
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              7,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 0,
+        "ticks": 7,
+        "to": 3,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:n1": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              false
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              false
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              true
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 1,
+        "ticks": 6,
+        "to": 3,
+        "value": 3
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              4,
+              false
+            ],
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n1": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              4,
+              true
+            ]
+          ],
+          "gate:n4": [
+            [
+              2,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              6,
+              true
+            ]
+          ],
+          "relay:n4:41,1,24": [
+            [
+              4,
+              false
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 0,
+        "ticks": 8,
+        "to": 4,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              false
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 1,
+        "ticks": 12,
+        "to": 4,
+        "value": 4
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 0,
+        "ticks": 9,
+        "to": 5,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              false
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              true
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              false
+            ]
+          ],
+          "lamp": [
+            [
+              12,
+              false
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              true
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              false
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 1,
+        "ticks": 12,
+        "to": 5,
+        "value": 5
+      },
+      {
+        "changes": {
+          "gate:g0": [
+            [
+              8,
+              true
+            ]
+          ],
+          "gate:n0": [
+            [
+              2,
+              false
+            ]
+          ],
+          "gate:n2": [
+            [
+              6,
+              true
+            ]
+          ],
+          "lamp": [
+            [
+              9,
+              true
+            ]
+          ],
+          "relay:n0:44,1,31": [
+            [
+              4,
+              false
+            ]
+          ],
+          "relay:n2:43,1,24": [
+            [
+              8,
+              true
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 0,
+        "ticks": 9,
+        "to": 6,
+        "value": 7
+      },
+      {
+        "changes": {
+          "gate:n3": [
+            [
+              2,
+              true
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 1,
+        "ticks": 2,
+        "to": 6,
+        "value": 6
+      },
+      {
+        "changes": {
+          "gate:n3": [
+            [
+              2,
+              false
+            ]
+          ]
+        },
+        "from": 7,
+        "phase": 0,
+        "ticks": 2,
+        "to": 7,
+        "value": 7
+      },
+      {
+        "changes": {},
+        "from": 7,
+        "phase": 1,
+        "ticks": 0,
+        "to": 7,
+        "value": 7
+      }
+    ],
+    "plan_refusal": null,
+    "planner": "Unified3d",
+    "routes": [
+      {
+        "owner": "s",
+        "paths": [
+          [
+            {
+              "x": 43,
+              "y": 1,
+              "z": 35
+            },
+            {
+              "x": 43,
+              "y": 1,
+              "z": 36
+            },
+            {
+              "x": 43,
+              "y": 1,
+              "z": 37
+            },
+            {
+              "x": 44,
+              "y": 1,
+              "z": 37
+            },
+            {
+              "x": 45,
+              "y": 1,
+              "z": 37
+            },
+            {
+              "x": 46,
+              "y": 1,
+              "z": 37
+            }
+          ],
+          [
+            {
+              "x": 43,
+              "y": 1,
+              "z": 35
+            },
+            {
+              "x": 42,
+              "y": 1,
+              "z": 35
+            },
+            {
+              "x": 42,
+              "y": 1,
+              "z": 34
+            },
+            {
+              "x": 42,
+              "y": 1,
+              "z": 33
+            },
+            {
+              "x": 41,
+              "y": 1,
+              "z": 33
+            },
+            {
+              "x": 41,
+              "y": 1,
+              "z": 32
+            },
+            {
+              "x": 41,
+              "y": 1,
+              "z": 31
+            },
+            {
+              "x": 40,
+              "y": 1,
+              "z": 31
+            },
+            {
+              "x": 39,
+              "y": 1,
+              "z": 31
+            },
+            {
+              "x": 38,
+              "y": 1,
+              "z": 31
+            },
+            {
+              "x": 38,
+              "y": 1,
+              "z": 32
+            },
+            {
+              "x": 37,
+              "y": 1,
+              "z": 32
+            }
+          ]
+        ],
+        "relays": [],
+        "terminals": "[RouteTerminal { sink: RouteSink { gate: \"n1\", input_index: 0, anchor: Anchor { x: 46, y: 1, z: 37 } }, kind: DirectedDustIntoSupport, repeaters: 0 }, RouteTerminal { sink: RouteSink { gate: \"n4\", input_index: 1, anchor: Anchor { x: 37, y: 1, z: 32 } }, kind: DirectedDustIntoSupport, repeaters: 0 }]"
+      },
+      {
+        "owner": "a",
+        "paths": [
+          [
+            {
+              "x": 23,
+              "y": 1,
+              "z": 42
+            },
+            {
+              "x": 23,
+              "y": 1,
+              "z": 41
+            },
+            {
+              "x": 23,
+              "y": 1,
+              "z": 40
+            },
+            {
+              "x": 23,
+              "y": 1,
+              "z": 39
+            },
+            {
+              "x": 23,
+              "y": 1,
+              "z": 38
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 38
+            },
+            {
+              "x": 25,
+              "y": 1,
+              "z": 38
+            },
+            {
+              "x": 26,
+              "y": 1,
+              "z": 38
+            },
+            {
+              "x": 27,
+              "y": 1,
+              "z": 38
+            }
+          ]
+        ],
+        "relays": [],
+        "terminals": "[RouteTerminal { sink: RouteSink { gate: \"n3\", input_index: 0, anchor: Anchor { x: 27, y: 1, z: 38 } }, kind: DirectedDustIntoSupport, repeaters: 0 }]"
+      },
+      {
+        "owner": "b",
+        "paths": [
+          [
+            {
+              "x": 37,
+              "y": 1,
+              "z": 40
+            },
+            {
+              "x": 37,
+              "y": 1,
+              "z": 39
+            },
+            {
+              "x": 37,
+              "y": 1,
+              "z": 38
+            },
+            {
+              "x": 37,
+              "y": 1,
+              "z": 37
+            },
+            {
+              "x": 38,
+              "y": 1,
+              "z": 37
+            }
+          ]
+        ],
+        "relays": [],
+        "terminals": "[RouteTerminal { sink: RouteSink { gate: \"n0\", input_index: 0, anchor: Anchor { x: 38, y: 1, z: 37 } }, kind: DirectedDustIntoSupport, repeaters: 0 }]"
+      },
+      {
+        "owner": "n0",
+        "paths": [
+          [
+            {
+              "x": 39,
+              "y": 1,
+              "z": 35
+            },
+            {
+              "x": 39,
+              "y": 2,
+              "z": 34
+            },
+            {
+              "x": 39,
+              "y": 2,
+              "z": 33
+            },
+            {
+              "x": 39,
+              "y": 3,
+              "z": 32
+            },
+            {
+              "x": 40,
+              "y": 3,
+              "z": 32
+            },
+            {
+              "x": 41,
+              "y": 3,
+              "z": 32
+            },
+            {
+              "x": 42,
+              "y": 3,
+              "z": 32
+            },
+            {
+              "x": 43,
+              "y": 2,
+              "z": 32
+            },
+            {
+              "x": 43,
+              "y": 1,
+              "z": 31
+            },
+            {
+              "x": 44,
+              "y": 1,
+              "z": 31
+            },
+            {
+              "x": 45,
+              "y": 1,
+              "z": 31
+            }
+          ]
+        ],
+        "relays": [
+          {
+            "at": {
+              "x": 44,
+              "y": 1,
+              "z": 31
+            },
+            "label": "relay:n0:44,1,31",
+            "state": {
+              "delay": 1,
+              "extra_properties": {},
+              "face": null,
+              "facing": "West",
+              "half": null,
+              "kind": "Repeater",
+              "lit": true,
+              "name": "minecraft:repeater",
+              "power": 0
+            }
+          }
+        ],
+        "terminals": "[RouteTerminal { sink: RouteSink { gate: \"n2\", input_index: 0, anchor: Anchor { x: 45, y: 1, z: 31 } }, kind: DirectedDustIntoSupport, repeaters: 1 }]"
+      },
+      {
+        "owner": "n1",
+        "paths": [
+          [
+            {
+              "x": 47,
+              "y": 1,
+              "z": 35
+            },
+            {
+              "x": 47,
+              "y": 1,
+              "z": 34
+            },
+            {
+              "x": 47,
+              "y": 1,
+              "z": 33
+            },
+            {
+              "x": 48,
+              "y": 1,
+              "z": 33
+            },
+            {
+              "x": 48,
+              "y": 1,
+              "z": 32
+            },
+            {
+              "x": 48,
+              "y": 1,
+              "z": 31
+            },
+            {
+              "x": 47,
+              "y": 1,
+              "z": 31
+            }
+          ]
+        ],
+        "relays": [],
+        "terminals": "[RouteTerminal { sink: RouteSink { gate: \"n2\", input_index: 1, anchor: Anchor { x: 47, y: 1, z: 31 } }, kind: DirectedDustIntoSupport, repeaters: 0 }]"
+      },
+      {
+        "owner": "n2",
+        "paths": [
+          [
+            {
+              "x": 46,
+              "y": 1,
+              "z": 29
+            },
+            {
+              "x": 45,
+              "y": 1,
+              "z": 29
+            },
+            {
+              "x": 44,
+              "y": 1,
+              "z": 29
+            },
+            {
+              "x": 44,
+              "y": 1,
+              "z": 28
+            },
+            {
+              "x": 44,
+              "y": 1,
+              "z": 27
+            },
+            {
+              "x": 44,
+              "y": 1,
+              "z": 26
+            },
+            {
+              "x": 44,
+              "y": 1,
+              "z": 25
+            },
+            {
+              "x": 44,
+              "y": 1,
+              "z": 24
+            },
+            {
+              "x": 43,
+              "y": 1,
+              "z": 24
+            }
+          ]
+        ],
+        "relays": [
+          {
+            "at": {
+              "x": 43,
+              "y": 1,
+              "z": 24
+            },
+            "label": "relay:n2:43,1,24",
+            "state": {
+              "delay": 1,
+              "extra_properties": {},
+              "face": null,
+              "facing": "East",
+              "half": null,
+              "kind": "Repeater",
+              "lit": true,
+              "name": "minecraft:repeater",
+              "power": 0
+            }
+          }
+        ],
+        "terminals": "[RouteTerminal { sink: RouteSink { gate: \"g0\", input_index: 0, anchor: Anchor { x: 43, y: 1, z: 24 } }, kind: BareMergeRepeater, repeaters: 1 }]"
+      },
+      {
+        "owner": "n3",
+        "paths": [
+          [
+            {
+              "x": 28,
+              "y": 1,
+              "z": 36
+            },
+            {
+              "x": 28,
+              "y": 1,
+              "z": 35
+            },
+            {
+              "x": 28,
+              "y": 1,
+              "z": 34
+            },
+            {
+              "x": 28,
+              "y": 1,
+              "z": 33
+            },
+            {
+              "x": 28,
+              "y": 1,
+              "z": 32
+            },
+            {
+              "x": 29,
+              "y": 1,
+              "z": 32
+            },
+            {
+              "x": 30,
+              "y": 1,
+              "z": 32
+            },
+            {
+              "x": 31,
+              "y": 1,
+              "z": 32
+            },
+            {
+              "x": 32,
+              "y": 1,
+              "z": 32
+            },
+            {
+              "x": 33,
+              "y": 1,
+              "z": 32
+            },
+            {
+              "x": 34,
+              "y": 1,
+              "z": 32
+            },
+            {
+              "x": 35,
+              "y": 1,
+              "z": 32
+            }
+          ]
+        ],
+        "relays": [],
+        "terminals": "[RouteTerminal { sink: RouteSink { gate: \"n4\", input_index: 0, anchor: Anchor { x: 35, y: 1, z: 32 } }, kind: DirectedDustIntoSupport, repeaters: 0 }]"
+      },
+      {
+        "owner": "n4",
+        "paths": [
+          [
+            {
+              "x": 36,
+              "y": 1,
+              "z": 30
+            },
+            {
+              "x": 36,
+              "y": 1,
+              "z": 29
+            },
+            {
+              "x": 36,
+              "y": 1,
+              "z": 28
+            },
+            {
+              "x": 36,
+              "y": 1,
+              "z": 27
+            },
+            {
+              "x": 36,
+              "y": 1,
+              "z": 26
+            },
+            {
+              "x": 36,
+              "y": 1,
+              "z": 25
+            },
+            {
+              "x": 36,
+              "y": 1,
+              "z": 24
+            },
+            {
+              "x": 37,
+              "y": 1,
+              "z": 24
+            },
+            {
+              "x": 38,
+              "y": 1,
+              "z": 24
+            },
+            {
+              "x": 39,
+              "y": 1,
+              "z": 24
+            },
+            {
+              "x": 40,
+              "y": 1,
+              "z": 24
+            },
+            {
+              "x": 41,
+              "y": 1,
+              "z": 24
+            }
+          ]
+        ],
+        "relays": [
+          {
+            "at": {
+              "x": 41,
+              "y": 1,
+              "z": 24
+            },
+            "label": "relay:n4:41,1,24",
+            "state": {
+              "delay": 1,
+              "extra_properties": {},
+              "face": null,
+              "facing": "West",
+              "half": null,
+              "kind": "Repeater",
+              "lit": true,
+              "name": "minecraft:repeater",
+              "power": 0
+            }
+          }
+        ],
+        "terminals": "[RouteTerminal { sink: RouteSink { gate: \"g0\", input_index: 1, anchor: Anchor { x: 41, y: 1, z: 24 } }, kind: BareMergeRepeater, repeaters: 1 }]"
+      }
+    ],
+    "unattributed_relays": [],
+    "world_fingerprint": "3c7efb1b9bf6df0077eb17cff2676cb877b650c0934b88296f60becf3a3ebd94"
+  },
+  "mux_repeated_stdout_identical": true,
+  "runway_probe_evidence": [
+    "weak runway request=PrimitiveOutput(PrimitiveId { instance: InstanceId(0), node: TopologyNodeId(0) }),sink=RoutedSinkId { route: RouteId(3), ordinal: 0 },at=Anchor { x: 42, y: 1, z: 31 },claim=Some(PhysicalReservation { owner: KeepOut(72), kind: Conductor(BlockState { kind: RedstoneWire, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }) }),keepout=None",
+    "weak runway request=PrimitiveOutput(PrimitiveId { instance: InstanceId(0), node: TopologyNodeId(0) }),sink=RoutedSinkId { route: RouteId(3), ordinal: 0 },at=Anchor { x: 41, y: 1, z: 31 },claim=Some(PhysicalReservation { owner: Route(RouteId(3)), kind: Conductor(BlockState { kind: RedstoneWire, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }) }),keepout=None",
+    "weak runway request=PrimitiveOutput(PrimitiveId { instance: InstanceId(0), node: TopologyNodeId(0) }),sink=RoutedSinkId { route: RouteId(3), ordinal: 0 },at=Anchor { x: 40, y: 1, z: 31 },claim=None,keepout=None"
+  ],
+  "mux_candidate_quality": {
+    "worst_settle_ticks": 12,
+    "total_settle_ticks": 424,
+    "driver": {
+      "glitches": 10,
+      "single_input_glitches": 1,
+      "worst_change_ticks": 8,
+      "total_pulse_ticks": 24,
+      "worst_pulse_ticks": 4
+    },
+    "lamp": {
+      "glitches": 6,
+      "single_input_glitches": 0,
+      "worst_change_ticks": 12,
+      "total_pulse_ticks": 22,
+      "worst_pulse_ticks": 5
+    }
+  }
+}
