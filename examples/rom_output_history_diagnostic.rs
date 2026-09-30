@@ -21,6 +21,40 @@ fn main() {
         .collect();
     let circuit = compile(&source).unwrap();
     println!("planner={:?},netlist={source:?}", circuit.planner_kind());
+    let plan = reda::compile::planner::plan_from_netlist(
+        &source,
+        &reda::compile::planner::PortPlacements::default(),
+    )
+    .unwrap();
+    let realised =
+        reda::compile::planner::emit_candidate(&plan, &source, circuit.world.size()).unwrap();
+    assert_eq!(
+        reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&realised.world),
+        reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&circuit.world),
+        "the diagnostic route ledger must describe exactly the world stock compile shipped"
+    );
+    for route in plan.routes() {
+        for (terminal, path) in route.terminals().iter().zip(route.branch_paths()) {
+            println!(
+                "terminal owner={:?},sink={:?},kind={:?},tail={:?}",
+                route.owner(),
+                terminal.sink,
+                terminal.kind,
+                &path[path.len().saturating_sub(3)..]
+            );
+        }
+    }
+    for route in plan.routes() {
+        for (at, state) in route.anchors().iter().zip(route.realisation()) {
+            if at.y == 1 && (40..=43).contains(&at.x) && (41..=43).contains(&at.z) {
+                println!(
+                    "route={},owner={:?},at={at:?},state={state:?}",
+                    route.id(),
+                    route.owner()
+                );
+            }
+        }
+    }
     let mut sim = Simulator::new(circuit.world.clone());
     sim.run_until_stable(2000).unwrap();
     let order = source.combinational_order().unwrap();
@@ -63,9 +97,47 @@ fn main() {
                     let state = sim.world().get(x, y, z);
                     if state.lit != values[name] {
                         println!("REPRODUCED: from={from},to={to},address={address},ticks={ticks},output={name},expected={},at=({x},{y},{z}),state={state:?}",values[name]);
+                        for route in plan
+                            .routes()
+                            .iter()
+                            .filter(|r| r.owner() == Some(name.as_str()))
+                        {
+                            let mut energized: Vec<_> = route
+                                .anchors()
+                                .iter()
+                                .filter_map(|a| {
+                                    let b = sim.world().get(a.x, a.y, a.z);
+                                    (b.kind == BlockKind::RedstoneWire && b.power > 0)
+                                        .then_some((b.power, *a))
+                                })
+                                .collect();
+                            energized.sort_by_key(|&(power, at)| (std::cmp::Reverse(power), at));
+                            println!(
+                                "highest affected route cells: {:?}",
+                                &energized[..energized.len().min(5)]
+                            );
+                            if let Some((_, at)) = energized.first() {
+                                for dy in -1..=1 {
+                                    for dz in -1..=1 {
+                                        for dx in -2..=1 {
+                                            let b =
+                                                sim.world().get(at.x + dx, at.y + dy, at.z + dz);
+                                            if b.kind != BlockKind::Air {
+                                                println!(
+                                                    "source neighborhood ({},{},{}) {b:?}",
+                                                    at.x + dx,
+                                                    at.y + dy,
+                                                    at.z + dz
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         for dy in 0..=2 {
                             for dz in -1..=1 {
-                                for dx in -1..=1 {
+                                for dx in -2..=1 {
                                     let state = sim.world().get(x + dx, y + dy, z + dz);
                                     if state.kind != BlockKind::Air {
                                         println!(
