@@ -1,0 +1,122 @@
+diff --git a/src/compile/planner.rs b/src/compile/planner.rs
+index 4e7c4c6..ad93a58 100644
+--- a/src/compile/planner.rs
++++ b/src/compile/planner.rs
+@@ -5368,6 +5368,11 @@ fn typed_legacy_request_parts(
+                     TerminalRequirement::Exact(RouteTerminalKind::BareMergeRepeater)
+                 } else if netlist.gates[*gate].is_merge() {
+                     TerminalRequirement::Exact(RouteTerminalKind::RepeaterIntoSupport)
++                } else if matches!(netlist.gates[*gate].kind, crate::compile::topology::GateKind::Nor(n) if n > 1)
++                    && !netlist.gates.iter().any(|g| g.kind.is_sequential())
++                    && !consumers.iter().any(|c| matches!(c, NetConsumer::Terminal { .. })) {
++                    if feeds_observed_output { TerminalRequirement::WeakRepeater }
++                    else { TerminalRequirement::WeakAutomatic }
+                 } else if feeds_observed_output {
+                     TerminalRequirement::Repeater
+                 } else {
+diff --git a/src/compile/routing.rs b/src/compile/routing.rs
+index 9c2179c..76de84f 100644
+--- a/src/compile/routing.rs
++++ b/src/compile/routing.rs
+@@ -186,6 +186,8 @@ pub enum TerminalRequirement {
+     Automatic,
+     Repeater,
+     DirectedDust,
++    WeakAutomatic,
++    WeakRepeater,
+     Exact(RouteTerminalKind),
+ }
+ 
+@@ -1626,7 +1628,10 @@ where
+                 price,
+                 guidance,
+                 &source_runway,
+-                &ForcedChain::new(runways.sinks, sink.anchor, sink.allowed_entry),
++                &ForcedChain::new(
++                    if sink.terminal.sink_parts().is_some_and(|(_, _, r)| matches!(r, TerminalRequirement::WeakAutomatic | TerminalRequirement::WeakRepeater)) {
++                        TerminalRunway::Forced { cells: runways.sinks.cells().max(2) }
++                    } else { runways.sinks }, sink.anchor, sink.allowed_entry),
+                 planned
+                     .get(ordinal)
+                     .map(|branch| {
+@@ -1887,8 +1892,14 @@ where
+                 .unwrap_or(request.source.anchor);
+             let isolated =
+                 terminal_is_isolated_typed(&reservations, predecessor, sink.anchor, support);
+-            let kind = select_terminal_kind(
+-                requirement,
++            let weak = matches!(requirement, TerminalRequirement::WeakAutomatic | TerminalRequirement::WeakRepeater);
++            let selection_requirement = match requirement {
++                TerminalRequirement::WeakAutomatic => TerminalRequirement::Automatic,
++                TerminalRequirement::WeakRepeater => TerminalRequirement::Repeater,
++                other => other,
++            };
++            let mut kind = select_terminal_kind(
++                selection_requirement,
+                 budget_needs_repeater,
+                 predecessor,
+                 sink.anchor,
+@@ -1896,6 +1907,26 @@ where
+                 laid.strength_before_terminal,
+                 isolated,
+             );
++            if weak && kind == RouteTerminalKind::RepeaterIntoSupport {
++                let len = path.len();
++                let valid = len >= 3 && shared <= len - 2
++                    && path[len-3].y == predecessor.y && predecessor.y == sink.anchor.y
++                    && horizontal_direction(path[len-3], predecessor) == horizontal_direction(predecessor, sink.anchor)
++                    && cell_states.get(&predecessor).is_some_and(|s| s.kind == BlockKind::RedstoneWire);
++                if !valid {
++                    return Err(RouterFailure::Refused { route: request.id, source: request.source.id,
++                        sink: Some(sink.id), category: RouterRefusalCategory::PhysicalInvariant });
++                }
++                // Move this terminal's already selected stage, not an extra
++                // buffer on every input. The last cell becomes weak drive.
++                cell_states.insert(predecessor, repeater_toward(horizontal_direction(predecessor, sink.anchor).unwrap()));
++                kind = RouteTerminalKind::DirectedDustIntoSupport;
++                reserve_terminal_guard(sink.id, path[len-3], predecessor, sink.anchor, &mut reservations,
++                    &mut |at, owner, kind| {
++                        if stage_claims { staged_claims.push((at, owner, kind)); }
++                        else { claim(at, owner, kind); }
++                    });
++            }
+             let terminal_state = match kind {
+                 RouteTerminalKind::RepeaterIntoSupport
+                 | RouteTerminalKind::BareMergeRepeater
+@@ -1940,7 +1971,7 @@ where
+                 certify_path(&request, sink, &path, &cell_states)?;
+             }
+ 
+-            let repeaters = trunk_repeaters + laid.repeaters;
++            let repeaters = path.iter().filter(|at| cell_states.get(at).is_some_and(|s| s.kind == BlockKind::Repeater)).count() as u64;
+             branches.push(RealisedRouteBranch {
+                 sink: sink.id,
+                 target,
+@@ -2564,7 +2595,7 @@ fn select_terminal_kind(
+         }
+         TerminalRequirement::Exact(kind) => kind,
+         TerminalRequirement::Repeater => RouteTerminalKind::RepeaterIntoSupport,
+-        TerminalRequirement::DirectedDust => RouteTerminalKind::DirectedDustIntoSupport,
++        TerminalRequirement::DirectedDust | TerminalRequirement::WeakAutomatic | TerminalRequirement::WeakRepeater => RouteTerminalKind::DirectedDustIntoSupport,
+         TerminalRequirement::Automatic if budget_needs_repeater => {
+             RouteTerminalKind::RepeaterIntoSupport
+         }
+@@ -3464,7 +3495,7 @@ fn sink_connection(sink: &RouteSink) -> Result<ConnectionId, RouterFailure> {
+ fn terminal_may_be_repeater(requirement: TerminalRequirement) -> bool {
+     match requirement {
+         TerminalRequirement::Automatic | TerminalRequirement::Repeater => true,
+-        TerminalRequirement::DirectedDust => false,
++        TerminalRequirement::DirectedDust | TerminalRequirement::WeakAutomatic | TerminalRequirement::WeakRepeater => false,
+         TerminalRequirement::Exact(kind) => matches!(
+             kind,
+             RouteTerminalKind::RepeaterIntoSupport
+@@ -3481,7 +3512,8 @@ fn terminal_may_be_repeater(requirement: TerminalRequirement) -> bool {
+ /// dust contract overwrites the demanded repeater with dust, so the branch
+ /// planner must not count on the terminal cell for its last refresh.
+ fn terminal_hosts_demanded_refresh(requirement: TerminalRequirement) -> bool {
+-    terminal_may_be_repeater(requirement)
++    matches!(requirement, TerminalRequirement::WeakAutomatic | TerminalRequirement::WeakRepeater)
++        || terminal_may_be_repeater(requirement)
+         || matches!(
+             requirement,
+             TerminalRequirement::Exact(RouteTerminalKind::BareMergeDust)
