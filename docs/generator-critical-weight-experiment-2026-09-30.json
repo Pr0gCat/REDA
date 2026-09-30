@@ -1,0 +1,1952 @@
+{
+  "base_commit": "58d8e43",
+  "experiment": "remaining logic depth weighted consumer barycentre",
+  "candidate": {
+    "case": "seven_segment",
+    "driver_glitch_transitions": 113,
+    "driver_single_input_glitches": 0,
+    "frontend": "REDA",
+    "total_driver_pulse_ticks": 1864,
+    "world_fingerprint": "dddedf5571d6b658bbe34cd023f826032b7980392fe69b7b3fa844dabc4d4b99",
+    "worst_driver_change_ticks": 40,
+    "worst_driver_pulse_ticks": 20
+  },
+  "world_ticks": 44,
+  "mean_world_ticks": 35.20703125,
+  "lamp_glitch_transitions": 107,
+  "decision": "reject; current committed mean 34.46484375 and lamp glitches 85; driver glitches 105 vs 113",
+  "prototype_diff": "diff --git a/src/compile/mod.rs b/src/compile/mod.rs\nindex 44526c1..f9d2283 100644\n--- a/src/compile/mod.rs\n+++ b/src/compile/mod.rs\n@@ -3380,6 +3380,13 @@ fn build_floorplan(\n         }\n     }\n \n+    // Prioritize consumers with longer remaining logic paths during ordering.\n+    let mut remaining_depth = vec![1usize; gate_count];\n+    for &g in order.iter().rev() {\n+        remaining_depth[g] += consumers[g].iter()\n+            .map(|&c| remaining_depth[c]).max().unwrap_or(0);\n+    }\n+\n     let input_slot: HashMap<&str, usize> = netlist\n         .inputs\n         .iter()\n@@ -3462,8 +3469,9 @@ fn build_floorplan(\n                     let mut sum = 0.0;\n                     let mut count = 0.0;\n                     for &c in &consumers[g] {\n-                        sum += spread(slot[c], row_len[level[c] + 1]);\n-                        count += 1.0;\n+                        let weight = if centered_ordering { remaining_depth[c] as f64 } else { 1.0 };\n+                        sum += weight * spread(slot[c], row_len[level[c] + 1]);\n+                        count += weight;\n                     }\n                     let key = if count > 0.0 {\n                         sum / count\n",
+  "new_driver_glitch_witnesses": [
+    {
+      "baseline": {
+        "changes": {
+          "driver:b": [
+            [
+              22,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              20,
+              true
+            ]
+          ]
+        },
+        "from": 0,
+        "glitched": false,
+        "last_driver_change_tick": 22,
+        "pulse_widths": {},
+        "to": 6
+      },
+      "candidate": {
+        "changes": {
+          "driver:b": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:e": [
+            [
+              32,
+              false
+            ],
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              32,
+              false
+            ],
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              20,
+              true
+            ]
+          ]
+        },
+        "from": 0,
+        "glitched": true,
+        "last_driver_change_tick": 34,
+        "pulse_widths": {
+          "e": [
+            2
+          ],
+          "f": [
+            2
+          ]
+        },
+        "to": 6
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              28,
+              true
+            ]
+          ],
+          "driver:b": [
+            [
+              22,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              20,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              20,
+              true
+            ]
+          ]
+        },
+        "from": 1,
+        "glitched": false,
+        "last_driver_change_tick": 28,
+        "pulse_widths": {},
+        "to": 6
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              30,
+              true
+            ]
+          ],
+          "driver:b": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              28,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ],
+            [
+              32,
+              false
+            ],
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              20,
+              true
+            ],
+            [
+              32,
+              false
+            ],
+            [
+              40,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              20,
+              true
+            ]
+          ]
+        },
+        "from": 1,
+        "glitched": true,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {
+          "e": [
+            2
+          ],
+          "f": [
+            8
+          ]
+        },
+        "to": 6
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:c": [
+            [
+              24,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              38,
+              false
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              40,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "glitched": false,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {},
+        "to": 7
+      },
+      "candidate": {
+        "changes": {
+          "driver:b": [
+            [
+              22,
+              false
+            ],
+            [
+              24,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              24,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              38,
+              false
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              34,
+              true
+            ],
+            [
+              40,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              40,
+              false
+            ]
+          ]
+        },
+        "from": 2,
+        "glitched": true,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {
+          "b": [
+            2
+          ],
+          "f": [
+            6
+          ]
+        },
+        "to": 7
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:e": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              36,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              20,
+              false
+            ]
+          ]
+        },
+        "from": 3,
+        "glitched": false,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {},
+        "to": 0
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              30,
+              false
+            ],
+            [
+              36,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              26,
+              false
+            ],
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              28,
+              false
+            ],
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              36,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              20,
+              false
+            ]
+          ]
+        },
+        "from": 3,
+        "glitched": true,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {
+          "a": [
+            6
+          ],
+          "c": [
+            6
+          ],
+          "d": [
+            6
+          ]
+        },
+        "to": 0
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:b": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              28,
+              false
+            ]
+          ],
+          "driver:e": [
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              36,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": false,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {},
+        "to": 2
+      },
+      "candidate": {
+        "changes": {
+          "driver:b": [
+            [
+              30,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              32,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              34,
+              false
+            ],
+            [
+              38,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              20,
+              false
+            ],
+            [
+              28,
+              true
+            ],
+            [
+              34,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              36,
+              false
+            ],
+            [
+              40,
+              true
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": true,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {
+          "d": [
+            4
+          ],
+          "f": [
+            6
+          ],
+          "g": [
+            4
+          ]
+        },
+        "to": 2
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:b": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              20,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": false,
+        "last_driver_change_tick": 32,
+        "pulse_widths": {},
+        "to": 3
+      },
+      "candidate": {
+        "changes": {
+          "driver:b": [
+            [
+              30,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              34,
+              false
+            ],
+            [
+              38,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              20,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              36,
+              false
+            ],
+            [
+              40,
+              true
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": true,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {
+          "d": [
+            4
+          ],
+          "g": [
+            4
+          ]
+        },
+        "to": 3
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:e": [
+            [
+              34,
+              true
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": false,
+        "last_driver_change_tick": 34,
+        "pulse_widths": {},
+        "to": 6
+      },
+      "candidate": {
+        "changes": {
+          "driver:d": [
+            [
+              34,
+              false
+            ],
+            [
+              38,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              36,
+              false
+            ],
+            [
+              40,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              36,
+              false
+            ],
+            [
+              40,
+              true
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": true,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {
+          "d": [
+            4
+          ],
+          "f": [
+            4
+          ],
+          "g": [
+            4
+          ]
+        },
+        "to": 6
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              36,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              22,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              34,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              30,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              36,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": false,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {},
+        "to": 10
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              40,
+              false
+            ]
+          ],
+          "driver:b": [
+            [
+              30,
+              true
+            ],
+            [
+              32,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              34,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              34,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              36,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": true,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {
+          "b": [
+            2
+          ]
+        },
+        "to": 10
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              36,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              22,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              34,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              30,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              36,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": false,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {},
+        "to": 11
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              40,
+              false
+            ]
+          ],
+          "driver:b": [
+            [
+              30,
+              true
+            ],
+            [
+              32,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              34,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              34,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              36,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": true,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {
+          "b": [
+            2
+          ]
+        },
+        "to": 11
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              22,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              22,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              32,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": false,
+        "last_driver_change_tick": 32,
+        "pulse_widths": {},
+        "to": 12
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              28,
+              false
+            ]
+          ],
+          "driver:b": [
+            [
+              34,
+              true
+            ],
+            [
+              36,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              30,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              32,
+              false
+            ]
+          ]
+        },
+        "from": 5,
+        "glitched": true,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {
+          "b": [
+            2
+          ]
+        },
+        "to": 12
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:e": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              24,
+              false
+            ]
+          ]
+        },
+        "from": 9,
+        "glitched": false,
+        "last_driver_change_tick": 26,
+        "pulse_widths": {},
+        "to": 0
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              34,
+              false
+            ],
+            [
+              36,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              32,
+              false
+            ],
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              20,
+              false
+            ],
+            [
+              28,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              24,
+              false
+            ]
+          ]
+        },
+        "from": 9,
+        "glitched": true,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {
+          "a": [
+            2
+          ],
+          "d": [
+            2
+          ],
+          "f": [
+            8
+          ]
+        },
+        "to": 0
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:c": [
+            [
+              28,
+              false
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              36,
+              false
+            ]
+          ]
+        },
+        "from": 9,
+        "glitched": false,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {},
+        "to": 2
+      },
+      "candidate": {
+        "changes": {
+          "driver:c": [
+            [
+              32,
+              false
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              20,
+              false
+            ],
+            [
+              28,
+              true
+            ],
+            [
+              32,
+              false
+            ]
+          ]
+        },
+        "from": 9,
+        "glitched": true,
+        "last_driver_change_tick": 32,
+        "pulse_widths": {
+          "f": [
+            4
+          ]
+        },
+        "to": 2
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              36,
+              false
+            ]
+          ],
+          "driver:b": [
+            [
+              28,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              22,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              34,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              30,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              36,
+              false
+            ]
+          ]
+        },
+        "from": 9,
+        "glitched": false,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {},
+        "to": 10
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              40,
+              false
+            ]
+          ],
+          "driver:b": [
+            [
+              32,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              38,
+              false
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ],
+            [
+              30,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              32,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              40,
+              false
+            ]
+          ]
+        },
+        "from": 9,
+        "glitched": true,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {
+          "e": [
+            4
+          ]
+        },
+        "to": 10
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              20,
+              false
+            ]
+          ],
+          "driver:b": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              20,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              28,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              24,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              30,
+              false
+            ]
+          ]
+        },
+        "from": 9,
+        "glitched": false,
+        "last_driver_change_tick": 30,
+        "pulse_widths": {},
+        "to": 12
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              24,
+              false
+            ]
+          ],
+          "driver:b": [
+            [
+              30,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              22,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              28,
+              false
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ],
+            [
+              28,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              28,
+              false
+            ]
+          ]
+        },
+        "from": 9,
+        "glitched": true,
+        "last_driver_change_tick": 30,
+        "pulse_widths": {
+          "e": [
+            2
+          ]
+        },
+        "to": 12
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              20,
+              false
+            ]
+          ],
+          "driver:b": [
+            [
+              22,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              20,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              32,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              24,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              30,
+              false
+            ]
+          ]
+        },
+        "from": 9,
+        "glitched": false,
+        "last_driver_change_tick": 32,
+        "pulse_widths": {},
+        "to": 14
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              24,
+              false
+            ]
+          ],
+          "driver:b": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:c": [
+            [
+              22,
+              false
+            ]
+          ],
+          "driver:d": [
+            [
+              30,
+              false
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ],
+            [
+              28,
+              false
+            ]
+          ],
+          "driver:f": [
+            [
+              26,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              28,
+              false
+            ]
+          ]
+        },
+        "from": 9,
+        "glitched": true,
+        "last_driver_change_tick": 30,
+        "pulse_widths": {
+          "e": [
+            2
+          ]
+        },
+        "to": 14
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:b": [
+            [
+              24,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              18,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              30,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              36,
+              true
+            ]
+          ]
+        },
+        "from": 11,
+        "glitched": false,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {},
+        "to": 0
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              32,
+              true
+            ],
+            [
+              34,
+              false
+            ],
+            [
+              36,
+              true
+            ]
+          ],
+          "driver:b": [
+            [
+              24,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              18,
+              true
+            ],
+            [
+              26,
+              false
+            ],
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              30,
+              true
+            ],
+            [
+              32,
+              false
+            ],
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              36,
+              true
+            ]
+          ]
+        },
+        "from": 11,
+        "glitched": true,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {
+          "a": [
+            2
+          ],
+          "c": [
+            6
+          ],
+          "d": [
+            2
+          ]
+        },
+        "to": 0
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:b": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              20,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              30,
+              true
+            ]
+          ]
+        },
+        "from": 12,
+        "glitched": false,
+        "last_driver_change_tick": 32,
+        "pulse_widths": {},
+        "to": 3
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:b": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              22,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              30,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              26,
+              true
+            ],
+            [
+              28,
+              false
+            ]
+          ],
+          "driver:g": [
+            [
+              28,
+              true
+            ]
+          ]
+        },
+        "from": 12,
+        "glitched": true,
+        "last_driver_change_tick": 32,
+        "pulse_widths": {
+          "f": [
+            2
+          ]
+        },
+        "to": 3
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              20,
+              true
+            ]
+          ],
+          "driver:b": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              20,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              30,
+              true
+            ]
+          ]
+        },
+        "from": 13,
+        "glitched": false,
+        "last_driver_change_tick": 32,
+        "pulse_widths": {},
+        "to": 3
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              24,
+              true
+            ]
+          ],
+          "driver:b": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              22,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              30,
+              true
+            ],
+            [
+              34,
+              false
+            ],
+            [
+              38,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              28,
+              true
+            ],
+            [
+              36,
+              false
+            ],
+            [
+              40,
+              true
+            ]
+          ]
+        },
+        "from": 13,
+        "glitched": true,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {
+          "d": [
+            4
+          ],
+          "g": [
+            4
+          ]
+        },
+        "to": 3
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              22,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              22,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              32,
+              true
+            ]
+          ]
+        },
+        "from": 13,
+        "glitched": false,
+        "last_driver_change_tick": 34,
+        "pulse_widths": {},
+        "to": 6
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              28,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              38,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              30,
+              true
+            ],
+            [
+              36,
+              false
+            ],
+            [
+              40,
+              true
+            ]
+          ],
+          "driver:g": [
+            [
+              32,
+              true
+            ],
+            [
+              36,
+              false
+            ],
+            [
+              40,
+              true
+            ]
+          ]
+        },
+        "from": 13,
+        "glitched": true,
+        "last_driver_change_tick": 40,
+        "pulse_widths": {
+          "f": [
+            4
+          ],
+          "g": [
+            4
+          ]
+        },
+        "to": 6
+      }
+    },
+    {
+      "baseline": {
+        "changes": {
+          "driver:a": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:b": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              20,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              26,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              36,
+              true
+            ]
+          ]
+        },
+        "from": 15,
+        "glitched": false,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {},
+        "to": 0
+      },
+      "candidate": {
+        "changes": {
+          "driver:a": [
+            [
+              32,
+              true
+            ],
+            [
+              34,
+              false
+            ],
+            [
+              36,
+              true
+            ]
+          ],
+          "driver:b": [
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:c": [
+            [
+              22,
+              true
+            ],
+            [
+              26,
+              false
+            ],
+            [
+              32,
+              true
+            ]
+          ],
+          "driver:d": [
+            [
+              34,
+              true
+            ]
+          ],
+          "driver:e": [
+            [
+              28,
+              true
+            ]
+          ],
+          "driver:f": [
+            [
+              36,
+              true
+            ]
+          ]
+        },
+        "from": 15,
+        "glitched": true,
+        "last_driver_change_tick": 36,
+        "pulse_widths": {
+          "a": [
+            2
+          ],
+          "c": [
+            6
+          ]
+        },
+        "to": 0
+      }
+    }
+  ]
+}
