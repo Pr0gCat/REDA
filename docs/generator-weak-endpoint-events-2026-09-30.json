@@ -1,0 +1,1469 @@
+{
+  "candidate_b_wire_always_correct": true,
+  "control_backfeed_phases": 8,
+  "different_target_traces": 3,
+  "phases": [
+    {
+      "arm": 0,
+      "events": [],
+      "from": 0,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 0,
+      "to": 0,
+      "vector": 0
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 0,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 0,
+      "to": 0,
+      "vector": 0
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 0,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 0,
+      "to": 0,
+      "vector": 0
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 0,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 0,
+      "to": 0,
+      "vector": 0
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 0,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 0,
+      "to": 1,
+      "vector": 0
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "b_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": false
+        }
+      ],
+      "from": 0,
+      "phase": 1,
+      "settle_ticks": 4,
+      "start_tick": 0,
+      "to": 1,
+      "vector": 1
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 0,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 0,
+      "to": 1,
+      "vector": 0
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": false
+        }
+      ],
+      "from": 0,
+      "phase": 1,
+      "settle_ticks": 4,
+      "start_tick": 0,
+      "to": 1,
+      "vector": 1
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "b_landing",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": true
+        }
+      ],
+      "from": 0,
+      "phase": 0,
+      "settle_ticks": 4,
+      "start_tick": 4,
+      "to": 2,
+      "vector": 0
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 0,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 8,
+      "to": 2,
+      "vector": 2
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": true
+        }
+      ],
+      "from": 0,
+      "phase": 0,
+      "settle_ticks": 4,
+      "start_tick": 4,
+      "to": 2,
+      "vector": 0
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 0,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 8,
+      "to": 2,
+      "vector": 2
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": true
+        }
+      ],
+      "from": 0,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 10,
+      "to": 3,
+      "vector": 0
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 0,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 12,
+      "to": 3,
+      "vector": 3
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": true
+        }
+      ],
+      "from": 0,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 10,
+      "to": 3,
+      "vector": 0
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 0,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 12,
+      "to": 3,
+      "vector": 3
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 1,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 14,
+      "to": 0,
+      "vector": 1
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "b_landing",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": true
+        }
+      ],
+      "from": 1,
+      "phase": 1,
+      "settle_ticks": 4,
+      "start_tick": 14,
+      "to": 0,
+      "vector": 0
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 1,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 14,
+      "to": 0,
+      "vector": 1
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": true
+        }
+      ],
+      "from": 1,
+      "phase": 1,
+      "settle_ticks": 4,
+      "start_tick": 14,
+      "to": 0,
+      "vector": 0
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "b_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": false
+        }
+      ],
+      "from": 1,
+      "phase": 0,
+      "settle_ticks": 4,
+      "start_tick": 18,
+      "to": 1,
+      "vector": 1
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 1,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 22,
+      "to": 1,
+      "vector": 1
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": false
+        }
+      ],
+      "from": 1,
+      "phase": 0,
+      "settle_ticks": 4,
+      "start_tick": 18,
+      "to": 1,
+      "vector": 1
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 1,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 22,
+      "to": 1,
+      "vector": 1
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 1,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 22,
+      "to": 2,
+      "vector": 1
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 1,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 22,
+      "to": 2,
+      "vector": 2
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 1,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 22,
+      "to": 2,
+      "vector": 1
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 1,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 22,
+      "to": 2,
+      "vector": 2
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "b_landing",
+          "tick": 2,
+          "value": true
+        }
+      ],
+      "from": 1,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 24,
+      "to": 3,
+      "vector": 1
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 1,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 26,
+      "to": 3,
+      "vector": 3
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": false
+        }
+      ],
+      "from": 1,
+      "phase": 0,
+      "settle_ticks": 4,
+      "start_tick": 24,
+      "to": 3,
+      "vector": 1
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 1,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 28,
+      "to": 3,
+      "vector": 3
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 2,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 26,
+      "to": 0,
+      "vector": 2
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": true
+        }
+      ],
+      "from": 2,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 28,
+      "to": 0,
+      "vector": 0
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 2,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 28,
+      "to": 0,
+      "vector": 2
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "gate",
+          "tick": 34,
+          "value": true
+        }
+      ],
+      "from": 2,
+      "phase": 1,
+      "settle_ticks": 34,
+      "start_tick": 30,
+      "to": 0,
+      "vector": 0
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 2,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 30,
+      "to": 1,
+      "vector": 2
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "b_landing",
+          "tick": 2,
+          "value": true
+        }
+      ],
+      "from": 2,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 32,
+      "to": 1,
+      "vector": 1
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 2,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 64,
+      "to": 1,
+      "vector": 2
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": false
+        }
+      ],
+      "from": 2,
+      "phase": 1,
+      "settle_ticks": 4,
+      "start_tick": 66,
+      "to": 1,
+      "vector": 1
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 2,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 34,
+      "to": 2,
+      "vector": 2
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 2,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 36,
+      "to": 2,
+      "vector": 2
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 2,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 70,
+      "to": 2,
+      "vector": 2
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 2,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 72,
+      "to": 2,
+      "vector": 2
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 2,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 36,
+      "to": 3,
+      "vector": 2
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        }
+      ],
+      "from": 2,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 36,
+      "to": 3,
+      "vector": 3
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 2,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 72,
+      "to": 3,
+      "vector": 2
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        }
+      ],
+      "from": 2,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 72,
+      "to": 3,
+      "vector": 3
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 3,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 38,
+      "to": 0,
+      "vector": 3
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "b_landing",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "gate",
+          "tick": 26,
+          "value": true
+        }
+      ],
+      "from": 3,
+      "phase": 1,
+      "settle_ticks": 26,
+      "start_tick": 38,
+      "to": 0,
+      "vector": 0
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 3,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 74,
+      "to": 0,
+      "vector": 3
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "gate",
+          "tick": 4,
+          "value": true
+        }
+      ],
+      "from": 3,
+      "phase": 1,
+      "settle_ticks": 4,
+      "start_tick": 74,
+      "to": 0,
+      "vector": 0
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 3,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 64,
+      "to": 1,
+      "vector": 3
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 3,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 66,
+      "to": 1,
+      "vector": 1
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "b_landing",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "gate",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 3,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 78,
+      "to": 1,
+      "vector": 3
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 3,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 80,
+      "to": 1,
+      "vector": 1
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 3,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 66,
+      "to": 2,
+      "vector": 3
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 3,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 66,
+      "to": 2,
+      "vector": 2
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 3,
+      "phase": 0,
+      "settle_ticks": 0,
+      "start_tick": 80,
+      "to": 2,
+      "vector": 3
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": false
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": false
+        }
+      ],
+      "from": 3,
+      "phase": 1,
+      "settle_ticks": 2,
+      "start_tick": 80,
+      "to": 2,
+      "vector": 2
+    },
+    {
+      "arm": 0,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 1,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        }
+      ],
+      "from": 3,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 68,
+      "to": 3,
+      "vector": 3
+    },
+    {
+      "arm": 0,
+      "events": [],
+      "from": 3,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 70,
+      "to": 3,
+      "vector": 3
+    },
+    {
+      "arm": 1,
+      "events": [
+        {
+          "label": "a_previous",
+          "tick": 2,
+          "value": true
+        },
+        {
+          "label": "a_landing",
+          "tick": 2,
+          "value": true
+        }
+      ],
+      "from": 3,
+      "phase": 0,
+      "settle_ticks": 2,
+      "start_tick": 82,
+      "to": 3,
+      "vector": 3
+    },
+    {
+      "arm": 1,
+      "events": [],
+      "from": 3,
+      "phase": 1,
+      "settle_ticks": 0,
+      "start_tick": 84,
+      "to": 3,
+      "vector": 3
+    }
+  ],
+  "physical_truth_correct": true,
+  "setup_phases_per_arm": 16,
+  "target_transitions_per_arm": 16,
+  "traces": [
+    {
+      "control": [],
+      "different": false,
+      "from": 0,
+      "to": 0,
+      "weak": []
+    },
+    {
+      "control": [
+        [
+          4,
+          false
+        ]
+      ],
+      "different": false,
+      "from": 0,
+      "to": 1,
+      "weak": [
+        [
+          4,
+          false
+        ]
+      ]
+    },
+    {
+      "control": [
+        [
+          2,
+          false
+        ]
+      ],
+      "different": false,
+      "from": 0,
+      "to": 2,
+      "weak": [
+        [
+          2,
+          false
+        ]
+      ]
+    },
+    {
+      "control": [
+        [
+          2,
+          false
+        ]
+      ],
+      "different": false,
+      "from": 0,
+      "to": 3,
+      "weak": [
+        [
+          2,
+          false
+        ]
+      ]
+    },
+    {
+      "control": [
+        [
+          4,
+          true
+        ]
+      ],
+      "different": false,
+      "from": 1,
+      "to": 0,
+      "weak": [
+        [
+          4,
+          true
+        ]
+      ]
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 1,
+      "to": 1,
+      "weak": []
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 1,
+      "to": 2,
+      "weak": []
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 1,
+      "to": 3,
+      "weak": []
+    },
+    {
+      "control": [
+        [
+          2,
+          true
+        ]
+      ],
+      "different": true,
+      "from": 2,
+      "to": 0,
+      "weak": [
+        [
+          34,
+          true
+        ]
+      ]
+    },
+    {
+      "control": [],
+      "different": true,
+      "from": 2,
+      "to": 1,
+      "weak": [
+        [
+          2,
+          true
+        ],
+        [
+          4,
+          false
+        ]
+      ]
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 2,
+      "to": 2,
+      "weak": []
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 2,
+      "to": 3,
+      "weak": []
+    },
+    {
+      "control": [
+        [
+          26,
+          true
+        ]
+      ],
+      "different": true,
+      "from": 3,
+      "to": 0,
+      "weak": [
+        [
+          4,
+          true
+        ]
+      ]
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 3,
+      "to": 1,
+      "weak": []
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 3,
+      "to": 2,
+      "weak": []
+    },
+    {
+      "control": [],
+      "different": false,
+      "from": 3,
+      "to": 3,
+      "weak": []
+    }
+  ],
+  "recovery_evidence": [
+    {
+      "arm": 0,
+      "start_tick": 28,
+      "first_torch_due": 30,
+      "prior_observed_gate_changes": [
+        4,
+        8,
+        10,
+        12,
+        14,
+        18,
+        22
+      ],
+      "recent_at_first_due": 7,
+      "actual_on_tick": 30,
+      "recent_before_actual_on": 7
+    },
+    {
+      "arm": 1,
+      "start_tick": 30,
+      "first_torch_due": 32,
+      "prior_observed_gate_changes": [
+        4,
+        8,
+        10,
+        12,
+        14,
+        18,
+        22,
+        26,
+        28
+      ],
+      "recent_at_first_due": 9,
+      "actual_on_tick": 64,
+      "recent_before_actual_on": 8
+    }
+  ]
+}

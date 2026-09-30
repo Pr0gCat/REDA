@@ -53,11 +53,17 @@ fn main() {
     ];
     for sim in &mut sims {
         sim.run_until_stable(2000).unwrap();
-        sim.attach_observer([(Position::new(5, 1, 4), "gate".to_owned())]);
+        sim.attach_observer([
+            (Position::new(5, 1, 4), "gate".to_owned()),
+            (Position::new(3, 1, 5), "a_previous".to_owned()),
+            (Position::new(4, 1, 5), "a_landing".to_owned()),
+            (Position::new(6, 1, 5), "b_landing".to_owned()),
+        ]);
     }
     let mut witnessed_backfeed = 0;
     let mut mismatches = 0;
     let mut records = Vec::new();
+    let mut phases = Vec::new();
     for from in 0..4usize {
         for to in 0..4usize {
             let mut traces = Vec::new();
@@ -70,7 +76,9 @@ fn main() {
                     }
                     sim.reset_observer();
                     let start = sim.current_tick();
-                    sim.run_until_stable(2000).unwrap();
+                    let settling = sim.run_until_stable(2000).unwrap();
+                    phases.push(serde_json::json!({"arm":arm,"from":from,"to":to,"phase":phase,"vector":vector,"start_tick":start,"settle_ticks":settling,
+                        "events":sim.observations().iter().map(|e| serde_json::json!({"label":e.label,"tick":e.tick-start,"value":e.value})).collect::<Vec<_>>() }));
                     assert_eq!(
                         sim.world().get(5, 1, 4).lit,
                         vector == 0,
@@ -94,6 +102,7 @@ fn main() {
                         traces.push(
                             sim.observations()
                                 .iter()
+                                .filter(|e| e.label == "gate")
                                 .map(|e| (e.tick - start, e.value))
                                 .collect::<Vec<_>>(),
                         );
@@ -106,8 +115,16 @@ fn main() {
         }
     }
     assert_eq!(witnessed_backfeed, 8);
-    println!(
-        "{}",
-        serde_json::json!({"physical_truth_correct":true,"candidate_b_wire_always_correct":true,"control_backfeed_phases":witnessed_backfeed,"different_target_traces":mismatches,"target_transitions_per_arm":16,"setup_phases_per_arm":16,"traces":records})
+    let report = serde_json::json!({"physical_truth_correct":true,"candidate_b_wire_always_correct":true,"control_backfeed_phases":witnessed_backfeed,"different_target_traces":mismatches,"target_transitions_per_arm":16,"setup_phases_per_arm":16,"traces":records,"phases":phases});
+    let baseline: serde_json::Value = serde_json::from_str(include_str!(
+        "../docs/generator-weak-endpoint-comparison-2026-09-30.json"
+    ))
+    .unwrap();
+    let mut summary = report.clone();
+    summary.as_object_mut().unwrap().remove("phases");
+    assert_eq!(
+        summary, baseline,
+        "instrumentation must preserve the independently frozen output events"
     );
+    println!("{report}");
 }
