@@ -47,10 +47,15 @@ fn endpoint(weak: bool) -> World {
 }
 
 fn main() {
-    let mut sims = [
-        Simulator::new(endpoint(false)),
-        Simulator::new(endpoint(true)),
-    ];
+    let balanced = std::env::args().nth(1).as_deref() == Some("balanced");
+    let mut candidate = endpoint(true);
+    if balanced {
+        let mut r = block(BlockKind::Repeater);
+        r.facing = Some(Facing::East);
+        r.delay = 1;
+        candidate.set(7, 1, 5, r);
+    }
+    let mut sims = [Simulator::new(endpoint(false)), Simulator::new(candidate)];
     for sim in &mut sims {
         sim.run_until_stable(2000).unwrap();
         sim.attach_observer([
@@ -87,6 +92,11 @@ fn main() {
                     let b_wire = sim.world().get(6, 1, 5).power > 0;
                     if arm == 1 {
                         assert_eq!(
+                            sim.world().get(4, 1, 5).power > 0,
+                            vector & 1 != 0,
+                            "candidate must preserve independent a wire"
+                        );
+                        assert_eq!(
                             b_wire,
                             vector & 2 != 0,
                             "weak arm must preserve the independent b wire"
@@ -122,9 +132,45 @@ fn main() {
     .unwrap();
     let mut summary = report.clone();
     summary.as_object_mut().unwrap().remove("phases");
-    assert_eq!(
-        summary, baseline,
-        "instrumentation must preserve the independently frozen output events"
-    );
+    for (actual, frozen) in report["traces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(baseline["traces"].as_array().unwrap())
+    {
+        assert_eq!(
+            actual["control"], frozen["control"],
+            "the independent control must remain unchanged"
+        );
+    }
+    if !balanced {
+        assert_eq!(
+            summary, baseline,
+            "instrumentation must preserve the independently frozen output events"
+        );
+    }
+    let mut report = report;
+    if balanced {
+        report["candidate_mode"] = serde_json::json!("balanced_weak_support");
+        report["all_candidate_input_landings_correct"] = serde_json::json!(true);
+        let quality: Vec<_> = (0..2).map(|arm| {
+            let target: Vec<_> = report["phases"].as_array().unwrap().iter()
+                .filter(|p| p["arm"] == arm && p["phase"] == 1).collect();
+            let events: Vec<_> = target.iter().map(|p| p["events"].as_array().unwrap().iter()
+                .filter(|e| e["label"] == "gate").collect::<Vec<_>>()).collect();
+            serde_json::json!({"worst_settle_ticks":target.iter().map(|p|p["settle_ticks"].as_u64().unwrap()).max().unwrap(),
+                "total_settle_ticks":target.iter().map(|p|p["settle_ticks"].as_u64().unwrap()).sum::<u64>(),
+                "worst_driver_change_ticks":events.iter().flatten().map(|e|e["tick"].as_u64().unwrap()).max().unwrap_or(0),
+                "driver_glitch_transitions":events.iter().filter(|e|e.len()>1).count(),
+                "driver_single_input_glitch_transitions":target.iter().zip(&events).filter(|(p,e)|e.len()>1 && (p["from"].as_u64().unwrap() ^ p["to"].as_u64().unwrap()).count_ones()==1).count()})
+        }).collect();
+        for (metric, value) in quality[1].as_object().unwrap() {
+            assert!(
+                value.as_u64().unwrap() <= quality[0][metric].as_u64().unwrap(),
+                "local endpoint metric regression: {metric}"
+            );
+        }
+        report["local_quality"] = serde_json::json!(quality);
+    }
     println!("{report}");
 }
