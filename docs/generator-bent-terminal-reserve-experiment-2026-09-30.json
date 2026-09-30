@@ -1,0 +1,4742 @@
+{
+  "base_commit": "3a232c5",
+  "status": "promising prototype withdrawn pending isolated integration and further verification",
+  "prototype_diff": "diff --git a/src/compile/mod.rs b/src/compile/mod.rs\nindex 44526c1..4535971 100644\n--- a/src/compile/mod.rs\n+++ b/src/compile/mod.rs\n@@ -2228,12 +2228,12 @@ pub(crate) fn plan_bent_path(\n     incoming_strength: u8,\n     reserve: i32,\n ) -> (Vec<bool>, u8) {\n-    let threshold = (MAX_DUST_RUN - reserve) as i64;\n+    let threshold = MAX_DUST_RUN as i64;\n     let mut is_repeater = vec![false; len];\n     let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);\n     let mut i = 0usize;\n     while i < len {\n-        if (i as i64) - last_refresh <= threshold {\n+        if (i as i64) - last_refresh <= threshold - if i + 1 == len { reserve as i64 } else { 0 } {\n             i += 1;\n             continue;\n         }\n",
+  "main_measurements": [
+    {
+      "case": "and4",
+      "frontend": "REDA",
+      "world_fingerprint": "60282d2bc95a521846f770c6268acc3acfee583acb28c2055a133954eacab952",
+      "worst_settle_ticks": 28,
+      "mean_settle_ticks": 6.56640625,
+      "worst_output_change_ticks": 16,
+      "glitch_transitions": 13,
+      "single_input_glitch_transitions": 0,
+      "driver_glitch_transitions": 13,
+      "driver_single_input_glitches": 0,
+      "worst_driver_change_ticks": 12,
+      "worst_driver_pulse_ticks": 8,
+      "total_driver_pulse_ticks": 64
+    },
+    {
+      "case": "and4",
+      "frontend": "Yosys-fresh",
+      "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+      "worst_settle_ticks": 22,
+      "mean_settle_ticks": 5.72265625,
+      "worst_output_change_ticks": 12,
+      "glitch_transitions": 0,
+      "single_input_glitch_transitions": 0,
+      "driver_glitch_transitions": 0,
+      "driver_single_input_glitches": 0,
+      "worst_driver_change_ticks": 8,
+      "worst_driver_pulse_ticks": 0,
+      "total_driver_pulse_ticks": 0
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "REDA",
+      "world_fingerprint": "f54ebef26fdd216dd24c27bc5008dbef0482a20cf37e1124b61f6d29a1ab8959",
+      "worst_settle_ticks": 44,
+      "mean_settle_ticks": 34.46484375,
+      "worst_output_change_ticks": 44,
+      "glitch_transitions": 85,
+      "single_input_glitch_transitions": 0,
+      "driver_glitch_transitions": 105,
+      "driver_single_input_glitches": 0,
+      "worst_driver_change_ticks": 40,
+      "worst_driver_pulse_ticks": 20,
+      "total_driver_pulse_ticks": 1520
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "Yosys-fresh",
+      "world_fingerprint": "0c9fed2d0ce96b78a1c76502a966544c77c6998e258142bb96fed02675d5a02e",
+      "worst_settle_ticks": 64,
+      "mean_settle_ticks": 48.05078125,
+      "worst_output_change_ticks": 64,
+      "glitch_transitions": 141,
+      "single_input_glitch_transitions": 17,
+      "driver_glitch_transitions": 146,
+      "driver_single_input_glitches": 18,
+      "worst_driver_change_ticks": 62,
+      "worst_driver_pulse_ticks": 24,
+      "total_driver_pulse_ticks": 2552
+    }
+  ],
+  "matrix_measurements": [
+    {
+      "case": "xor2",
+      "frontend": "native",
+      "lowered_gates": 5,
+      "mean_settle_ticks": 6.375,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 5,
+          "numerator": 193
+        },
+        "non_air_blocks": 193,
+        "occupied_max": {
+          "x": 31,
+          "y": 4,
+          "z": 39
+        },
+        "occupied_min": {
+          "x": 20,
+          "y": 0,
+          "z": 23
+        },
+        "occupied_volume": 1020
+      },
+      "planner": "Unified3d",
+      "repeaters": 6,
+      "source": "module xor2(input logic a,b, output logic y); assign y=a^b; endmodule",
+      "transitions": 16,
+      "world_fingerprint": "452be711b034b9f3ef938b5013b4e80dc8122410179d29b55d46c4908a21768c",
+      "worst_settle_ticks": 12
+    },
+    {
+      "case": "xor2",
+      "frontend": "yosys",
+      "lowered_gates": 5,
+      "mean_settle_ticks": 6.375,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 5,
+          "numerator": 193
+        },
+        "non_air_blocks": 193,
+        "occupied_max": {
+          "x": 31,
+          "y": 4,
+          "z": 39
+        },
+        "occupied_min": {
+          "x": 20,
+          "y": 0,
+          "z": 23
+        },
+        "occupied_volume": 1020
+      },
+      "planner": "Unified3d",
+      "repeaters": 6,
+      "source": "module xor2(input logic a,b, output logic y); assign y=a^b; endmodule",
+      "transitions": 16,
+      "world_fingerprint": "452be711b034b9f3ef938b5013b4e80dc8122410179d29b55d46c4908a21768c",
+      "worst_settle_ticks": 12
+    },
+    {
+      "case": "mux2",
+      "frontend": "native",
+      "lowered_gates": 6,
+      "mean_settle_ticks": 6.25,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 6,
+          "numerator": 174
+        },
+        "non_air_blocks": 174,
+        "occupied_max": {
+          "x": 47,
+          "y": 4,
+          "z": 42
+        },
+        "occupied_min": {
+          "x": 22,
+          "y": 0,
+          "z": 24
+        },
+        "occupied_volume": 2470
+      },
+      "planner": "Unified3d",
+      "repeaters": 3,
+      "source": "module mux2(input logic a,b,s, output logic y); assign y=s?b:a; endmodule",
+      "transitions": 64,
+      "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+      "worst_settle_ticks": 12
+    },
+    {
+      "case": "mux2",
+      "frontend": "yosys",
+      "lowered_gates": 6,
+      "mean_settle_ticks": 6.25,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 6,
+          "numerator": 174
+        },
+        "non_air_blocks": 174,
+        "occupied_max": {
+          "x": 47,
+          "y": 4,
+          "z": 42
+        },
+        "occupied_min": {
+          "x": 22,
+          "y": 0,
+          "z": 24
+        },
+        "occupied_volume": 2470
+      },
+      "planner": "Unified3d",
+      "repeaters": 3,
+      "source": "module mux2(input logic a,b,s, output logic y); assign y=s?b:a; endmodule",
+      "transitions": 64,
+      "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+      "worst_settle_ticks": 12
+    },
+    {
+      "case": "majority3",
+      "frontend": "native",
+      "lowered_gates": 8,
+      "mean_settle_ticks": 11.5,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 8,
+          "numerator": 588
+        },
+        "non_air_blocks": 588,
+        "occupied_max": {
+          "x": 44,
+          "y": 5,
+          "z": 53
+        },
+        "occupied_min": {
+          "x": 8,
+          "y": 0,
+          "z": 4
+        },
+        "occupied_volume": 11100
+      },
+      "planner": "Legacy",
+      "repeaters": 15,
+      "source": "module majority3(input logic a,b,c, output logic y); assign y=(a&b)|(a&c)|(b&c); endmodule",
+      "transitions": 64,
+      "world_fingerprint": "54e4951319859c0c93507d42fa350f564e27ac583776dfac45d6944aabdbd281",
+      "worst_settle_ticks": 18
+    },
+    {
+      "case": "majority3",
+      "frontend": "yosys",
+      "lowered_gates": 8,
+      "mean_settle_ticks": 15.046875,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 8,
+          "numerator": 792
+        },
+        "non_air_blocks": 792,
+        "occupied_max": {
+          "x": 60,
+          "y": 5,
+          "z": 61
+        },
+        "occupied_min": {
+          "x": 10,
+          "y": 0,
+          "z": 4
+        },
+        "occupied_volume": 17748
+      },
+      "planner": "Legacy",
+      "repeaters": 23,
+      "source": "module majority3(input logic a,b,c, output logic y); assign y=(a&b)|(a&c)|(b&c); endmodule",
+      "transitions": 64,
+      "world_fingerprint": "a61e1164bbcffd2882661f2a97092d2974fdac5a51cd2d552d95e5324f046c04",
+      "worst_settle_ticks": 26
+    }
+  ],
+  "remaining": [
+    "isolate endpoint policy from compile_legacy and pinned routing reference",
+    "determinism and DFF/route regression",
+    "commit generator only after all acceptance gates pass"
+  ],
+  "restoration": "main quality, shape matrix and five hazard traces passed; generator source restored",
+  "integration_caveat": "routing.rs also passes total staircase reserve to the shared planner; terminal reserve and staircase traversal reserve must be distinguished before production integration",
+  "observed_matrix_measurements": [
+    {
+      "case": "xor2",
+      "frontend": "native",
+      "lowered_gates": 5,
+      "mean_settle_ticks": 6.375,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 5,
+          "numerator": 193
+        },
+        "non_air_blocks": 193,
+        "occupied_max": {
+          "x": 31,
+          "y": 4,
+          "z": 39
+        },
+        "occupied_min": {
+          "x": 20,
+          "y": 0,
+          "z": 23
+        },
+        "occupied_volume": 1020
+      },
+      "planner": "Unified3d",
+      "repeaters": 6,
+      "signal_quality": {
+        "driver": {
+          "glitches": 1,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 2,
+          "worst_change_ticks": 8,
+          "worst_pulse_ticks": 2
+        },
+        "lamp": {
+          "glitches": 0,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 0,
+          "worst_change_ticks": 12,
+          "worst_pulse_ticks": 0
+        }
+      },
+      "source": "module xor2(input logic a,b, output logic y); assign y=a^b; endmodule",
+      "traces": [
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 1,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ],
+              [
+                8,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 2,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 2,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 2,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 2,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 3,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 3,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 3,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 3,
+          "to": 3
+        }
+      ],
+      "transitions": 16,
+      "world_fingerprint": "452be711b034b9f3ef938b5013b4e80dc8122410179d29b55d46c4908a21768c",
+      "worst_settle_ticks": 12
+    },
+    {
+      "case": "xor2",
+      "frontend": "yosys",
+      "lowered_gates": 5,
+      "mean_settle_ticks": 6.375,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 5,
+          "numerator": 193
+        },
+        "non_air_blocks": 193,
+        "occupied_max": {
+          "x": 31,
+          "y": 4,
+          "z": 39
+        },
+        "occupied_min": {
+          "x": 20,
+          "y": 0,
+          "z": 23
+        },
+        "occupied_volume": 1020
+      },
+      "planner": "Unified3d",
+      "repeaters": 6,
+      "signal_quality": {
+        "driver": {
+          "glitches": 1,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 2,
+          "worst_change_ticks": 8,
+          "worst_pulse_ticks": 2
+        },
+        "lamp": {
+          "glitches": 0,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 0,
+          "worst_change_ticks": 12,
+          "worst_pulse_ticks": 0
+        }
+      },
+      "source": "module xor2(input logic a,b, output logic y); assign y=a^b; endmodule",
+      "traces": [
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 1,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ],
+              [
+                8,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 2,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 2,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 2,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 2,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 3,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 3,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 3,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 3,
+          "to": 3
+        }
+      ],
+      "transitions": 16,
+      "world_fingerprint": "452be711b034b9f3ef938b5013b4e80dc8122410179d29b55d46c4908a21768c",
+      "worst_settle_ticks": 12
+    },
+    {
+      "case": "mux2",
+      "frontend": "native",
+      "lowered_gates": 6,
+      "mean_settle_ticks": 6.25,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 6,
+          "numerator": 174
+        },
+        "non_air_blocks": 174,
+        "occupied_max": {
+          "x": 47,
+          "y": 4,
+          "z": 42
+        },
+        "occupied_min": {
+          "x": 22,
+          "y": 0,
+          "z": 24
+        },
+        "occupied_volume": 2470
+      },
+      "planner": "Unified3d",
+      "repeaters": 3,
+      "signal_quality": {
+        "driver": {
+          "glitches": 6,
+          "single_input_glitches": 1,
+          "total_pulse_ticks": 16,
+          "worst_change_ticks": 8,
+          "worst_pulse_ticks": 4
+        },
+        "lamp": {
+          "glitches": 4,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 12,
+          "worst_change_ticks": 12,
+          "worst_pulse_ticks": 5
+        }
+      },
+      "source": "module mux2(input logic a,b,s, output logic y); assign y=s?b:a; endmodule",
+      "traces": [
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 1,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 1,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ],
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ],
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ],
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ],
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 7
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ],
+              [
+                6,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 3,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ],
+              [
+                6,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 3,
+          "to": 7
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                true
+              ],
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                5,
+                true
+              ],
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                5,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 5,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                true
+              ],
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                5,
+                true
+              ],
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                5,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 5,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 5,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 5,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 5,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 5,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 7
+        }
+      ],
+      "transitions": 64,
+      "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+      "worst_settle_ticks": 12
+    },
+    {
+      "case": "mux2",
+      "frontend": "yosys",
+      "lowered_gates": 6,
+      "mean_settle_ticks": 6.25,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 6,
+          "numerator": 174
+        },
+        "non_air_blocks": 174,
+        "occupied_max": {
+          "x": 47,
+          "y": 4,
+          "z": 42
+        },
+        "occupied_min": {
+          "x": 22,
+          "y": 0,
+          "z": 24
+        },
+        "occupied_volume": 2470
+      },
+      "planner": "Unified3d",
+      "repeaters": 3,
+      "signal_quality": {
+        "driver": {
+          "glitches": 6,
+          "single_input_glitches": 1,
+          "total_pulse_ticks": 16,
+          "worst_change_ticks": 8,
+          "worst_pulse_ticks": 4
+        },
+        "lamp": {
+          "glitches": 4,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 12,
+          "worst_change_ticks": 12,
+          "worst_pulse_ticks": 5
+        }
+      },
+      "source": "module mux2(input logic a,b,s, output logic y); assign y=s?b:a; endmodule",
+      "traces": [
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 1,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 1,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ],
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ],
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ],
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ],
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 7
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                8,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ],
+              [
+                6,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 3,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                false
+              ],
+              [
+                6,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 3,
+          "to": 7
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                7,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                true
+              ],
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                5,
+                true
+              ],
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                5,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 5,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                true
+              ],
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                5,
+                true
+              ],
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                4,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                5,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 5,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 5,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 5,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 5,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                9,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 5,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                6,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                10,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                8,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                12,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 7
+        }
+      ],
+      "transitions": 64,
+      "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+      "worst_settle_ticks": 12
+    },
+    {
+      "case": "majority3",
+      "frontend": "native",
+      "lowered_gates": 8,
+      "mean_settle_ticks": 11.5,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 8,
+          "numerator": 588
+        },
+        "non_air_blocks": 588,
+        "occupied_max": {
+          "x": 44,
+          "y": 5,
+          "z": 53
+        },
+        "occupied_min": {
+          "x": 8,
+          "y": 0,
+          "z": 4
+        },
+        "occupied_volume": 11100
+      },
+      "planner": "Legacy",
+      "repeaters": 15,
+      "signal_quality": {
+        "driver": {
+          "glitches": 2,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 4,
+          "worst_change_ticks": 14,
+          "worst_pulse_ticks": 2
+        },
+        "lamp": {
+          "glitches": 0,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 0,
+          "worst_change_ticks": 18,
+          "worst_pulse_ticks": 0
+        }
+      },
+      "source": "module majority3(input logic a,b,c, output logic y); assign y=(a&b)|(a&c)|(b&c); endmodule",
+      "traces": [
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 7
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 1,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 1,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 1,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 1,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 7
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 7
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 5,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 5,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 5,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 5,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                16,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                16,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                16,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                false
+              ],
+              [
+                14,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 6,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                16,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                false
+              ],
+              [
+                14,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 6,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 7
+        }
+      ],
+      "transitions": 64,
+      "world_fingerprint": "54e4951319859c0c93507d42fa350f564e27ac583776dfac45d6944aabdbd281",
+      "worst_settle_ticks": 18
+    },
+    {
+      "case": "majority3",
+      "frontend": "yosys",
+      "lowered_gates": 8,
+      "mean_settle_ticks": 15.046875,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 8,
+          "numerator": 792
+        },
+        "non_air_blocks": 792,
+        "occupied_max": {
+          "x": 60,
+          "y": 5,
+          "z": 61
+        },
+        "occupied_min": {
+          "x": 10,
+          "y": 0,
+          "z": 4
+        },
+        "occupied_volume": 17748
+      },
+      "planner": "Legacy",
+      "repeaters": 23,
+      "signal_quality": {
+        "driver": {
+          "glitches": 7,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 32,
+          "worst_change_ticks": 22,
+          "worst_pulse_ticks": 8
+        },
+        "lamp": {
+          "glitches": 5,
+          "single_input_glitches": 0,
+          "total_pulse_ticks": 25,
+          "worst_change_ticks": 26,
+          "worst_pulse_ticks": 11
+        }
+      },
+      "source": "module majority3(input logic a,b,c, output logic y); assign y=(a&b)|(a&c)|(b&c); endmodule",
+      "traces": [
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 0,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                22,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                23,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                18,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                19,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 0,
+          "to": 7
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 1,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 1,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ],
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ],
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ],
+              [
+                22,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ],
+              [
+                26,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 1,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                13,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 1,
+          "to": 7
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 2,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ],
+              [
+                18,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ],
+              [
+                22,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 2,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ],
+              [
+                18,
+                false
+              ],
+              [
+                22,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ],
+              [
+                22,
+                false
+              ],
+              [
+                23,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 2,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                16,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                16,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                false
+              ],
+              [
+                14,
+                true
+              ],
+              [
+                22,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                26,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 3,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                12,
+                false
+              ],
+              [
+                14,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 3,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 3,
+          "to": 7
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 0
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 1
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 2
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 3
+        },
+        {
+          "changes": {},
+          "expected": false,
+          "from": 4,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                22,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                23,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 5
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                18,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                19,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 6
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                15,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 4,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 5,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                22,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                26,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 5,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 5,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 5,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 5,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                18,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                22,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 6,
+          "to": 4
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                18,
+                false
+              ],
+              [
+                22,
+                true
+              ]
+            ],
+            "lamp": [
+              [
+                22,
+                false
+              ],
+              [
+                23,
+                true
+              ]
+            ]
+          },
+          "expected": true,
+          "from": 6,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 6,
+          "to": 7
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 0
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 1
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                14,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                18,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 2
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 3
+        },
+        {
+          "changes": {
+            "driver": [
+              [
+                22,
+                false
+              ]
+            ],
+            "lamp": [
+              [
+                26,
+                false
+              ]
+            ]
+          },
+          "expected": false,
+          "from": 7,
+          "to": 4
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 5
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 6
+        },
+        {
+          "changes": {},
+          "expected": true,
+          "from": 7,
+          "to": 7
+        }
+      ],
+      "transitions": 64,
+      "world_fingerprint": "a61e1164bbcffd2882661f2a97092d2974fdac5a51cd2d552d95e5324f046c04",
+      "worst_settle_ticks": 26
+    }
+  ],
+  "exact_router_alternative": {
+    "status": "rejected; majority native lamp glitches 0 -> 1, driver total pulse ticks 4 -> 8",
+    "comparison": [
+      {
+        "case": "xor2",
+        "frontend": "native",
+        "baseline": {
+          "lamp": {
+            "glitches": 2,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 14,
+            "total_pulse_ticks": 6,
+            "worst_pulse_ticks": 5
+          },
+          "driver": {
+            "glitches": 2,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 10,
+            "total_pulse_ticks": 6,
+            "worst_pulse_ticks": 4
+          }
+        },
+        "candidate": {
+          "lamp": {
+            "glitches": 1,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 12,
+            "total_pulse_ticks": 5,
+            "worst_pulse_ticks": 5
+          },
+          "driver": {
+            "glitches": 2,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 8,
+            "total_pulse_ticks": 4,
+            "worst_pulse_ticks": 2
+          }
+        }
+      },
+      {
+        "case": "xor2",
+        "frontend": "yosys",
+        "baseline": {
+          "lamp": {
+            "glitches": 2,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 14,
+            "total_pulse_ticks": 6,
+            "worst_pulse_ticks": 5
+          },
+          "driver": {
+            "glitches": 2,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 10,
+            "total_pulse_ticks": 6,
+            "worst_pulse_ticks": 4
+          }
+        },
+        "candidate": {
+          "lamp": {
+            "glitches": 1,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 12,
+            "total_pulse_ticks": 5,
+            "worst_pulse_ticks": 5
+          },
+          "driver": {
+            "glitches": 2,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 8,
+            "total_pulse_ticks": 4,
+            "worst_pulse_ticks": 2
+          }
+        }
+      },
+      {
+        "case": "mux2",
+        "frontend": "native",
+        "baseline": {
+          "lamp": {
+            "glitches": 4,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 12,
+            "total_pulse_ticks": 12,
+            "worst_pulse_ticks": 5
+          },
+          "driver": {
+            "glitches": 6,
+            "single_input_glitches": 1,
+            "worst_change_ticks": 8,
+            "total_pulse_ticks": 16,
+            "worst_pulse_ticks": 4
+          }
+        },
+        "candidate": {
+          "lamp": {
+            "glitches": 2,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 10,
+            "total_pulse_ticks": 10,
+            "worst_pulse_ticks": 5
+          },
+          "driver": {
+            "glitches": 6,
+            "single_input_glitches": 1,
+            "worst_change_ticks": 6,
+            "total_pulse_ticks": 12,
+            "worst_pulse_ticks": 2
+          }
+        }
+      },
+      {
+        "case": "mux2",
+        "frontend": "yosys",
+        "baseline": {
+          "lamp": {
+            "glitches": 4,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 12,
+            "total_pulse_ticks": 12,
+            "worst_pulse_ticks": 5
+          },
+          "driver": {
+            "glitches": 6,
+            "single_input_glitches": 1,
+            "worst_change_ticks": 8,
+            "total_pulse_ticks": 16,
+            "worst_pulse_ticks": 4
+          }
+        },
+        "candidate": {
+          "lamp": {
+            "glitches": 2,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 10,
+            "total_pulse_ticks": 10,
+            "worst_pulse_ticks": 5
+          },
+          "driver": {
+            "glitches": 6,
+            "single_input_glitches": 1,
+            "worst_change_ticks": 6,
+            "total_pulse_ticks": 12,
+            "worst_pulse_ticks": 2
+          }
+        }
+      },
+      {
+        "case": "majority3",
+        "frontend": "native",
+        "baseline": {
+          "lamp": {
+            "glitches": 0,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 18,
+            "total_pulse_ticks": 0,
+            "worst_pulse_ticks": 0
+          },
+          "driver": {
+            "glitches": 2,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 14,
+            "total_pulse_ticks": 4,
+            "worst_pulse_ticks": 2
+          }
+        },
+        "candidate": {
+          "lamp": {
+            "glitches": 1,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 14,
+            "total_pulse_ticks": 7,
+            "worst_pulse_ticks": 7
+          },
+          "driver": {
+            "glitches": 3,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 10,
+            "total_pulse_ticks": 8,
+            "worst_pulse_ticks": 4
+          }
+        }
+      },
+      {
+        "case": "majority3",
+        "frontend": "yosys",
+        "baseline": {
+          "lamp": {
+            "glitches": 5,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 26,
+            "total_pulse_ticks": 25,
+            "worst_pulse_ticks": 11
+          },
+          "driver": {
+            "glitches": 7,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 22,
+            "total_pulse_ticks": 32,
+            "worst_pulse_ticks": 8
+          }
+        },
+        "candidate": {
+          "lamp": {
+            "glitches": 5,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 26,
+            "total_pulse_ticks": 25,
+            "worst_pulse_ticks": 11
+          },
+          "driver": {
+            "glitches": 7,
+            "single_input_glitches": 0,
+            "worst_change_ticks": 22,
+            "total_pulse_ticks": 32,
+            "worst_pulse_ticks": 8
+          }
+        }
+      }
+    ]
+  }
+}

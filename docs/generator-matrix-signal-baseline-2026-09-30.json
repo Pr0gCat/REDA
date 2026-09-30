@@ -1,0 +1,139 @@
+{
+  "generator_commit": "0de792e",
+  "base_commit": "3a232c5",
+  "sampling": "end of each game tick; dust power > 0; finite wrong-target intervals between changes; initial propagation excluded",
+  "measurements": [
+    {
+      "case": "xor2",
+      "frontend": "native",
+      "world_fingerprint": "b4d680036c11035e124b82ba20e593c488453dd3a34d15a11d1d2b534471342b",
+      "transitions": 16,
+      "signal_quality": {
+        "lamp": {
+          "glitches": 2,
+          "single_input_glitches": 0,
+          "worst_change_ticks": 14,
+          "total_pulse_ticks": 6,
+          "worst_pulse_ticks": 5
+        },
+        "driver": {
+          "glitches": 2,
+          "single_input_glitches": 0,
+          "worst_change_ticks": 10,
+          "total_pulse_ticks": 6,
+          "worst_pulse_ticks": 4
+        }
+      }
+    },
+    {
+      "case": "xor2",
+      "frontend": "yosys",
+      "world_fingerprint": "b4d680036c11035e124b82ba20e593c488453dd3a34d15a11d1d2b534471342b",
+      "transitions": 16,
+      "signal_quality": {
+        "lamp": {
+          "glitches": 2,
+          "single_input_glitches": 0,
+          "worst_change_ticks": 14,
+          "total_pulse_ticks": 6,
+          "worst_pulse_ticks": 5
+        },
+        "driver": {
+          "glitches": 2,
+          "single_input_glitches": 0,
+          "worst_change_ticks": 10,
+          "total_pulse_ticks": 6,
+          "worst_pulse_ticks": 4
+        }
+      }
+    },
+    {
+      "case": "mux2",
+      "frontend": "native",
+      "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+      "transitions": 64,
+      "signal_quality": {
+        "lamp": {
+          "glitches": 4,
+          "single_input_glitches": 0,
+          "worst_change_ticks": 12,
+          "total_pulse_ticks": 12,
+          "worst_pulse_ticks": 5
+        },
+        "driver": {
+          "glitches": 6,
+          "single_input_glitches": 1,
+          "worst_change_ticks": 8,
+          "total_pulse_ticks": 16,
+          "worst_pulse_ticks": 4
+        }
+      }
+    },
+    {
+      "case": "mux2",
+      "frontend": "yosys",
+      "world_fingerprint": "bc53c0e3687e82045b72abd4674bca5ee33690d337b08c00579def2e0eb9746a",
+      "transitions": 64,
+      "signal_quality": {
+        "lamp": {
+          "glitches": 4,
+          "single_input_glitches": 0,
+          "worst_change_ticks": 12,
+          "total_pulse_ticks": 12,
+          "worst_pulse_ticks": 5
+        },
+        "driver": {
+          "glitches": 6,
+          "single_input_glitches": 1,
+          "worst_change_ticks": 8,
+          "total_pulse_ticks": 16,
+          "worst_pulse_ticks": 4
+        }
+      }
+    },
+    {
+      "case": "majority3",
+      "frontend": "native",
+      "world_fingerprint": "d9657b0cba5d2fbdcec75f3e725364d9bd0473af1ca0dc62dff1d8183a1c77fe",
+      "transitions": 64,
+      "signal_quality": {
+        "lamp": {
+          "glitches": 0,
+          "single_input_glitches": 0,
+          "worst_change_ticks": 18,
+          "total_pulse_ticks": 0,
+          "worst_pulse_ticks": 0
+        },
+        "driver": {
+          "glitches": 2,
+          "single_input_glitches": 0,
+          "worst_change_ticks": 14,
+          "total_pulse_ticks": 4,
+          "worst_pulse_ticks": 2
+        }
+      }
+    },
+    {
+      "case": "majority3",
+      "frontend": "yosys",
+      "world_fingerprint": "a61e1164bbcffd2882661f2a97092d2974fdac5a51cd2d552d95e5324f046c04",
+      "transitions": 64,
+      "signal_quality": {
+        "lamp": {
+          "glitches": 5,
+          "single_input_glitches": 0,
+          "worst_change_ticks": 26,
+          "total_pulse_ticks": 25,
+          "worst_pulse_ticks": 11
+        },
+        "driver": {
+          "glitches": 7,
+          "single_input_glitches": 0,
+          "worst_change_ticks": 22,
+          "total_pulse_ticks": 32,
+          "worst_pulse_ticks": 8
+        }
+      }
+    }
+  ]
+}
