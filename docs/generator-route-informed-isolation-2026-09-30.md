@@ -1,0 +1,11 @@
+# Route-informed isolation experiment (rejected)
+
+Control: `b9a9165`. Instead of classifying graph fanout alone, this experiment first routes the circuit and examines actual gate terminals. A shared route's directed-dust landing is hazardous when another route has a repeater landing into that same gate support. Such nets are added to a monotonically increasing diode-requirement set, and the entire circuit is rerouted from the original placement using explicit typed terminal requirements. Newly introduced mixed-support hazards are detected in subsequent rounds. The set can grow only to the finite number of nets; no case names, ROM words, gate/block-count quality targets, or post-emission block edits are used.
+
+The fixed frontend quality test passes. The quality matrix retains XOR controls, but rejects `majority3/native` for two lamp glitches against the independently accepted zero-glitch cap. The actual route conditions avoid the earlier XOR overconstraint, but enforcing diodes and rerouting still introduces an unacceptable transient in majority logic.
+
+All three known internal/input-fanout ROM defects pass the manual diagnostic in the experiment: `[5,3,2,0]`, `[4,1,0,2]`, and `[4,3,2,5]`. Each exercises 32 setup/target history phases; every internal gate driver and output lamp is correct. The diagnostic checks that the route ledger's emitted world exactly equals the stock compiled world. These 96 phases establish improvement on the observed defects, not full-family qualification.
+
+The quality failure is sufficient to reject the experiment. A full-family scan is not claimed or substituted for the failing transient criterion. The helper, rerouting loop, and additional terminal constraint argument are all withdrawn; production source is restored exactly to the control. Existing quality caps, tests, and physical observation intervals are unchanged. Automatic torch-row selection remains disabled.
+
+Next mechanism to investigate: prevent strong support power from repowering adjacent dust while retaining the accepted transient timing. Simply identifying the correct hazard and adding diodes does not satisfy the quality controls. Weak support drive or alternate physical support geometry must be evaluated as a separate experiment, with exact emitted terminal metadata and independent controls.
