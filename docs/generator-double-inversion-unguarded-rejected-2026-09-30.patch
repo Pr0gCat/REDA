@@ -1,0 +1,52 @@
+diff --git a/src/compile/lowering.rs b/src/compile/lowering.rs
+index 2ea0b87..1c3f399 100644
+--- a/src/compile/lowering.rs
++++ b/src/compile/lowering.rs
+@@ -174,7 +174,9 @@ pub fn lower_optimised(netlist: &Netlist) -> Result<Netlist, LowerError> {
+         }
+         PolarityError::Lowering(error) => error,
+     })?;
+-    lower_with_assignment(netlist, &assignment)
++    let mut lowered = lower_with_assignment_and_provenance(netlist, &assignment)?;
++    eliminate_internal_double_inversions(&mut lowered);
++    Ok(lowered.netlist)
+ }
+ 
+ /// [`lower_optimised`], plus the source gate that created each physical gate.
+@@ -195,7 +197,35 @@ pub fn lower_optimised_with_provenance(
+         }
+         PolarityError::Lowering(error) => error,
+     })?;
+-    lower_with_assignment_and_provenance(netlist, &assignment)
++    let mut lowered = lower_with_assignment_and_provenance(netlist, &assignment)?;
++    eliminate_internal_double_inversions(&mut lowered);
++    Ok(lowered)
++}
++
++fn eliminate_internal_double_inversions(lowered: &mut LoweredWithProvenance) {
++    loop {
++        let removable = lowered.netlist.gates.iter().enumerate().find_map(|(index, gate)| {
++            if gate.kind != GateKind::Nor(1) || lowered.netlist.outputs.contains(&gate.output) {
++                return None;
++            }
++            let source = lowered.netlist.gates.iter().find(|g| g.output == gate.inputs[0])?;
++            (source.kind == GateKind::Nor(1)).then(|| (index, gate.output.clone(), source.inputs[0].clone()))
++        });
++        let Some((index, output, original)) = removable else { break; };
++        for gate in &mut lowered.netlist.gates {
++            for input in &mut gate.inputs {
++                if *input == output { *input = original.clone(); }
++            }
++        }
++        lowered.netlist.gates.remove(index);
++        lowered.provenance.remove(index);
++        for terminals in &mut lowered.source_terminals {
++            terminals.retain(|terminal| *terminal != index);
++            for terminal in terminals {
++                if *terminal > index { *terminal -= 1; }
++            }
++        }
++    }
+ }
+ 
+ /// The physical rails currently available for one logical signal. A source

@@ -146,7 +146,8 @@ pub struct LoweredWithProvenance {
     pub provenance: Vec<usize>,
     /// For every source cell, its physical output gate or gates. A negative
     /// rail exported as a declared output has both its selected rail and its
-    /// final positive inverter here.
+    /// final positive inverter here. An optimized-away internal inverter has
+    /// no physical terminal; its list is empty rather than naming a fake site.
     pub source_terminals: Vec<Vec<usize>>,
 }
 
@@ -174,7 +175,9 @@ pub fn lower_optimised(netlist: &Netlist) -> Result<Netlist, LowerError> {
         }
         PolarityError::Lowering(error) => error,
     })?;
-    lower_with_assignment(netlist, &assignment)
+    let mut lowered = lower_with_assignment_and_provenance(netlist, &assignment)?;
+    eliminate_internal_double_inversions(&mut lowered);
+    Ok(lowered.netlist)
 }
 
 /// [`lower_optimised`], plus the source gate that created each physical gate.
@@ -195,7 +198,90 @@ pub fn lower_optimised_with_provenance(
         }
         PolarityError::Lowering(error) => error,
     })?;
-    lower_with_assignment_and_provenance(netlist, &assignment)
+    let mut lowered = lower_with_assignment_and_provenance(netlist, &assignment)?;
+    eliminate_internal_double_inversions(&mut lowered);
+    Ok(lowered)
+}
+
+// Bypass only inverter-only fanout: adding a shared multi-input support
+// can feed power backward and change physical truth despite Boolean equality.
+fn eliminate_internal_double_inversions(lowered: &mut LoweredWithProvenance) {
+    loop {
+        let removable = lowered
+            .netlist
+            .gates
+            .iter()
+            .enumerate()
+            .find_map(|(index, gate)| {
+                if gate.kind != GateKind::Nor(1) || lowered.netlist.outputs.contains(&gate.output) {
+                    return None;
+                }
+                let source = lowered
+                    .netlist
+                    .gates
+                    .iter()
+                    .find(|g| g.output == gate.inputs[0])?;
+                if source.kind != GateKind::Nor(1) {
+                    return None;
+                }
+                let original = &source.inputs[0];
+                if lowered.netlist.gates.iter().any(|consumer| {
+                    (consumer.inputs.contains(&gate.output) || consumer.inputs.contains(original))
+                        && consumer.kind != GateKind::Nor(1)
+                }) {
+                    return None;
+                }
+                Some((index, gate.output.clone(), source.inputs[0].clone()))
+            });
+        let Some((index, output, original)) = removable else {
+            break;
+        };
+        for gate in &mut lowered.netlist.gates {
+            for input in &mut gate.inputs {
+                if *input == output {
+                    *input = original.clone();
+                }
+            }
+        }
+        let predecessor = lowered
+            .netlist
+            .gates
+            .iter()
+            .find(|g| g.output == lowered.netlist.gates[index].inputs[0])
+            .map(|g| g.output.clone());
+        remove_bypassed_gate(lowered, index);
+        if let Some(predecessor) = predecessor {
+            if !lowered.netlist.outputs.contains(&predecessor)
+                && !lowered
+                    .netlist
+                    .gates
+                    .iter()
+                    .any(|g| g.inputs.contains(&predecessor))
+            {
+                if let Some(index) = lowered
+                    .netlist
+                    .gates
+                    .iter()
+                    .position(|g| g.output == predecessor)
+                {
+                    remove_bypassed_gate(lowered, index);
+                }
+            }
+        }
+    }
+}
+
+fn remove_bypassed_gate(lowered: &mut LoweredWithProvenance, index: usize) {
+    lowered.netlist.gates.remove(index);
+    lowered.provenance.remove(index);
+    for terminals in &mut lowered.source_terminals {
+        terminals.retain(|terminal| *terminal != index);
+        for terminal in terminals {
+            if *terminal > index {
+                *terminal -= 1;
+            }
+        }
+    }
 }
 
 /// The physical rails currently available for one logical signal. A source
