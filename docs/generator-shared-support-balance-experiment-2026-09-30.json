@@ -1,0 +1,196 @@
+{
+  "base_commit": "b120a38",
+  "rule": "all inputs of NOR share at least one primary input; only adjust existing faster terminal repeaters",
+  "decision": "no effect; withdraw prototype",
+  "rows": [
+    {
+      "case": "and4",
+      "driver_glitch_transitions": 13,
+      "driver_single_input_glitches": 0,
+      "frontend": "REDA",
+      "frontend_gates": 3,
+      "glitch_transitions": 13,
+      "lower_and_compile_ms": 12.624787,
+      "lowered_gates": 7,
+      "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+      "mean_settle_ticks": 6.56640625,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 7,
+          "numerator": 228
+        },
+        "non_air_blocks": 228,
+        "occupied_max": {
+          "x": 69,
+          "y": 3,
+          "z": 57
+        },
+        "occupied_min": {
+          "x": 21,
+          "y": 0,
+          "z": 40
+        },
+        "occupied_volume": 3528
+      },
+      "planner": "Unified3d",
+      "single_input_glitch_transitions": 0,
+      "total_driver_pulse_ticks": 64,
+      "transitions": 256,
+      "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+      "worst_driver_change_ticks": 12,
+      "worst_driver_pulse_ticks": 8,
+      "worst_output_change_ticks": 16,
+      "worst_settle_ticks": 28,
+      "worst_transition": [
+        9,
+        5
+      ]
+    },
+    {
+      "case": "and4",
+      "driver_glitch_transitions": 0,
+      "driver_single_input_glitches": 0,
+      "frontend": "Yosys-fresh",
+      "frontend_gates": 3,
+      "glitch_transitions": 0,
+      "lower_and_compile_ms": 11.467746,
+      "lowered_gates": 7,
+      "lowered_histogram": "nor1:4 nor2:1 merge2:2",
+      "mean_settle_ticks": 5.72265625,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 7,
+          "numerator": 214
+        },
+        "non_air_blocks": 214,
+        "occupied_max": {
+          "x": 68,
+          "y": 3,
+          "z": 42
+        },
+        "occupied_min": {
+          "x": 21,
+          "y": 0,
+          "z": 28
+        },
+        "occupied_volume": 2880
+      },
+      "planner": "Unified3d",
+      "single_input_glitch_transitions": 0,
+      "total_driver_pulse_ticks": 0,
+      "transitions": 256,
+      "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+      "worst_driver_change_ticks": 8,
+      "worst_driver_pulse_ticks": 0,
+      "worst_output_change_ticks": 12,
+      "worst_settle_ticks": 22,
+      "worst_transition": [
+        8,
+        5
+      ]
+    },
+    {
+      "case": "seven_segment",
+      "driver_glitch_transitions": 105,
+      "driver_single_input_glitches": 0,
+      "frontend": "REDA",
+      "frontend_gates": 32,
+      "glitch_transitions": 85,
+      "lower_and_compile_ms": 146.927038,
+      "lowered_gates": 32,
+      "lowered_histogram": "nor1:4 nor2:12 nor3:8 merge2:2 merge3:6",
+      "mean_settle_ticks": 34.46484375,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 32,
+          "numerator": 6578
+        },
+        "non_air_blocks": 6578,
+        "occupied_max": {
+          "x": 170,
+          "y": 3,
+          "z": 101
+        },
+        "occupied_min": {
+          "x": 8,
+          "y": 0,
+          "z": 3
+        },
+        "occupied_volume": 64548
+      },
+      "planner": "Legacy",
+      "single_input_glitch_transitions": 0,
+      "total_driver_pulse_ticks": 1520,
+      "transitions": 256,
+      "world_fingerprint": "7c6c51d831ca72e249d590fd11b7306bdddd1c1f8f76c73bac13ada0e6cb39d4",
+      "worst_driver_change_ticks": 40,
+      "worst_driver_pulse_ticks": 20,
+      "worst_output_change_ticks": 44,
+      "worst_settle_ticks": 44,
+      "worst_transition": [
+        0,
+        7
+      ]
+    },
+    {
+      "case": "seven_segment",
+      "driver_glitch_transitions": 146,
+      "driver_single_input_glitches": 18,
+      "frontend": "Yosys-fresh",
+      "frontend_gates": 31,
+      "glitch_transitions": 141,
+      "lower_and_compile_ms": 326.07946599999997,
+      "lowered_gates": 47,
+      "lowered_histogram": "nor1:14 nor2:16 merge2:17",
+      "mean_settle_ticks": 48.05078125,
+      "physical": {
+        "blocks_per_lowered_gate": {
+          "denominator": 47,
+          "numerator": 7976
+        },
+        "non_air_blocks": 7976,
+        "occupied_max": {
+          "x": 158,
+          "y": 5,
+          "z": 179
+        },
+        "occupied_min": {
+          "x": 10,
+          "y": 0,
+          "z": 4
+        },
+        "occupied_volume": 157344
+      },
+      "planner": "Legacy",
+      "single_input_glitch_transitions": 17,
+      "total_driver_pulse_ticks": 2552,
+      "transitions": 256,
+      "world_fingerprint": "9839637a3ae76d2c45fc50def2b4d21d984ff88fc85beca5f4593ebcb7dbce63",
+      "worst_driver_change_ticks": 62,
+      "worst_driver_pulse_ticks": 24,
+      "worst_output_change_ticks": 64,
+      "worst_settle_ticks": 64,
+      "worst_transition": [
+        0,
+        7
+      ]
+    }
+  ],
+  "prototype_diff": "diff --git a/tests/frontend_quality_report.rs b/tests/frontend_quality_report.rs\nindex 39603e1..082ad03 100644\n--- a/tests/frontend_quality_report.rs\n+++ b/tests/frontend_quality_report.rs\n@@ -25,10 +25,61 @@ fn apply(sim: &mut Simulator, inputs: &[Position], bits: u32) -> u64 {\n     sim.current_tick() - start\n }\n \n+// Experimental physical delay balancing; not integrated into the generator.\n+fn balance_delays(netlist: &Netlist, compiled: &mut reda::compile::CompiledCircuit) {\n+    use reda::compile::{geometry, topology::GateKind};\n+    use reda::redstone::{simulator::position::Position, world::block::BlockKind};\n+    let Ok(report) = reda::compile::routing_stats::analyze(netlist, compiled) else { return; };\n+    let costs: HashMap<_, _> = report.edges.iter().map(|edge|\n+        (edge.sink.clone(), (edge.total().repeaters * 2) as u64)).collect();\n+    let mut arrival: HashMap<String, u64> = netlist.inputs.iter().map(|n| (n.clone(), 0)).collect();\n+    let mut supports: HashMap<String, std::collections::BTreeSet<String>> = netlist.inputs.iter().map(|n| (n.clone(), std::iter::once(n.clone()).collect())).collect();\n+    let mut pending: Vec<_> = netlist.gates.iter().enumerate().collect();\n+    let mut edits = 0;\n+    while !pending.is_empty() {\n+        let before = pending.len();\n+        pending.retain(|&(index, gate)| {\n+            if !gate.inputs.iter().all(|n| arrival.contains_key(n)) { return true; }\n+            let mut times: Vec<_> = gate.inputs.iter().enumerate().map(|(i,n)|\n+                arrival[n] + costs[&format!(\"{}.in[{}]\",gate.output,i)]).collect();\n+            let latest = times.iter().copied().max().unwrap_or(0);\n+            let shared = gate.inputs.first().map(|n| {\n+                supports[n].iter().any(|primary| gate.inputs.iter().all(|n| supports[n].contains(primary)))\n+            }).unwrap_or(false);\n+            if shared && gate.inputs.len() > 1 && matches!(gate.kind, GateKind::Nor(_)) {\n+                let facing = compiled.gate_facings[index];\n+                let (x,y,z) = compiled.gate_output_positions[&gate.output];\n+                let support = Position::new(x,y,z).offset(geometry::output_direction(facing).opposite());\n+                for (i, direction) in geometry::input_directions(facing).into_iter().take(gate.inputs.len()).enumerate() {\n+                    let socket = support.offset(direction);\n+                    let mut state = compiled.world.get(socket.x,socket.y,socket.z).clone();\n+                    if state.kind != BlockKind::Repeater { continue; }\n+                    let extra = ((latest-times[i])/2).min(4-state.delay as u64);\n+                    if extra > 0 {\n+                        eprintln!(\"balanced {} input {} by {} redstone ticks\", gate.output, i, extra);\n+                        state.delay += extra as u8;\n+                        compiled.world.set(socket.x,socket.y,socket.z,state);\n+                        times[i] += extra*2;\n+                        edits += 1;\n+                    }\n+                }\n+            }\n+            let support = gate.inputs.iter().flat_map(|n| supports[n].iter().cloned()).collect();\n+            supports.insert(gate.output.clone(), support);\n+            arrival.insert(gate.output.clone(), times.into_iter().max().unwrap_or(0) +\n+                if matches!(gate.kind, GateKind::Nor(_)) { 2 } else { 0 });\n+            false\n+        });\n+        assert!(pending.len() < before, \"cyclic delay model\");\n+    }\n+    eprintln!(\"delay-balanced sockets: {edits}\");\n+}\n+\n fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String, String>) -> Value {\n     let started = Instant::now();\n     let lowered = lower_optimised(&netlist).expect(\"lowering succeeds\");\n-    let compiled = compile(&lowered).expect(\"physical compilation succeeds\");\n+    let mut compiled = compile(&lowered).expect(\"physical compilation succeeds\");\n+    balance_delays(&lowered, &mut compiled);\n     let compile_ms = started.elapsed().as_secs_f64() * 1000.0;\n     let metrics = physical_metrics(&compiled.world, lowered.gates.len() as u64);\n     let fingerprint =\n",
+  "pairwise_variant": {
+    "mean_world_ticks": 34.46484375,
+    "lamp_glitch_transitions": 94,
+    "decision": "reject; driver glitches 105 -> 106",
+    "metrics": {
+      "case": "seven_segment",
+      "driver_glitch_transitions": 106,
+      "driver_single_input_glitches": 0,
+      "frontend": "REDA",
+      "total_driver_pulse_ticks": 1608,
+      "world_fingerprint": "518c8dde41460e2483fe649f5f8d42374e4ff77ea066880ec4988344f6467240",
+      "worst_driver_change_ticks": 40,
+      "worst_driver_pulse_ticks": 20
+    },
+    "prototype_diff": "diff --git a/tests/frontend_quality_report.rs b/tests/frontend_quality_report.rs\nindex 39603e1..c0682e0 100644\n--- a/tests/frontend_quality_report.rs\n+++ b/tests/frontend_quality_report.rs\n@@ -25,10 +25,59 @@ fn apply(sim: &mut Simulator, inputs: &[Position], bits: u32) -> u64 {\n     sim.current_tick() - start\n }\n \n+// Experimental physical delay balancing; not integrated into the generator.\n+fn balance_delays(netlist: &Netlist, compiled: &mut reda::compile::CompiledCircuit) {\n+    use reda::compile::{geometry, topology::GateKind};\n+    use reda::redstone::{simulator::position::Position, world::block::BlockKind};\n+    let Ok(report) = reda::compile::routing_stats::analyze(netlist, compiled) else { return; };\n+    let costs: HashMap<_, _> = report.edges.iter().map(|edge|\n+        (edge.sink.clone(), (edge.total().repeaters * 2) as u64)).collect();\n+    let mut arrival: HashMap<String, u64> = netlist.inputs.iter().map(|n| (n.clone(), 0)).collect();\n+    let mut supports: HashMap<String, std::collections::BTreeSet<String>> = netlist.inputs.iter().map(|n| (n.clone(), std::iter::once(n.clone()).collect())).collect();\n+    let mut pending: Vec<_> = netlist.gates.iter().enumerate().collect();\n+    let mut edits = 0;\n+    while !pending.is_empty() {\n+        let before = pending.len();\n+        pending.retain(|&(index, gate)| {\n+            if !gate.inputs.iter().all(|n| arrival.contains_key(n)) { return true; }\n+            let mut times: Vec<_> = gate.inputs.iter().enumerate().map(|(i,n)|\n+                arrival[n] + costs[&format!(\"{}.in[{}]\",gate.output,i)]).collect();\n+            let latest = times.iter().copied().max().unwrap_or(0);\n+            let shared = gate.inputs.iter().enumerate().any(|(i,n)| gate.inputs.iter().skip(i+1).any(|m| !supports[n].is_disjoint(&supports[m])));\n+            if shared && gate.inputs.len() > 1 && matches!(gate.kind, GateKind::Nor(_)) {\n+                let facing = compiled.gate_facings[index];\n+                let (x,y,z) = compiled.gate_output_positions[&gate.output];\n+                let support = Position::new(x,y,z).offset(geometry::output_direction(facing).opposite());\n+                for (i, direction) in geometry::input_directions(facing).into_iter().take(gate.inputs.len()).enumerate() {\n+                    let socket = support.offset(direction);\n+                    let mut state = compiled.world.get(socket.x,socket.y,socket.z).clone();\n+                    if state.kind != BlockKind::Repeater { continue; }\n+                    let extra = ((latest-times[i])/2).min(4-state.delay as u64);\n+                    if extra > 0 {\n+                        eprintln!(\"balanced {} input {} by {} redstone ticks\", gate.output, i, extra);\n+                        state.delay += extra as u8;\n+                        compiled.world.set(socket.x,socket.y,socket.z,state);\n+                        times[i] += extra*2;\n+                        edits += 1;\n+                    }\n+                }\n+            }\n+            let support = gate.inputs.iter().flat_map(|n| supports[n].iter().cloned()).collect();\n+            supports.insert(gate.output.clone(), support);\n+            arrival.insert(gate.output.clone(), times.into_iter().max().unwrap_or(0) +\n+                if matches!(gate.kind, GateKind::Nor(_)) { 2 } else { 0 });\n+            false\n+        });\n+        assert!(pending.len() < before, \"cyclic delay model\");\n+    }\n+    eprintln!(\"delay-balanced sockets: {edits}\");\n+}\n+\n fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String, String>) -> Value {\n     let started = Instant::now();\n     let lowered = lower_optimised(&netlist).expect(\"lowering succeeds\");\n-    let compiled = compile(&lowered).expect(\"physical compilation succeeds\");\n+    let mut compiled = compile(&lowered).expect(\"physical compilation succeeds\");\n+    balance_delays(&lowered, &mut compiled);\n     let compile_ms = started.elapsed().as_secs_f64() * 1000.0;\n     let metrics = physical_metrics(&compiled.world, lowered.gates.len() as u64);\n     let fingerprint =\n"
+  }
+}
