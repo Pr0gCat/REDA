@@ -1,5 +1,7 @@
 # Guarded internal inverter bypass
 
+The immediate-consumer rule below was subsequently corrected to inspect the complete downstream cone. See `generator-inverter-downstream-2026-09-30.md` for the counterexample, correction, and additional frozen qualification. Original controls remain unchanged.
+
 Control: `32150bf`. Repeated inversion rails can leave a physical `NOT(NOT(x))` between a signal and its consumers even when it has no public output. Removing that path is a Boolean identity, but the earlier unconditional experiment regressed the already-fixed ROM `[1,3,2,0]`: at address 0 its `g3=!a` driver became false instead of true. The exported `!b` repeater into `n1` repowered the newly shared primary-input `a` dust and corrupted the sibling inverter. The exact rejected experiment is retained separately as `generator-double-inversion-unguarded-rejected-2026-09-30.patch`; it is not the accepted implementation.
 
 The accepted optimization bypasses an internal second inverter only when every consumer of both the bypassed signal and the original signal is itself `Nor(1)`. It excludes shared multi-input supports, merges, and sequential consumers. Exported gate outputs remain real named gates; output order and aliases are preserved. If the first inverter becomes unconsumed and is not exported, it is removed too. Leaving that orphan was experimentally insufficient: a four-stage chain's total settling regressed despite the Boolean bypass.

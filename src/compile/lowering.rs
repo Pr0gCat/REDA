@@ -225,11 +225,24 @@ fn eliminate_internal_double_inversions(lowered: &mut LoweredWithProvenance) {
                     return None;
                 }
                 let original = &source.inputs[0];
-                if lowered.netlist.gates.iter().any(|consumer| {
-                    (consumer.inputs.contains(&gate.output) || consumer.inputs.contains(original))
-                        && consumer.kind != GateKind::Nor(1)
-                }) {
-                    return None;
+                // A later multi-input receiver can turn an earlier arrival into
+                // a longer pulse even when the immediate receiver is unary.
+                // Inspect the complete downstream cone, including siblings of
+                // the signal whose timing the bypass changes.
+                let mut pending = vec![gate.output.clone(), original.clone()];
+                let mut visited = HashSet::new();
+                while let Some(signal) = pending.pop() {
+                    if !visited.insert(signal.clone()) {
+                        continue;
+                    }
+                    for consumer in &lowered.netlist.gates {
+                        if consumer.inputs.contains(&signal) {
+                            if consumer.kind != GateKind::Nor(1) {
+                                return None;
+                            }
+                            pending.push(consumer.output.clone());
+                        }
+                    }
                 }
                 Some((index, gate.output.clone(), source.inputs[0].clone()))
             });
