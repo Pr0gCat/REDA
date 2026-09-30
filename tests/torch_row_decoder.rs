@@ -905,3 +905,581 @@ fn all_nonconstant_matrix_functions_have_complete_logic_bindings() {
     )
     .unwrap();
 }
+
+fn typed_matrix_candidate(
+    words: [u8; 4],
+) -> (
+    reda::compile::Netlist,
+    World,
+    reda::compile::fragment_synth::candidate::ExpandedPhysicalCandidate,
+) {
+    use reda::compile::fragment_synth::{
+        candidate::*, identity::*, instance_graph::*, topology::*,
+    };
+    use reda::compile::{
+        geometry::{Anchor, CellFacing},
+        planner::PortPlacements,
+        topology::Library,
+    };
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
+    let anchor = |p: Position| Anchor {
+        x: p.x,
+        y: p.y,
+        z: p.z,
+    };
+    let (netlist, positions) = matrix_logic_binding(words);
+    let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+    let mut candidate = ExpandedPhysicalCandidate::empty(graph, PortPlacements::default());
+    let (mut world, mut inputs, _, lamps) =
+        matrix_four_words_with_aligned_refresh(words, true, true, true);
+    // A conductor above the inverter support makes the direct lever/support
+    // contact an explicit route terminal; retain the original fixture as control.
+    for p in &mut inputs {
+        let lever = world.get(p.x, p.y, p.z).clone();
+        world.set(p.x, p.y, p.z, block(BlockKind::RedstoneWire));
+        world.set(p.x, p.y - 1, 0, block(BlockKind::Solid));
+        world.set(p.x, p.y, 0, lever);
+        p.z = 0;
+    }
+    let placed = |p: Position| PlacedBlock {
+        at: anchor(p),
+        state: world.get(p.x, p.y, p.z).clone(),
+    };
+    let mut claimed = BTreeSet::new();
+    for instance in &candidate.instances.instances {
+        let p = positions[&netlist.gates[instance.logical_gate.0 as usize].output];
+        let obs = VerifiedObservation {
+            site: ObservationSite {
+                id: ObservationId::InstanceOutput(instance.id),
+                at: anchor(p),
+                logical_owner: Some(instance.id),
+                display_label: None,
+            },
+            state: world.get(p.x, p.y, p.z).clone(),
+        };
+        candidate.observations.insert(obs.site.id, obs.clone());
+        if let OutputSpec::Primitive(id) = instance.expanded.topology.output {
+            let state = world.get(p.x, p.y, p.z);
+            let support = p.offset(state.facing.unwrap().opposite());
+            let facing = match state.facing.unwrap() {
+                Facing::North => CellFacing::NORTH,
+                Facing::South => CellFacing::SOUTH,
+                Facing::East => CellFacing::EAST,
+                Facing::West => CellFacing::WEST,
+                _ => unreachable!(),
+            };
+            let blocks = vec![placed(support), placed(p)];
+            for b in &blocks {
+                assert!(claimed.insert(b.at));
+            }
+            candidate.placements.insert(
+                id,
+                PrimitivePlacement {
+                    id,
+                    variant: facing.index() as u16,
+                    facing,
+                    anchor: anchor(support),
+                    delayed: None,
+                    blocks,
+                },
+            );
+            let mut obs = obs;
+            obs.site.id = ObservationId::PrimitiveOutput(id);
+            candidate.observations.insert(obs.site.id, obs);
+        } else {
+            let mut obs = obs;
+            obs.site.id = ObservationId::JunctionOutput(instance.id);
+            candidate.observations.insert(obs.site.id, obs);
+            candidate.junctions.insert(
+                instance.id,
+                RealisedJunction {
+                    id: instance.id,
+                    at: anchor(p),
+                    facing: CellFacing::SOUTH,
+                    contributors: Vec::new(),
+                    cells: Vec::new(),
+                },
+            );
+        }
+    }
+    for (port, p) in inputs.into_iter().enumerate() {
+        let id = PortId(port as u32);
+        let endpoint = PhysicalEndpointId::PrimaryInput(id);
+        let blocks = vec![placed(p.down()), placed(p)];
+        for b in &blocks {
+            assert!(claimed.insert(b.at));
+        }
+        candidate.boundaries.insert(
+            endpoint,
+            BoundaryPlacement {
+                endpoint,
+                delayed: None,
+                blocks,
+            },
+        );
+        candidate.observations.insert(
+            ObservationId::PrimaryInput(id),
+            VerifiedObservation {
+                site: ObservationSite {
+                    id: ObservationId::PrimaryInput(id),
+                    at: anchor(p),
+                    logical_owner: None,
+                    display_label: None,
+                },
+                state: world.get(p.x, p.y, p.z).clone(),
+            },
+        );
+    }
+    for (port, p) in lamps.into_iter().enumerate() {
+        let id = PortId(port as u32);
+        let endpoint = PhysicalEndpointId::DeclaredOutput(id);
+        let blocks = vec![placed(p.down()), placed(p)];
+        for b in &blocks {
+            assert!(claimed.insert(b.at));
+        }
+        candidate.boundaries.insert(
+            endpoint,
+            BoundaryPlacement {
+                endpoint,
+                delayed: None,
+                blocks,
+            },
+        );
+        candidate.observations.insert(
+            ObservationId::DeclaredOutput(id),
+            VerifiedObservation {
+                site: ObservationSite {
+                    id: ObservationId::DeclaredOutput(id),
+                    at: anchor(p),
+                    logical_owner: None,
+                    display_label: None,
+                },
+                state: world.get(p.x, p.y, p.z).clone(),
+            },
+        );
+    }
+    let endpoint = |d: &PhysicalDriver| match d {
+        PhysicalDriver::PrimaryInput(p) => PhysicalEndpointId::PrimaryInput(*p),
+        PhysicalDriver::Instance(InstanceDriver::Primitive { terminals, .. }) => {
+            PhysicalEndpointId::PrimitiveOutput(terminals[0])
+        }
+        PhysicalDriver::Instance(InstanceDriver::Junction { logical_owner, .. }) => {
+            PhysicalEndpointId::Junction(*logical_owner)
+        }
+    };
+    let observation = |e: PhysicalEndpointId| match e {
+        PhysicalEndpointId::PrimaryInput(p) => ObservationId::PrimaryInput(p),
+        PhysicalEndpointId::PrimitiveOutput(p) => ObservationId::PrimitiveOutput(p),
+        PhysicalEndpointId::Junction(p) => ObservationId::JunctionOutput(p),
+        PhysicalEndpointId::DeclaredOutput(p) => ObservationId::DeclaredOutput(p),
+        _ => unreachable!(),
+    };
+    let mut work = Vec::new();
+    for instance in &candidate.instances.instances {
+        for spec in &instance.expanded.topology.connections {
+            let ConnectionSource::ExternalInput { input_index } = spec.source else {
+                panic!("unexpected internal connection");
+            };
+            let assignment = candidate
+                .instances
+                .assignments
+                .iter()
+                .find(|a| {
+                    a.sink
+                        == PhysicalSink::InstanceInput {
+                            instance: instance.id,
+                            input_index,
+                        }
+                })
+                .unwrap();
+            let source = endpoint(&assignment.driver);
+            let target = match spec.target {
+                ConnectionTarget::Primitive(p) => PhysicalEndpointId::PrimitiveOutput(p),
+                ConnectionTarget::Junction(j) => PhysicalEndpointId::Junction(j),
+            };
+            work.push((
+                source,
+                RouteTarget::Connection(spec.id),
+                target,
+                Some(spec.id),
+            ));
+        }
+    }
+    for assignment in &candidate.instances.assignments {
+        if let PhysicalSink::DeclaredOutput(p) = assignment.sink {
+            work.push((
+                endpoint(&assignment.driver),
+                RouteTarget::DeclaredOutput(p),
+                PhysicalEndpointId::DeclaredOutput(p),
+                None,
+            ));
+        }
+    }
+    let mut route_ids = BTreeMap::new();
+    for (source, target, landing, connection) in work {
+        let next = RouteId(route_ids.len() as u32);
+        let route = *route_ids.entry(source).or_insert(next);
+        let at = candidate.observations[&observation(source)].site.at;
+        let p = Position::new(at.x, at.y, at.z);
+        let root = if world.get(p.x, p.y, p.z).kind == BlockKind::RedstoneWire {
+            p
+        } else if world.get(p.x, p.y - 1, p.z).kind == BlockKind::RedstoneWire {
+            p.down()
+        } else {
+            [Facing::North, Facing::South, Facing::East, Facing::West]
+                .into_iter()
+                .map(|f| p.offset(f))
+                .find(|p| world.get(p.x, p.y, p.z).kind == BlockKind::RedstoneWire)
+                .unwrap()
+        };
+        let end = match landing {
+            PhysicalEndpointId::PrimitiveOutput(id) => {
+                let support = candidate.placements[&id].anchor;
+                Position::new(support.x, support.y + 1, support.z)
+            }
+            PhysicalEndpointId::Junction(_) => root,
+            PhysicalEndpointId::DeclaredOutput(_) => {
+                let at = candidate.observations[&observation(landing)].site.at;
+                Position::new(at.x, at.y, at.z - 1)
+            }
+            _ => unreachable!(),
+        };
+        let mut parent = BTreeMap::new();
+        let mut queue = VecDeque::from([root]);
+        parent.insert(root, root);
+        while let Some(p) = queue.pop_front() {
+            if p == end {
+                break;
+            }
+            let state = world.get(p.x, p.y, p.z);
+            for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+                if state.kind == BlockKind::Repeater
+                    && Some(direction) != state.facing.map(Facing::opposite)
+                {
+                    continue;
+                }
+                let mut next: Vec<_> =
+                    reda::redstone::simulator::connectivity::dust_connections(&world, p, direction)
+                        .iter()
+                        .collect();
+                let n = p.offset(direction);
+                let nstate = world.get(n.x, n.y, n.z);
+                if nstate.kind == BlockKind::Repeater && nstate.facing == Some(direction.opposite())
+                {
+                    next.push(n);
+                }
+                for n in next {
+                    if let std::collections::btree_map::Entry::Vacant(e) = parent.entry(n) {
+                        e.insert(p);
+                        queue.push_back(n);
+                    }
+                }
+            }
+        }
+        assert!(
+            parent.contains_key(&end),
+            "no real conductor path {root:?}->{end:?}"
+        );
+        let mut path = vec![end];
+        while *path.last().unwrap() != root {
+            path.push(parent[path.last().unwrap()]);
+        }
+        path.reverse();
+        let repeaters = path
+            .iter()
+            .filter(|p| world.get(p.x, p.y, p.z).kind == BlockKind::Repeater)
+            .count() as u64;
+        let tree = candidate.routes.entry(route).or_insert(RealisedRouteTree {
+            id: route,
+            source,
+            cells: Vec::new(),
+            floors: Vec::new(),
+            branches: Vec::new(),
+        });
+        let sink = RoutedSinkId {
+            route,
+            ordinal: tree.branches.len() as u16,
+        };
+        tree.branches.push(RealisedRouteBranch {
+            sink,
+            target,
+            root: anchor(root),
+            path: path.into_iter().map(anchor).collect(),
+            terminal: TerminalRecord {
+                sink,
+                at: anchor(end),
+                state: world.get(end.x, end.y, end.z).clone(),
+                kind: if matches!(landing, PhysicalEndpointId::Junction(_)) {
+                    reda::compile::routing::RouteTerminalKind::BareMergeDust
+                } else {
+                    reda::compile::routing::RouteTerminalKind::DirectedDustIntoSupport
+                },
+                repeaters,
+                delayed_owner: None,
+            },
+        });
+        if let Some(id) = connection {
+            candidate.connections.insert(
+                id,
+                ConnectionBinding {
+                    id,
+                    source,
+                    landing: PhysicalEndpointId::Landing(id),
+                    route,
+                    sink,
+                },
+            );
+            if let PhysicalEndpointId::Junction(j) = landing {
+                candidate
+                    .junctions
+                    .get_mut(&j)
+                    .unwrap()
+                    .contributors
+                    .push(PhysicalEndpointId::Landing(id));
+            }
+        }
+    }
+    // The junction's observed cell belongs to the junction even when an
+    // outgoing branch starts on it. Contributor landings stay route-owned.
+    for j in candidate.junctions.values_mut() {
+        assert!(claimed.insert(j.at));
+        j.cells.push(placed(Position::new(j.at.x, j.at.y, j.at.z)));
+    }
+    // Assign real branch cells first; merge landings retain their route owner.
+    for tree in candidate.routes.values_mut() {
+        for at in tree.branches.iter().flat_map(|b| b.path.iter()).copied() {
+            if claimed.insert(at) {
+                tree.cells.push(placed(Position::new(at.x, at.y, at.z)));
+            }
+        }
+    }
+    // This first adapter owns remaining connected wire cells by their actual
+    // route/junction component, then owns the support below each conductor.
+    for flat in world.positions_of(BlockKind::RedstoneWire) {
+        let (x, y, z) = world.decode(flat);
+        let at = Anchor { x, y, z };
+        if claimed.contains(&at) {
+            continue;
+        }
+        let j = candidate
+            .junctions
+            .iter()
+            .find(|(_, j)| {
+                (j.at.y == y && j.at.z == z && j.at.y == 3 && x <= 15)
+                    || (j.at.y == y && j.at.x == x && j.at.y == 1)
+            })
+            .map(|(&id, _)| id);
+        if let Some(j) = j {
+            candidate
+                .junctions
+                .get_mut(&j)
+                .unwrap()
+                .cells
+                .push(placed(Position::new(x, y, z)));
+            claimed.insert(at);
+        } else {
+            let route = candidate
+                .routes
+                .iter()
+                .filter(|(_, r)| {
+                    r.branches.iter().any(|b| {
+                        b.path
+                            .iter()
+                            .any(|a| a.y == y && if y == 3 { a.z == z } else { a.x == x })
+                    })
+                })
+                .min_by_key(|(_, r)| {
+                    !(y == 3
+                        && r.branches
+                            .iter()
+                            .any(|b| b.path.iter().any(|a| a.x == 16 && a.y == 3 && a.z == z)))
+                })
+                .map(|(&id, _)| id)
+                .expect("wire must have a route owner");
+            candidate
+                .routes
+                .get_mut(&route)
+                .unwrap()
+                .cells
+                .push(placed(Position::new(x, y, z)));
+            claimed.insert(at);
+        }
+    }
+    for j in candidate.junctions.values_mut() {
+        if claimed.insert(j.at) {
+            j.cells.push(placed(Position::new(j.at.x, j.at.y, j.at.z)));
+        }
+    }
+    for tree in candidate.routes.values_mut() {
+        for b in &tree.cells {
+            let p = Position::new(b.at.x, b.at.y - 1, b.at.z);
+            if world.get(p.x, p.y, p.z).kind == BlockKind::Solid && claimed.insert(anchor(p)) {
+                tree.floors.push(placed(p));
+            }
+        }
+    }
+    for j in candidate.junctions.values_mut() {
+        let floors: Vec<_> = j
+            .cells
+            .iter()
+            .map(|b| Position::new(b.at.x, b.at.y - 1, b.at.z))
+            .filter(|p| {
+                world.get(p.x, p.y, p.z).kind == BlockKind::Solid && claimed.insert(anchor(*p))
+            })
+            .map(placed)
+            .collect();
+        j.cells.extend(floors);
+    }
+    for assignment in &candidate.instances.assignments {
+        if let PhysicalSink::DeclaredOutput(port) = assignment.sink {
+            let owner = match &assignment.driver {
+                PhysicalDriver::PrimaryInput(_) => None,
+                PhysicalDriver::Instance(InstanceDriver::Primitive { logical_owner, .. })
+                | PhysicalDriver::Instance(InstanceDriver::Junction { logical_owner, .. }) => {
+                    Some(*logical_owner)
+                }
+            };
+            candidate
+                .observations
+                .get_mut(&ObservationId::DeclaredOutput(port))
+                .unwrap()
+                .site
+                .logical_owner = owner;
+        }
+    }
+    candidate.bind_pin_contracts(&netlist).unwrap();
+    (netlist, world, candidate)
+}
+
+#[test]
+fn typed_matrix_adapter_records_real_routes_and_runs_existing_certifiers() {
+    use reda::compile::fragment_synth::{
+        realise::realise_and_verify_expanded, verify::certify_expanded_structure,
+    };
+    let (netlist, world, candidate) = typed_matrix_candidate([1, 6, 3, 5]);
+    let (_, _, repeated) = typed_matrix_candidate([1, 6, 3, 5]);
+    assert_eq!(candidate.fingerprint(), repeated.fingerprint());
+    candidate.validate_shape().unwrap();
+    candidate.validate_route_timing().unwrap();
+    let library = reda::compile::topology::Library::default_library();
+    certify_expanded_structure(&candidate, &netlist, &library).unwrap();
+    let replay = candidate.emit_world(world.size()).unwrap();
+    for y in 0..world.size().1 {
+        for z in 0..world.size().2 {
+            for x in 0..world.size().0 {
+                assert_eq!(
+                    world.get(x, y, z),
+                    replay.get(x, y, z),
+                    "owned replay at ({x},{y},{z})"
+                );
+            }
+        }
+    }
+    let certified = realise_and_verify_expanded(&candidate, &netlist, &library).unwrap();
+    let emitted = certified.world();
+    for y in 0..world.size().1 {
+        for z in 0..world.size().2 {
+            for x in 0..world.size().0 {
+                assert_eq!(
+                    world.get(x, y, z),
+                    emitted.get(x, y, z),
+                    "typed emission at ({x},{y},{z})"
+                );
+            }
+        }
+    }
+    let views = candidate.compatibility_views(&netlist).unwrap();
+    let position = |p: (i32, i32, i32)| Position::new(p.0, p.1, p.2);
+    let inputs = netlist
+        .inputs
+        .iter()
+        .map(|n| position(views.input_positions[n]))
+        .collect();
+    let drivers = netlist
+        .outputs
+        .iter()
+        .map(|n| position(views.gate_output_positions[n]))
+        .collect();
+    let lamps = netlist
+        .outputs
+        .iter()
+        .map(|n| position(views.output_positions[n]))
+        .collect();
+    let quality = measure_rom(
+        certified.world().clone(),
+        inputs,
+        drivers,
+        lamps,
+        &[1, 6, 3, 5],
+    );
+    let frozen: serde_json::Value = serde_json::from_str(include_str!(
+        "../docs/generator-torch-row-four-word-2026-09-30.json"
+    ))
+    .unwrap();
+    for (metric, value) in quality.as_object().unwrap() {
+        if metric == "traces" {
+            continue;
+        }
+        assert!(
+            value.as_u64().unwrap() <= frozen["balanced"][metric].as_u64().unwrap(),
+            "certified geometry quality regression: {metric}"
+        );
+    }
+    let report = json!({"structurally_certified":true,"strict_physically_certified":true,"exact_owned_and_durable_replay":true,"candidate_fingerprint":candidate.fingerprint(),"route_count":candidate.routes.len(),"quality":quality});
+    std::fs::write(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/torch_row_typed_certification.json"),
+        serde_json::to_string_pretty(&report).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn typed_matrix_certifiers_reject_forged_regions_missing_contributors_and_reversed_repeaters() {
+    use reda::compile::{
+        fragment_synth::{
+            candidate::PlacedBlock,
+            realise::{realise_and_verify_expanded, CertificationError},
+            verify::certify_expanded_structure,
+        },
+        geometry::Anchor,
+        verification::ExpandedPhysicalError,
+    };
+    let (netlist, _, candidate) = typed_matrix_candidate([1, 6, 3, 5]);
+    let library = reda::compile::topology::Library::default_library();
+    let mut missing = candidate.clone();
+    missing
+        .junctions
+        .values_mut()
+        .next()
+        .unwrap()
+        .contributors
+        .pop();
+    assert!(certify_expanded_structure(&missing, &netlist, &library).is_err());
+    let mut forged = candidate.clone();
+    let junction = forged.junctions.values_mut().next().unwrap();
+    junction.cells.push(PlacedBlock {
+        at: Anchor { x: 26, y: 1, z: 1 },
+        state: block(BlockKind::RedstoneWire),
+    });
+    assert!(matches!(
+        realise_and_verify_expanded(&forged, &netlist, &library),
+        Err(CertificationError::Physical(
+            ExpandedPhysicalError::DisconnectedJunctionCell { .. }
+        ))
+    ));
+    let mut reversed = candidate.clone();
+    let repeater = reversed
+        .routes
+        .values_mut()
+        .flat_map(|r| r.cells.iter_mut())
+        .find(|b| b.state.kind == BlockKind::Repeater)
+        .unwrap();
+    repeater.state.facing = repeater.state.facing.map(Facing::opposite);
+    assert!(matches!(
+        realise_and_verify_expanded(&reversed, &netlist, &library),
+        Err(CertificationError::Physical(
+            ExpandedPhysicalError::WrongRepeaterAxis { .. }
+        ))
+    ));
+}

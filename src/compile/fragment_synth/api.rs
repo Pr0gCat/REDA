@@ -773,29 +773,19 @@ mod tests {
         );
     }
 
-    /// **Byte compatibility of the shipping case identity, pinned.**
-    ///
-    /// These are the case fingerprints the public entry reports for three
-    /// fixed cases under the schema-3 descriptor. The two unpinned ones were
-    /// measured on the pre-deletion `api.rs` with an identical probe and still
-    /// hold; the pinned one was measured after the deletion, on a descriptor
-    /// whose serialised shape -- `PinDescriptor` with its `Facing` code and
-    /// all -- the deletion did not touch, so it is the pre-deletion identity
-    /// too. Every baseline recorded under any of them is still found.
-    ///
-    /// If this fails, either the descriptor, a revision it names, the pin or
-    /// facing encoding, or the canonical netlist order changed -- and that is
-    /// a deliberate bump to make, with the constants below updated in the same
-    /// change, not a side effect to absorb.
+    /// Shipping case identity snapshots under ExpandedStrict Connectivity v2.
+    /// Verifier revisions intentionally change the case identity, keeping
+    /// measurements certified under different rules separate.
+    /// Any further change must explicitly update these snapshots.
     #[test]
-    fn the_shipping_case_fingerprint_is_byte_compatible_with_the_pre_deletion_descriptor() {
+    fn the_shipping_case_fingerprint_pins_the_current_verifier_revision() {
         const TWO_GATE_CHAIN_CASE: &str =
-            "fef8fed34215d422ece3273fd1c1cddf0fa1f37a1af904999688146334a7629b";
-        const AND4_CASE: &str = "edb886c881527c4c13536aa681f5ad51acf71bd2c25f9d874cbc66fed0ec7c97";
+            "b5354a07098a22b4f7a97f7f160cf50191a05d75c72e94d19ba6da557741e7a6";
+        const AND4_CASE: &str = "972724ac08724d6cb63b2c0d68a2155ca9f9391d23ef3486c34671573487c98c";
         /// The chain on the caller row the contract honours: `a` at
         /// (1,1,4) facing south, `y` at (4,1,4) facing north.
         const PINNED_TWO_GATE_CHAIN_CASE: &str =
-            "d8925f3521e3da1981707892cab47431485545ccffd0fe001f369caa313e15d7";
+            "d104817a82d501c08ffd7111380f646a1a9c109001cf9c75ce48a420f195bcfc";
 
         let chain = two_gate_chain();
         let (and4, _) = build_and4_netlist();
@@ -808,6 +798,7 @@ mod tests {
             (&and4, None, AND4_CASE),
             (&chain, Some(&honoured), PINNED_TWO_GATE_CHAIN_CASE),
         ];
+        let mut actual_cases = Vec::new();
         for (netlist, pins, expected) in cases {
             assert_eq!(expected.len(), 64);
             let input = SynthesisInput {
@@ -818,7 +809,7 @@ mod tests {
             let shipped = super::compile_fragment_synth(input, SynthesisBudget::Evaluations(0))
                 .unwrap()
                 .case_fingerprint;
-            assert_eq!(shipped.as_str(), expected);
+            actual_cases.push(shipped.as_str().to_owned());
             // And the fingerprint function alone agrees, so the public entry
             // is not computing an identity of its own.
             let search = SearchConfig::checked_defaults();
@@ -831,9 +822,13 @@ mod tests {
                 )
                 .unwrap()
                 .as_str(),
-                expected
+                shipped.as_str()
             );
         }
+        assert_eq!(
+            actual_cases,
+            cases.map(|(_, _, expected)| expected.to_owned())
+        );
         // Pins are part of the identity, and the pinned constant is not
         // accidentally the unpinned one.
         assert_ne!(PINNED_TWO_GATE_CHAIN_CASE, TWO_GATE_CHAIN_CASE);

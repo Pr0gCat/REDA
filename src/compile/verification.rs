@@ -206,7 +206,7 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Connectivity,
-                semantic_version: 1,
+                semantic_version: 2,
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Coupling,
@@ -442,6 +442,8 @@ pub enum ExpandedPhysicalError {
         from: Anchor,
         to: Anchor,
     },
+    #[error("junction {junction:?} claims a disconnected wire cell at {at:?}")]
+    DisconnectedJunctionCell { junction: InstanceId, at: Anchor },
     #[error("routes {first:?} and {second:?} join through redstone dust at {at:?}")]
     CrossRouteConnectivity {
         first: RouteId,
@@ -711,7 +713,9 @@ fn verify_typed_connectivity(
     let junction_cells = candidate
         .junctions
         .values()
-        .map(|junction| Position::new(junction.at.x, junction.at.y, junction.at.z))
+        .flat_map(|junction| junction.cells.iter())
+        .filter(|block| block.state.kind == BlockKind::RedstoneWire)
+        .map(|block| Position::new(block.at.x, block.at.y, block.at.z))
         .collect::<HashSet<_>>();
 
     let world = &emitted.world;
@@ -779,6 +783,43 @@ fn verify_junction_closure(
                     route,
                     contributor_at,
                     junction_at: junction.at,
+                });
+            }
+        }
+
+        // Every declared junction wire must belong to its connected region.
+        // Listed landings can bridge the region; arbitrary route conductors
+        // cannot be relabelled as a junction to hide a foreign short.
+        let region = junction
+            .cells
+            .iter()
+            .filter(|block| block.state.kind == BlockKind::RedstoneWire)
+            .map(|block| Position::new(block.at.x, block.at.y, block.at.z))
+            .chain(listed.values().map(|(_, at)| Position::new(at.x, at.y, at.z)))
+            .collect::<HashSet<_>>();
+        let start = Position::new(junction.at.x, junction.at.y, junction.at.z);
+        let mut reached = HashSet::from([start]);
+        let mut queue = VecDeque::from([start]);
+        while let Some(position) = queue.pop_front() {
+            for next in potential_predecessors(position) {
+                if region.contains(&next)
+                    && !reached.contains(&next)
+                    && directed_conductor_step(&emitted.world, position, next)
+                {
+                    reached.insert(next);
+                    queue.push_back(next);
+                }
+            }
+        }
+        for block in junction
+            .cells
+            .iter()
+            .filter(|block| block.state.kind == BlockKind::RedstoneWire)
+        {
+            if !reached.contains(&Position::new(block.at.x, block.at.y, block.at.z)) {
+                return Err(ExpandedPhysicalError::DisconnectedJunctionCell {
+                    junction: junction_id,
+                    at: block.at,
                 });
             }
         }
@@ -948,6 +989,27 @@ fn reverse_junction_contributors(
                             });
                         }
                         observed.insert(target);
+                        // A declared landing can inject into the interior of
+                        // a distributed junction, rather than bounding it.
+                        // Continue only through explicitly junction-owned
+                        // cells; never follow the incoming source route.
+                        for predecessor in potential_predecessors(position) {
+                            let predecessor_at = Anchor {
+                                x: predecessor.x,
+                                y: predecessor.y,
+                                z: predecessor.z,
+                            };
+                            if matches!(
+                                emitted.owner_at(predecessor_at),
+                                Some(PhysicalBlockRole::Junction(owner)) if owner == junction
+                            )
+                                && !visited.contains(&predecessor)
+                                && directed_conductor_step(&emitted.world, predecessor, position)
+                            {
+                                visited.insert(predecessor);
+                                queue.push_back(predecessor);
+                            }
+                        }
                         continue;
                     }
                     return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
