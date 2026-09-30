@@ -51,6 +51,10 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
         .iter()
         .map(|name| compiled.output_positions[&outputs[*name]])
         .collect();
+    let drivers: Vec<_> = output_names
+        .iter()
+        .map(|name| compiled.gate_output_positions[&outputs[*name]])
+        .collect();
     let planner = format!("{:?}", compiled.planner_kind());
     let mut sim = Simulator::new(compiled.world);
     sim.run_until_stable(2000).expect("initial world settles");
@@ -63,8 +67,20 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
                     reda::redstone::simulator::position::Position::new(x, y, z),
                     (*name).to_string(),
                 )
-            }),
+            })
+            .chain(drivers.iter().zip(output_names).map(|(&(x, y, z), name)| {
+                (
+                    reda::redstone::simulator::position::Position::new(x, y, z),
+                    format!("driver:{name}"),
+                )
+            })),
     );
+    let mut driver_traces = Vec::new();
+    let mut worst_driver_ticks = 0;
+    let mut driver_glitch_transitions = 0;
+    let mut driver_single_input_glitches = 0;
+    let mut worst_driver_pulse_ticks = 0;
+    let mut total_driver_pulse_ticks = 0;
     let mut output_traces = Vec::new();
     let mut worst_output_ticks = 0;
     let mut glitch_transitions = 0;
@@ -81,16 +97,20 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
                 reda::timing::observations_to_result(sim.observations(), start_tick, ticks);
             let output_ticks = timing
                 .nets
-                .values()
-                .filter_map(|net| net.arrival_tick())
+                .iter()
+                .filter(|(name, _)| !name.starts_with("driver:"))
+                .filter_map(|(_, net)| net.arrival_tick())
                 .max()
                 .unwrap_or(0);
             worst_output_ticks = worst_output_ticks.max(output_ticks);
-            let glitched = timing.nets.values().any(|net| net.glitched());
+            let glitched = timing
+                .nets
+                .iter()
+                .any(|(name, net)| !name.starts_with("driver:") && net.glitched());
             glitch_transitions += usize::from(glitched);
             output_traces.push(json!({"from":from, "to":to,
                 "last_output_change_tick":output_ticks, "glitched":glitched,
-                "changes": timing.nets.iter().map(|(name, net)|
+                "changes": timing.nets.iter().filter(|(name,_)| !name.starts_with("driver:")).map(|(name, net)|
                     (name.clone(), json!(net.changes()))).collect::<std::collections::BTreeMap<_,_>>() }));
             if ticks > worst_ticks {
                 worst_ticks = ticks;
@@ -107,6 +127,53 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
             } else {
                 vec![false; 7]
             };
+            let driver_timings: Vec<_> = timing
+                .nets
+                .iter()
+                .filter(|(name, _)| name.starts_with("driver:"))
+                .collect();
+            let driver_ticks = driver_timings
+                .iter()
+                .filter_map(|(_, net)| net.arrival_tick())
+                .max()
+                .unwrap_or(0);
+            let driver_glitched = driver_timings.iter().any(|(_, net)| net.glitched());
+            worst_driver_ticks = worst_driver_ticks.max(driver_ticks);
+            driver_glitch_transitions += usize::from(driver_glitched);
+            driver_single_input_glitches +=
+                usize::from(driver_glitched && (from ^ to).count_ones() == 1);
+            let mut pulses = std::collections::BTreeMap::new();
+            for (i, name) in output_names.iter().enumerate() {
+                if let Some(net) = timing.nets.get(&format!("driver:{name}")) {
+                    let widths: Vec<_> = net
+                        .changes()
+                        .windows(2)
+                        .filter(|events| events[0].1 != expected[i])
+                        .map(|events| events[1].0 - events[0].0)
+                        .collect();
+                    worst_driver_pulse_ticks =
+                        worst_driver_pulse_ticks.max(widths.iter().copied().max().unwrap_or(0));
+                    total_driver_pulse_ticks += widths.iter().sum::<u64>();
+                    if !widths.is_empty() {
+                        pulses.insert(*name, widths);
+                    }
+                }
+                let (x, y, z) = drivers[i];
+                let state = sim.world().get(x, y, z);
+                let value = if state.kind == reda::redstone::world::block::BlockKind::RedstoneWire {
+                    state.power > 0
+                } else {
+                    state.lit
+                };
+                assert_eq!(
+                    value, expected[i],
+                    "{top}/{frontend}: driver {name}, {from}->{to}"
+                );
+            }
+            driver_traces.push(json!({"from":from,"to":to,"last_driver_change_tick":driver_ticks,
+                "glitched":driver_glitched,"pulse_widths":pulses,
+                "changes":driver_timings.iter().map(|(name,net)| ((*name).clone(),json!(net.changes())))
+                    .collect::<std::collections::BTreeMap<_,_>>() }));
             for (i, &(x, y, z)) in positions.iter().enumerate() {
                 assert_eq!(
                     sim.world().get(x, y, z).lit,
@@ -154,6 +221,34 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
                 .unwrap(),
         "{top}/{frontend}: single input glitch regression"
     );
+    let driver_baselines: Value = serde_json::from_str(include_str!(
+        "../docs/generator-driver-timing-baseline-2026-09-30.json"
+    ))
+    .unwrap();
+    let driver_baseline = driver_baselines["measurements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["case"] == top && row["frontend"] == frontend)
+        .unwrap();
+    for (name, measured) in [
+        ("worst_driver_change_ticks", worst_driver_ticks),
+        (
+            "driver_glitch_transitions",
+            driver_glitch_transitions as u64,
+        ),
+        (
+            "driver_single_input_glitches",
+            driver_single_input_glitches as u64,
+        ),
+        ("worst_driver_pulse_ticks", worst_driver_pulse_ticks),
+        ("total_driver_pulse_ticks", total_driver_pulse_ticks),
+    ] {
+        assert!(
+            measured <= driver_baseline[name].as_u64().unwrap(),
+            "{top}/{frontend}: {name} regression: {measured}"
+        );
+    }
     // Fixed pre-experiment timing baselines; material counts are diagnostic only.
     let (tick_limit, total_tick_limit) = match (top, frontend) {
         ("and4", "REDA") => (28, 1681),
@@ -185,6 +280,10 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
         "physical": metrics, "historical_channel_baseline": legacy_baseline, "planner": planner, "world_fingerprint": fingerprint,
         "lower_and_compile_ms": compile_ms,
         "transitions": 256, "worst_settle_ticks": worst_ticks,
+        "worst_driver_change_ticks":worst_driver_ticks,"driver_glitch_transitions":driver_glitch_transitions,
+        "driver_single_input_glitches":driver_single_input_glitches,
+        "worst_driver_pulse_ticks":worst_driver_pulse_ticks,"total_driver_pulse_ticks":total_driver_pulse_ticks,
+        "driver_traces":driver_traces,
         "worst_output_change_ticks": worst_output_ticks,
         "glitch_transitions": glitch_transitions, "single_input_glitch_transitions": single_input_glitches, "output_traces": output_traces,
         "worst_transition": worst_pair, "mean_settle_ticks": sum_ticks as f64 / 256.0,

@@ -1,0 +1,1231 @@
+{
+  "before": {
+    "changes": {
+      "d0": [
+        [
+          1,
+          false
+        ]
+      ],
+      "d2": [
+        [
+          1,
+          true
+        ]
+      ],
+      "g0": [
+        [
+          4,
+          true
+        ]
+      ],
+      "g10": [
+        [
+          28,
+          true
+        ],
+        [
+          30,
+          false
+        ]
+      ],
+      "g11": [
+        [
+          18,
+          true
+        ],
+        [
+          20,
+          false
+        ]
+      ],
+      "g13": [
+        [
+          24,
+          true
+        ],
+        [
+          26,
+          false
+        ]
+      ],
+      "g14": [
+        [
+          32,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ],
+      "g19": [
+        [
+          26,
+          true
+        ],
+        [
+          28,
+          false
+        ]
+      ],
+      "g2": [
+        [
+          6,
+          false
+        ]
+      ],
+      "g20": [
+        [
+          22,
+          true
+        ]
+      ],
+      "g21": [
+        [
+          22,
+          false
+        ]
+      ],
+      "g22": [
+        [
+          26,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ],
+      "g23": [
+        [
+          12,
+          false
+        ]
+      ],
+      "g26": [
+        [
+          14,
+          false
+        ]
+      ],
+      "g28": [
+        [
+          20,
+          true
+        ]
+      ],
+      "g29": [
+        [
+          10,
+          false
+        ]
+      ],
+      "g31": [
+        [
+          26,
+          true
+        ]
+      ],
+      "g4": [
+        [
+          12,
+          true
+        ]
+      ],
+      "g5": [
+        [
+          12,
+          false
+        ]
+      ],
+      "g6": [
+        [
+          16,
+          true
+        ]
+      ],
+      "g9": [
+        [
+          18,
+          false
+        ],
+        [
+          20,
+          true
+        ]
+      ]
+    },
+    "from": 1,
+    "gates": [
+      {
+        "inputs": [
+          "d0"
+        ],
+        "kind": "Nor(1)",
+        "output": "g0",
+        "position": [
+          112,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d1"
+        ],
+        "kind": "Nor(1)",
+        "output": "g1",
+        "position": [
+          84,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d2"
+        ],
+        "kind": "Nor(1)",
+        "output": "g2",
+        "position": [
+          70,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d3"
+        ],
+        "kind": "Nor(1)",
+        "output": "g3",
+        "position": [
+          56,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Or(3)",
+        "output": "g4",
+        "position": [
+          126,
+          1,
+          80
+        ]
+      },
+      {
+        "inputs": [
+          "g4",
+          "g0"
+        ],
+        "kind": "Nor(2)",
+        "output": "g5",
+        "position": [
+          124,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "d0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g6",
+        "position": [
+          110,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g1",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g7",
+        "position": [
+          54,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g2",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g8",
+        "position": [
+          68,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g5",
+          "g6",
+          "g7"
+        ],
+        "kind": "Or(3)",
+        "output": "g9",
+        "position": [
+          98,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g9",
+          "g8"
+        ],
+        "kind": "Nor(2)",
+        "output": "g10",
+        "position": [
+          68,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "g0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g11",
+        "position": [
+          26,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g12",
+        "position": [
+          96,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g11"
+        ],
+        "kind": "Or(3)",
+        "output": "g13",
+        "position": [
+          56,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g13",
+          "g12"
+        ],
+        "kind": "Nor(2)",
+        "output": "g14",
+        "position": [
+          82,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d2",
+          "d0",
+          "g1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g15",
+        "position": [
+          40,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g15"
+        ],
+        "kind": "Nor(3)",
+        "output": "g16",
+        "position": [
+          70,
+          1,
+          22
+        ]
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g17",
+        "position": [
+          166,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(2)",
+        "output": "g18",
+        "position": [
+          140,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g9",
+          "g18"
+        ],
+        "kind": "Nor(2)",
+        "output": "g19",
+        "position": [
+          124,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "g2"
+        ],
+        "kind": "Nor(2)",
+        "output": "g20",
+        "position": [
+          12,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d0",
+          "g7",
+          "g8"
+        ],
+        "kind": "Or(3)",
+        "output": "g21",
+        "position": [
+          42,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g21",
+          "g20"
+        ],
+        "kind": "Nor(2)",
+        "output": "g22",
+        "position": [
+          54,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "g0"
+        ],
+        "kind": "Nor(3)",
+        "output": "g23",
+        "position": [
+          82,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "d2",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g24",
+        "position": [
+          138,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g25",
+        "position": [
+          152,
+          1,
+          46
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g23"
+        ],
+        "kind": "Or(3)",
+        "output": "g26",
+        "position": [
+          84,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g24",
+          "g25"
+        ],
+        "kind": "Or(2)",
+        "output": "g27",
+        "position": [
+          112,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g26",
+          "g27"
+        ],
+        "kind": "Nor(2)",
+        "output": "g28",
+        "position": [
+          96,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g29",
+        "position": [
+          98,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(3)",
+        "output": "g30",
+        "position": [
+          126,
+          1,
+          23
+        ]
+      },
+      {
+        "inputs": [
+          "g30",
+          "g29"
+        ],
+        "kind": "Nor(2)",
+        "output": "g31",
+        "position": [
+          110,
+          1,
+          4
+        ]
+      }
+    ],
+    "output_map": {
+      "a": "g10",
+      "b": "g14",
+      "c": "g16",
+      "d": "g19",
+      "e": "g22",
+      "f": "g28",
+      "g": "g31"
+    },
+    "to": 4
+  },
+  "candidate": {
+    "changes": {
+      "d0": [
+        [
+          1,
+          false
+        ]
+      ],
+      "d2": [
+        [
+          1,
+          true
+        ]
+      ],
+      "g0": [
+        [
+          6,
+          true
+        ]
+      ],
+      "g10": [
+        [
+          24,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ],
+      "g11": [
+        [
+          16,
+          true
+        ],
+        [
+          20,
+          false
+        ]
+      ],
+      "g13": [
+        [
+          24,
+          true
+        ],
+        [
+          28,
+          false
+        ]
+      ],
+      "g14": [
+        [
+          30,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ],
+      "g18": [
+        [
+          26,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "g19": [
+        [
+          18,
+          true
+        ]
+      ],
+      "g2": [
+        [
+          8,
+          false
+        ]
+      ],
+      "g20": [
+        [
+          22,
+          false
+        ]
+      ],
+      "g21": [
+        [
+          28,
+          true
+        ],
+        [
+          32,
+          false
+        ]
+      ],
+      "g22": [
+        [
+          16,
+          false
+        ]
+      ],
+      "g25": [
+        [
+          20,
+          false
+        ]
+      ],
+      "g26": [
+        [
+          26,
+          true
+        ]
+      ],
+      "g27": [
+        [
+          8,
+          false
+        ]
+      ],
+      "g29": [
+        [
+          26,
+          true
+        ]
+      ],
+      "g4": [
+        [
+          6,
+          true
+        ]
+      ],
+      "g5": [
+        [
+          12,
+          false
+        ]
+      ],
+      "g6": [
+        [
+          18,
+          true
+        ]
+      ],
+      "g9": [
+        [
+          16,
+          false
+        ],
+        [
+          28,
+          true
+        ]
+      ],
+      "public_b": [
+        [
+          34,
+          false
+        ],
+        [
+          35,
+          true
+        ]
+      ]
+    },
+    "from": 1,
+    "gates": [
+      {
+        "inputs": [
+          "d0"
+        ],
+        "kind": "Nor(1)",
+        "output": "g0",
+        "position": [
+          98,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d1"
+        ],
+        "kind": "Nor(1)",
+        "output": "g1",
+        "position": [
+          126,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d2"
+        ],
+        "kind": "Nor(1)",
+        "output": "g2",
+        "position": [
+          56,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d3"
+        ],
+        "kind": "Nor(1)",
+        "output": "g3",
+        "position": [
+          84,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Or(3)",
+        "output": "g4",
+        "position": [
+          70,
+          1,
+          80
+        ]
+      },
+      {
+        "inputs": [
+          "g4",
+          "g0"
+        ],
+        "kind": "Nor(2)",
+        "output": "g5",
+        "position": [
+          68,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "d0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g6",
+        "position": [
+          40,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "g1",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g7",
+        "position": [
+          96,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "g2",
+          "g3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g8",
+        "position": [
+          82,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "g5",
+          "g6",
+          "g7"
+        ],
+        "kind": "Or(3)",
+        "output": "g9",
+        "position": [
+          84,
+          1,
+          26
+        ]
+      },
+      {
+        "inputs": [
+          "g9",
+          "g8"
+        ],
+        "kind": "Nor(2)",
+        "output": "g10",
+        "position": [
+          68,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "g0",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g11",
+        "position": [
+          26,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "d0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g12",
+        "position": [
+          54,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g11"
+        ],
+        "kind": "Or(3)",
+        "output": "g13",
+        "position": [
+          70,
+          1,
+          26
+        ]
+      },
+      {
+        "inputs": [
+          "g13",
+          "g12"
+        ],
+        "kind": "Nor(2)",
+        "output": "g14",
+        "position": [
+          82,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d2",
+          "d0",
+          "g1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g15",
+        "position": [
+          110,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g15"
+        ],
+        "kind": "Nor(3)",
+        "output": "g16",
+        "position": [
+          98,
+          1,
+          25
+        ]
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g17",
+        "position": [
+          124,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "g9",
+          "g8",
+          "g17"
+        ],
+        "kind": "Nor(3)",
+        "output": "g18",
+        "position": [
+          96,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d1",
+          "g2"
+        ],
+        "kind": "Nor(2)",
+        "output": "g19",
+        "position": [
+          12,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "d0",
+          "g7",
+          "g8"
+        ],
+        "kind": "Or(3)",
+        "output": "g20",
+        "position": [
+          56,
+          1,
+          26
+        ]
+      },
+      {
+        "inputs": [
+          "g20",
+          "g19"
+        ],
+        "kind": "Nor(2)",
+        "output": "g21",
+        "position": [
+          54,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "g0"
+        ],
+        "kind": "Nor(3)",
+        "output": "g22",
+        "position": [
+          138,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "d2",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g23",
+        "position": [
+          152,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "g0",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g24",
+        "position": [
+          166,
+          1,
+          49
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g22"
+        ],
+        "kind": "Or(3)",
+        "output": "g25",
+        "position": [
+          126,
+          1,
+          26
+        ]
+      },
+      {
+        "inputs": [
+          "g25",
+          "g23",
+          "g24"
+        ],
+        "kind": "Nor(3)",
+        "output": "g26",
+        "position": [
+          124,
+          1,
+          4
+        ]
+      },
+      {
+        "inputs": [
+          "d3",
+          "d2",
+          "d1"
+        ],
+        "kind": "Nor(3)",
+        "output": "g27",
+        "position": [
+          112,
+          1,
+          79
+        ]
+      },
+      {
+        "inputs": [
+          "g7",
+          "g8",
+          "g17"
+        ],
+        "kind": "Or(3)",
+        "output": "g28",
+        "position": [
+          112,
+          1,
+          26
+        ]
+      },
+      {
+        "inputs": [
+          "g28",
+          "g27"
+        ],
+        "kind": "Nor(2)",
+        "output": "g29",
+        "position": [
+          110,
+          1,
+          4
+        ]
+      }
+    ],
+    "output_map": {
+      "a": "g10",
+      "b": "g14",
+      "c": "g16",
+      "d": "g18",
+      "e": "g21",
+      "f": "g26",
+      "g": "g29"
+    },
+    "to": 4
+  },
+  "hidden_yosys_single_input_witnesses": [
+    {
+      "changes": {
+        "driver:a": [
+          [
+            48,
+            true
+          ]
+        ],
+        "driver:d": [
+          [
+            44,
+            true
+          ]
+        ],
+        "driver:e": [
+          [
+            30,
+            true
+          ]
+        ],
+        "driver:f": [
+          [
+            44,
+            false
+          ],
+          [
+            46,
+            true
+          ]
+        ],
+        "driver:g": [
+          [
+            44,
+            false
+          ]
+        ]
+      },
+      "from": 4,
+      "glitched": true,
+      "last_driver_change_tick": 48,
+      "pulse_widths": {
+        "f": [
+          2
+        ]
+      },
+      "to": 0
+    }
+  ]
+}

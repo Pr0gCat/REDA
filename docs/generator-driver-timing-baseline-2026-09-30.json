@@ -1,0 +1,48 @@
+{
+  "base_commit": "5c37201",
+  "generator_commit": "0de792e",
+  "sampling": "end of each game tick at actual declared-output driver; dust uses power > 0",
+  "pulse_definition": "finite wrong-target-value intervals between recorded driver changes; initial propagation interval excluded",
+  "measurements": [
+    {
+      "case": "and4",
+      "frontend": "REDA",
+      "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+      "worst_driver_change_ticks": 12,
+      "driver_glitch_transitions": 13,
+      "driver_single_input_glitches": 0,
+      "worst_driver_pulse_ticks": 8,
+      "total_driver_pulse_ticks": 64
+    },
+    {
+      "case": "and4",
+      "frontend": "Yosys-fresh",
+      "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+      "worst_driver_change_ticks": 8,
+      "driver_glitch_transitions": 0,
+      "driver_single_input_glitches": 0,
+      "worst_driver_pulse_ticks": 0,
+      "total_driver_pulse_ticks": 0
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "REDA",
+      "world_fingerprint": "7c6c51d831ca72e249d590fd11b7306bdddd1c1f8f76c73bac13ada0e6cb39d4",
+      "worst_driver_change_ticks": 40,
+      "driver_glitch_transitions": 105,
+      "driver_single_input_glitches": 0,
+      "worst_driver_pulse_ticks": 20,
+      "total_driver_pulse_ticks": 1520
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "Yosys-fresh",
+      "world_fingerprint": "9839637a3ae76d2c45fc50def2b4d21d984ff88fc85beca5f4593ebcb7dbce63",
+      "worst_driver_change_ticks": 62,
+      "driver_glitch_transitions": 146,
+      "driver_single_input_glitches": 18,
+      "worst_driver_pulse_ticks": 24,
+      "total_driver_pulse_ticks": 2552
+    }
+  ]
+}

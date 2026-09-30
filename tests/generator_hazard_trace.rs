@@ -5,6 +5,66 @@ use reda::redstone::simulator::Simulator;
 use serde_json::json;
 
 #[test]
+fn trace_two_input_decoder_transition() {
+    let artifact = compile_systemverilog(
+        &[SourceInput {
+            name: "fixture.sv",
+            text: include_str!("fixtures/seven_segment.sv"),
+        }],
+        &CompileOptions::new("seven_segment"),
+    )
+    .unwrap();
+    let outputs = artifact.output_map();
+    let lowered = lower_optimised(&artifact.netlist).unwrap();
+    let compiled = compile(&lowered).unwrap();
+    let mut watched = reda::timing::watch_all_nets(&compiled);
+    let output = compiled.output_positions[&outputs["b"]];
+    watched.push((
+        reda::redstone::simulator::position::Position::new(output.0, output.1, output.2),
+        "public_b".to_string(),
+    ));
+    let positions: Vec<_> = ["d0", "d1", "d2", "d3"]
+        .iter()
+        .map(|name| compiled.input_positions[*name])
+        .collect();
+    let mut sim = Simulator::new(compiled.world);
+    sim.run_until_stable(2000).unwrap();
+    let apply = |sim: &mut Simulator, value: usize| {
+        for (i, &(x, y, z)) in positions.iter().enumerate() {
+            let mut block = sim.world().get(x, y, z).clone();
+            block.lit = value & (1 << i) != 0;
+            sim.world_mut().set(x, y, z, block);
+        }
+    };
+    // Preserve the quality matrix's history before its 1 -> 4 transition.
+    for (from, end) in [(0, 16), (1, 4)] {
+        for to in 0..end {
+            apply(&mut sim, from);
+            sim.run_until_stable(2000).unwrap();
+            apply(&mut sim, to);
+            sim.run_until_stable(2000).unwrap();
+        }
+    }
+    apply(&mut sim, 1);
+    sim.run_until_stable(2000).unwrap();
+    assert!(sim.world().get(output.0, output.1, output.2).lit);
+    sim.attach_observer(watched);
+    let timing = reda::timing::measure_transition(&mut sim, 2000, |sim| apply(sim, 4)).unwrap();
+    assert!(sim.world().get(output.0, output.1, output.2).lit);
+    let report = json!({"from":1,"to":4,"output_map":outputs,
+        "gates":lowered.gates.iter().map(|gate| json!({"kind":format!("{:?}",gate.kind),"inputs":gate.inputs,"output":gate.output,"position":compiled.gate_output_positions[&gate.output]})).collect::<Vec<_>>(),
+        "changes":timing.nets.iter().map(|(name,net)| (name.clone(),json!(net.changes()))).collect::<std::collections::BTreeMap<_,_>>()});
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
+    std::fs::write(
+        target.join("generator_two_input_trace.json"),
+        serde_json::to_string_pretty(&report).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
 fn trace_yosys_single_input_transition() {
     let (netlist, outputs) = reda::frontend::synthesize_verilog(
         include_str!("fixtures/seven_segment.v"),
