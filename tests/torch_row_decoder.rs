@@ -1818,7 +1818,6 @@ fn verify_typed_matrix_internal_truth(
 }
 
 fn verify_typed_matrix_family(include_constants: bool) {
-    use reda::compile::fragment_synth::realise::realise_and_verify_expanded;
     let library = typed_matrix_library();
     let mut verified = 0;
     let mut improved = 0;
@@ -1854,18 +1853,26 @@ fn verify_typed_matrix_family(include_constants: bool) {
         }
         let (netlist, original, candidate) = typed_matrix_candidate(words);
         let source = matrix_frontend_source(words);
-        let rewrite = reda::compile::equivalence::prove_netlist_rewrite(
+        let result = reda::compile::fragment_synth::rewrite::realise_physical_rewrite(
             &source,
             &netlist,
+            &candidate,
+            &library,
             &source.inputs,
             &netlist.outputs,
             1_000_000,
         )
-        .unwrap();
-        let physical = reda::compile::equivalence::prove_combinational_equivalence(
-            &netlist, &candidate, &library, 1_000_000,
-        )
-        .unwrap();
+        .unwrap_or_else(|e| panic!("words={words:?}, encoding={encoding}: {e:?}"));
+        let rewrite = result.rewrite_certificate();
+        let physical = result.equivalence_certificate();
+        assert_eq!(result.source(), &source);
+        assert_eq!(result.implemented(), &netlist);
+        assert_eq!(result.source_input_positions().len(), source.inputs.len());
+        assert_eq!(result.source_output_positions().len(), source.outputs.len());
+        assert_eq!(
+            result.source_output_driver_positions().len(),
+            source.outputs.len()
+        );
         assert_eq!(
             rewrite.rewritten_netlist_hash(),
             &physical.lowered_netlist_hash
@@ -1883,8 +1890,7 @@ fn verify_typed_matrix_family(include_constants: bool) {
         }
         let (_, _, repeated) = typed_matrix_candidate(words);
         assert_eq!(candidate.fingerprint(), repeated.fingerprint());
-        let certified = realise_and_verify_expanded(&candidate, &netlist, &library)
-            .unwrap_or_else(|e| panic!("words={words:?}, encoding={encoding}: {e:?}"));
+        let certified = result.physical();
         for y in 0..original.size().1 {
             for z in 0..original.size().2 {
                 for x in 0..original.size().0 {
@@ -1897,7 +1903,8 @@ fn verify_typed_matrix_family(include_constants: bool) {
             }
         }
         verify_typed_matrix_internal_truth(&candidate, &netlist, certified.world().clone());
-        let views = candidate.compatibility_views(&netlist).unwrap();
+        let views = result.implemented_observations();
+        assert_eq!(views, &candidate.compatibility_views(&netlist).unwrap());
         let position = |p: (i32, i32, i32)| Position::new(p.0, p.1, p.2);
         let measured = measure_rom(
             certified.world().clone(),
@@ -2026,9 +2033,7 @@ fn typed_matrix_refresh_rejects_missing_delay_owner_and_foreign_output_wire() {
 
 #[test]
 fn matrix_rewrite_chain_checks_fresh_yosys_and_rejects_wrong_source_data() {
-    use reda::compile::equivalence::{
-        prove_combinational_equivalence, prove_netlist_rewrite, NetlistRewriteError,
-    };
+    use reda::compile::equivalence::{prove_netlist_rewrite, NetlistRewriteError};
     for words in [[1, 6, 3, 5], [3, 6, 6, 1]] {
         let text = matrix_frontend_text(words);
         let (source, ports) = reda::frontend::synthesize_verilog(&text, "source_rom").unwrap();
@@ -2037,21 +2042,18 @@ fn matrix_rewrite_chain_checks_fresh_yosys_and_rejects_wrong_source_data() {
             .map(|bit| ports[&format!("y{bit}")].clone())
             .collect();
         let (normalized, _, candidate) = typed_matrix_candidate(words);
-        let rewrite = prove_netlist_rewrite(
+        let result = reda::compile::fragment_synth::rewrite::realise_physical_rewrite(
             &source,
             &normalized,
+            &candidate,
+            &typed_matrix_library(),
             &source.inputs,
             &normalized.outputs,
             1_000_000,
         )
         .unwrap();
-        let physical = prove_combinational_equivalence(
-            &normalized,
-            &candidate,
-            &typed_matrix_library(),
-            1_000_000,
-        )
-        .unwrap();
+        let rewrite = result.rewrite_certificate();
+        let physical = result.equivalence_certificate();
         assert_eq!(
             rewrite.rewritten_netlist_hash(),
             &physical.lowered_netlist_hash
@@ -2144,4 +2146,110 @@ fn typed_constant_support_rejects_a_foreign_owned_wire() {
         "unexpected certification error: {:?}",
         actual.err()
     );
+}
+
+#[test]
+fn physical_rewrite_preserves_ordered_boundaries_and_rejects_partial_proofs() {
+    use reda::compile::equivalence::NetlistRewriteError;
+    use reda::compile::fragment_synth::rewrite::{realise_physical_rewrite, PhysicalRewriteError};
+    let (normalized, _, candidate) = typed_matrix_candidate([1, 6, 3, 5]);
+    let library = typed_matrix_library();
+    let mut source = matrix_frontend_source([1, 6, 3, 5]);
+    source.inputs.reverse();
+    source.outputs.reverse();
+    let mut inputs = normalized.inputs.clone();
+    inputs.reverse();
+    let mut outputs = normalized.outputs.clone();
+    outputs.reverse();
+    let result = realise_physical_rewrite(
+        &source,
+        &normalized,
+        &candidate,
+        &library,
+        &inputs,
+        &outputs,
+        1_000_000,
+    )
+    .unwrap();
+    let views = result.implemented_observations();
+    for (i, name) in inputs.iter().enumerate() {
+        assert_eq!(
+            result.source_input_positions()[i],
+            views.input_positions[name]
+        );
+    }
+    for (i, name) in outputs.iter().enumerate() {
+        assert_eq!(
+            result.source_output_positions()[i],
+            views.output_positions[name]
+        );
+        assert_eq!(
+            result.source_output_driver_positions()[i],
+            views.gate_output_positions[name]
+        );
+    }
+    assert!(matches!(
+        realise_physical_rewrite(
+            &source,
+            &normalized,
+            &candidate,
+            &library,
+            &inputs,
+            &outputs,
+            0
+        ),
+        Err(PhysicalRewriteError::Rewrite(
+            NetlistRewriteError::ProofExhausted { .. }
+        ))
+    ));
+    assert!(matches!(
+        realise_physical_rewrite(
+            &source,
+            &normalized,
+            &candidate,
+            &library,
+            &inputs,
+            &outputs[..2],
+            1_000_000
+        ),
+        Err(PhysicalRewriteError::Rewrite(
+            NetlistRewriteError::InvalidPortBindings
+        ))
+    ));
+    let mut broken = candidate.clone();
+    broken
+        .junctions
+        .values_mut()
+        .next()
+        .unwrap()
+        .contributors
+        .pop();
+    assert!(realise_physical_rewrite(
+        &source,
+        &normalized,
+        &broken,
+        &library,
+        &inputs,
+        &outputs,
+        1_000_000
+    )
+    .is_err());
+    let wrong = matrix_frontend_source([1, 6, 3, 4]);
+    assert!(matches!(
+        realise_physical_rewrite(
+            &wrong,
+            &normalized,
+            &candidate,
+            &library,
+            &normalized.inputs,
+            &normalized.outputs,
+            1_000_000
+        ),
+        Err(PhysicalRewriteError::Rewrite(
+            NetlistRewriteError::OutputMismatch {
+                input_vector: 3,
+                ..
+            }
+        ))
+    ));
 }

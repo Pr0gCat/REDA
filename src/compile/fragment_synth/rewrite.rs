@@ -1,0 +1,154 @@
+//! Certified physical rewrites retain both netlists instead of fabricating
+//! observation positions for source gates removed by the rewrite.
+
+use super::candidate::{CandidateError, CompatibilityViews, ExpandedPhysicalCandidate};
+use super::identity::{ObservationId, PortId};
+use super::realise::{realise_and_verify_expanded, CertificationError, CertifiedWorld};
+use crate::compile::equivalence::{
+    prove_combinational_equivalence, prove_netlist_rewrite, EquivalenceCertificate,
+    EquivalenceError, NetlistRewriteCertificate, NetlistRewriteError,
+};
+use crate::compile::topology::Library;
+use crate::compile::Netlist;
+
+#[derive(Debug)]
+pub enum PhysicalRewriteError {
+    Rewrite(NetlistRewriteError),
+    Equivalence(EquivalenceError),
+    Certification(CertificationError),
+    Boundary(CandidateError),
+    MissingOutputDriver { signal: String },
+}
+
+/// A source boundary and its actual rewritten physical implementation.
+/// Read-only access keeps the netlists, proofs and world tied together.
+#[derive(Debug, Clone)]
+pub struct CertifiedPhysicalRewrite {
+    source: Netlist,
+    implemented: Netlist,
+    rewrite: NetlistRewriteCertificate,
+    equivalence: EquivalenceCertificate,
+    physical: CertifiedWorld,
+    observations: CompatibilityViews,
+    source_inputs: Vec<(i32, i32, i32)>,
+    source_outputs: Vec<(i32, i32, i32)>,
+    source_output_drivers: Vec<(i32, i32, i32)>,
+}
+
+impl CertifiedPhysicalRewrite {
+    pub fn source(&self) -> &Netlist {
+        &self.source
+    }
+    pub fn implemented(&self) -> &Netlist {
+        &self.implemented
+    }
+    pub fn rewrite_certificate(&self) -> &NetlistRewriteCertificate {
+        &self.rewrite
+    }
+    pub fn equivalence_certificate(&self) -> &EquivalenceCertificate {
+        &self.equivalence
+    }
+    pub fn physical(&self) -> &CertifiedWorld {
+        &self.physical
+    }
+    /// All internal positions belong to implemented(), never source().
+    pub fn implemented_observations(&self) -> &CompatibilityViews {
+        &self.observations
+    }
+    /// Positions in source declaration order; output aliases retain multiplicity.
+    pub fn source_input_positions(&self) -> &[(i32, i32, i32)] {
+        &self.source_inputs
+    }
+    pub fn source_output_positions(&self) -> &[(i32, i32, i32)] {
+        &self.source_outputs
+    }
+    pub fn source_output_driver_positions(&self) -> &[(i32, i32, i32)] {
+        &self.source_output_drivers
+    }
+}
+
+/// Prove the complete source boundary, prove its rewritten instance graph,
+/// then certify and emit exactly that candidate. No partially checked result
+/// escapes on any failure. Bindings use implemented names in source order.
+/// Each proof uses the caller's work limit; this is not a timing guarantee.
+pub fn realise_physical_rewrite(
+    source: &Netlist,
+    implemented: &Netlist,
+    candidate: &ExpandedPhysicalCandidate,
+    library: &Library,
+    inputs_in_source_order: &[String],
+    outputs_in_source_order: &[String],
+    proof_work_limit: u64,
+) -> Result<CertifiedPhysicalRewrite, PhysicalRewriteError> {
+    let rewrite = prove_netlist_rewrite(
+        source,
+        implemented,
+        inputs_in_source_order,
+        outputs_in_source_order,
+        proof_work_limit,
+    )
+    .map_err(PhysicalRewriteError::Rewrite)?;
+    let equivalence =
+        prove_combinational_equivalence(implemented, candidate, library, proof_work_limit)
+            .map_err(PhysicalRewriteError::Equivalence)?;
+    let physical = realise_and_verify_expanded(candidate, implemented, library)
+        .map_err(PhysicalRewriteError::Certification)?;
+    let observations = candidate
+        .compatibility_views(implemented)
+        .map_err(PhysicalRewriteError::Boundary)?;
+    let source_inputs = inputs_in_source_order
+        .iter()
+        .map(|name| observations.input_positions[name])
+        .collect();
+    // Names alone collapse repeated output aliases. Consume each declared
+    // occurrence and retain its own certified boundary observation.
+    let mut remaining_outputs: Vec<_> = implemented.outputs.iter().enumerate().collect();
+    let source_outputs = outputs_in_source_order
+        .iter()
+        .map(|name| {
+            let ordinal = remaining_outputs
+                .iter()
+                .position(|(_, signal)| *signal == name)
+                .expect("the rewrite proof checked the complete output multiset");
+            let (index, _) = remaining_outputs.remove(ordinal);
+            let id =
+                PortId(u32::try_from(index).map_err(|_| {
+                    PhysicalRewriteError::Boundary(CandidateError::IdentityOverflow)
+                })?);
+            let observation = ObservationId::DeclaredOutput(id);
+            let at = candidate
+                .observations
+                .get(&observation)
+                .ok_or(PhysicalRewriteError::Boundary(
+                    CandidateError::MissingCompatibilityObservation { observation },
+                ))?
+                .site
+                .at;
+            Ok((at.x, at.y, at.z))
+        })
+        .collect::<Result<Vec<_>, PhysicalRewriteError>>()?;
+    let source_output_drivers = outputs_in_source_order
+        .iter()
+        .map(|name| {
+            observations
+                .gate_output_positions
+                .get(name)
+                .copied()
+                .or_else(|| observations.input_positions.get(name).copied())
+                .ok_or_else(|| PhysicalRewriteError::MissingOutputDriver {
+                    signal: name.clone(),
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CertifiedPhysicalRewrite {
+        source: source.clone(),
+        implemented: implemented.clone(),
+        rewrite,
+        equivalence,
+        physical,
+        observations,
+        source_inputs,
+        source_outputs,
+        source_output_drivers,
+    })
+}

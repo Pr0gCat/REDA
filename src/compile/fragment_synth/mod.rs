@@ -24,6 +24,7 @@ mod parent;
 pub(crate) mod partition;
 pub(crate) mod placement;
 pub mod realise;
+pub mod rewrite;
 mod recursive;
 pub(crate) mod route_schedule;
 mod schedule;
