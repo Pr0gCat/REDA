@@ -1,0 +1,402 @@
+{
+  "base_commit": "35b7318",
+  "nor_only": "zero edits; all quality metrics unchanged",
+  "variants": [
+    {
+      "rule": "full",
+      "world_ticks": 74,
+      "mean_world_ticks": 51.42578125,
+      "lamp_glitch_transitions": 135,
+      "lamp_single_input_glitches": 14,
+      "metrics": {
+        "case": "seven_segment",
+        "driver_glitch_transitions": 139,
+        "driver_single_input_glitches": 14,
+        "frontend": "Yosys-fresh",
+        "total_driver_pulse_ticks": 2760,
+        "world_fingerprint": "b8f121a06c243b90812a8e243a8eeb698a984c30dd7888bd89f5996d0a823199",
+        "worst_driver_change_ticks": 70,
+        "worst_driver_pulse_ticks": 26
+      },
+      "driver_witnesses": [
+        {
+          "baseline": {
+            "changes": {
+              "driver:a": [
+                [
+                  42,
+                  false
+                ],
+                [
+                  48,
+                  true
+                ]
+              ],
+              "driver:c": [
+                [
+                  30,
+                  false
+                ]
+              ],
+              "driver:d": [
+                [
+                  38,
+                  false
+                ],
+                [
+                  44,
+                  true
+                ]
+              ],
+              "driver:f": [
+                [
+                  40,
+                  false
+                ]
+              ],
+              "driver:g": [
+                [
+                  40,
+                  true
+                ]
+              ]
+            },
+            "from": 0,
+            "glitched": true,
+            "last_driver_change_tick": 48,
+            "pulse_widths": {
+              "a": [
+                6
+              ],
+              "d": [
+                6
+              ]
+            },
+            "to": 2
+          },
+          "candidate": {
+            "changes": {
+              "driver:c": [
+                [
+                  30,
+                  false
+                ]
+              ],
+              "driver:f": [
+                [
+                  40,
+                  false
+                ]
+              ],
+              "driver:g": [
+                [
+                  40,
+                  true
+                ]
+              ]
+            },
+            "from": 0,
+            "glitched": false,
+            "last_driver_change_tick": 40,
+            "pulse_widths": {},
+            "to": 2
+          }
+        },
+        {
+          "baseline": {
+            "changes": {
+              "driver:a": [
+                [
+                  48,
+                  true
+                ]
+              ],
+              "driver:d": [
+                [
+                  44,
+                  true
+                ]
+              ],
+              "driver:e": [
+                [
+                  30,
+                  true
+                ]
+              ],
+              "driver:f": [
+                [
+                  44,
+                  false
+                ],
+                [
+                  46,
+                  true
+                ]
+              ],
+              "driver:g": [
+                [
+                  44,
+                  false
+                ]
+              ]
+            },
+            "from": 4,
+            "glitched": true,
+            "last_driver_change_tick": 48,
+            "pulse_widths": {
+              "f": [
+                2
+              ]
+            },
+            "to": 0
+          },
+          "candidate": {
+            "changes": {
+              "driver:a": [
+                [
+                  54,
+                  true
+                ]
+              ],
+              "driver:d": [
+                [
+                  50,
+                  true
+                ]
+              ],
+              "driver:e": [
+                [
+                  30,
+                  true
+                ]
+              ],
+              "driver:g": [
+                [
+                  48,
+                  false
+                ]
+              ]
+            },
+            "from": 4,
+            "glitched": false,
+            "last_driver_change_tick": 54,
+            "pulse_widths": {},
+            "to": 0
+          }
+        }
+      ]
+    },
+    {
+      "rule": "cap_one",
+      "world_ticks": 65,
+      "mean_world_ticks": 49.3359375,
+      "lamp_glitch_transitions": 142,
+      "lamp_single_input_glitches": 17,
+      "metrics": {
+        "case": "seven_segment",
+        "driver_glitch_transitions": 145,
+        "driver_single_input_glitches": 17,
+        "frontend": "Yosys-fresh",
+        "total_driver_pulse_ticks": 2622,
+        "world_fingerprint": "a63ee1eaf39e079cbe07b8c45d1dc60b9cdb67f2087ff4979a3837c5e775a335",
+        "worst_driver_change_ticks": 64,
+        "worst_driver_pulse_ticks": 24
+      },
+      "driver_witnesses": [
+        {
+          "baseline": {
+            "changes": {
+              "driver:a": [
+                [
+                  42,
+                  false
+                ],
+                [
+                  48,
+                  true
+                ]
+              ],
+              "driver:c": [
+                [
+                  30,
+                  false
+                ]
+              ],
+              "driver:d": [
+                [
+                  38,
+                  false
+                ],
+                [
+                  44,
+                  true
+                ]
+              ],
+              "driver:f": [
+                [
+                  40,
+                  false
+                ]
+              ],
+              "driver:g": [
+                [
+                  40,
+                  true
+                ]
+              ]
+            },
+            "from": 0,
+            "glitched": true,
+            "last_driver_change_tick": 48,
+            "pulse_widths": {
+              "a": [
+                6
+              ],
+              "d": [
+                6
+              ]
+            },
+            "to": 2
+          },
+          "candidate": {
+            "changes": {
+              "driver:a": [
+                [
+                  44,
+                  false
+                ],
+                [
+                  48,
+                  true
+                ]
+              ],
+              "driver:c": [
+                [
+                  30,
+                  false
+                ]
+              ],
+              "driver:d": [
+                [
+                  40,
+                  false
+                ],
+                [
+                  44,
+                  true
+                ]
+              ],
+              "driver:f": [
+                [
+                  40,
+                  false
+                ]
+              ],
+              "driver:g": [
+                [
+                  40,
+                  true
+                ]
+              ]
+            },
+            "from": 0,
+            "glitched": true,
+            "last_driver_change_tick": 48,
+            "pulse_widths": {
+              "a": [
+                4
+              ],
+              "d": [
+                4
+              ]
+            },
+            "to": 2
+          }
+        },
+        {
+          "baseline": {
+            "changes": {
+              "driver:a": [
+                [
+                  48,
+                  true
+                ]
+              ],
+              "driver:d": [
+                [
+                  44,
+                  true
+                ]
+              ],
+              "driver:e": [
+                [
+                  30,
+                  true
+                ]
+              ],
+              "driver:f": [
+                [
+                  44,
+                  false
+                ],
+                [
+                  46,
+                  true
+                ]
+              ],
+              "driver:g": [
+                [
+                  44,
+                  false
+                ]
+              ]
+            },
+            "from": 4,
+            "glitched": true,
+            "last_driver_change_tick": 48,
+            "pulse_widths": {
+              "f": [
+                2
+              ]
+            },
+            "to": 0
+          },
+          "candidate": {
+            "changes": {
+              "driver:a": [
+                [
+                  50,
+                  true
+                ]
+              ],
+              "driver:d": [
+                [
+                  46,
+                  true
+                ]
+              ],
+              "driver:e": [
+                [
+                  30,
+                  true
+                ]
+              ],
+              "driver:g": [
+                [
+                  46,
+                  false
+                ]
+              ]
+            },
+            "from": 4,
+            "glitched": false,
+            "last_driver_change_tick": 50,
+            "pulse_widths": {},
+            "to": 0
+          }
+        }
+      ]
+    }
+  ],
+  "full_prototype": " compensate only predicted single-input static NOR hazards.\nfn balance_static_events(netlist: &Netlist, compiled: &mut reda::compile::CompiledCircuit) {\n    use reda::compile::{geometry, topology::GateKind};\n    use reda::redstone::{simulator::position::Position, world::block::BlockKind};\n    if netlist.inputs.len() > 6 { return; }\n    let Ok(routes) = reda::compile::routing_stats::analyze(netlist, compiled) else { return; };\n    let cost: HashMap<_,_> = routes.edges.iter().map(|e| (e.sink.clone(), (e.total().repeaters*2) as u64)).collect();\n    let mut ordered = Vec::new();\n    let mut known: std::collections::BTreeSet<_> = netlist.inputs.iter().cloned().collect();\n    let mut pending: Vec<_> = netlist.gates.iter().enumerate().collect();\n    while !pending.is_empty() {\n        let before = pending.len();\n        pending.retain(|&(index,gate)| {\n            if !gate.inputs.iter().all(|n| known.contains(n)) { return true; }\n            if !matches!(gate.kind, GateKind::Nor(_) | GateKind::Or(_)) { return true; }\n            known.insert(gate.output.clone()); ordered.push((index,gate)); false\n        });\n        if pending.len()==before { return; }\n    }\n    let truth = |bits: usize| {\n        let mut values: HashMap<String,bool> = netlist.inputs.iter().enumerate().map(|(i,n)| (n.clone(),bits&(1<<i)!=0)).collect();\n        for &(_,gate) in &ordered {\n            let any = gate.inputs.iter().any(|n| values[n]);\n            values.insert(gate.output.clone(), if matches!(gate.kind,GateKind::Nor(_)) { !any } else { any });\n        }\n        values\n    };\n    let states: Vec<_> = (0..1usize<<netlist.inputs.len()).map(truth).collect();\n    let mut additions = std::collections::BTreeMap::<(usize,usize),u64>::new();\n    for from in 0..states.len() {\n        for bit in 0..netlist.inputs.len() {\n            let to = from^(1<<bit); let old=&states[from]; let new=&states[to];\n            let mut arrival: HashMap<String,u64> = netlist.inputs.iter().map(|n| (n.clone(),0)).collect();\n            for &(index,gate) in &ordered {\n                let times: Vec<_> = gate.inputs.iter().enumerate().map(|(i,n)| arrival[n]+cost[&format!(\"{}.in[{}]\",gate.output,i)]).collect();\n                let rising: Vec<_> = gate.inputs.iter().enumerate().filter(|(_,n)| !old[*n] && new[*n]).map(|(i,_)| times[i]).collect();\n                let falling: Vec<_> = gate.inputs.iter().enumerate().filter(|(_,n)| old[*n] && !new[*n]).map(|(i,_)| (i,times[i])).collect();\n                if old[&gate.output] == !matches!(gate.kind,GateKind::Nor(_)) && new[&gate.output] == old[&gate.output]\n                    && !gate.inputs.iter().any(|n| old[n] && new[n]) {\n                    if let (Some(first_on),Some(last_off)) = (rising.iter().min(),falling.iter().map(|(_,t)| t).max()) {\n                        if last_off < first_on {\n                            // Delay an actual falling endpoint; never delay the replacement high.\n                            let facing=compiled.gate_facings[index];\n                            let (x,y,z)=compiled.gate_output_positions[&gate.output];\n                            let output=Position::new(x,y,z);\n                            let support=if matches!(gate.kind,GateKind::Nor(_)) {output.offset(geometry::output_direction(facing).opposite())} else {output};\n                            for &(i,time) in &falling {\n                                let socket=support.offset(geometry::input_directions(facing)[i]);\n                                let state=compiled.world.get(socket.x,socket.y,socket.z);\n                                if state.kind!=BlockKind::Repeater { continue; }\n                                let extra=((*first_on-time).div_ceil(2)).min(4-state.delay as u64);\n                                additions.entry((index,i)).and_modify(|x| *x=(*x).max(extra)).or_insert(extra);\n                                break;\n                            }\n                        }\n                    }\n                }\n                let is_nor=matches!(gate.kind,GateKind::Nor(_));\n                let tick=if old[&gate.output]!=new[&gate.output] {\n                    if new[&gate.output] != is_nor { rising.iter().copied().min().unwrap() }\n                    else { falling.iter().map(|(_,t)| *t).max().unwrap() }\n                } else { 0 };\n                arrival.insert(gate.output.clone(),tick+if is_nor {2} else {0});\n            }\n        }\n    }\n    for (&(index,i),&extra) in &additions {\n        let gate=&netlist.gates[index];let facing=compiled.gate_facings[index];\n        let (x,y,z)=compiled.gate_output_positions[&gate.output];\n        let output=Position::new(x,y,z);\n                            let support=if matches!(gate.kind,GateKind::Nor(_)) {output.offset(geometry::output_direction(facing).opposite())} else {output};\n        let socket=support.offset(geometry::input_directions(facing)[i]);\n        let mut state=compiled.world.get(socket.x,socket.y,socket.z).clone();\n        state.delay+=extra as u8;compiled.world.set(socket.x,socket.y,socket.z,state);\n        eprintln!(\"event-balanced {} input {} by {} redstone ticks\",gate.output,i,extra);\n    }\n    eprintln!(\"event-balanced endpoints: {}\",additions.len());\n}\n\n"
+}
