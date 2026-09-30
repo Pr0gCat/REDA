@@ -225,6 +225,15 @@ fn matrix_four_words(
     minimized: bool,
     balanced: bool,
 ) -> (World, Vec<Position>, Vec<Position>, Vec<Position>) {
+    matrix_four_words_with_aligned_refresh(words, minimized, balanced, false)
+}
+
+fn matrix_four_words_with_aligned_refresh(
+    words: [u8; 4],
+    minimized: bool,
+    balanced: bool,
+    align_refresh: bool,
+) -> (World, Vec<Position>, Vec<Position>, Vec<Position>) {
     let mut rows = std::collections::BTreeMap::new();
     if minimized {
         for bit in 0..3 {
@@ -323,7 +332,10 @@ fn matrix_four_words(
             r.name = "minecraft:repeater".into();
             r.facing = Some(Facing::North);
             r.delay = 1;
-            w.set(x, 1, 18, r);
+            // Put output restoration at the same boundary as the literal
+            // restoration: early rows pay the output stage, late rows the
+            // literal stage, so every row crosses exactly one stage.
+            w.set(x, 1, if align_refresh { 15 } else { 18 }, r);
         }
         w.set(x, 0, output_end + 1, block(BlockKind::Solid));
         w.set(x, 1, output_end + 1, block(BlockKind::Lamp));
@@ -531,34 +543,135 @@ fn four_word_rom_with_physical_literal_decoder_records_full_transition_quality()
 
 #[test]
 fn all_two_address_three_output_roms_have_correct_physical_truth() {
+    qualify_all_tables(false);
+}
+
+#[test]
+fn all_rom_tables_with_aligned_refresh_boundaries_have_correct_truth_and_no_sampled_glitches() {
+    qualify_all_tables(true);
+}
+
+fn qualify_all_tables(aligned: bool) {
     let mut worst = 0;
     let mut glitches = 0;
     let mut single = 0;
+    let mut lamp_glitches = 0;
     for encoding in 0..4096u32 {
         let words = std::array::from_fn(|i| ((encoding >> (3 * i)) & 7) as u8);
-        let (world, inputs, drivers, lamps) = matrix_four_words(words, true, true);
+        let (world, inputs, drivers, lamps) =
+            matrix_four_words_with_aligned_refresh(words, true, true, aligned);
         assert_eq!(
             reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&world),
             reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(
-                &matrix_four_words(words, true, true).0
+                &matrix_four_words_with_aligned_refresh(words, true, true, aligned).0
             )
         );
         let quality = measure_rom(world, inputs, drivers, lamps, &words);
         worst = worst.max(quality["worst_settle_ticks"].as_u64().unwrap());
         glitches += quality["driver_glitches"].as_u64().unwrap();
         single += quality["driver_single_input_glitches"].as_u64().unwrap();
+        lamp_glitches += quality["lamp_glitches"].as_u64().unwrap();
         if encoding % 512 == 0 {
             println!("verified ROM encodings through {encoding}: words={words:?}");
         }
     }
+    if aligned {
+        assert_eq!(lamp_glitches, 0, "lamp hazard regression");
+    }
     assert_eq!(single, 0, "single-input hazard regression");
-    assert!(glitches <= 48, "prototype aggregate pulse regression");
-    assert!(worst <= 18, "prototype aggregate settling regression");
-    let report = json!({"data_tables":4096,"measured_transitions":65536,"setup_transitions":65536,"driver_glitches":glitches,"driver_single_input_glitches":single,"worst_settle_ticks":worst,"all_final_driver_and_lamp_truth_correct":true,"all_worlds_deterministic":true});
+    assert!(
+        glitches <= if aligned { 0 } else { 48 },
+        "prototype aggregate pulse regression"
+    );
+    assert!(
+        worst <= if aligned { 16 } else { 18 },
+        "prototype aggregate settling regression"
+    );
+    let report = json!({"aligned_refresh_boundaries":aligned,"data_tables":4096,"measured_transitions":65536,"setup_transitions":65536,"driver_glitches":glitches,"lamp_glitches":lamp_glitches,"driver_single_input_glitches":single,"worst_settle_ticks":worst,"all_final_driver_and_lamp_truth_correct":true,"all_worlds_deterministic":true});
     println!("{report}");
     std::fs::write(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/torch_row_exhaustive.json"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(if aligned {
+            "target/torch_row_exhaustive_aligned.json"
+        } else {
+            "target/torch_row_exhaustive.json"
+        }),
         serde_json::to_string_pretty(&report).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn six_row_decoder_refresh_paths_are_balanced_against_frozen_geometry() {
+    let fixed: serde_json::Value = serde_json::from_str(include_str!(
+        "../docs/generator-torch-row-stage-balance-2026-09-30.json"
+    ))
+    .unwrap();
+    let mut records = Vec::new();
+    for encoding in 0..4096u32 {
+        let words: [u8; 4] = std::array::from_fn(|i| ((encoding >> (3 * i)) & 7) as u8);
+        let mut cubes = std::collections::BTreeSet::new();
+        for bit in 0..3 {
+            let table: Vec<_> = words.iter().map(|w| w & (1 << bit) != 0).collect();
+            cubes.extend(cover::cover(&table, true));
+        }
+        if cubes.len() != 6 {
+            continue;
+        }
+        let (w, i, d, l) = matrix_four_words(words, true, true);
+        let baseline = measure_rom(w, i, d, l, &words);
+        let (w, i, d, l) = matrix_four_words_with_aligned_refresh(words, true, true, true);
+        assert_eq!(
+            reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&w),
+            reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(
+                &matrix_four_words_with_aligned_refresh(words, true, true, true).0
+            )
+        );
+        let candidate = measure_rom(w, i, d, l, &words);
+        let frozen = fixed["measurements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["encoding"] == encoding)
+            .expect("fixed six-row reference exists");
+        println!(
+            "encoding={encoding} words={words:?} old={} new={}",
+            baseline["driver_glitches"], candidate["driver_glitches"]
+        );
+        for metric in [
+            "worst_settle_ticks",
+            "total_settle_ticks",
+            "driver_glitches",
+            "lamp_glitches",
+            "driver_single_input_glitches",
+            "lamp_single_input_glitches",
+            "worst_driver_change_ticks",
+            "worst_driver_pulse_ticks",
+            "total_driver_pulse_ticks",
+        ] {
+            assert_eq!(
+                baseline[metric], frozen["baseline"][metric],
+                "independent baseline drift for {encoding}/{metric}"
+            );
+            assert!(
+                candidate[metric].as_u64().unwrap() <= frozen["baseline"][metric].as_u64().unwrap(),
+                "{words:?}: {metric} regression: {} > {}",
+                candidate[metric],
+                baseline[metric]
+            );
+        }
+        records.push(
+            json!({"encoding":encoding,"words":words,"baseline":baseline,"candidate":candidate}),
+        );
+    }
+    assert_eq!(records.len(), 48);
+    assert!(records
+        .iter()
+        .all(|r| r["candidate"]["driver_glitches"] == 0 && r["candidate"]["lamp_glitches"] == 0));
+    println!("six-row tables: {}", records.len());
+    std::fs::write(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/torch_row_stage_balance.json"),
+        serde_json::to_string_pretty(&records).unwrap(),
     )
     .unwrap();
 }

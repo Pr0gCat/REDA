@@ -1,0 +1,12 @@
+{
+  "aligned_refresh_boundaries": true,
+  "all_final_driver_and_lamp_truth_correct": true,
+  "all_worlds_deterministic": true,
+  "data_tables": 4096,
+  "driver_glitches": 0,
+  "driver_single_input_glitches": 0,
+  "lamp_glitches": 0,
+  "measured_transitions": 65536,
+  "setup_transitions": 65536,
+  "worst_settle_ticks": 16
+}
