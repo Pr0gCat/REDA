@@ -1,0 +1,174 @@
+{
+  "base_commit": "0b3b024",
+  "rule": "static max arrival propagation from routing repeaters; balance NOR terminal repeaters only",
+  "variants": [
+    {
+      "rule": "full",
+      "mean_world_ticks": 34.48046875,
+      "lamp_glitch_transitions": 95,
+      "metrics": {
+        "case": "seven_segment",
+        "driver_glitch_transitions": 102,
+        "driver_single_input_glitches": 0,
+        "frontend": "REDA",
+        "total_driver_pulse_ticks": 1610,
+        "world_fingerprint": "73326e94e93dc1d9c9bf8d8d2a396fca0bc09b0f3c977f26f52f6923d31b7039",
+        "worst_driver_change_ticks": 40,
+        "worst_driver_pulse_ticks": 20
+      },
+      "new_driver_glitches": [
+        {
+          "baseline": {
+            "changes": {
+              "driver:a": [
+                [
+                  22,
+                  false
+                ]
+              ],
+              "driver:b": [
+                [
+                  24,
+                  false
+                ]
+              ],
+              "driver:c": [
+                [
+                  18,
+                  false
+                ]
+              ]
+            },
+            "from": 7,
+            "glitched": false,
+            "last_driver_change_tick": 24,
+            "pulse_widths": {},
+            "to": 13
+          },
+          "candidate": {
+            "changes": {
+              "driver:a": [
+                [
+                  22,
+                  false
+                ]
+              ],
+              "driver:b": [
+                [
+                  24,
+                  false
+                ]
+              ],
+              "driver:c": [
+                [
+                  18,
+                  false
+                ],
+                [
+                  22,
+                  true
+                ],
+                [
+                  28,
+                  false
+                ]
+              ]
+            },
+            "from": 7,
+            "glitched": true,
+            "last_driver_change_tick": 28,
+            "pulse_widths": {
+              "c": [
+                6
+              ]
+            },
+            "to": 13
+          }
+        },
+        {
+          "baseline": {
+            "changes": {},
+            "from": 11,
+            "glitched": false,
+            "last_driver_change_tick": 0,
+            "pulse_widths": {},
+            "to": 12
+          },
+          "candidate": {
+            "changes": {
+              "driver:c": [
+                [
+                  22,
+                  true
+                ],
+                [
+                  26,
+                  false
+                ]
+              ]
+            },
+            "from": 11,
+            "glitched": true,
+            "last_driver_change_tick": 26,
+            "pulse_widths": {
+              "c": [
+                4
+              ]
+            },
+            "to": 12
+          }
+        },
+        {
+          "baseline": {
+            "changes": {},
+            "from": 11,
+            "glitched": false,
+            "last_driver_change_tick": 0,
+            "pulse_widths": {},
+            "to": 13
+          },
+          "candidate": {
+            "changes": {
+              "driver:c": [
+                [
+                  22,
+                  true
+                ],
+                [
+                  26,
+                  false
+                ]
+              ]
+            },
+            "from": 11,
+            "glitched": true,
+            "last_driver_change_tick": 26,
+            "pulse_widths": {
+              "c": [
+                4
+              ]
+            },
+            "to": 13
+          }
+        }
+      ]
+    },
+    {
+      "rule": "cap_one",
+      "mean_world_ticks": 34.48046875,
+      "lamp_glitch_transitions": 94,
+      "metrics": {
+        "case": "seven_segment",
+        "driver_glitch_transitions": 101,
+        "driver_single_input_glitches": 0,
+        "frontend": "REDA",
+        "total_driver_pulse_ticks": 1538,
+        "world_fingerprint": "741794af1d6801ba0e2fdcdbdec218ced9d49362dc8fd84c87a7d14a7c61d076",
+        "worst_driver_change_ticks": 40,
+        "worst_driver_pulse_ticks": 20
+      },
+      "new_driver_glitches": []
+    }
+  ],
+  "prototype": " not integrated into the generator.\nfn balance_delays(netlist: &Netlist, compiled: &mut reda::compile::CompiledCircuit) {\n    use reda::compile::{geometry, topology::GateKind};\n    use reda::redstone::{simulator::position::Position, world::block::BlockKind};\n    let Ok(report) = reda::compile::routing_stats::analyze(netlist, compiled) else { return; };\n    let costs: HashMap<_, _> = report.edges.iter().map(|edge|\n        (edge.sink.clone(), (edge.total().repeaters * 2) as u64)).collect();\n    let mut arrival: HashMap<String, u64> = netlist.inputs.iter().map(|n| (n.clone(), 0)).collect();\n    let mut pending: Vec<_> = netlist.gates.iter().enumerate().collect();\n    let mut edits = 0;\n    while !pending.is_empty() {\n        let before = pending.len();\n        pending.retain(|&(index, gate)| {\n            if !gate.inputs.iter().all(|n| arrival.contains_key(n)) { return true; }\n            let mut times: Vec<_> = gate.inputs.iter().enumerate().map(|(i,n)|\n                arrival[n] + costs[&format!(\"{}.in[{}]\",gate.output,i)]).collect();\n            let latest = times.iter().copied().max().unwrap_or(0);\n            if matches!(gate.kind, GateKind::Nor(_)) {\n                let facing = compiled.gate_facings[index];\n                let (x,y,z) = compiled.gate_output_positions[&gate.output];\n                let support = Position::new(x,y,z).offset(geometry::output_direction(facing).opposite());\n                for (i, direction) in geometry::input_directions(facing).into_iter().take(gate.inputs.len()).enumerate() {\n                    let socket = support.offset(direction);\n                    let mut state = compiled.world.get(socket.x,socket.y,socket.z).clone();\n                    if state.kind != BlockKind::Repeater { continue; }\n                    let extra = ((latest-times[i])/2).min(4-state.delay as u64);\n                    if extra > 0 {\n                        eprintln!(\"balanced {} input {} by {} redstone ticks\", gate.output, i, extra);\n                        state.delay += extra as u8;\n                        compiled.world.set(socket.x,socket.y,socket.z,state);\n                        times[i] += extra*2;\n                        edits += 1;\n                    }\n                }\n            }\n            arrival.insert(gate.output.clone(), times.into_iter().max().unwrap_or(0) +\n                if matches!(gate.kind, GateKind::Nor(_)) { 2 } else { 0 });\n            false\n        });\n        assert!(pending.len() < before, \"cyclic delay model\");\n    }\n    eprintln!(\"delay-balanced sockets: {edits}\");\n}\n\n"
+}
