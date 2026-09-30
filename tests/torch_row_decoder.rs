@@ -906,6 +906,114 @@ fn all_nonconstant_matrix_functions_have_complete_logic_bindings() {
     .unwrap();
 }
 
+fn typed_matrix_library() -> reda::compile::topology::Library {
+    use reda::compile::topology::{
+        GateKind, Library, LibraryEntry, Primitive, Template, TemplateNode,
+    };
+    let default = Library::default_library();
+    let mut entries = std::collections::BTreeMap::new();
+    for kind in [GateKind::Nor(1), GateKind::Or(2), GateKind::Or(3)] {
+        let entry = default.entry_at(kind, 0).unwrap();
+        entries.insert(
+            kind,
+            vec![LibraryEntry {
+                name: entry.name,
+                template: Template {
+                    nodes: entry.template.nodes.clone(),
+                    internal_edges: entry.template.internal_edges.clone(),
+                    inputs: entry.template.inputs.clone(),
+                    output: entry.template.output,
+                    embedding_hints: entry.template.embedding_hints.clone(),
+                },
+            }],
+        );
+    }
+    entries.insert(
+        GateKind::Buf,
+        vec![LibraryEntry {
+            name: "matrix-repeater-buffer",
+            template: Template {
+                nodes: vec![(TemplateNode::Torch, Primitive::Repeater)],
+                internal_edges: vec![],
+                inputs: vec![TemplateNode::Torch],
+                output: Some(TemplateNode::Torch),
+                embedding_hints: vec![],
+            },
+        }],
+    );
+    Library::new(entries)
+}
+
+// Make each real output-restoration repeater a declared BUF node, with
+// independent OR regions before and after it. Never hide it inside an OR.
+fn bind_matrix_refresh_stages(
+    netlist: &mut reda::compile::Netlist,
+    positions: &mut std::collections::BTreeMap<String, Position>,
+    world: &mut World,
+) {
+    use reda::compile::{topology::GateKind, Gate};
+    for bit in 0..3 {
+        let x = 18 + 3 * bit as i32;
+        if world.get(x, 1, 15).kind != BlockKind::Repeater {
+            continue;
+        }
+        let old_output = netlist.outputs[bit].clone();
+        let old_gate = netlist
+            .gates
+            .iter()
+            .find(|g| g.output == old_output)
+            .unwrap();
+        let terms = if matches!(old_gate.kind, GateKind::Or(_)) {
+            old_gate.inputs.clone()
+        } else {
+            vec![old_output.clone()]
+        };
+        let (early, late): (Vec<_>, Vec<_>) = terms.into_iter().partition(|n| positions[n].z < 15);
+        if early.is_empty() {
+            // A late-only output has no signal to restore in its empty prefix.
+            let first = late.iter().map(|n| positions[n].z).min().unwrap();
+            for z in 5..first {
+                world.set(x, 1, z, BlockState::air());
+                world.set(x, 0, z, BlockState::air());
+            }
+            continue;
+        }
+        if matches!(old_gate.kind, GateKind::Or(_)) {
+            netlist.gates.retain(|g| g.output != old_output);
+            positions.remove(&old_output);
+        }
+        let pre = if early.len() == 1 {
+            early[0].clone()
+        } else {
+            let name = format!("early_output{bit}");
+            let inputs: Vec<_> = early.iter().map(String::as_str).collect();
+            netlist.gates.push(Gate::merge(&name, &inputs));
+            positions.insert(name.clone(), Position::new(x, 1, 13));
+            name
+        };
+        let buffer = format!("refresh_output{bit}");
+        netlist.gates.push(Gate {
+            name: buffer.clone(),
+            output: buffer.clone(),
+            inputs: vec![pre],
+            kind: GateKind::Buf,
+        });
+        positions.insert(buffer.clone(), Position::new(x, 1, 15));
+        netlist.outputs[bit] = if late.is_empty() {
+            buffer
+        } else {
+            let name = format!("output{bit}");
+            let mut inputs = late;
+            inputs.push(buffer);
+            let inputs: Vec<_> = inputs.iter().map(String::as_str).collect();
+            netlist.gates.push(Gate::merge(&name, &inputs));
+            let end = world.size().2 - 4;
+            positions.insert(name.clone(), Position::new(x, 1, end));
+            name
+        };
+    }
+}
+
 fn typed_matrix_candidate(
     words: [u8; 4],
 ) -> (
@@ -919,7 +1027,6 @@ fn typed_matrix_candidate(
     use reda::compile::{
         geometry::{Anchor, CellFacing},
         planner::PortPlacements,
-        topology::Library,
     };
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
     let anchor = |p: Position| Anchor {
@@ -927,11 +1034,12 @@ fn typed_matrix_candidate(
         y: p.y,
         z: p.z,
     };
-    let (netlist, positions) = matrix_logic_binding(words);
-    let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
-    let mut candidate = ExpandedPhysicalCandidate::empty(graph, PortPlacements::default());
+    let (mut netlist, mut positions) = matrix_logic_binding(words);
     let (mut world, mut inputs, _, lamps) =
         matrix_four_words_with_aligned_refresh(words, true, true, true);
+    bind_matrix_refresh_stages(&mut netlist, &mut positions, &mut world);
+    let graph = InstanceGraph::one_to_one(&netlist, &typed_matrix_library()).unwrap();
+    let mut candidate = ExpandedPhysicalCandidate::empty(graph, PortPlacements::default());
     // A conductor above the inverter support makes the direct lever/support
     // contact an explicit route terminal; retain the original fixture as control.
     for p in &mut inputs {
@@ -940,6 +1048,25 @@ fn typed_matrix_candidate(
         world.set(p.x, p.y - 1, 0, block(BlockKind::Solid));
         world.set(p.x, p.y, 0, lever);
         p.z = 0;
+    }
+    // Retain each address rail only through its last real decoder tap.
+    // True rails still feed the global inverter; unused inverse rails have
+    // no conductor load. Keep the untrimmed prototype as independent control.
+    for x in [3, 6, 9, 12] {
+        let last_tap = positions
+            .values()
+            .filter(|p| p.x == x + 1 && p.y == 4 && p.z >= 4)
+            .map(|p| p.z)
+            .max()
+            .unwrap_or(if [3, 9].contains(&x) { 1 } else { 0 });
+        for z in (last_tap + 1)..world.size().2 {
+            world.set(x, 5, z, BlockState::air());
+            world.set(x, 4, z, BlockState::air());
+        }
+        if last_tap == 0 {
+            world.set(x - 1, 4, 1, BlockState::air());
+            world.set(x - 1, 3, 1, BlockState::air());
+        }
     }
     let placed = |p: Position| PlacedBlock {
         at: anchor(p),
@@ -960,7 +1087,12 @@ fn typed_matrix_candidate(
         candidate.observations.insert(obs.site.id, obs.clone());
         if let OutputSpec::Primitive(id) = instance.expanded.topology.output {
             let state = world.get(p.x, p.y, p.z);
-            let support = p.offset(state.facing.unwrap().opposite());
+            let is_repeater = state.kind == BlockKind::Repeater;
+            let support = if is_repeater {
+                p.down()
+            } else {
+                p.offset(state.facing.unwrap().opposite())
+            };
             let facing = match state.facing.unwrap() {
                 Facing::North => CellFacing::NORTH,
                 Facing::South => CellFacing::SOUTH,
@@ -978,8 +1110,11 @@ fn typed_matrix_candidate(
                     id,
                     variant: facing.index() as u16,
                     facing,
-                    anchor: anchor(support),
-                    delayed: None,
+                    anchor: anchor(if is_repeater { p } else { support }),
+                    delayed: is_repeater.then_some(DelayedComponent {
+                        at: anchor(p),
+                        owner: DelayedOwner::Primitive(id),
+                    }),
                     blocks,
                 },
             );
@@ -1121,7 +1256,9 @@ fn typed_matrix_candidate(
         let route = *route_ids.entry(source).or_insert(next);
         let at = candidate.observations[&observation(source)].site.at;
         let p = Position::new(at.x, at.y, at.z);
-        let root = if world.get(p.x, p.y, p.z).kind == BlockKind::RedstoneWire {
+        let root = if world.get(p.x, p.y, p.z).kind == BlockKind::Repeater {
+            p.offset(world.get(p.x, p.y, p.z).facing.unwrap().opposite())
+        } else if world.get(p.x, p.y, p.z).kind == BlockKind::RedstoneWire {
             p
         } else if world.get(p.x, p.y - 1, p.z).kind == BlockKind::RedstoneWire {
             p.down()
@@ -1135,7 +1272,16 @@ fn typed_matrix_candidate(
         let end = match landing {
             PhysicalEndpointId::PrimitiveOutput(id) => {
                 let support = candidate.placements[&id].anchor;
-                Position::new(support.x, support.y + 1, support.z)
+                let placement = &candidate.placements[&id];
+                let output = placement
+                    .blocks
+                    .iter()
+                    .find(|b| b.state.kind == BlockKind::Repeater);
+                if let Some(output) = output {
+                    Position::new(output.at.x, output.at.y, output.at.z)
+                } else {
+                    Position::new(support.x, support.y + 1, support.z)
+                }
             }
             PhysicalEndpointId::Junction(_) => root,
             PhysicalEndpointId::DeclaredOutput(_) => {
@@ -1185,9 +1331,20 @@ fn typed_matrix_candidate(
             path.push(parent[path.last().unwrap()]);
         }
         path.reverse();
+        let target_repeater = match landing {
+            PhysicalEndpointId::PrimitiveOutput(id)
+                if world.get(end.x, end.y, end.z).kind == BlockKind::Repeater =>
+            {
+                Some(id)
+            }
+            _ => None,
+        };
         let repeaters = path
             .iter()
-            .filter(|p| world.get(p.x, p.y, p.z).kind == BlockKind::Repeater)
+            .filter(|p| {
+                world.get(p.x, p.y, p.z).kind == BlockKind::Repeater
+                    && !(**p == end && target_repeater.is_some())
+            })
             .count() as u64;
         let tree = candidate.routes.entry(route).or_insert(RealisedRouteTree {
             id: route,
@@ -1209,13 +1366,15 @@ fn typed_matrix_candidate(
                 sink,
                 at: anchor(end),
                 state: world.get(end.x, end.y, end.z).clone(),
-                kind: if matches!(landing, PhysicalEndpointId::Junction(_)) {
+                kind: if target_repeater.is_some() {
+                    reda::compile::routing::RouteTerminalKind::RepeaterIntoSupport
+                } else if matches!(landing, PhysicalEndpointId::Junction(_)) {
                     reda::compile::routing::RouteTerminalKind::BareMergeDust
                 } else {
                     reda::compile::routing::RouteTerminalKind::DirectedDustIntoSupport
                 },
                 repeaters,
-                delayed_owner: None,
+                delayed_owner: target_repeater.map(DelayedOwner::Primitive),
             },
         });
         if let Some(id) = connection {
@@ -1266,7 +1425,14 @@ fn typed_matrix_candidate(
             .iter()
             .find(|(_, j)| {
                 (j.at.y == y && j.at.z == z && j.at.y == 3 && x <= 15)
-                    || (j.at.y == y && j.at.x == x && j.at.y == 1)
+                    || (j.at.y == y
+                        && j.at.x == x
+                        && j.at.y == 1
+                        && (!candidate.placements.values().any(|p| {
+                            p.blocks.iter().any(|b| {
+                                b.state.kind == BlockKind::Repeater && b.at.x == x && b.at.y == 1
+                            })
+                        }) || (z < 15) == (j.at.z < 15)))
             })
             .map(|(&id, _)| id);
         if let Some(j) = j {
@@ -1361,7 +1527,7 @@ fn typed_matrix_adapter_records_real_routes_and_runs_existing_certifiers() {
     assert_eq!(candidate.fingerprint(), repeated.fingerprint());
     candidate.validate_shape().unwrap();
     candidate.validate_route_timing().unwrap();
-    let library = reda::compile::topology::Library::default_library();
+    let library = typed_matrix_library();
     certify_expanded_structure(&candidate, &netlist, &library).unwrap();
     let replay = candidate.emit_world(world.size()).unwrap();
     for y in 0..world.size().1 {
@@ -1446,7 +1612,7 @@ fn typed_matrix_certifiers_reject_forged_regions_missing_contributors_and_revers
         verification::ExpandedPhysicalError,
     };
     let (netlist, _, candidate) = typed_matrix_candidate([1, 6, 3, 5]);
-    let library = reda::compile::topology::Library::default_library();
+    let library = typed_matrix_library();
     let mut missing = candidate.clone();
     missing
         .junctions
@@ -1480,6 +1646,216 @@ fn typed_matrix_certifiers_reject_forged_regions_missing_contributors_and_revers
         realise_and_verify_expanded(&reversed, &netlist, &library),
         Err(CertificationError::Physical(
             ExpandedPhysicalError::WrongRepeaterAxis { .. }
+        ))
+    ));
+}
+
+fn verify_typed_matrix_internal_truth(
+    candidate: &reda::compile::fragment_synth::candidate::ExpandedPhysicalCandidate,
+    netlist: &reda::compile::Netlist,
+    world: World,
+) {
+    use reda::compile::fragment_synth::identity::ObservationId;
+    use reda::compile::topology::GateKind;
+    let views = candidate.compatibility_views(netlist).unwrap();
+    let order = netlist.combinational_order().unwrap();
+    for instance in &candidate.instances.instances {
+        reda::compile::fragment_synth::topology::prove_topology_semantics(
+            &instance.expanded.topology,
+            netlist.gates[instance.logical_gate.0 as usize].kind,
+        )
+        .unwrap();
+    }
+    let sites: std::collections::BTreeMap<_, _> = candidate
+        .instances
+        .instances
+        .iter()
+        .map(|i| {
+            (
+                i.logical_gate.0 as usize,
+                candidate.observations[&ObservationId::InstanceOutput(i.id)]
+                    .site
+                    .at,
+            )
+        })
+        .collect();
+    let mut sim = Simulator::new(world);
+    sim.run_until_stable(2000).unwrap();
+    for from in 0..4 {
+        for to in 0..4 {
+            for address in [from, to] {
+                let mut values = std::collections::BTreeMap::new();
+                for (bit, name) in netlist.inputs.iter().enumerate() {
+                    let (x, y, z) = views.input_positions[name];
+                    let mut b = sim.world().get(x, y, z).clone();
+                    b.lit = address & (1 << bit) != 0;
+                    values.insert(name.clone(), b.lit);
+                    sim.world_mut().set(x, y, z, b);
+                }
+                sim.run_until_stable(2000).unwrap();
+                for &index in &order {
+                    let gate = &netlist.gates[index];
+                    let any = gate.inputs.iter().any(|n| values[n]);
+                    let expected = match gate.kind {
+                        GateKind::Nor(_) => !any,
+                        GateKind::Or(_) | GateKind::Buf => any,
+                        _ => unreachable!(),
+                    };
+                    let p = sites[&index];
+                    let b = sim.world().get(p.x, p.y, p.z);
+                    let actual = if b.kind == BlockKind::RedstoneWire {
+                        b.power > 0
+                    } else {
+                        b.lit
+                    };
+                    assert_eq!(actual, expected, "address={address}, node={}", gate.output);
+                    values.insert(gate.output.clone(), expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn all_nonconstant_matrix_tables_run_strict_typed_certification() {
+    use reda::compile::fragment_synth::realise::realise_and_verify_expanded;
+    let library = typed_matrix_library();
+    let mut verified = 0;
+    let mut improved = 0;
+    let mut control_sum = 0u64;
+    let mut candidate_sum = 0u64;
+    let mut worst = 0u64;
+    for encoding in 0..4096u32 {
+        let words: [u8; 4] = std::array::from_fn(|i| ((encoding >> (3 * i)) & 7) as u8);
+        if (0..3).any(|bit| {
+            words.iter().all(|w| w & (1 << bit) == 0) || words.iter().all(|w| w & (1 << bit) != 0)
+        }) {
+            continue;
+        }
+        let (netlist, original, candidate) = typed_matrix_candidate(words);
+        let (_, _, repeated) = typed_matrix_candidate(words);
+        assert_eq!(candidate.fingerprint(), repeated.fingerprint());
+        let certified = realise_and_verify_expanded(&candidate, &netlist, &library)
+            .unwrap_or_else(|e| panic!("words={words:?}, encoding={encoding}: {e:?}"));
+        for y in 0..original.size().1 {
+            for z in 0..original.size().2 {
+                for x in 0..original.size().0 {
+                    assert_eq!(
+                        original.get(x, y, z),
+                        certified.world().get(x, y, z),
+                        "emission mismatch words={words:?} at ({x},{y},{z})"
+                    );
+                }
+            }
+        }
+        verify_typed_matrix_internal_truth(&candidate, &netlist, certified.world().clone());
+        let views = candidate.compatibility_views(&netlist).unwrap();
+        let position = |p: (i32, i32, i32)| Position::new(p.0, p.1, p.2);
+        let measured = measure_rom(
+            certified.world().clone(),
+            netlist
+                .inputs
+                .iter()
+                .map(|n| position(views.input_positions[n]))
+                .collect(),
+            netlist
+                .outputs
+                .iter()
+                .map(|n| position(views.gate_output_positions[n]))
+                .collect(),
+            netlist
+                .outputs
+                .iter()
+                .map(|n| position(views.output_positions[n]))
+                .collect(),
+            &words,
+        );
+        let (w, inputs, drivers, lamps) =
+            matrix_four_words_with_aligned_refresh(words, true, true, true);
+        let control = measure_rom(w, inputs, drivers, lamps, &words);
+        for (metric, value) in measured.as_object().unwrap() {
+            if metric == "traces" {
+                continue;
+            }
+            assert!(
+                value.as_u64().unwrap() <= control[metric].as_u64().unwrap(),
+                "quality regression words={words:?}: {metric}, candidate={value}, control={}",
+                control[metric]
+            );
+        }
+        control_sum += control["total_settle_ticks"].as_u64().unwrap();
+        candidate_sum += measured["total_settle_ticks"].as_u64().unwrap();
+        improved += usize::from(measured["total_settle_ticks"] != control["total_settle_ticks"]);
+        worst = worst.max(measured["worst_settle_ticks"].as_u64().unwrap());
+        verified += 1;
+    }
+    assert_eq!(verified, 2744);
+    let report = json!({"data_tables":verified,"measured_transitions_per_arm":verified*16,
+        "strict_certification":true,"exact_emission":true,"deterministic_candidates":true,
+        "all_internal_setup_and_target_truth_correct":true,"all_topologies_symbolically_proved":true,
+        "all_nine_metrics_preserve_per_table_controls":true,"control_total_settle_ticks":control_sum,
+        "candidate_total_settle_ticks":candidate_sum,"improved_tables":improved,"worst_settle_ticks":worst});
+    println!("{report}");
+    std::fs::write(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/torch_row_typed_exhaustive.json"),
+        serde_json::to_string_pretty(&report).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn typed_matrix_refresh_rejects_missing_delay_owner_and_foreign_output_wire() {
+    use reda::compile::fragment_synth::{
+        candidate::PlacedBlock,
+        realise::{realise_and_verify_expanded, CertificationError},
+    };
+    use reda::compile::{geometry::Anchor, verification::ExpandedPhysicalError};
+    let (netlist, world, candidate) = typed_matrix_candidate([3, 6, 6, 1]);
+    let library = typed_matrix_library();
+    let mut missing = candidate.clone();
+    let branch = missing
+        .routes
+        .values_mut()
+        .flat_map(|r| r.branches.iter_mut())
+        .find(|b| b.terminal.delayed_owner.is_some())
+        .unwrap();
+    branch.terminal.delayed_owner = None;
+    assert!(realise_and_verify_expanded(&missing, &netlist, &library).is_err());
+    let mut shorted = candidate;
+    let repeater = shorted
+        .placements
+        .values()
+        .find(|p| p.delayed.is_some())
+        .unwrap();
+    let at = Anchor {
+        x: repeater.anchor.x - 1,
+        y: repeater.anchor.y,
+        z: repeater.anchor.z + 1,
+    };
+    assert_eq!(world.get(at.x, at.y, at.z).kind, BlockKind::Air);
+    let route = shorted
+        .routes
+        .values_mut()
+        .find(|r| {
+            matches!(
+                r.source,
+                reda::compile::fragment_synth::identity::PhysicalEndpointId::PrimaryInput(_)
+            )
+        })
+        .unwrap();
+    route.cells.push(PlacedBlock {
+        at,
+        state: block(BlockKind::RedstoneWire),
+    });
+    route.floors.push(PlacedBlock {
+        at: Anchor { y: at.y - 1, ..at },
+        state: block(BlockKind::Solid),
+    });
+    assert!(matches!(
+        realise_and_verify_expanded(&shorted, &netlist, &library),
+        Err(CertificationError::Physical(
+            ExpandedPhysicalError::CrossRouteConnectivity { .. }
         ))
     ));
 }

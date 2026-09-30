@@ -773,19 +773,19 @@ mod tests {
         );
     }
 
-    /// Shipping case identity snapshots under ExpandedStrict Connectivity v2.
+    /// Shipping case identity snapshots under ExpandedStrict Connectivity/Coupling v3.
     /// Verifier revisions intentionally change the case identity, keeping
     /// measurements certified under different rules separate.
     /// Any further change must explicitly update these snapshots.
     #[test]
     fn the_shipping_case_fingerprint_pins_the_current_verifier_revision() {
         const TWO_GATE_CHAIN_CASE: &str =
-            "b5354a07098a22b4f7a97f7f160cf50191a05d75c72e94d19ba6da557741e7a6";
-        const AND4_CASE: &str = "972724ac08724d6cb63b2c0d68a2155ca9f9391d23ef3486c34671573487c98c";
+            "24351b11816c3492e46db771bc16aba1d7ded2199cb87cbdec922c78626e19a1";
+        const AND4_CASE: &str = "7e4f17a53c27dba3b779d20d94b0dfcd9e0d8adf2ecfd25711fd5643d4125021";
         /// The chain on the caller row the contract honours: `a` at
         /// (1,1,4) facing south, `y` at (4,1,4) facing north.
         const PINNED_TWO_GATE_CHAIN_CASE: &str =
-            "d104817a82d501c08ffd7111380f646a1a9c109001cf9c75ce48a420f195bcfc";
+            "263c8b1385c3a850fa5cd8922b6bd4c9890b0a8d7144a74f32452f80e092983d";
 
         let chain = two_gate_chain();
         let (and4, _) = build_and4_netlist();

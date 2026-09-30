@@ -206,11 +206,11 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Connectivity,
-                semantic_version: 2,
+                semantic_version: 3,
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Coupling,
-                semantic_version: 2,
+                semantic_version: 3,
             },
         ],
     }
@@ -719,6 +719,16 @@ fn verify_typed_connectivity(
         .collect::<HashSet<_>>();
 
     let world = &emitted.world;
+    let mut declared_landings = BTreeMap::<Position, InstanceId>::new();
+    for (&id, junction) in &candidate.junctions {
+        for &contributor in &junction.contributors {
+            if !matches!(contributor, PhysicalEndpointId::Landing(_)) {
+                continue;
+            }
+            let (_, at) = resolve_junction_contributor(candidate, id, junction.at, contributor)?;
+            declared_landings.insert(Position::new(at.x, at.y, at.z), id);
+        }
+    }
     let mut visited = HashSet::<Position>::new();
     for flat in world.positions_of(BlockKind::RedstoneWire) {
         let (x, y, z) = world.decode(flat);
@@ -740,6 +750,14 @@ fn verify_typed_connectivity(
             }
             for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
                 for next in dust_connections(world, position, direction).iter() {
+                    // Two explicitly listed injection terminals can touch
+                    // inside the same OR region. Cut only that declared edge;
+                    // retain all edges to unlisted or upstream route cells.
+                    if declared_landings.get(&position).is_some()
+                        && declared_landings.get(&position) == declared_landings.get(&next)
+                    {
+                        continue;
+                    }
                     if !junction_cells.contains(&next) && visited.insert(next) {
                         queue.push_back(next);
                     }
@@ -992,17 +1010,23 @@ fn reverse_junction_contributors(
                         // A declared landing can inject into the interior of
                         // a distributed junction, rather than bounding it.
                         // Continue only through explicitly junction-owned
-                        // cells; never follow the incoming source route.
+                        // cells or another listed landing; never follow the
+                        // incoming source route past either terminal.
                         for predecessor in potential_predecessors(position) {
                             let predecessor_at = Anchor {
                                 x: predecessor.x,
                                 y: predecessor.y,
                                 z: predecessor.z,
                             };
-                            if matches!(
+                            let declared_region = matches!(
                                 emitted.owner_at(predecessor_at),
                                 Some(PhysicalBlockRole::Junction(owner)) if owner == junction
-                            )
+                            ) || matches!(
+                                emitted.owner_at(predecessor_at),
+                                Some(PhysicalBlockRole::RouteTerminal { target, .. })
+                                    if listed.contains_key(&target)
+                            );
+                            if declared_region
                                 && !visited.contains(&predecessor)
                                 && directed_conductor_step(&emitted.world, predecessor, position)
                             {
@@ -1210,6 +1234,15 @@ fn verify_typed_coupling(
                 seeds.insert(Position::new(block.at.x, block.at.y, block.at.z));
             }
             for branch in &route.branches {
+                // A target primitive's repeater output is a new logical
+                // signal. Its incoming route reaches the input but must not
+                // seed the primitive's output as part of that input network.
+                if matches!(
+                    branch.terminal.delayed_owner,
+                    Some(super::routing::DelayedOwner::Primitive(_))
+                ) {
+                    continue;
+                }
                 let at = branch.terminal.at;
                 seeds.insert(Position::new(at.x, at.y, at.z));
             }
@@ -1224,6 +1257,30 @@ fn verify_typed_coupling(
             let position = Position::new(at.x, at.y, at.z);
             if !network.contains(&position) && !powered.contains(&position) {
                 continue;
+            }
+            // Emission retains the incoming terminal's route identity even
+            // when the block is owned by a target primitive. Coupling must
+            // use that proven primitive owner, including for its output net.
+            if let PhysicalBlockRole::RouteTerminal { sink, .. } = role {
+                let primitive_owner = candidate
+                    .routes
+                    .get(&sink.route)
+                    .and_then(|route| route.branches.iter().find(|branch| branch.sink == sink))
+                    .and_then(|branch| match branch.terminal.delayed_owner {
+                        Some(super::routing::DelayedOwner::Primitive(id)) => Some(id),
+                        _ => None,
+                    });
+                if let Some(id) = primitive_owner {
+                    let foreign = StablePhysicalOwnerId::Primitive(id);
+                    if allowed_components.contains(&foreign) {
+                        continue;
+                    }
+                    return Err(ExpandedPhysicalError::CrossComponentCoupling {
+                        source_route: routes[0],
+                        foreign,
+                        at,
+                    });
+                }
             }
             if let Some(foreign) = route_owner(Some(role)) {
                 if route_root(&parent, foreign) == source_group {
@@ -1771,6 +1828,90 @@ mod tests {
         )
         .unwrap();
         assert_eq!(verify_typed_connectivity(&candidate, &legitimate), Ok(()));
+
+        // Adjacent, explicitly listed injection terminals may join before
+        // the observed junction cell. An unlisted adjacent route may not.
+        let first_at = Anchor { x: 3, y: 1, z: 5 };
+        let second_at = Anchor { x: 4, y: 1, z: 5 };
+        candidate.routes.get_mut(&first).unwrap().branches[0]
+            .terminal
+            .at = first_at;
+        candidate.routes.get_mut(&second).unwrap().branches[0]
+            .terminal
+            .at = second_at;
+        let mut adjacent_blocks = vec![
+            (
+                first_at,
+                crate::compile::dust(),
+                PhysicalBlockRole::RouteTerminal {
+                    sink: first_sink,
+                    target: PhysicalEndpointId::Landing(first_connection),
+                    kind: super::super::emission::TerminalKind::BareMergeDust,
+                    repeaters: 0,
+                },
+            ),
+            (
+                second_at,
+                crate::compile::dust(),
+                PhysicalBlockRole::RouteTerminal {
+                    sink: second_sink,
+                    target: PhysicalEndpointId::Landing(second_connection),
+                    kind: super::super::emission::TerminalKind::BareMergeDust,
+                    repeaters: 0,
+                },
+            ),
+            (
+                junction_at,
+                crate::compile::dust(),
+                PhysicalBlockRole::Junction(junction),
+            ),
+        ];
+        let adjacent = emit_typed(
+            &ShortedRoutes {
+                blocks: adjacent_blocks.clone(),
+            },
+            (8, 4, 8),
+        )
+        .unwrap();
+        assert_eq!(verify_typed_connectivity(&candidate, &adjacent), Ok(()));
+        assert_eq!(verify_junction_closure(&candidate, &adjacent), Ok(()));
+        candidate
+            .junctions
+            .get_mut(&junction)
+            .unwrap()
+            .contributors
+            .pop();
+        assert!(matches!(
+            verify_typed_connectivity(&candidate, &adjacent),
+            Err(ExpandedPhysicalError::CrossRouteConnectivity { .. })
+        ));
+        candidate
+            .junctions
+            .get_mut(&junction)
+            .unwrap()
+            .contributors
+            .push(PhysicalEndpointId::Landing(second_connection));
+        let foreign = RouteId(2);
+        let mut foreign_tree = candidate.routes[&first].clone();
+        foreign_tree.id = foreign;
+        foreign_tree.source = PhysicalEndpointId::PrimaryInput(PortId(2));
+        candidate.routes.insert(foreign, foreign_tree);
+        adjacent_blocks.push((
+            Anchor { x: 4, y: 1, z: 4 },
+            crate::compile::dust(),
+            PhysicalBlockRole::RouteConductor(foreign),
+        ));
+        let contaminated = emit_typed(
+            &ShortedRoutes {
+                blocks: adjacent_blocks,
+            },
+            (8, 4, 8),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_typed_connectivity(&candidate, &contaminated),
+            Err(ExpandedPhysicalError::CrossRouteConnectivity { .. })
+        ));
     }
 
     #[test]
