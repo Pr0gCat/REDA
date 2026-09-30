@@ -1,0 +1,90 @@
+{
+  "base_commit": "3e9d889",
+  "full_rule_and4": [
+    {
+      "case": "and4",
+      "driver_glitch_transitions": 9,
+      "driver_single_input_glitches": 0,
+      "frontend": "REDA",
+      "total_driver_pulse_ticks": 20,
+      "world_fingerprint": "98eafc4af9de5a594fa339e019499bd0a7ae9a1eddc54672c4c73487e037aced",
+      "worst_driver_change_ticks": 8,
+      "worst_driver_pulse_ticks": 4
+    },
+    {
+      "case": "and4",
+      "driver_glitch_transitions": 9,
+      "driver_single_input_glitches": 0,
+      "frontend": "Yosys-fresh",
+      "total_driver_pulse_ticks": 20,
+      "world_fingerprint": "98eafc4af9de5a594fa339e019499bd0a7ae9a1eddc54672c4c73487e037aced",
+      "worst_driver_change_ticks": 8,
+      "worst_driver_pulse_ticks": 4
+    }
+  ],
+  "restricted_rows": [
+    {
+      "case": "and4",
+      "frontend": "REDA",
+      "world_fingerprint": "d16a10f52e606404a351b9ba97fe6527cc1d0eec8d315a1b3b04b4a57771b55a",
+      "worst_settle_ticks": 28,
+      "mean_settle_ticks": 6.56640625,
+      "worst_output_change_ticks": 16,
+      "glitch_transitions": 13,
+      "single_input_glitch_transitions": 0,
+      "driver_glitch_transitions": 13,
+      "driver_single_input_glitches": 0,
+      "worst_driver_change_ticks": 12,
+      "worst_driver_pulse_ticks": 8,
+      "total_driver_pulse_ticks": 64
+    },
+    {
+      "case": "and4",
+      "frontend": "Yosys-fresh",
+      "world_fingerprint": "fa225fa5224f91da32fd59a5d23e493a9c22eccce483834010505f9a08c8ce25",
+      "worst_settle_ticks": 22,
+      "mean_settle_ticks": 5.72265625,
+      "worst_output_change_ticks": 12,
+      "glitch_transitions": 0,
+      "single_input_glitch_transitions": 0,
+      "driver_glitch_transitions": 0,
+      "driver_single_input_glitches": 0,
+      "worst_driver_change_ticks": 8,
+      "worst_driver_pulse_ticks": 0,
+      "total_driver_pulse_ticks": 0
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "REDA",
+      "world_fingerprint": "cb7a091b22561dbd58b8a98dfae8241bf2c1cd70b696e67870f6ce9728925074",
+      "worst_settle_ticks": 42,
+      "mean_settle_ticks": 32.49609375,
+      "worst_output_change_ticks": 42,
+      "glitch_transitions": 92,
+      "single_input_glitch_transitions": 0,
+      "driver_glitch_transitions": 105,
+      "driver_single_input_glitches": 0,
+      "worst_driver_change_ticks": 38,
+      "worst_driver_pulse_ticks": 14,
+      "total_driver_pulse_ticks": 1104
+    },
+    {
+      "case": "seven_segment",
+      "frontend": "Yosys-fresh",
+      "world_fingerprint": "9839637a3ae76d2c45fc50def2b4d21d984ff88fc85beca5f4593ebcb7dbce63",
+      "worst_settle_ticks": 64,
+      "mean_settle_ticks": 48.05078125,
+      "worst_output_change_ticks": 64,
+      "glitch_transitions": 141,
+      "single_input_glitch_transitions": 17,
+      "driver_glitch_transitions": 146,
+      "driver_single_input_glitches": 18,
+      "worst_driver_change_ticks": 62,
+      "worst_driver_pulse_ticks": 24,
+      "total_driver_pulse_ticks": 2552
+    }
+  ],
+  "equivalent_prior_variant": "generator-fanin-grouping-experiment-2026-09-30.json: five_only_prefix",
+  "full_prototype": "fn flatten_private_merge(netlist: &mut Netlist) {\n    use reda::compile::topology::GateKind;\n    let producers: HashMap<_,_> = netlist.gates.iter().enumerate().map(|(i,g)| (g.output.clone(),i)).collect();\n    let mut uses = HashMap::<String,usize>::new();\n    for gate in &netlist.gates { for input in &gate.inputs { *uses.entry(input.clone()).or_default() += 1; } }\n    let mut removed = std::collections::BTreeSet::new();\n    for index in 0..netlist.gates.len() {\n        if netlist.gates[index].kind != GateKind::Nor(2) { continue; }\n        for pin in 0..2 {\n            let input=&netlist.gates[index].inputs[pin];\n            let Some(&child)=producers.get(input) else { continue; };\n            if netlist.gates[child].kind != GateKind::Or(2) || uses[input] != 1 || netlist.outputs.contains(input) { continue; }\n            let mut inputs=netlist.gates[index].inputs.clone();\n            inputs.splice(pin..=pin,netlist.gates[child].inputs.clone());\n            netlist.gates[index].inputs=inputs;\n            netlist.gates[index].kind=GateKind::Nor(3);\n            removed.insert(child);\n            break;\n        }\n    }\n    eprintln!(\"expanded private Merge2 into NOR2: {}\",removed.len());\n    let mut index=0;\n    netlist.gates.retain(|_| { let keep=!removed.contains(&index);index+=1;keep });\n}\n\n",
+  "restricted_prototype": "(netlist: &mut Netlist) {\n    use reda::compile::topology::GateKind;\n    let producers: HashMap<_,_> = netlist.gates.iter().enumerate().map(|(i,g)| (g.output.clone(),i)).collect();\n    let mut uses = HashMap::<String,usize>::new();\n    for gate in &netlist.gates { for input in &gate.inputs { *uses.entry(input.clone()).or_default() += 1; } }\n    let mut removed = std::collections::BTreeSet::new();\n    for index in 0..netlist.gates.len() {\n        if netlist.gates[index].kind != GateKind::Nor(2) { continue; }\n        if !netlist.gates[index].inputs.iter().all(|n|\n            producers.get(n).is_some_and(|&p| matches!(netlist.gates[p].kind, GateKind::Or(_)))) { continue; }\n        if !netlist.gates[index].inputs.iter().any(|n|\n            producers.get(n).is_some_and(|&p| netlist.gates[p].kind == GateKind::Or(3))) { continue; }\n        for pin in 0..2 {\n            let input=&netlist.gates[index].inputs[pin];\n            let Some(&child)=producers.get(input) else { continue; };\n            if netlist.gates[child].kind != GateKind::Or(2) || uses[input] != 1 || netlist.outputs.contains(input) { continue; }\n            let mut inputs=netlist.gates[index].inputs.clone();\n            inputs.splice(pin..=pin,netlist.gates[child].inputs.clone());\n            netlist.gates[index].inputs=inputs;\n            netlist.gates[index].kind=GateKind::Nor(3);\n            removed.insert(child);\n            break;\n        }\n    }\n    eprintln!(\"expanded private Merge2 into NOR2: {}\",removed.len());\n    let mut index=0;\n    netlist.gates.retain(|_| { let keep=!removed.contains(&index);index+=1;keep });\n}\n\n"
+}
