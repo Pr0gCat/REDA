@@ -207,7 +207,7 @@ pub fn prove_topology_semantics(
             };
             let meaning = match specification.primitive {
                 Primitive::Torch => {
-                    if sources.is_empty() {
+                    if sources.is_empty() && kind != GateKind::Nor(0) {
                         return Err(TopologySemanticsError::PrimitiveInputCount {
                             primitive: specification.id,
                             expected: 1,

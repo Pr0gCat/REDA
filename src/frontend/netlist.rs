@@ -26,7 +26,7 @@ use super::debug::{
 };
 use super::elaborate::{bit_name, Design};
 use super::logic::{Blasted, LogicGraph, LogicNode, LogicNodeId};
-use super::{Diagnostic, PortBinding, Severity};
+use super::{Diagnostic, PortBinding};
 
 /// What gate mapping produced, beside the netlist itself.
 pub struct Emitted {
@@ -42,7 +42,6 @@ pub struct Emitted {
 
 pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnostic>> {
     let graph = &blasted.graph;
-    let mut errors = Vec::new();
     let mut builder = NetlistBuilder::new();
     let mut transformations = Vec::new();
 
@@ -58,6 +57,8 @@ pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnosti
         }
     }
 
+    let mut constant_one: Option<(String, u32)> = None;
+
     // Leaves first, in either order: a primary input keeps its declared
     // name regardless of whether anything reads it, matching a DFF's
     // eventual `Realisation::Input` even when the design never uses it.
@@ -67,7 +68,37 @@ pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnosti
                 signal_of[index] = Some(name.clone());
                 realisations[index] = Realisation::Input(name.clone());
             }
-            LogicNode::Const(value) => realisations[index] = Realisation::Const(*value),
+            LogicNode::Const(value) => {
+                realisations[index] = Realisation::Const(*value);
+                if !graph.live.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
+                let before = builder.len();
+                let (high, high_index) = constant_one
+                    .get_or_insert_with(|| {
+                        let high = builder.nor(&[]);
+                        (high, (builder.len() - 1) as u32)
+                    })
+                    .clone();
+                let driver = if *value { high } else { builder.not(&high) };
+                let driver_index = if *value {
+                    high_index
+                } else {
+                    (builder.len() - 1) as u32
+                };
+                let mut mapped: Vec<_> = (before..builder.len())
+                    .map(|i| DebugNode::Gate(i as u32))
+                    .collect();
+                if mapped.is_empty() {
+                    mapped.push(DebugNode::Gate(driver_index));
+                }
+                transformations.push(Transformation {
+                    reason: TransformReason::Map,
+                    inputs: vec![DebugNode::Logic(LogicNodeId(index as u32))],
+                    outputs: mapped,
+                });
+                signal_of[index] = Some(driver);
+            }
             _ => {}
         }
     }
@@ -92,7 +123,7 @@ pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnosti
         resolve(id, graph, &mut builder, &mut signal_of, &mut realisations);
     }
 
-    // Output ports. A port whose bit is a bare primary input (or a constant)
+    // Output ports. A port whose bit is a bare primary input
     // has no gate of its own, and `compile` requires every declared output to
     // be driven by a real gate -- so a passthrough gets the same `Buf` the
     // Yosys bridge synthesizes for `assign y = a;`.
@@ -116,20 +147,6 @@ pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnosti
         for bit in 0..signal.width {
             let node = blasted.signal_bits[index][bit as usize];
             let name = bit_name(&signal.name, signal.width, bit);
-            if let Some(value) = graph.const_value(node) {
-                errors.push(Diagnostic {
-                    kind: super::DiagnosticKind::Internal,
-                    severity: Severity::Error,
-                    message: format!(
-                        "unsupported: output `{name}` folds to the constant {}; REDA has no \
-                         physical constant driver in `Netlist` yet",
-                        u8::from(value)
-                    ),
-                    span: signal.span,
-                });
-                continue;
-            }
-
             let driver = signal_of[node.0 as usize]
                 .clone()
                 .expect("every live node has a signal");
@@ -167,11 +184,6 @@ pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnosti
                 bit,
             });
         }
-    }
-
-    if !errors.is_empty() {
-        errors.sort_by_key(|diagnostic| (diagnostic.span.file, diagnostic.span.start));
-        return Err(errors);
     }
 
     // One statement-level mapping row per assignment: which gates this

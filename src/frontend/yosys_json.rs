@@ -86,11 +86,8 @@ fn unsupported(message: impl Into<String>) -> FrontendError {
 }
 
 /// One bit of a Yosys "bits" array: either a real net id, or a literal
-/// constant. Nothing in this project can realize a hard-wired driver of any
-/// kind (there is no "always on" or "always off" cell in real redstone), so
-/// every constant this reader meets is a candidate for either folding away
-/// (a `0` feeding a NOR or OR pin, which changes nothing) or a hard error
-/// (any other use).
+/// constant. Literal output bits receive real NOR constant drivers. Gate
+/// input constants retain the existing pin-folding rules; x/z are rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Bit {
     Net(i64),
@@ -192,10 +189,23 @@ struct Context<'a> {
     /// output ports both directly wired to the same input share one buffer
     /// instead of each building their own.
     buffer_of_input: HashMap<i64, String>,
+    constant_one: Option<String>,
     builder: NetlistBuilder,
 }
 
 impl<'a> Context<'a> {
+    fn constant_output(&mut self, value: bool) -> String {
+        let high = self
+            .constant_one
+            .get_or_insert_with(|| self.builder.nor(&[]))
+            .clone();
+        if value {
+            high
+        } else {
+            self.builder.not(&high)
+        }
+    }
+
     /// The signal name driving `net_id`, building whatever gate(s) that
     /// takes along the way. Memoized in `signal_of`, and safe to call in any
     /// order regardless of how Yosys happened to list cells in the JSON --
@@ -498,6 +508,7 @@ pub(super) fn netlist_from_json(
         in_progress: HashSet::new(),
         input_names,
         buffer_of_input: HashMap::new(),
+        constant_one: None,
         builder: NetlistBuilder::new(),
     };
 
@@ -544,9 +555,8 @@ pub(super) fn netlist_from_json(
         for (name, bit) in bit_names(port_name, bits).into_iter().zip(bits.iter()) {
             let signal = match parse_bit(bit)? {
                 Bit::Net(id) => resolve_output_net(&mut ctx, id)?,
-                Bit::Zero | Bit::One => {
-                    return Err(unsupported(format!("output port `{port_name}` is tied to a constant -- there is no hard-wired driver in real redstone")));
-                }
+                Bit::Zero => ctx.constant_output(false),
+                Bit::One => ctx.constant_output(true),
             };
             if seen_outputs.insert(signal.clone()) {
                 outputs.push(signal.clone());

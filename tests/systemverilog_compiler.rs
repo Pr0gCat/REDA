@@ -632,12 +632,6 @@ fn the_rejection_matrix_has_stable_messages_and_spans() {
             "has no driver",
         ),
         (
-            "module m(input logic a, output logic y);\n  assign y = a & 1'b0;\nendmodule\n",
-            "output logic y",
-            0,
-            "folds to the constant 0",
-        ),
-        (
             "module m(input logic w, output logic y);\n  assign w = y;\nendmodule\n",
             "w",
             1,

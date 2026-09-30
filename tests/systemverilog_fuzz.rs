@@ -348,16 +348,9 @@ fn oracle_bool(node: &Node, vars: &[bool]) -> bool {
     (value & mask(width)) != 0
 }
 
-/// Whether `node` evaluates to the same result on every one of `nvars`'
-/// input rows. The compiler's own logic optimiser folds a top-level output
-/// like this to a literal constant, and `Netlist` has no constant driver
-/// (`netlist.rs`'s "folds to the constant" rejection) -- a real, documented
-/// limitation, not a bug this harness should paper over. The generator
-/// instead avoids offering the compiler a case it is already known to
-/// reject, the same way it never offers width mismatches or ascending
-/// ranges: those are rejection-matrix cases with their own dedicated tests
-/// in `tests/systemverilog_compiler.rs`, not what this file's "small valid
-/// expressions" property is measuring.
+/// Detect constant functions so this established nonconstant corpus keeps
+/// its original deterministic sequence. Constant drivers are qualified by
+/// the dedicated constant-driver and complete ROM-family physical tests.
 fn is_constant_over_all_rows(node: &Node, nvars: usize) -> bool {
     let rows = 1u32 << nvars;
     let first = {

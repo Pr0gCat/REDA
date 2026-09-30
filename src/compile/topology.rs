@@ -139,7 +139,7 @@ pub enum Primitive {
 /// frontend reads Yosys's gate-level netlist as it stands and *this* module
 /// decides how each gate becomes redstone -- see [`expansion_for`].
 ///
-/// NOR's fan-in is 1..=3 (`place_nor_gate`'s own hardware ceiling), a
+/// NOR's fan-in is 0..=3 (zero inputs give an isolated constant-one torch), a
 /// merge's 2..=3 (`place_merge_gate` shares the same three input faces), so
 /// for those two the arity is part of the kind: it selects the [`Template`].
 /// `Nor(1)` is the same gate the spec calls `NOT` (a NOR gate with one input
@@ -439,9 +439,9 @@ impl GateKind {
 ///   never silently enter the combinational library. `$_DFF_P_` is retained
 ///   as a state boundary and receives its physical topology in the sequential
 ///   compiler phase; it is not a combinational expansion.
-/// - `$_TBUF_`, and Yosys's `$__ZERO`/`$__ONE` constant drivers. There is
-///   no tri-state and no "always on" cell in real redstone, so an entry for
-///   either would be a lie.
+/// - `$_TBUF_`: redstone does not represent a tri-state cell.
+/// - `$__ZERO`/`$__ONE`: literal output bits are materialized by the JSON
+///   reader as Nor(0), or its inverter, rather than as named Yosys cells.
 ///
 /// Two Yosys cells need no expansion at all, because redstone builds them
 /// directly: `$_NOR_` is [`GateKind::Nor`] (a torch) and `$_OR_` is
@@ -645,7 +645,7 @@ impl Library {
     }
 
     /// Today's library: one entry per NOR arity this compiler ever places
-    /// (1..=3 -- see [`GateKind`]'s doc comment for why fan-in never
+    /// (0..=3 -- see [`GateKind`]'s doc comment for why fan-in never
     /// exceeds 3), `Buf`'s two-torch chain -- every `GateKind` named in
     /// [`gate_kind_for_yosys_cell`]'s table, so the Yosys frontend never
     /// meets a mapped cell type with nothing here to build it from -- plus
@@ -658,7 +658,7 @@ impl Library {
     pub fn default_library() -> Self {
         let mut entries = BTreeMap::new();
         let mut stateful_entries = BTreeMap::new();
-        for arity in 1..=3 {
+        for arity in 0..=3 {
             entries.insert(GateKind::Nor(arity), vec![nor_entry(arity)]);
         }
         entries.insert(GateKind::Buf, vec![buf_entry()]);
@@ -783,11 +783,12 @@ fn dff_design_h_topology() -> StatefulTopology {
 /// inbound edges, one outbound.
 fn nor_entry(arity: usize) -> LibraryEntry {
     assert!(
-        (1..=3).contains(&arity),
-        "a NOR gate's fan-in is 1..=3, got {arity}"
+        (0..=3).contains(&arity),
+        "a NOR gate's fan-in is 0..=3, got {arity}"
     );
 
     let name = match arity {
+        0 => "torch-nor0 (constant one)",
         1 => "torch-nor1 (not)",
         2 => "torch-nor2",
         3 => "torch-nor3",
@@ -1017,7 +1018,7 @@ impl Expansion {
             let operands = Self::operands(step);
             match step {
                 Step::Nor(_) => assert!(
-                    (1..=3).contains(&operands.len()),
+                    (0..=3).contains(&operands.len()),
                     "{kind:?} step {index}: a torch has 1..=3 inputs, got {}",
                     operands.len()
                 ),
@@ -1350,8 +1351,8 @@ fn footprint_area(arity: usize, facing: geometry::CellFacing, pin_hops: i32) -> 
 /// where a `match` on arity had to name an `unreachable!` arm to get there.
 fn nor_footprint_area_facing(arity: usize, facing: geometry::CellFacing) -> u32 {
     assert!(
-        (1..=3).contains(&arity),
-        "a NOR gate's fan-in is 1..=3, got {arity}"
+        (0..=3).contains(&arity),
+        "a NOR gate's fan-in is 0..=3, got {arity}"
     );
     footprint_area(arity, facing, 2)
 }

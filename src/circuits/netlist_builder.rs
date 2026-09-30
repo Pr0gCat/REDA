@@ -153,7 +153,7 @@ impl NetlistBuilder {
         name.to_string()
     }
 
-    /// A new NOR gate; `inputs.len()` must be in 1..=3.
+    /// A new NOR gate; `inputs.len()` must be in 0..=3. Zero inputs drive constant one.
     pub(crate) fn nor(&mut self, inputs: &[String]) -> String {
         let output = self.fresh_name();
         self.nor_named(&output.clone(), &output, inputs)
@@ -164,7 +164,7 @@ impl NetlistBuilder {
     /// of an expansion, so the gate's own declared output name survives.
     pub(crate) fn nor_named(&mut self, name: &str, output: &str, inputs: &[String]) -> String {
         assert!(
-            !inputs.is_empty() && inputs.len() <= 3,
+            inputs.len() <= 3,
             "place_nor_gate takes at most 3 inputs, got {}",
             inputs.len()
         );

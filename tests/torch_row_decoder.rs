@@ -692,10 +692,6 @@ fn matrix_logic_binding(
             *rows.entry((cube.bits, cube.mask)).or_insert(0u8) |= 1 << bit;
         }
     }
-    assert!(
-        rows.keys().all(|(_, mask)| *mask != 0),
-        "constant support needs an explicit constant-driver implementation"
-    );
     let mut gates = Vec::new();
     let mut positions = std::collections::BTreeMap::new();
     for (bit, name) in ["a", "b"].into_iter().enumerate() {
@@ -704,7 +700,7 @@ fn matrix_logic_binding(
         positions.insert(inverse, Position::new(4 + 6 * bit as i32, 4, 1));
     }
     let mut terms: [Vec<String>; 3] = std::array::from_fn(|_| Vec::new());
-    let output_end = 4 + 3 * (rows.len() as i32 - 1) + 3;
+    let output_end = 4 + 3 * (rows.len().max(1) as i32 - 1) + 3;
     for (row, ((address, mask), word)) in rows.into_iter().enumerate() {
         let z = 4 + 3 * row as i32;
         let mut mismatches = Vec::new();
@@ -726,32 +722,42 @@ fn matrix_logic_binding(
             );
             mismatches.push(mismatch);
         }
-        let control = if mismatches.len() == 1 {
-            mismatches[0].clone()
+        let control = if mismatches.is_empty() {
+            None
+        } else if mismatches.len() == 1 {
+            Some(mismatches[0].clone())
         } else {
             let control = format!("row{row}_control");
             let inputs: Vec<_> = mismatches.iter().map(String::as_str).collect();
             gates.push(Gate::merge(&control, &inputs));
             positions.insert(control.clone(), Position::new(15, 3, z));
-            control
+            Some(control)
         };
         for (bit, bit_terms) in terms.iter_mut().enumerate() {
             if word & (1 << bit) == 0 {
                 continue;
             }
             let term = format!("row{row}_bit{bit}");
-            gates.push(Gate::nor(&term, &[&control]));
+            let inputs: Vec<_> = control.iter().map(String::as_str).collect();
+            gates.push(Gate::nor(&term, &inputs));
             positions.insert(term.clone(), Position::new(18 + 3 * bit as i32, 2, z + 1));
             bit_terms.push(term);
         }
     }
     let mut outputs = Vec::new();
     for (bit, terms) in terms.into_iter().enumerate() {
-        assert!(
-            !terms.is_empty(),
-            "empty output requires an explicit constant-zero driver"
-        );
-        let output = if terms.len() == 1 {
+        let output = if terms.is_empty() {
+            let high = format!("constant_high{bit}");
+            let low = format!("constant_low{bit}");
+            gates.push(Gate::nor(&high, &[]));
+            gates.push(Gate::nor(&low, &[&high]));
+            positions.insert(high, Position::new(18 + 3 * bit as i32, 4, output_end - 1));
+            positions.insert(
+                low.clone(),
+                Position::new(18 + 3 * bit as i32, 2, output_end),
+            );
+            low
+        } else if terms.len() == 1 {
             terms[0].clone()
         } else {
             let output = format!("output{bit}");
@@ -912,7 +918,12 @@ fn typed_matrix_library() -> reda::compile::topology::Library {
     };
     let default = Library::default_library();
     let mut entries = std::collections::BTreeMap::new();
-    for kind in [GateKind::Nor(1), GateKind::Or(2), GateKind::Or(3)] {
+    for kind in [
+        GateKind::Nor(0),
+        GateKind::Nor(1),
+        GateKind::Or(2),
+        GateKind::Or(3),
+    ] {
         let entry = default.entry_at(kind, 0).unwrap();
         entries.insert(
             kind,
@@ -1037,7 +1048,52 @@ fn typed_matrix_candidate(
     let (mut netlist, mut positions) = matrix_logic_binding(words);
     let (mut world, mut inputs, _, lamps) =
         matrix_four_words_with_aligned_refresh(words, true, true, true);
+    // A constant-one row has no active control rail. Retain only the
+    // actual supports of its zero-input NOR data torches.
+    let row_zs: std::collections::BTreeSet<_> = world
+        .positions_of(BlockKind::Repeater)
+        .map(|flat| world.decode(flat))
+        .filter(|&(x, y, _)| x == 16 && y == 3)
+        .map(|(_, _, z)| z)
+        .collect();
+    for z in row_zs {
+        if positions
+            .values()
+            .any(|p| p.y == 4 && p.z == z && p.x <= 13)
+        {
+            continue;
+        }
+        for x in 2..25 {
+            world.set(x, 3, z, BlockState::air());
+            if world.get(x, 2, z + 1).kind != BlockKind::WallTorch {
+                world.set(x, 2, z, BlockState::air());
+            }
+        }
+    }
+    // A real high driver and inverter replace each empty output column.
+    for bit in 0..3 {
+        if let Some(p) = positions.get(&format!("constant_high{bit}")) {
+            world.set(p.x - 1, p.y, p.z, block(BlockKind::Solid));
+            torch(&mut world, p.x, p.y, p.z, Facing::East);
+            wire(&mut world, p.x, p.y - 1, p.z);
+            let low = positions[&format!("constant_low{bit}")];
+            torch(&mut world, low.x, low.y, low.z, Facing::South);
+        }
+    }
     bind_matrix_refresh_stages(&mut netlist, &mut positions, &mut world);
+    // Unused address inverters have no observable function but can burn
+    // out under rapid input histories. Delete their actual gate and torch;
+    // the rail pruning below then retains only real taps/inverter inputs.
+    for bit in 0..2 {
+        let inverse = format!("inverse{bit}");
+        if netlist.gates.iter().any(|g| g.inputs.contains(&inverse)) {
+            continue;
+        }
+        netlist.gates.retain(|g| g.output != inverse);
+        if let Some(p) = positions.remove(&inverse) {
+            world.set(p.x, p.y, p.z, BlockState::air());
+        }
+    }
     let graph = InstanceGraph::one_to_one(&netlist, &typed_matrix_library()).unwrap();
     let mut candidate = ExpandedPhysicalCandidate::empty(graph, PortPlacements::default());
     // A conductor above the inverter support makes the direct lever/support
@@ -1058,12 +1114,21 @@ fn typed_matrix_candidate(
             .filter(|p| p.x == x + 1 && p.y == 4 && p.z >= 4)
             .map(|p| p.z)
             .max()
-            .unwrap_or(if [3, 9].contains(&x) { 1 } else { 0 });
+            .unwrap_or(
+                if positions
+                    .values()
+                    .any(|p| p.x == x + 1 && p.y == 4 && p.z == 1)
+                {
+                    1
+                } else {
+                    0
+                },
+            );
         for z in (last_tap + 1)..world.size().2 {
             world.set(x, 5, z, BlockState::air());
             world.set(x, 4, z, BlockState::air());
         }
-        if last_tap == 0 {
+        if last_tap == 0 && [6, 12].contains(&x) {
             world.set(x - 1, 4, 1, BlockState::air());
             world.set(x - 1, 3, 1, BlockState::air());
         }
@@ -1752,8 +1817,7 @@ fn verify_typed_matrix_internal_truth(
     }
 }
 
-#[test]
-fn all_nonconstant_matrix_tables_run_strict_typed_certification() {
+fn verify_typed_matrix_family(include_constants: bool) {
     use reda::compile::fragment_synth::realise::realise_and_verify_expanded;
     let library = typed_matrix_library();
     let mut verified = 0;
@@ -1762,11 +1826,30 @@ fn all_nonconstant_matrix_tables_run_strict_typed_certification() {
     let mut candidate_sum = 0u64;
     let mut worst = 0u64;
     let mut rewrite_proof_fingerprints = Vec::new();
+    let prior: serde_json::Value = serde_json::from_str(include_str!(
+        "../docs/generator-torch-row-prior-nonconstant-caps-2026-09-30.json"
+    ))
+    .unwrap();
+    let prior_caps: std::collections::BTreeMap<_, _> = prior["tables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row[0].as_u64().unwrap(),
+                row.as_array().unwrap()[1..].to_vec(),
+            )
+        })
+        .collect();
+
     for encoding in 0..4096u32 {
         let words: [u8; 4] = std::array::from_fn(|i| ((encoding >> (3 * i)) & 7) as u8);
-        if (0..3).any(|bit| {
-            words.iter().all(|w| w & (1 << bit) == 0) || words.iter().all(|w| w & (1 << bit) != 0)
-        }) {
+        if !include_constants
+            && (0..3).any(|bit| {
+                words.iter().all(|w| w & (1 << bit) == 0)
+                    || words.iter().all(|w| w & (1 << bit) != 0)
+            })
+        {
             continue;
         }
         let (netlist, original, candidate) = typed_matrix_candidate(words);
@@ -1848,13 +1931,22 @@ fn all_nonconstant_matrix_tables_run_strict_typed_certification() {
                 control[metric]
             );
         }
+        if let Some(caps) = prior_caps.get(&u64::from(encoding)) {
+            for (metric, cap) in prior["metrics"].as_array().unwrap().iter().zip(caps) {
+                let metric = metric.as_str().unwrap();
+                assert!(
+                    measured[metric].as_u64().unwrap() <= cap.as_u64().unwrap(),
+                    "prior accepted adapter regression words={words:?}: {metric}"
+                );
+            }
+        }
         control_sum += control["total_settle_ticks"].as_u64().unwrap();
         candidate_sum += measured["total_settle_ticks"].as_u64().unwrap();
         improved += usize::from(measured["total_settle_ticks"] != control["total_settle_ticks"]);
         worst = worst.max(measured["worst_settle_ticks"].as_u64().unwrap());
         verified += 1;
     }
-    assert_eq!(verified, 2744);
+    assert_eq!(verified, if include_constants { 4096 } else { 2744 });
     let report = json!({"data_tables":verified,"measured_transitions_per_arm":verified*16,
         "strict_certification":true,"exact_emission":true,"deterministic_candidates":true,
         "frontend_source_rewrites_proved":rewrite_proof_fingerprints.len(),
@@ -1862,12 +1954,15 @@ fn all_nonconstant_matrix_tables_run_strict_typed_certification() {
         "rewrite_proof_set_fingerprint":reda::compile::metrics::canonical_fingerprint(
             &serde_json::to_vec(&rewrite_proof_fingerprints).unwrap()),
         "all_internal_setup_and_target_truth_correct":true,"all_topologies_symbolically_proved":true,
-        "all_nine_metrics_preserve_per_table_controls":true,"control_total_settle_ticks":control_sum,
+        "all_nine_metrics_preserve_per_table_controls":true,"all_prior_nonconstant_caps_preserved":true,"control_total_settle_ticks":control_sum,
         "candidate_total_settle_ticks":candidate_sum,"improved_tables":improved,"worst_settle_ticks":worst});
     println!("{report}");
     std::fs::write(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target/torch_row_typed_exhaustive.json"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(if include_constants {
+            "target/torch_row_typed_all_functions.json"
+        } else {
+            "target/torch_row_typed_exhaustive.json"
+        }),
         serde_json::to_string_pretty(&report).unwrap(),
     )
     .unwrap();
@@ -1978,4 +2073,75 @@ fn matrix_rewrite_chain_checks_fresh_yosys_and_rejects_wrong_source_data() {
             ..
         })
     ));
+}
+
+#[test]
+fn all_nonconstant_matrix_tables_run_strict_typed_certification() {
+    verify_typed_matrix_family(false);
+}
+
+#[test]
+fn all_matrix_tables_including_constants_run_strict_typed_certification() {
+    verify_typed_matrix_family(true);
+}
+
+#[test]
+fn typed_constant_support_rejects_a_foreign_owned_wire() {
+    use reda::compile::fragment_synth::{
+        candidate::PlacedBlock,
+        identity::{ObservationId, PhysicalEndpointId},
+        realise::{realise_and_verify_expanded, CertificationError},
+    };
+    use reda::compile::{geometry::Anchor, verification::ExpandedPhysicalError};
+    let (netlist, world, mut candidate) = typed_matrix_candidate([0; 4]);
+    let route = *candidate
+        .routes
+        .iter()
+        .find(|(_, r)| {
+            let PhysicalEndpointId::PrimitiveOutput(id) = r.source else {
+                return false;
+            };
+            let at = candidate.observations[&ObservationId::PrimitiveOutput(id)]
+                .site
+                .at;
+            at.x == 21 && at.y == 2
+        })
+        .unwrap()
+        .0;
+    let at = Anchor { x: 17, y: 4, z: 5 };
+    assert_eq!(world.get(at.x, at.y, at.z).kind, BlockKind::Air);
+    let route = candidate.routes.get_mut(&route).unwrap();
+    route.cells.push(PlacedBlock {
+        at,
+        state: block(BlockKind::RedstoneWire),
+    });
+    route.floors.push(PlacedBlock {
+        at: Anchor { y: at.y - 1, ..at },
+        state: block(BlockKind::Solid),
+    });
+    // A second cell makes this a north/south run aimed into the support,
+    // rather than an isolated dot whose horizontal output is world-dependent.
+    let north = Anchor { z: at.z - 1, ..at };
+    route.cells.push(PlacedBlock {
+        at: north,
+        state: block(BlockKind::RedstoneWire),
+    });
+    route.floors.push(PlacedBlock {
+        at: Anchor {
+            y: north.y - 1,
+            ..north
+        },
+        state: block(BlockKind::Solid),
+    });
+    let actual = realise_and_verify_expanded(&candidate, &netlist, &typed_matrix_library());
+    assert!(
+        matches!(
+            &actual,
+            Err(CertificationError::Physical(
+                ExpandedPhysicalError::CrossComponentCoupling { .. }
+            ))
+        ),
+        "unexpected certification error: {:?}",
+        actual.err()
+    );
 }
