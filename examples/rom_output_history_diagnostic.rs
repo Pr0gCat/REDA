@@ -1,11 +1,14 @@
-//! Manual route/power diagnostic; optional argument is four comma-separated ROM words.
+//! Manual route/power diagnostic: four comma-separated ROM words, or `xor2`.
 use reda::compile::{compile, lowering::lower_optimised};
 use reda::frontend::{compile_systemverilog, CompileOptions, SourceInput};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::BlockKind;
 use std::collections::HashMap;
 fn main() {
-    let words: [u8; 4] = match std::env::args().nth(1) {
+    let argument = std::env::args().nth(1);
+    let xor = argument.as_deref() == Some("xor2");
+    let words: [u8; 4] = match argument {
+        Some(_) if xor => [0, 1, 1, 0],
         Some(arg) => {
             let values: Vec<u8> = arg
                 .split(',')
@@ -26,19 +29,31 @@ fn main() {
         ));
     }
     text.push_str("endmodule");
+    let module = if xor { "xor2" } else { "source_rom" };
+    if xor {
+        text = "module xor2(input logic a,b, output logic y); assign y=a^b; endmodule".to_owned();
+    }
     let artifact = compile_systemverilog(
         &[SourceInput {
             name: "diagnostic.sv",
             text: &text,
         }],
-        &CompileOptions::new("source_rom"),
+        &CompileOptions::new(module),
     )
     .unwrap();
     let ports = artifact.output_map();
     let mut source = lower_optimised(&artifact.netlist).unwrap();
-    source.outputs = (0..3)
-        .map(|bit| ports[&format!("y{bit}")].clone())
-        .collect();
+    source.outputs = if xor {
+        vec![ports["y"].clone()]
+    } else {
+        (0..3)
+            .map(|bit| ports[&format!("y{bit}")].clone())
+            .collect()
+    };
+    // Stock compile declares one physical observation per driven net.
+    // Public aliases share that observation rather than duplicate declarations.
+    let mut seen = std::collections::BTreeSet::new();
+    source.outputs.retain(|name| seen.insert(name.clone()));
     let circuit = compile(&source).unwrap();
     println!("planner={:?},netlist={source:?}", circuit.planner_kind());
     let plan = reda::compile::planner::plan_from_netlist(
