@@ -1,0 +1,1089 @@
+{
+  "base_commit": "15e8353",
+  "before_witness": {
+    "changes": {
+      "d1": [
+        [
+          1,
+          true
+        ]
+      ],
+      "g17": [
+        [
+          38,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "g18": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ],
+      "g22": [
+        [
+          12,
+          true
+        ]
+      ],
+      "g25": [
+        [
+          30,
+          false
+        ]
+      ],
+      "g28": [
+        [
+          40,
+          false
+        ]
+      ],
+      "g30": [
+        [
+          40,
+          true
+        ]
+      ],
+      "g9": [
+        [
+          6,
+          false
+        ]
+      ],
+      "n10": [
+        [
+          18,
+          false
+        ]
+      ],
+      "n11": [
+        [
+          18,
+          false
+        ]
+      ],
+      "n2": [
+        [
+          6,
+          false
+        ]
+      ],
+      "n21": [
+        [
+          34,
+          true
+        ]
+      ],
+      "n23": [
+        [
+          32,
+          false
+        ]
+      ],
+      "n24": [
+        [
+          32,
+          true
+        ]
+      ],
+      "n3": [
+        [
+          14,
+          false
+        ]
+      ],
+      "n5": [
+        [
+          20,
+          true
+        ]
+      ],
+      "n7": [
+        [
+          22,
+          true
+        ]
+      ],
+      "n8": [
+        [
+          22,
+          true
+        ]
+      ],
+      "n9": [
+        [
+          12,
+          true
+        ]
+      ],
+      "public_a": [
+        [
+          46,
+          false
+        ],
+        [
+          49,
+          true
+        ]
+      ]
+    },
+    "from": 0,
+    "gates": [
+      {
+        "inputs": [
+          "d2"
+        ],
+        "kind": "Nor(1)",
+        "output": "n0"
+      },
+      {
+        "inputs": [
+          "n0",
+          "d3"
+        ],
+        "kind": "Or(2)",
+        "output": "n1"
+      },
+      {
+        "inputs": [
+          "d1"
+        ],
+        "kind": "Nor(1)",
+        "output": "n2"
+      },
+      {
+        "inputs": [
+          "n2",
+          "d0"
+        ],
+        "kind": "Or(2)",
+        "output": "n3"
+      },
+      {
+        "inputs": [
+          "d2",
+          "d3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g5"
+      },
+      {
+        "inputs": [
+          "d3"
+        ],
+        "kind": "Nor(1)",
+        "output": "n4"
+      },
+      {
+        "inputs": [
+          "n2",
+          "n4"
+        ],
+        "kind": "Nor(2)",
+        "output": "g6"
+      },
+      {
+        "inputs": [
+          "d1",
+          "d0"
+        ],
+        "kind": "Nor(2)",
+        "output": "g9"
+      },
+      {
+        "inputs": [
+          "d1",
+          "n0"
+        ],
+        "kind": "Or(2)",
+        "output": "g13"
+      },
+      {
+        "inputs": [
+          "d2",
+          "d1"
+        ],
+        "kind": "Or(2)",
+        "output": "g22"
+      },
+      {
+        "inputs": [
+          "n2",
+          "n1"
+        ],
+        "kind": "Or(2)",
+        "output": "g1"
+      },
+      {
+        "inputs": [
+          "n3"
+        ],
+        "kind": "Nor(1)",
+        "output": "n5"
+      },
+      {
+        "inputs": [
+          "n0",
+          "n5"
+        ],
+        "kind": "Nor(2)",
+        "output": "g4"
+      },
+      {
+        "inputs": [
+          "g5"
+        ],
+        "kind": "Nor(1)",
+        "output": "n6"
+      },
+      {
+        "inputs": [
+          "n2",
+          "n6"
+        ],
+        "kind": "Nor(2)",
+        "output": "n7"
+      },
+      {
+        "inputs": [
+          "n3",
+          "n6"
+        ],
+        "kind": "Nor(2)",
+        "output": "n8"
+      },
+      {
+        "inputs": [
+          "g5",
+          "g6"
+        ],
+        "kind": "Or(2)",
+        "output": "g7"
+      },
+      {
+        "inputs": [
+          "d2",
+          "g6"
+        ],
+        "kind": "Or(2)",
+        "output": "g19"
+      },
+      {
+        "inputs": [
+          "d0",
+          "g6"
+        ],
+        "kind": "Nor(2)",
+        "output": "g26"
+      },
+      {
+        "inputs": [
+          "g9"
+        ],
+        "kind": "Nor(1)",
+        "output": "n9"
+      },
+      {
+        "inputs": [
+          "n6",
+          "n9"
+        ],
+        "kind": "Nor(2)",
+        "output": "n10"
+      },
+      {
+        "inputs": [
+          "d3",
+          "g13"
+        ],
+        "kind": "Or(2)",
+        "output": "g14"
+      },
+      {
+        "inputs": [
+          "g22"
+        ],
+        "kind": "Nor(1)",
+        "output": "n11"
+      },
+      {
+        "inputs": [
+          "n4",
+          "n11"
+        ],
+        "kind": "Nor(2)",
+        "output": "n12"
+      },
+      {
+        "inputs": [
+          "d0"
+        ],
+        "kind": "Nor(1)",
+        "output": "n13"
+      },
+      {
+        "inputs": [
+          "n13",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g2"
+      },
+      {
+        "inputs": [
+          "g4",
+          "g7"
+        ],
+        "kind": "Or(2)",
+        "output": "g8"
+      },
+      {
+        "inputs": [
+          "g13"
+        ],
+        "kind": "Nor(1)",
+        "output": "n14"
+      },
+      {
+        "inputs": [
+          "g26"
+        ],
+        "kind": "Nor(1)",
+        "output": "n15"
+      },
+      {
+        "inputs": [
+          "n14",
+          "n15"
+        ],
+        "kind": "Nor(2)",
+        "output": "g27"
+      },
+      {
+        "inputs": [
+          "n13",
+          "g14"
+        ],
+        "kind": "Nor(2)",
+        "output": "g15"
+      },
+      {
+        "inputs": [
+          "g1"
+        ],
+        "kind": "Nor(1)",
+        "output": "n16"
+      },
+      {
+        "inputs": [
+          "n16",
+          "n13"
+        ],
+        "kind": "Nor(2)",
+        "output": "n17"
+      },
+      {
+        "inputs": [
+          "g14"
+        ],
+        "kind": "Nor(1)",
+        "output": "n18"
+      },
+      {
+        "inputs": [
+          "n18",
+          "d0"
+        ],
+        "kind": "Nor(2)",
+        "output": "n19"
+      },
+      {
+        "inputs": [
+          "n17",
+          "n19"
+        ],
+        "kind": "Nor(2)",
+        "output": "n20"
+      },
+      {
+        "inputs": [
+          "n18",
+          "n7"
+        ],
+        "kind": "Or(2)",
+        "output": "n21"
+      },
+      {
+        "inputs": [
+          "n12",
+          "n8"
+        ],
+        "kind": "Nor(2)",
+        "output": "g25"
+      },
+      {
+        "inputs": [
+          "g8"
+        ],
+        "kind": "Nor(1)",
+        "output": "n22"
+      },
+      {
+        "inputs": [
+          "n22",
+          "n10"
+        ],
+        "kind": "Or(2)",
+        "output": "n23"
+      },
+      {
+        "inputs": [
+          "n7",
+          "g15"
+        ],
+        "kind": "Or(2)",
+        "output": "n24"
+      },
+      {
+        "inputs": [
+          "g19"
+        ],
+        "kind": "Nor(1)",
+        "output": "n25"
+      },
+      {
+        "inputs": [
+          "n25",
+          "n20"
+        ],
+        "kind": "Or(2)",
+        "output": "g21"
+      },
+      {
+        "inputs": [
+          "n22",
+          "n21"
+        ],
+        "kind": "Or(2)",
+        "output": "g30"
+      },
+      {
+        "inputs": [
+          "n18",
+          "n23"
+        ],
+        "kind": "Or(2)",
+        "output": "g28"
+      },
+      {
+        "inputs": [
+          "n23",
+          "n24"
+        ],
+        "kind": "Or(2)",
+        "output": "g17"
+      },
+      {
+        "inputs": [
+          "g2",
+          "g17"
+        ],
+        "kind": "Or(2)",
+        "output": "g18"
+      }
+    ],
+    "output_map": {
+      "a": "g18",
+      "b": "g21",
+      "c": "g25",
+      "d": "g17",
+      "e": "g27",
+      "f": "g28",
+      "g": "g30"
+    },
+    "to": 2
+  },
+  "after_witness": {
+    "changes": {
+      "__consensus_term_47": [
+        [
+          8,
+          false
+        ]
+      ],
+      "d1": [
+        [
+          1,
+          true
+        ]
+      ],
+      "g22": [
+        [
+          14,
+          true
+        ]
+      ],
+      "g25": [
+        [
+          32,
+          false
+        ]
+      ],
+      "g28": [
+        [
+          50,
+          false
+        ]
+      ],
+      "g30": [
+        [
+          50,
+          true
+        ]
+      ],
+      "g9": [
+        [
+          8,
+          false
+        ]
+      ],
+      "n10": [
+        [
+          22,
+          false
+        ]
+      ],
+      "n11": [
+        [
+          22,
+          false
+        ]
+      ],
+      "n2": [
+        [
+          6,
+          false
+        ]
+      ],
+      "n21": [
+        [
+          44,
+          true
+        ]
+      ],
+      "n23": [
+        [
+          46,
+          false
+        ]
+      ],
+      "n24": [
+        [
+          42,
+          true
+        ]
+      ],
+      "n3": [
+        [
+          14,
+          false
+        ]
+      ],
+      "n5": [
+        [
+          24,
+          true
+        ]
+      ],
+      "n7": [
+        [
+          32,
+          true
+        ]
+      ],
+      "n8": [
+        [
+          26,
+          true
+        ]
+      ],
+      "n9": [
+        [
+          16,
+          true
+        ]
+      ]
+    },
+    "from": 0,
+    "gates": [
+      {
+        "inputs": [
+          "d2"
+        ],
+        "kind": "Nor(1)",
+        "output": "n0"
+      },
+      {
+        "inputs": [
+          "n0",
+          "d3"
+        ],
+        "kind": "Or(2)",
+        "output": "n1"
+      },
+      {
+        "inputs": [
+          "d1"
+        ],
+        "kind": "Nor(1)",
+        "output": "n2"
+      },
+      {
+        "inputs": [
+          "n2",
+          "d0"
+        ],
+        "kind": "Or(2)",
+        "output": "n3"
+      },
+      {
+        "inputs": [
+          "d2",
+          "d3"
+        ],
+        "kind": "Nor(2)",
+        "output": "g5"
+      },
+      {
+        "inputs": [
+          "d3"
+        ],
+        "kind": "Nor(1)",
+        "output": "n4"
+      },
+      {
+        "inputs": [
+          "n2",
+          "n4"
+        ],
+        "kind": "Nor(2)",
+        "output": "g6"
+      },
+      {
+        "inputs": [
+          "d1",
+          "d0"
+        ],
+        "kind": "Nor(2)",
+        "output": "g9"
+      },
+      {
+        "inputs": [
+          "d1",
+          "n0"
+        ],
+        "kind": "Or(2)",
+        "output": "g13"
+      },
+      {
+        "inputs": [
+          "d2",
+          "d1"
+        ],
+        "kind": "Or(2)",
+        "output": "g22"
+      },
+      {
+        "inputs": [
+          "n2",
+          "n1"
+        ],
+        "kind": "Or(2)",
+        "output": "g1"
+      },
+      {
+        "inputs": [
+          "n3"
+        ],
+        "kind": "Nor(1)",
+        "output": "n5"
+      },
+      {
+        "inputs": [
+          "n0",
+          "n5"
+        ],
+        "kind": "Nor(2)",
+        "output": "g4"
+      },
+      {
+        "inputs": [
+          "g5"
+        ],
+        "kind": "Nor(1)",
+        "output": "n6"
+      },
+      {
+        "inputs": [
+          "n2",
+          "n6"
+        ],
+        "kind": "Nor(2)",
+        "output": "n7"
+      },
+      {
+        "inputs": [
+          "n3",
+          "n6"
+        ],
+        "kind": "Nor(2)",
+        "output": "n8"
+      },
+      {
+        "inputs": [
+          "g5",
+          "g6"
+        ],
+        "kind": "Or(2)",
+        "output": "g7"
+      },
+      {
+        "inputs": [
+          "d2",
+          "g6"
+        ],
+        "kind": "Or(2)",
+        "output": "g19"
+      },
+      {
+        "inputs": [
+          "d0",
+          "g6"
+        ],
+        "kind": "Nor(2)",
+        "output": "g26"
+      },
+      {
+        "inputs": [
+          "g9"
+        ],
+        "kind": "Nor(1)",
+        "output": "n9"
+      },
+      {
+        "inputs": [
+          "n6",
+          "n9"
+        ],
+        "kind": "Nor(2)",
+        "output": "n10"
+      },
+      {
+        "inputs": [
+          "d3",
+          "g13"
+        ],
+        "kind": "Or(2)",
+        "output": "g14"
+      },
+      {
+        "inputs": [
+          "g22"
+        ],
+        "kind": "Nor(1)",
+        "output": "n11"
+      },
+      {
+        "inputs": [
+          "n4",
+          "n11"
+        ],
+        "kind": "Nor(2)",
+        "output": "n12"
+      },
+      {
+        "inputs": [
+          "d0"
+        ],
+        "kind": "Nor(1)",
+        "output": "n13"
+      },
+      {
+        "inputs": [
+          "n13",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g2"
+      },
+      {
+        "inputs": [
+          "g4",
+          "g7"
+        ],
+        "kind": "Or(2)",
+        "output": "g8"
+      },
+      {
+        "inputs": [
+          "g13"
+        ],
+        "kind": "Nor(1)",
+        "output": "n14"
+      },
+      {
+        "inputs": [
+          "g26"
+        ],
+        "kind": "Nor(1)",
+        "output": "n15"
+      },
+      {
+        "inputs": [
+          "n14",
+          "n15"
+        ],
+        "kind": "Nor(2)",
+        "output": "g27"
+      },
+      {
+        "inputs": [
+          "n13",
+          "g14"
+        ],
+        "kind": "Nor(2)",
+        "output": "g15"
+      },
+      {
+        "inputs": [
+          "g1"
+        ],
+        "kind": "Nor(1)",
+        "output": "n16"
+      },
+      {
+        "inputs": [
+          "n16",
+          "n13"
+        ],
+        "kind": "Nor(2)",
+        "output": "n17"
+      },
+      {
+        "inputs": [
+          "g14"
+        ],
+        "kind": "Nor(1)",
+        "output": "n18"
+      },
+      {
+        "inputs": [
+          "n18",
+          "d0"
+        ],
+        "kind": "Nor(2)",
+        "output": "n19"
+      },
+      {
+        "inputs": [
+          "n17",
+          "n19"
+        ],
+        "kind": "Nor(2)",
+        "output": "n20"
+      },
+      {
+        "inputs": [
+          "n18",
+          "n7"
+        ],
+        "kind": "Or(2)",
+        "output": "n21"
+      },
+      {
+        "inputs": [
+          "n12",
+          "n8"
+        ],
+        "kind": "Nor(2)",
+        "output": "g25"
+      },
+      {
+        "inputs": [
+          "g8"
+        ],
+        "kind": "Nor(1)",
+        "output": "n22"
+      },
+      {
+        "inputs": [
+          "n22",
+          "n10"
+        ],
+        "kind": "Or(2)",
+        "output": "n23"
+      },
+      {
+        "inputs": [
+          "n7",
+          "g15"
+        ],
+        "kind": "Or(2)",
+        "output": "n24"
+      },
+      {
+        "inputs": [
+          "g19"
+        ],
+        "kind": "Nor(1)",
+        "output": "n25"
+      },
+      {
+        "inputs": [
+          "n25",
+          "n20"
+        ],
+        "kind": "Or(2)",
+        "output": "g21"
+      },
+      {
+        "inputs": [
+          "n22",
+          "n21"
+        ],
+        "kind": "Or(2)",
+        "output": "g30"
+      },
+      {
+        "inputs": [
+          "n18",
+          "n23",
+          "__consensus_term_47"
+        ],
+        "kind": "Or(3)",
+        "output": "g28"
+      },
+      {
+        "inputs": [
+          "n23",
+          "n24",
+          "__consensus_term_48"
+        ],
+        "kind": "Or(3)",
+        "output": "g17"
+      },
+      {
+        "inputs": [
+          "g2",
+          "g17"
+        ],
+        "kind": "Or(2)",
+        "output": "g18"
+      },
+      {
+        "inputs": [
+          "d0",
+          "d1",
+          "d3"
+        ],
+        "kind": "Nor(3)",
+        "output": "__consensus_term_47"
+      },
+      {
+        "inputs": [
+          "d0",
+          "d2",
+          "d3"
+        ],
+        "kind": "Nor(3)",
+        "output": "__consensus_term_48"
+      }
+    ],
+    "output_map": {
+      "a": "g18",
+      "b": "g21",
+      "c": "g25",
+      "d": "g17",
+      "e": "g27",
+      "f": "g28",
+      "g": "g30"
+    },
+    "to": 2
+  },
+  "prototype_source": "fn add_merge_consensus(netlist: &mut Netlist) {\n    use std::collections::{BTreeMap, BTreeSet};\n    type Cube = BTreeMap<String, bool>;\n    fn cube(signal: &str, negative: bool, inputs: &BTreeSet<String>, producers: &HashMap<String, Gate>, cache: &mut HashMap<(String, bool), Option<Cube>>) -> Option<Cube> {\n        let key = (signal.to_string(), negative);\n        if let Some(value) = cache.get(&key) {return value.clone();}\n        let result = if inputs.contains(signal) {\n            Some(BTreeMap::from([(signal.to_string(), !negative)]))\n        } else if let Some(gate) = producers.get(signal) {\n            match gate.kind {\n                GateKind::Nor(_) if !negative => combine(&gate.inputs, true, inputs, producers, cache),\n                GateKind::Or(_) if negative => combine(&gate.inputs, true, inputs, producers, cache),\n                GateKind::Nor(1) if negative => cube(&gate.inputs[0], false, inputs, producers, cache),\n                GateKind::Or(1) if !negative => cube(&gate.inputs[0], false, inputs, producers, cache),\n                _ => None,\n            }\n        } else {None};\n        cache.insert(key, result.clone());\n        result\n    }\n    fn combine(signals: &[String], negative: bool, inputs: &BTreeSet<String>, producers: &HashMap<String, Gate>, cache: &mut HashMap<(String, bool), Option<Cube>>) -> Option<Cube> {\n        let mut result = Cube::new();\n        for signal in signals {\n            for (name, value) in cube(signal, negative, inputs, producers, cache)? {\n                if result.insert(name, value).is_some_and(|old| old != value) {return None;}\n            }\n        }\n        Some(result)\n    }\n    fn leaves(signal: &str, producers: &HashMap<String, Gate>, seen: &mut BTreeSet<String>, result: &mut BTreeSet<String>) {\n        if !seen.insert(signal.to_string()) {return;}\n        if let Some(gate) = producers.get(signal).filter(|gate| gate.is_merge()) {\n            for input in &gate.inputs {leaves(input, producers, seen, result);}\n        } else {result.insert(signal.to_string());}\n    }\n    if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {return;}\n    let mut producers: HashMap<_,_> = netlist.gates.iter().map(|gate| (gate.output.clone(),gate.clone())).collect();\n    let inputs = netlist.inputs.iter().cloned().collect();\n    let mut cache = HashMap::new();\n    let mut terms: BTreeMap<Cube, String> = BTreeMap::new();\n    let mut inverted: BTreeMap<String, String> = producers.values().filter(|gate| gate.kind == GateKind::Nor(1))\n        .map(|gate| (gate.inputs[0].clone(),gate.output.clone())).collect();\n    let count = netlist.gates.len();\n    for index in 0..count {\n        if netlist.gates[index].kind != GateKind::Or(2) || !netlist.outputs.contains(&netlist.gates[index].output) {continue;}\n        let mut leaf_signals = BTreeSet::new();\n        leaves(&netlist.gates[index].output, &producers, &mut BTreeSet::new(), &mut leaf_signals);\n        if leaf_signals.iter().any(|signal| terms.values().any(|term| term == signal)) {continue;}\n        let cubes: Vec<_> = leaf_signals.iter().filter_map(|signal| cube(signal, false, &inputs, &producers, &mut cache)).collect();\n        let mut candidates = BTreeSet::new();\n        for (i,a) in cubes.iter().enumerate() {\n            for b in &cubes[i+1..] {\n                let opposite: Vec<_> = a.iter().filter(|(name,value)| b.get(*name).is_some_and(|other| other != *value)).map(|(name,_)|name.clone()).collect();\n                if opposite.len() != 1 {continue;}\n                let mut common = a.clone();\n                common.extend(b.clone());\n                common.remove(&opposite[0]);\n                if common.is_empty() || common.len() > 3 {continue;}\n                if cubes.iter().any(|existing| existing.iter().all(|(name,value)|common.get(name)==Some(value))) {continue;}\n                candidates.insert(common);\n            }\n        }\n        let Some(common) = candidates.into_iter().next() else {continue;};\n        let term = if let Some(term) = terms.get(&common) {term.clone()} else {\n            let mut operands = Vec::new();\n            for (name, positive) in &common {\n                if !positive {operands.push(name.clone());continue;}\n                let opposite = if let Some(signal) = inverted.get(name) {signal.clone()} else {\n                    let signal = format!(\"__consensus_inv_{}\", netlist.gates.len());\n                    if producers.contains_key(&signal) || netlist.inputs.contains(&signal) {return;}\n                    netlist.gates.push(Gate {name:signal.clone(),kind:GateKind::Nor(1),inputs:vec![name.clone()],output:signal.clone()});\n                    inverted.insert(name.clone(), signal.clone());\n                    signal\n                };\n                operands.push(opposite);\n            }\n            let signal = format!(\"__consensus_term_{}\", netlist.gates.len());\n            if producers.contains_key(&signal) || netlist.inputs.contains(&signal) {return;}\n            netlist.gates.push(Gate {name:signal.clone(),kind:GateKind::Nor(operands.len()),inputs:operands,output:signal.clone()});\n            terms.insert(common.clone(), signal.clone());\n            signal\n        };\n        eprintln!(\"MERGE_CONSENSUS {} term={common:?}\",netlist.gates[index].output);\n        netlist.gates[index].inputs.push(term);\n        netlist.gates[index].kind = GateKind::Or(3);\n        producers.insert(netlist.gates[index].output.clone(), netlist.gates[index].clone());\n        for gate in &netlist.gates[count..] {producers.insert(gate.output.clone(), gate.clone());}\n        cache.clear();\n    }\n}\n\n",
+  "variants": {
+    "all_merge": {
+      "terms": [
+        "MERGE_CONSENSUS g7 term={\"d1\": true, \"d2\": false}",
+        "MERGE_CONSENSUS g8 term={\"d1\": true, \"d2\": false}",
+        "MERGE_CONSENSUS g28 term={\"d0\": false, \"d1\": false, \"d3\": false}",
+        "MERGE_CONSENSUS g17 term={\"d0\": false, \"d2\": false, \"d3\": false}",
+        "MERGE_CONSENSUS g18 term={\"d0\": false, \"d2\": false, \"d3\": false}"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=34.46484375, glitches=85, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=66, output=66, mean=50.390625, glitches=134, single_input_glitches=10"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: output timing regression"
+      ]
+    },
+    "public_outputs": {
+      "terms": [
+        "MERGE_CONSENSUS g28 term={\"d0\": false, \"d1\": false, \"d3\": false}",
+        "MERGE_CONSENSUS g17 term={\"d0\": false, \"d2\": false, \"d3\": false}",
+        "MERGE_CONSENSUS g18 term={\"d0\": false, \"d2\": false, \"d3\": false}"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=34.46484375, glitches=85, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=64, output=64, mean=51.90234375, glitches=146, single_input_glitches=14"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: output glitch regression"
+      ]
+    },
+    "updated_cone": {
+      "terms": [
+        "MERGE_CONSENSUS g28 term={\"d0\": false, \"d1\": false, \"d3\": false}",
+        "MERGE_CONSENSUS g17 term={\"d0\": false, \"d2\": false, \"d3\": false}",
+        "MERGE_CONSENSUS g18 term={\"d0\": true, \"d1\": true, \"d3\": false}"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=34.46484375, glitches=85, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=72, output=72, mean=54.13671875, glitches=144, single_input_glitches=13"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: output timing regression"
+      ]
+    },
+    "one_per_cone": {
+      "terms": [
+        "MERGE_CONSENSUS g28 term={\"d0\": false, \"d1\": false, \"d3\": false}",
+        "MERGE_CONSENSUS g17 term={\"d0\": false, \"d2\": false, \"d3\": false}"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=34.46484375, glitches=85, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=64, output=64, mean=51.90234375, glitches=145, single_input_glitches=14"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: output glitch regression"
+      ]
+    }
+  }
+}

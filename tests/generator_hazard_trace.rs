@@ -5,6 +5,55 @@ use reda::redstone::simulator::Simulator;
 use serde_json::json;
 
 #[test]
+fn trace_yosys_single_input_transition() {
+    let (netlist, outputs) = reda::frontend::synthesize_verilog(
+        include_str!("fixtures/seven_segment.v"),
+        "bcd_seven_segment",
+    )
+    .unwrap();
+    let lowered = lower_optimised(&netlist).unwrap();
+    let compiled = compile(&lowered).unwrap();
+    let mut watched = reda::timing::watch_all_nets(&compiled);
+    let output = compiled.output_positions[&outputs["a"]];
+    watched.push((
+        reda::redstone::simulator::position::Position::new(output.0, output.1, output.2),
+        "public_a".to_string(),
+    ));
+    let positions: Vec<_> = ["d0", "d1", "d2", "d3"]
+        .iter()
+        .map(|name| compiled.input_positions[*name])
+        .collect();
+    let mut sim = Simulator::new(compiled.world);
+    for &(x, y, z) in &positions {
+        let mut block = sim.world().get(x, y, z).clone();
+        block.lit = false;
+        sim.world_mut().set(x, y, z, block);
+    }
+    sim.run_until_stable(2000).unwrap();
+    assert!(sim.world().get(output.0, output.1, output.2).lit);
+    sim.attach_observer(watched);
+    let timing = reda::timing::measure_transition(&mut sim, 2000, |sim| {
+        let (x, y, z) = positions[1];
+        let mut block = sim.world().get(x, y, z).clone();
+        block.lit = true;
+        sim.world_mut().set(x, y, z, block);
+    })
+    .unwrap();
+    assert!(sim.world().get(output.0, output.1, output.2).lit);
+    let report = json!({"from":0,"to":2,"output_map":outputs,
+        "gates":lowered.gates.iter().map(|gate| json!({"kind":format!("{:?}",gate.kind),"inputs":gate.inputs,"output":gate.output})).collect::<Vec<_>>(),
+        "changes":timing.nets.iter().map(|(name,net)| (name.clone(),json!(net.changes()))).collect::<std::collections::BTreeMap<_,_>>()});
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
+    std::fs::write(
+        target.join("generator_yosys_hazard_trace.json"),
+        serde_json::to_string_pretty(&report).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
 fn trace_slowest_decoder_transition() {
     let artifact = compile_systemverilog(
         &[SourceInput {
