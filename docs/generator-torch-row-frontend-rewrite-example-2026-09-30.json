@@ -1,0 +1,525 @@
+{
+  "physical": {
+    "candidate_fingerprint": "afaf397d9c22dcc8cfc620b98b32f9c286570c3707a522a7a66cd998670403fc",
+    "fingerprint": "6042e6159844dd313217830b969297941d599dd14d6e93096825b48dd8e16d60",
+    "library_revision": "d83c73faea87d4f7c67fd54f8b99c1e1c5bed570cbb17586368f3629adb29fd4",
+    "lowered_netlist_hash": "d587bc80daf2b30c224964460c89dbca01e041af63bf4e8e3c6bc5624ca0c7d6",
+    "ordered_input_axioms": [
+      0,
+      1
+    ],
+    "proof_steps": [
+      {
+        "InputAxiom": {
+          "port": 0
+        }
+      },
+      {
+        "InputAxiom": {
+          "port": 1
+        }
+      },
+      {
+        "Instance": {
+          "instance": 0,
+          "logical_gate": 0,
+          "role": "Canonical",
+          "topology": "90ccb6981d82aa3c381ef87c858b1d425f787ffc5d0ce7f0bc542d64ea37add8"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 1,
+          "logical_gate": 1,
+          "role": "Canonical",
+          "topology": "cc39a5282fd73a523a57f819fb949f0383d2b340d00e9fe691fdfee6ec050c4e"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 4,
+          "logical_gate": 4,
+          "role": "Canonical",
+          "topology": "2cc2c9e61398c4d84ac85975173c312e9b21587ac119c4d668478467b7f3ab4b"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 6,
+          "logical_gate": 6,
+          "role": "Canonical",
+          "topology": "9837914cbb98686d400b4c82b0a51d7fc5d579653d4ab3eabfd33e269e9f9f8d"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 10,
+          "logical_gate": 10,
+          "role": "Canonical",
+          "topology": "ec05737661bb4bda6705dd48fff190c223d77df9c409c07af72496a2165e8ed3"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 13,
+          "logical_gate": 13,
+          "role": "Canonical",
+          "topology": "a5eb14e906e4bfe3ac937b73b1f4b82b922012ee58628e59cadc5ef54336f659"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 2,
+          "logical_gate": 2,
+          "role": "Canonical",
+          "topology": "2b965f5baab0405aa2e7a8fbaf97513fbdf541293b94b4d6ba5d329cd733416d"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 12,
+          "logical_gate": 12,
+          "role": "Canonical",
+          "topology": "b6b4de9fa8be7bc6ae011e5e884649b8f3c3d5f025dd7f4abc449ea02423f754"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 7,
+          "logical_gate": 7,
+          "role": "Canonical",
+          "topology": "08e144eab7e8a07bfbdcd3eadf3cfa440169be4c054a44948802e5e4a10e3da1"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 5,
+          "logical_gate": 5,
+          "role": "Canonical",
+          "topology": "c130b87733715f383536afdf9a11348e5d46f89bace54fc5bd4b5eedc50e6fbb"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 11,
+          "logical_gate": 11,
+          "role": "Canonical",
+          "topology": "c2ef093cb1d267848b4234cf4f8193a5e83ec2872e9e978b24ad682b27cfb308"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 3,
+          "logical_gate": 3,
+          "role": "Canonical",
+          "topology": "d18a0c4d891dd524cf9a5b12bded0a375e173c5db2627b499c64c09280d7f19a"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 14,
+          "logical_gate": 14,
+          "role": "Canonical",
+          "topology": "b25cde71e8758582c6d54e0a5b7b5f3cbcaa44358147eafcaa485d80d0dfc182"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 8,
+          "logical_gate": 8,
+          "role": "Canonical",
+          "topology": "c645d47c2ed918a4aa76164cde91a1b3c1088587423f2ad6fbd3fc00d5099bdc"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 16,
+          "logical_gate": 16,
+          "role": "Canonical",
+          "topology": "5b4e7f74f952aa4a97b4a2b9aee3dc159f8b21bccc29096e1675ce7cca23a9db"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 15,
+          "logical_gate": 15,
+          "role": "Canonical",
+          "topology": "a860b84223c55a00b004e08ea7e3a7b884fb0b3cd1ea409717bdd656a74ea97c"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 9,
+          "logical_gate": 9,
+          "role": "Canonical",
+          "topology": "adc5d09b169cae147bb8e7128ebc22460ee9278344fd1f6b6826bbc22445ae81"
+        }
+      },
+      {
+        "Instance": {
+          "instance": 17,
+          "logical_gate": 17,
+          "role": "Canonical",
+          "topology": "1931aec7efdab31fad0d73d02be9518a357ae6b2f32d6923192bef42e0728a50"
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "PrimaryInput": 0
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 0
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "PrimaryInput": 1
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 1
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 0
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 2
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 2
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 3
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "PrimaryInput": 0
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 4
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 4
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 5
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "PrimaryInput": 0
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 6
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 1
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 7
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 6
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 8
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 7
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 1,
+              "instance": 8
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 8
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 9
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "PrimaryInput": 1
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 10
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 10
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 11
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 0
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 12
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "PrimaryInput": 1
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 13
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 12
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 14
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 13
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 1,
+              "instance": 14
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 14
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 15
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 3
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 16
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 11
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 1,
+              "instance": 16
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 9
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 0,
+              "instance": 17
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 15
+          },
+          "sink": {
+            "InstanceInput": {
+              "input_index": 1,
+              "instance": 17
+            }
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 16
+          },
+          "sink": {
+            "DeclaredOutput": 0
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 17
+          },
+          "sink": {
+            "DeclaredOutput": 1
+          }
+        }
+      },
+      {
+        "Assignment": {
+          "signal": {
+            "GateOutput": 5
+          },
+          "sink": {
+            "DeclaredOutput": 2
+          }
+        }
+      },
+      {
+        "Output": {
+          "port": 0,
+          "signal": {
+            "GateOutput": 16
+          }
+        }
+      },
+      {
+        "Output": {
+          "port": 1,
+          "signal": {
+            "GateOutput": 17
+          }
+        }
+      },
+      {
+        "Output": {
+          "port": 2,
+          "signal": {
+            "GateOutput": 5
+          }
+        }
+      }
+    ],
+    "work_used": 48
+  },
+  "rewrite": {
+    "fingerprint": "b65685a5be7e0f45b9b5bcd17989b405ba441d50aa02643854a646ea6f61437b",
+    "input_vectors_checked": 4,
+    "rewritten_inputs_in_source_order": [
+      "a",
+      "b"
+    ],
+    "rewritten_netlist_hash": "d587bc80daf2b30c224964460c89dbca01e041af63bf4e8e3c6bc5624ca0c7d6",
+    "rewritten_outputs_in_source_order": [
+      "output0",
+      "output1",
+      "row1_bit2"
+    ],
+    "source_netlist_hash": "e15903b6daacd1adce390a1e124cbf2d2ed2e594b1e3701e1f18eacc8d7bc504",
+    "work_used": 268
+  }
+}

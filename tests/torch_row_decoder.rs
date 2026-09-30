@@ -1650,6 +1650,42 @@ fn typed_matrix_certifiers_reject_forged_regions_missing_contributors_and_revers
     ));
 }
 
+fn matrix_frontend_text(words: [u8; 4]) -> String {
+    let mut source = String::from("module source_rom(input logic a,b,output logic y0,y1,y2);\n");
+    for bit in 0..3 {
+        let values: Vec<_> = words
+            .iter()
+            .map(|w| format!("1'b{}", (w >> bit) & 1))
+            .collect();
+        source.push_str(&format!(
+            "assign y{bit} = b ? (a ? {} : {}) : (a ? {} : {});\n",
+            values[3], values[2], values[1], values[0]
+        ));
+    }
+    source.push_str("endmodule");
+    source
+}
+
+fn matrix_frontend_source(words: [u8; 4]) -> reda::compile::Netlist {
+    let source = matrix_frontend_text(words);
+    let artifact = compile_systemverilog(
+        &[SourceInput {
+            name: "source_rom.sv",
+            text: &source,
+        }],
+        &CompileOptions::new("source_rom"),
+    )
+    .unwrap();
+    let ports = artifact.output_map();
+    let mut lowered = lower_optimised(&artifact.netlist).unwrap();
+    // Materialize the original public boundary, including aliases, rather
+    // than pretending the normalized matrix retains frontend gate identities.
+    lowered.outputs = (0..3)
+        .map(|bit| ports[&format!("y{bit}")].clone())
+        .collect();
+    lowered
+}
+
 fn verify_typed_matrix_internal_truth(
     candidate: &reda::compile::fragment_synth::candidate::ExpandedPhysicalCandidate,
     netlist: &reda::compile::Netlist,
@@ -1725,6 +1761,7 @@ fn all_nonconstant_matrix_tables_run_strict_typed_certification() {
     let mut control_sum = 0u64;
     let mut candidate_sum = 0u64;
     let mut worst = 0u64;
+    let mut rewrite_proof_fingerprints = Vec::new();
     for encoding in 0..4096u32 {
         let words: [u8; 4] = std::array::from_fn(|i| ((encoding >> (3 * i)) & 7) as u8);
         if (0..3).any(|bit| {
@@ -1733,6 +1770,34 @@ fn all_nonconstant_matrix_tables_run_strict_typed_certification() {
             continue;
         }
         let (netlist, original, candidate) = typed_matrix_candidate(words);
+        let source = matrix_frontend_source(words);
+        let rewrite = reda::compile::equivalence::prove_netlist_rewrite(
+            &source,
+            &netlist,
+            &source.inputs,
+            &netlist.outputs,
+            1_000_000,
+        )
+        .unwrap();
+        let physical = reda::compile::equivalence::prove_combinational_equivalence(
+            &netlist, &candidate, &library, 1_000_000,
+        )
+        .unwrap();
+        assert_eq!(
+            rewrite.rewritten_netlist_hash(),
+            &physical.lowered_netlist_hash
+        );
+        assert_eq!(physical.candidate_fingerprint, candidate.fingerprint());
+        rewrite_proof_fingerprints.push(rewrite.fingerprint().clone());
+        if words == [1, 6, 3, 5] {
+            std::fs::write(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("target/torch_row_frontend_rewrite_example.json"),
+                serde_json::to_string_pretty(&json!({"rewrite":rewrite,"physical":physical}))
+                    .unwrap(),
+            )
+            .unwrap();
+        }
         let (_, _, repeated) = typed_matrix_candidate(words);
         assert_eq!(candidate.fingerprint(), repeated.fingerprint());
         let certified = realise_and_verify_expanded(&candidate, &netlist, &library)
@@ -1792,6 +1857,10 @@ fn all_nonconstant_matrix_tables_run_strict_typed_certification() {
     assert_eq!(verified, 2744);
     let report = json!({"data_tables":verified,"measured_transitions_per_arm":verified*16,
         "strict_certification":true,"exact_emission":true,"deterministic_candidates":true,
+        "frontend_source_rewrites_proved":rewrite_proof_fingerprints.len(),
+        "frontend_to_physical_proof_chain":true,
+        "rewrite_proof_set_fingerprint":reda::compile::metrics::canonical_fingerprint(
+            &serde_json::to_vec(&rewrite_proof_fingerprints).unwrap()),
         "all_internal_setup_and_target_truth_correct":true,"all_topologies_symbolically_proved":true,
         "all_nine_metrics_preserve_per_table_controls":true,"control_total_settle_ticks":control_sum,
         "candidate_total_settle_ticks":candidate_sum,"improved_tables":improved,"worst_settle_ticks":worst});
@@ -1857,5 +1926,56 @@ fn typed_matrix_refresh_rejects_missing_delay_owner_and_foreign_output_wire() {
         Err(CertificationError::Physical(
             ExpandedPhysicalError::CrossRouteConnectivity { .. }
         ))
+    ));
+}
+
+#[test]
+fn matrix_rewrite_chain_checks_fresh_yosys_and_rejects_wrong_source_data() {
+    use reda::compile::equivalence::{
+        prove_combinational_equivalence, prove_netlist_rewrite, NetlistRewriteError,
+    };
+    for words in [[1, 6, 3, 5], [3, 6, 6, 1]] {
+        let text = matrix_frontend_text(words);
+        let (source, ports) = reda::frontend::synthesize_verilog(&text, "source_rom").unwrap();
+        let mut source = lower_optimised(&source).unwrap();
+        source.outputs = (0..3)
+            .map(|bit| ports[&format!("y{bit}")].clone())
+            .collect();
+        let (normalized, _, candidate) = typed_matrix_candidate(words);
+        let rewrite = prove_netlist_rewrite(
+            &source,
+            &normalized,
+            &source.inputs,
+            &normalized.outputs,
+            1_000_000,
+        )
+        .unwrap();
+        let physical = prove_combinational_equivalence(
+            &normalized,
+            &candidate,
+            &typed_matrix_library(),
+            1_000_000,
+        )
+        .unwrap();
+        assert_eq!(
+            rewrite.rewritten_netlist_hash(),
+            &physical.lowered_netlist_hash
+        );
+        assert_eq!(physical.candidate_fingerprint, candidate.fingerprint());
+    }
+    let wrong_source = matrix_frontend_source([1, 6, 3, 4]);
+    let (normalized, _, _) = typed_matrix_candidate([1, 6, 3, 5]);
+    assert!(matches!(
+        prove_netlist_rewrite(
+            &wrong_source,
+            &normalized,
+            &wrong_source.inputs,
+            &normalized.outputs,
+            1_000_000
+        ),
+        Err(NetlistRewriteError::OutputMismatch {
+            input_vector: 3,
+            ..
+        })
     ));
 }

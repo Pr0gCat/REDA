@@ -1,0 +1,17 @@
+{
+  "all_internal_setup_and_target_truth_correct": true,
+  "all_nine_metrics_preserve_per_table_controls": true,
+  "all_topologies_symbolically_proved": true,
+  "candidate_total_settle_ticks": 420816,
+  "control_total_settle_ticks": 420944,
+  "data_tables": 2744,
+  "deterministic_candidates": true,
+  "exact_emission": true,
+  "frontend_source_rewrites_proved": 2744,
+  "frontend_to_physical_proof_chain": true,
+  "improved_tables": 16,
+  "measured_transitions_per_arm": 43904,
+  "rewrite_proof_set_fingerprint": "1a332663fd98f1bb91e29f67312b0e811d3021fcdce10ddc596b704cc192b517",
+  "strict_certification": true,
+  "worst_settle_ticks": 16
+}

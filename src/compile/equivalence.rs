@@ -333,6 +333,207 @@ fn lowered_netlist_fingerprint(netlist: &Netlist) -> Fingerprint {
     canonical_fingerprint(&serde_json::to_vec(&payload).expect("a lowered netlist must serialize"))
 }
 
+/// Exact boundary equivalence between two differently structured netlists.
+/// This certificate says nothing about physical correctness or timing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NetlistRewriteCertificate {
+    source_netlist_hash: Fingerprint,
+    rewritten_netlist_hash: Fingerprint,
+    rewritten_inputs_in_source_order: Vec<String>,
+    rewritten_outputs_in_source_order: Vec<String>,
+    input_vectors_checked: u64,
+    work_used: u64,
+    fingerprint: Fingerprint,
+}
+
+impl NetlistRewriteCertificate {
+    pub fn fingerprint(&self) -> &Fingerprint {
+        &self.fingerprint
+    }
+    pub fn source_netlist_hash(&self) -> &Fingerprint {
+        &self.source_netlist_hash
+    }
+    pub fn rewritten_netlist_hash(&self) -> &Fingerprint {
+        &self.rewritten_netlist_hash
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetlistRewriteError {
+    InvalidNetlist {
+        side: &'static str,
+        reason: String,
+    },
+    InvalidPortBindings,
+    ProofExhausted {
+        required: u64,
+        limit: u64,
+    },
+    OutputMismatch {
+        input_vector: u64,
+        output_index: usize,
+        source: bool,
+        rewritten: bool,
+    },
+}
+
+/// Prove every declared output for every possible source input vector.
+/// Bindings list rewritten port names in the source's declared port order;
+/// both lists must cover their respective rewritten boundaries exactly.
+/// Stateful/invalid netlists and proofs exceeding the work cap fail closed.
+/// Work counts input assignments, gate/input evaluations and output comparisons.
+pub fn prove_netlist_rewrite(
+    source: &Netlist,
+    rewritten: &Netlist,
+    rewritten_inputs_in_source_order: &[String],
+    rewritten_outputs_in_source_order: &[String],
+    max_proof_steps: u64,
+) -> Result<NetlistRewriteCertificate, NetlistRewriteError> {
+    let validate = |netlist: &Netlist, side| {
+        let fail = |reason: &str| NetlistRewriteError::InvalidNetlist {
+            side,
+            reason: reason.into(),
+        };
+        let mut driven = HashSet::new();
+        for name in &netlist.inputs {
+            if !driven.insert(name.as_str()) {
+                return Err(fail("duplicate input"));
+            }
+        }
+        for gate in &netlist.gates {
+            if gate.kind.is_sequential() {
+                return Err(fail("stateful gate"));
+            }
+            if !gate.kind.accepts_arity(gate.inputs.len()) {
+                return Err(fail("invalid gate arity"));
+            }
+            if !driven.insert(gate.output.as_str()) {
+                return Err(fail("multiple signal drivers"));
+            }
+        }
+        if netlist
+            .gates
+            .iter()
+            .flat_map(|g| &g.inputs)
+            .chain(&netlist.outputs)
+            .any(|name| !driven.contains(name.as_str()))
+        {
+            return Err(fail("undriven signal"));
+        }
+        netlist
+            .combinational_order()
+            .ok_or_else(|| fail("combinational cycle"))
+    };
+    let source_order = validate(source, "source")?;
+    let rewritten_order = validate(rewritten, "rewritten")?;
+    let same_ports = |a: &[String], b: &[String]| {
+        let mut a: Vec<_> = a.iter().collect();
+        let mut b: Vec<_> = b.iter().collect();
+        a.sort();
+        b.sort();
+        a == b
+    };
+    if source.inputs.len() != rewritten_inputs_in_source_order.len()
+        || source.outputs.len() != rewritten_outputs_in_source_order.len()
+        || !same_ports(&rewritten.inputs, rewritten_inputs_in_source_order)
+        || !same_ports(&rewritten.outputs, rewritten_outputs_in_source_order)
+    {
+        return Err(NetlistRewriteError::InvalidPortBindings);
+    }
+    let exhausted = |required| NetlistRewriteError::ProofExhausted {
+        required,
+        limit: max_proof_steps,
+    };
+    let vectors = u32::try_from(source.inputs.len())
+        .ok()
+        .and_then(|n| 1u64.checked_shl(n))
+        .ok_or_else(|| exhausted(u64::MAX))?;
+    let mut per_vector = (source.inputs.len() as u64)
+        .checked_mul(2)
+        .and_then(|v| v.checked_add(source.outputs.len() as u64))
+        .ok_or_else(|| exhausted(u64::MAX))?;
+    for gate in source.gates.iter().chain(&rewritten.gates) {
+        per_vector = per_vector
+            .checked_add(1)
+            .and_then(|v| v.checked_add(gate.inputs.len() as u64))
+            .ok_or_else(|| exhausted(u64::MAX))?;
+    }
+    // Even an empty circuit costs one step per vector; never make an
+    // exponential enumeration free because its boundary is empty.
+    let work_used = vectors
+        .checked_mul(per_vector.max(1))
+        .ok_or_else(|| exhausted(u64::MAX))?;
+    if work_used > max_proof_steps {
+        return Err(exhausted(work_used));
+    }
+    let evaluate =
+        |netlist: &Netlist, order: &[usize], ports: &[String], outputs: &[String], vector: u64| {
+            let mut values: HashMap<&str, bool> = ports
+                .iter()
+                .enumerate()
+                .map(|(bit, n)| (n.as_str(), vector & (1u64 << bit) != 0))
+                .collect();
+            for &index in order {
+                let gate = &netlist.gates[index];
+                let inputs: Vec<_> = gate.inputs.iter().map(|n| values[n.as_str()]).collect();
+                values.insert(&gate.output, gate.kind.evaluate(&inputs));
+            }
+            outputs
+                .iter()
+                .map(|n| values[n.as_str()])
+                .collect::<Vec<_>>()
+        };
+    for vector in 0..vectors {
+        let expected = evaluate(
+            source,
+            &source_order,
+            &source.inputs,
+            &source.outputs,
+            vector,
+        );
+        let actual = evaluate(
+            rewritten,
+            &rewritten_order,
+            rewritten_inputs_in_source_order,
+            rewritten_outputs_in_source_order,
+            vector,
+        );
+        for (output_index, (&a, &b)) in expected.iter().zip(&actual).enumerate() {
+            if a != b {
+                return Err(NetlistRewriteError::OutputMismatch {
+                    input_vector: vector,
+                    output_index,
+                    source: a,
+                    rewritten: b,
+                });
+            }
+        }
+    }
+    let source_netlist_hash = lowered_netlist_fingerprint(source);
+    let rewritten_netlist_hash = lowered_netlist_fingerprint(rewritten);
+    let fingerprint = canonical_fingerprint(
+        &serde_json::to_vec(&(
+            "exhaustive-combinational-rewrite-v1",
+            &source_netlist_hash,
+            &rewritten_netlist_hash,
+            rewritten_inputs_in_source_order,
+            rewritten_outputs_in_source_order,
+            vectors,
+            work_used,
+        ))
+        .expect("rewrite proof must serialize"),
+    );
+    Ok(NetlistRewriteCertificate {
+        source_netlist_hash,
+        rewritten_netlist_hash,
+        rewritten_inputs_in_source_order: rewritten_inputs_in_source_order.to_vec(),
+        rewritten_outputs_in_source_order: rewritten_outputs_in_source_order.to_vec(),
+        input_vectors_checked: vectors,
+        work_used,
+        fingerprint,
+    })
+}
+
 fn append_proof_step(
     steps: &mut Vec<EquivalenceProofStep>,
     step: EquivalenceProofStep,
