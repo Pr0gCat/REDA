@@ -17,6 +17,36 @@ fn trace_slowest_decoder_transition() {
     let outputs = artifact.output_map();
     let lowered = lower_optimised(&artifact.netlist).unwrap();
     let compiled = compile(&lowered).unwrap();
+    let route_report = reda::compile::routing_stats::analyze(&lowered, &compiled).unwrap();
+    let routes: Vec<_> = route_report
+        .edges
+        .iter()
+        .map(|edge| {
+            json!({
+                "source":edge.source, "sink":edge.sink, "hops":edge.hops,
+                "repeaters":edge.total().repeaters,
+                "parts":edge.parts.iter().map(|(part, cost)|
+                    (format!("{part:?}"), json!({"length":cost.length,"repeaters":cost.repeaters})))
+                    .collect::<std::collections::BTreeMap<_,_>>()
+            })
+        })
+        .collect();
+    let mut repeater_delays = std::collections::BTreeMap::new();
+    for index in compiled
+        .world
+        .positions_of(reda::redstone::world::block::BlockKind::Repeater)
+    {
+        *repeater_delays
+            .entry(
+                compiled
+                    .world
+                    .palette()
+                    .get(compiled.world.cells()[index])
+                    .unwrap()
+                    .delay,
+            )
+            .or_insert(0usize) += 1;
+    }
     let mut watched = reda::timing::watch_all_nets(&compiled);
     for (name, signal) in &outputs {
         let (x, y, z) = compiled.output_positions[signal];
@@ -53,7 +83,7 @@ fn trace_slowest_decoder_transition() {
             reda::circuits::seven_segment::TRUTH_TABLE[7][index] == 1
         );
     }
-    let report = json!({"from":0,"to":7,"output_map":outputs,
+    let report = json!({"from":0,"to":7,"output_map":outputs,"routes":routes,"repeater_delays":repeater_delays,
         "settle_ticks":timing.settle_game_ticks,
         "gates":lowered.gates.iter().map(|gate| json!({"kind":format!("{:?}",gate.kind),"inputs":gate.inputs,"output":gate.output,"position":compiled.gate_output_positions[&gate.output]})).collect::<Vec<_>>(),
         "changes":timing.nets.iter().map(|(name,net)| (name.clone(),json!(net.changes()))).collect::<std::collections::BTreeMap<_,_>>()});

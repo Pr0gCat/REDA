@@ -1,0 +1,383 @@
+{
+  "base_commit": "7c264cb",
+  "repeater_delay_histogram": {
+    "1": 225
+  },
+  "settle_ticks": 44,
+  "changes": {
+    "g1": [
+      [
+        6,
+        false
+      ]
+    ],
+    "g17": [
+      [
+        24,
+        true
+      ]
+    ],
+    "g25": [
+      [
+        22,
+        true
+      ]
+    ],
+    "g27": [
+      [
+        30,
+        true
+      ]
+    ],
+    "g28": [
+      [
+        40,
+        false
+      ]
+    ],
+    "g30": [
+      [
+        34,
+        true
+      ]
+    ],
+    "g31": [
+      [
+        20,
+        true
+      ],
+      [
+        40,
+        false
+      ]
+    ],
+    "public_f": [
+      [
+        44,
+        false
+      ]
+    ],
+    "public_g": [
+      [
+        21,
+        true
+      ],
+      [
+        44,
+        false
+      ]
+    ]
+  },
+  "routes": [
+    {
+      "hops": 1,
+      "parts": {
+        "Column": {
+          "length": 14,
+          "repeaters": 1
+        },
+        "GateEntry": {
+          "length": 16,
+          "repeaters": 1
+        },
+        "Ramp": {
+          "length": 4,
+          "repeaters": 0
+        },
+        "Track": {
+          "length": 72,
+          "repeaters": 5
+        }
+      },
+      "repeaters": 7,
+      "sink": "g25.in[1]",
+      "source": "g1"
+    },
+    {
+      "hops": 1,
+      "parts": {
+        "Column": {
+          "length": 14,
+          "repeaters": 1
+        },
+        "GateEntry": {
+          "length": 16,
+          "repeaters": 1
+        },
+        "Ramp": {
+          "length": 4,
+          "repeaters": 0
+        },
+        "Track": {
+          "length": 86,
+          "repeaters": 6
+        }
+      },
+      "repeaters": 8,
+      "sink": "g17.in[1]",
+      "source": "g1"
+    },
+    {
+      "hops": 1,
+      "parts": {
+        "Column": {
+          "length": 2,
+          "repeaters": 0
+        },
+        "GateEntry": {
+          "length": 19,
+          "repeaters": 2
+        },
+        "Ramp": {
+          "length": 4,
+          "repeaters": 0
+        },
+        "Track": {
+          "length": 36,
+          "repeaters": 2
+        }
+      },
+      "repeaters": 4,
+      "sink": "g27.in[1]",
+      "source": "g25"
+    },
+    {
+      "hops": 1,
+      "parts": {
+        "Column": {
+          "length": 5,
+          "repeaters": 0
+        },
+        "GateEntry": {
+          "length": 12,
+          "repeaters": 2
+        },
+        "Ramp": {
+          "length": 4,
+          "repeaters": 0
+        },
+        "Track": {
+          "length": 40,
+          "repeaters": 3
+        }
+      },
+      "repeaters": 5,
+      "sink": "g30.in[2]",
+      "source": "g17"
+    },
+    {
+      "hops": 1,
+      "parts": {
+        "Column": {
+          "length": 6,
+          "repeaters": 1
+        },
+        "GateEntry": {
+          "length": 10,
+          "repeaters": 2
+        },
+        "Ramp": {
+          "length": 4,
+          "repeaters": 0
+        },
+        "Track": {
+          "length": 12,
+          "repeaters": 1
+        }
+      },
+      "repeaters": 4,
+      "sink": "g28.in[1]",
+      "source": "g27"
+    },
+    {
+      "hops": 1,
+      "parts": {
+        "Column": {
+          "length": 9,
+          "repeaters": 0
+        },
+        "GateEntry": {
+          "length": 7,
+          "repeaters": 0
+        },
+        "Ramp": {
+          "length": 4,
+          "repeaters": 0
+        },
+        "Track": {
+          "length": 20,
+          "repeaters": 2
+        }
+      },
+      "repeaters": 2,
+      "sink": "g31.in[0]",
+      "source": "g30"
+    }
+  ],
+  "pin_assignment_hypotheses": [
+    {
+      "gate": {
+        "inputs": [
+          "g0",
+          "g1"
+        ],
+        "kind": "Nor(2)",
+        "output": "g25",
+        "position": [
+          152,
+          1,
+          46
+        ]
+      },
+      "input_positions": {
+        "g0": [
+          112,
+          1,
+          79
+        ],
+        "g1": [
+          84,
+          1,
+          79
+        ]
+      },
+      "permutations": [
+        {
+          "inputs": [
+            "g0",
+            "g1"
+          ],
+          "horizontal_spans": [
+            36,
+            72
+          ],
+          "longest_span": 72
+        },
+        {
+          "inputs": [
+            "g1",
+            "g0"
+          ],
+          "horizontal_spans": [
+            64,
+            44
+          ],
+          "longest_span": 64
+        }
+      ]
+    },
+    {
+      "gate": {
+        "inputs": [
+          "g0",
+          "g1",
+          "g2"
+        ],
+        "kind": "Nor(3)",
+        "output": "g17",
+        "position": [
+          166,
+          1,
+          46
+        ]
+      },
+      "input_positions": {
+        "g0": [
+          112,
+          1,
+          79
+        ],
+        "g1": [
+          84,
+          1,
+          79
+        ],
+        "g2": [
+          70,
+          1,
+          79
+        ]
+      },
+      "permutations": [
+        {
+          "inputs": [
+            "g0",
+            "g1",
+            "g2"
+          ],
+          "horizontal_spans": [
+            50,
+            86,
+            96
+          ],
+          "longest_span": 96
+        },
+        {
+          "inputs": [
+            "g0",
+            "g2",
+            "g1"
+          ],
+          "horizontal_spans": [
+            50,
+            100,
+            82
+          ],
+          "longest_span": 100
+        },
+        {
+          "inputs": [
+            "g1",
+            "g0",
+            "g2"
+          ],
+          "horizontal_spans": [
+            78,
+            58,
+            96
+          ],
+          "longest_span": 96
+        },
+        {
+          "inputs": [
+            "g1",
+            "g2",
+            "g0"
+          ],
+          "horizontal_spans": [
+            78,
+            100,
+            54
+          ],
+          "longest_span": 100
+        },
+        {
+          "inputs": [
+            "g2",
+            "g0",
+            "g1"
+          ],
+          "horizontal_spans": [
+            92,
+            58,
+            82
+          ],
+          "longest_span": 92
+        },
+        {
+          "inputs": [
+            "g2",
+            "g1",
+            "g0"
+          ],
+          "horizontal_spans": [
+            92,
+            86,
+            54
+          ],
+          "longest_span": 92
+        }
+      ]
+    }
+  ]
+}
