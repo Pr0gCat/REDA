@@ -6,6 +6,15 @@ use serde_json::json;
 
 #[test]
 fn trace_two_input_decoder_transition() {
+    trace_decoder_transition(1, 4, "generator_two_input_trace.json");
+}
+
+#[test]
+fn trace_reconvergent_decoder_transition() {
+    trace_decoder_transition(0, 6, "generator_reconvergent_trace.json");
+}
+
+fn trace_decoder_transition(from_value: usize, to_value: usize, filename: &str) {
     let artifact = compile_systemverilog(
         &[SourceInput {
             name: "fixture.sv",
@@ -18,11 +27,13 @@ fn trace_two_input_decoder_transition() {
     let lowered = lower_optimised(&artifact.netlist).unwrap();
     let compiled = compile(&lowered).unwrap();
     let mut watched = reda::timing::watch_all_nets(&compiled);
-    let output = compiled.output_positions[&outputs["b"]];
-    watched.push((
-        reda::redstone::simulator::position::Position::new(output.0, output.1, output.2),
-        "public_b".to_string(),
-    ));
+    for (name, signal) in &outputs {
+        let output = compiled.output_positions[signal];
+        watched.push((
+            reda::redstone::simulator::position::Position::new(output.0, output.1, output.2),
+            format!("public_{name}"),
+        ));
+    }
     let positions: Vec<_> = ["d0", "d1", "d2", "d3"]
         .iter()
         .map(|name| compiled.input_positions[*name])
@@ -36,8 +47,9 @@ fn trace_two_input_decoder_transition() {
             sim.world_mut().set(x, y, z, block);
         }
     };
-    // Preserve the quality matrix's history before its 1 -> 4 transition.
-    for (from, end) in [(0, 16), (1, 4)] {
+    // Preserve the quality matrix history before the observed transition.
+    for from in 0..=from_value {
+        let end = if from == from_value { to_value } else { 16 };
         for to in 0..end {
             apply(&mut sim, from);
             sim.run_until_stable(2000).unwrap();
@@ -45,20 +57,26 @@ fn trace_two_input_decoder_transition() {
             sim.run_until_stable(2000).unwrap();
         }
     }
-    apply(&mut sim, 1);
+    apply(&mut sim, from_value);
     sim.run_until_stable(2000).unwrap();
-    assert!(sim.world().get(output.0, output.1, output.2).lit);
     sim.attach_observer(watched);
-    let timing = reda::timing::measure_transition(&mut sim, 2000, |sim| apply(sim, 4)).unwrap();
-    assert!(sim.world().get(output.0, output.1, output.2).lit);
-    let report = json!({"from":1,"to":4,"output_map":outputs,
+    let timing =
+        reda::timing::measure_transition(&mut sim, 2000, |sim| apply(sim, to_value)).unwrap();
+    for (index, name) in ["a", "b", "c", "d", "e", "f", "g"].iter().enumerate() {
+        let (x, y, z) = compiled.output_positions[&outputs[*name]];
+        assert_eq!(
+            sim.world().get(x, y, z).lit,
+            reda::circuits::seven_segment::TRUTH_TABLE[to_value][index] == 1
+        );
+    }
+    let report = json!({"from":from_value,"to":to_value,"output_map":outputs,
         "gates":lowered.gates.iter().map(|gate| json!({"kind":format!("{:?}",gate.kind),"inputs":gate.inputs,"output":gate.output,"position":compiled.gate_output_positions[&gate.output]})).collect::<Vec<_>>(),
         "changes":timing.nets.iter().map(|(name,net)| (name.clone(),json!(net.changes()))).collect::<std::collections::BTreeMap<_,_>>()});
     let target = std::env::var_os("CARGO_TARGET_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
     std::fs::write(
-        target.join("generator_two_input_trace.json"),
+        target.join(filename),
         serde_json::to_string_pretty(&report).unwrap(),
     )
     .unwrap();
