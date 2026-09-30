@@ -1,0 +1,7615 @@
+{
+  "base_commit": "6ec3b41",
+  "prototype_source": "fn add_merge_consensus(netlist: &mut Netlist) {\n    use std::collections::{BTreeMap, BTreeSet};\n    type Cube = BTreeMap<String, bool>;\n    fn cube(signal: &str, negative: bool, inputs: &BTreeSet<String>, producers: &HashMap<String, Gate>, cache: &mut HashMap<(String, bool), Option<Cube>>) -> Option<Cube> {\n        let key = (signal.to_string(), negative);\n        if let Some(value) = cache.get(&key) {return value.clone();}\n        let result = if inputs.contains(signal) {\n            Some(BTreeMap::from([(signal.to_string(), !negative)]))\n        } else if let Some(gate) = producers.get(signal) {\n            match gate.kind {\n                GateKind::Nor(_) if !negative => combine(&gate.inputs, true, inputs, producers, cache),\n                GateKind::Or(_) if negative => combine(&gate.inputs, true, inputs, producers, cache),\n                GateKind::Nor(1) if negative => cube(&gate.inputs[0], false, inputs, producers, cache),\n                GateKind::Or(1) if !negative => cube(&gate.inputs[0], false, inputs, producers, cache),\n                _ => None,\n            }\n        } else {None};\n        cache.insert(key, result.clone());\n        result\n    }\n    fn combine(signals: &[String], negative: bool, inputs: &BTreeSet<String>, producers: &HashMap<String, Gate>, cache: &mut HashMap<(String, bool), Option<Cube>>) -> Option<Cube> {\n        let mut result = Cube::new();\n        for signal in signals {\n            for (name, value) in cube(signal, negative, inputs, producers, cache)? {\n                if result.insert(name, value).is_some_and(|old| old != value) {return None;}\n            }\n        }\n        Some(result)\n    }\n    fn leaves(signal: &str, producers: &HashMap<String, Gate>, seen: &mut BTreeSet<String>, result: &mut BTreeSet<String>) {\n        if !seen.insert(signal.to_string()) {return;}\n        if let Some(gate) = producers.get(signal).filter(|gate| gate.is_merge()) {\n            for input in &gate.inputs {leaves(input, producers, seen, result);}\n        } else {result.insert(signal.to_string());}\n    }\n    if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {return;}\n    let producers: HashMap<_,_> = netlist.gates.iter().map(|gate| (gate.output.clone(),gate.clone())).collect();\n    let inputs = netlist.inputs.iter().cloned().collect();\n    let mut cache = HashMap::new();\n    let mut terms: BTreeMap<Cube, String> = BTreeMap::new();\n    let mut inverted: BTreeMap<String, String> = producers.values().filter(|gate| gate.kind == GateKind::Nor(1))\n        .map(|gate| (gate.inputs[0].clone(),gate.output.clone())).collect();\n    let count = netlist.gates.len();\n    for index in 0..count {\n        if netlist.gates[index].kind != GateKind::Or(2) || !netlist.outputs.contains(&netlist.gates[index].output) {continue;}\n        if netlist.gates.iter().any(|gate| gate.inputs.contains(&netlist.gates[index].output)) {continue;}\n        let mut leaf_signals = BTreeSet::new();\n        leaves(&netlist.gates[index].output, &producers, &mut BTreeSet::new(), &mut leaf_signals);\n        let cubes: Vec<_> = leaf_signals.iter().filter_map(|signal| cube(signal, false, &inputs, &producers, &mut cache)).collect();\n        let mut candidates = BTreeSet::new();\n        for (i,a) in cubes.iter().enumerate() {\n            for b in &cubes[i+1..] {\n                let opposite: Vec<_> = a.iter().filter(|(name,value)| b.get(*name).is_some_and(|other| other != *value)).map(|(name,_)|name.clone()).collect();\n                if opposite.len() != 1 {continue;}\n                let mut common = a.clone();\n                common.extend(b.clone());\n                common.remove(&opposite[0]);\n                if common.is_empty() || common.len() > 3 {continue;}\n                if cubes.iter().any(|existing| existing.iter().all(|(name,value)|common.get(name)==Some(value))) {continue;}\n                candidates.insert(common);\n            }\n        }\n        eprintln!(\"CONSENSUS_OPTIONS {} count={}\",netlist.gates[index].output,candidates.len());\n        if candidates.len() != 1 {continue;}\n        let Some(common) = candidates.into_iter().next() else {continue;};\n        let term = if let Some(term) = terms.get(&common) {term.clone()} else {\n            let mut operands = Vec::new();\n            let mut remaining = common.clone();\n            let mut names: Vec<_> = producers.keys().cloned().collect();\n            names.sort();\n            let mut factor = None;\n            for signal in names {\n                if let Some(part) = cube(&signal, true, &inputs, &producers, &mut cache) {\n                    if part.len() >= 2 && part.iter().all(|(name,value)| common.get(name) == Some(value))\n                        && factor.as_ref().is_none_or(|(_, old): &(String,Cube)| part.len() > old.len()) {\n                        factor = Some((signal, part));\n                    }\n                }\n            }\n            if let Some((signal, part)) = factor {\n                eprintln!(\"CONSENSUS_FACTOR {} reuse={signal}\",netlist.gates[index].output);\n                operands.push(signal);\n                for name in part.keys() {remaining.remove(name);}\n            }\n            for (name, positive) in &remaining {\n                if !positive {operands.push(name.clone());continue;}\n                let opposite = if let Some(signal) = inverted.get(name) {signal.clone()} else {\n                    let signal = format!(\"__consensus_inv_{}\", netlist.gates.len());\n                    if producers.contains_key(&signal) || netlist.inputs.contains(&signal) {return;}\n                    netlist.gates.push(Gate {name:signal.clone(),kind:GateKind::Nor(1),inputs:vec![name.clone()],output:signal.clone()});\n                    inverted.insert(name.clone(), signal.clone());\n                    signal\n                };\n                operands.push(opposite);\n            }\n            let signal = format!(\"__consensus_term_{}\", netlist.gates.len());\n            if producers.contains_key(&signal) || netlist.inputs.contains(&signal) {return;}\n            netlist.gates.push(Gate {name:signal.clone(),kind:GateKind::Nor(operands.len()),inputs:operands,output:signal.clone()});\n            terms.insert(common.clone(), signal.clone());\n            signal\n        };\n        eprintln!(\"MERGE_CONSENSUS {} term={common:?}\",netlist.gates[index].output);\n        netlist.gates[index].inputs.push(term);\n        netlist.gates[index].kind = GateKind::Or(3);\n    }\n}\n\n",
+  "variants": {
+    "terminal_outputs": {
+      "selected_terms": [
+        "MERGE_CONSENSUS g28 term={\"d0\": false, \"d1\": false, \"d3\": false}",
+        "MERGE_CONSENSUS g18 term={\"d0\": false, \"d2\": false, \"d3\": false}"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=34.46484375, glitches=85, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=70, output=70, mean=54.1875, glitches=153, single_input_glitches=15"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: output timing regression"
+      ]
+    },
+    "unique_gap": {
+      "selected_terms": [
+        "CONSENSUS_OPTIONS g21 count=0",
+        "CONSENSUS_OPTIONS g30 count=0",
+        "CONSENSUS_OPTIONS g28 count=1",
+        "MERGE_CONSENSUS g28 term={\"d0\": false, \"d1\": false, \"d3\": false}",
+        "CONSENSUS_OPTIONS g18 count=3"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=34.46484375, glitches=85, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=68, output=68, mean=52.91796875, glitches=151, single_input_glitches=16"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: output timing regression"
+      ]
+    },
+    "reuse_inverse_product": {
+      "selected_terms": [
+        "CONSENSUS_OPTIONS g21 count=0",
+        "CONSENSUS_OPTIONS g30 count=0",
+        "CONSENSUS_OPTIONS g28 count=1",
+        "CONSENSUS_FACTOR g28 reuse=n9",
+        "MERGE_CONSENSUS g28 term={\"d0\": false, \"d1\": false, \"d3\": false}",
+        "CONSENSUS_OPTIONS g18 count=3"
+      ],
+      "summaries": [
+        "and4/REDA: world=28, output=16, mean=6.56640625, glitches=13, single_input_glitches=0",
+        "and4/Yosys-fresh: world=22, output=12, mean=5.72265625, glitches=0, single_input_glitches=0",
+        "seven_segment/REDA: world=44, output=44, mean=34.46484375, glitches=85, single_input_glitches=0",
+        "seven_segment/Yosys-fresh: world=64, output=64, mean=51.23828125, glitches=140, single_input_glitches=15"
+      ],
+      "rejection": [
+        "seven_segment/Yosys-fresh: total_driver_pulse_ticks regression: 3178"
+      ]
+    }
+  },
+  "factor_driver_metrics": {
+    "world_fingerprint": "f464a6c7362194a00baf0215d2679ac229c793e16c28abe296f1ccbc7edcded0",
+    "worst_driver_change_ticks": 60,
+    "driver_glitch_transitions": 145,
+    "driver_single_input_glitches": 15,
+    "worst_driver_pulse_ticks": 18,
+    "total_driver_pulse_ticks": 3178
+  },
+  "increased_pulse_witnesses": [
+    {
+      "from": 4,
+      "to": 3,
+      "output": "e",
+      "extra_ticks": 16,
+      "before": [],
+      "after": [
+        [
+          32,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 7,
+      "output": "e",
+      "extra_ticks": 16,
+      "before": [],
+      "after": [
+        [
+          32,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 3,
+      "output": "d",
+      "extra_ticks": 14,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 0,
+      "output": "g",
+      "extra_ticks": 14,
+      "before": [
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          38,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 1,
+      "output": "g",
+      "extra_ticks": 14,
+      "before": [
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          38,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 14,
+      "output": "d",
+      "extra_ticks": 14,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 14,
+      "output": "f",
+      "extra_ticks": 14,
+      "before": [],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 14,
+      "output": "g",
+      "extra_ticks": 14,
+      "before": [],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 3,
+      "output": "e",
+      "extra_ticks": 14,
+      "before": [],
+      "after": [
+        [
+          32,
+          true
+        ],
+        [
+          36,
+          false
+        ],
+        [
+          38,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 7,
+      "output": "e",
+      "extra_ticks": 14,
+      "before": [],
+      "after": [
+        [
+          32,
+          true
+        ],
+        [
+          36,
+          false
+        ],
+        [
+          38,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 1,
+      "output": "a",
+      "extra_ticks": 14,
+      "before": [
+        [
+          44,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 1,
+      "output": "d",
+      "extra_ticks": 14,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 2,
+      "output": "g",
+      "extra_ticks": 12,
+      "before": [],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 3,
+      "output": "a",
+      "extra_ticks": 12,
+      "before": [
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          46,
+          true
+        ],
+        [
+          48,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 3,
+      "output": "d",
+      "extra_ticks": 12,
+      "before": [
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          44,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 3,
+      "output": "g",
+      "extra_ticks": 12,
+      "before": [],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 14,
+      "output": "a",
+      "extra_ticks": 12,
+      "before": [],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 14,
+      "output": "d",
+      "extra_ticks": 12,
+      "before": [],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 2,
+      "output": "g",
+      "extra_ticks": 12,
+      "before": [],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 3,
+      "output": "a",
+      "extra_ticks": 12,
+      "before": [
+        [
+          44,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          50,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 3,
+      "output": "g",
+      "extra_ticks": 12,
+      "before": [],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 14,
+      "output": "a",
+      "extra_ticks": 12,
+      "before": [
+        [
+          42,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 14,
+      "output": "d",
+      "extra_ticks": 12,
+      "before": [
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          44,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 1,
+      "output": "e",
+      "extra_ticks": 12,
+      "before": [],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 9,
+      "output": "e",
+      "extra_ticks": 12,
+      "before": [],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 3,
+      "output": "a",
+      "extra_ticks": 12,
+      "before": [
+        [
+          42,
+          true
+        ],
+        [
+          44,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          54,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 3,
+      "output": "d",
+      "extra_ticks": 12,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          50,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 5,
+      "output": "f",
+      "extra_ticks": 10,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 2,
+      "output": "a",
+      "extra_ticks": 10,
+      "before": [
+        [
+          44,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 2,
+      "output": "d",
+      "extra_ticks": 10,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          44,
+          true
+        ],
+        [
+          48,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 0,
+      "output": "e",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          32,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 1,
+      "output": "f",
+      "extra_ticks": 10,
+      "before": [
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          46,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 8,
+      "output": "e",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          32,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 0,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          36,
+          false
+        ],
+        [
+          38,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 1,
+      "output": "d",
+      "extra_ticks": 10,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          44,
+          false
+        ],
+        [
+          46,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 2,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 3,
+      "output": "e",
+      "extra_ticks": 10,
+      "before": [
+        [
+          28,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          38,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 3,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 5,
+      "output": "f",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 7,
+      "output": "e",
+      "extra_ticks": 10,
+      "before": [
+        [
+          28,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          38,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 2,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 3,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 5,
+      "output": "f",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 3,
+      "output": "e",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 7,
+      "output": "e",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 2,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 3,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 14,
+      "output": "a",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          58,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 14,
+      "output": "d",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 14,
+      "output": "f",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 14,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 2,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 3,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 14,
+      "output": "a",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          58,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 14,
+      "output": "d",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 14,
+      "output": "f",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 14,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 0,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 1,
+      "output": "d",
+      "extra_ticks": 10,
+      "before": [
+        [
+          42,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 1,
+      "output": "f",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          46,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 1,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 3,
+      "output": "e",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 7,
+      "output": "e",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 0,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 1,
+      "output": "f",
+      "extra_ticks": 10,
+      "before": [],
+      "after": [
+        [
+          46,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 1,
+      "output": "g",
+      "extra_ticks": 10,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 14,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [
+        [
+          42,
+          false
+        ]
+      ],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 14,
+      "output": "d",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 14,
+      "output": "f",
+      "extra_ticks": 8,
+      "before": [
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          46,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 14,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 14,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 4,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 5,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 7,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          54,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 4,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 5,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 14,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 14,
+      "output": "d",
+      "extra_ticks": 8,
+      "before": [
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 14,
+      "output": "f",
+      "extra_ticks": 8,
+      "before": [],
+      "after": [
+        [
+          46,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 14,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          36,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          40,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 2,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          46,
+          true
+        ],
+        [
+          52,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 2,
+      "output": "d",
+      "extra_ticks": 8,
+      "before": [
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 7,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          54,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 11,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 11,
+      "output": "d",
+      "extra_ticks": 8,
+      "before": [
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 11,
+      "output": "f",
+      "extra_ticks": 8,
+      "before": [
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          46,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 11,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          40,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 13,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 15,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 1,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 10,
+      "output": "d",
+      "extra_ticks": 8,
+      "before": [
+        [
+          46,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 10,
+      "output": "f",
+      "extra_ticks": 8,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 10,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 4,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 5,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 4,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 5,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 0,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          36,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 1,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [
+        [
+          44,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 1,
+      "output": "d",
+      "extra_ticks": 8,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 1,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          36,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 11,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 13,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 15,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 11,
+      "to": 0,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          36,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 11,
+      "to": 1,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [
+        [
+          44,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 11,
+      "to": 1,
+      "output": "d",
+      "extra_ticks": 8,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 11,
+      "to": 1,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          36,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 0,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 1,
+      "output": "f",
+      "extra_ticks": 8,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          44,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 1,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 5,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 13,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 15,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 0,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 1,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 1,
+      "output": "d",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          46,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 1,
+      "output": "g",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 2,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [
+        [
+          42,
+          true
+        ],
+        [
+          44,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 2,
+      "output": "d",
+      "extra_ticks": 8,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ],
+        [
+          44,
+          true
+        ],
+        [
+          50,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 1,
+      "output": "a",
+      "extra_ticks": 8,
+      "before": [
+        [
+          44,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 11,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 13,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 15,
+      "output": "b",
+      "extra_ticks": 8,
+      "before": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 14,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          42,
+          false
+        ]
+      ],
+      "after": [
+        [
+          52,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 14,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [
+        [
+          36,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 14,
+      "output": "f",
+      "extra_ticks": 6,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          46,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 5,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 5,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 5,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 1,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 9,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 10,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 10,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [
+        [
+          46,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 11,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          32,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 15,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          32,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 8,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [
+        [
+          42,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 8,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          46,
+          true
+        ]
+      ],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 9,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [
+        [
+          42,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 9,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          46,
+          true
+        ]
+      ],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 10,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [
+        [
+          42,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 10,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          46,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          44,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 0,
+      "output": "c",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 1,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [
+        [
+          28,
+          false
+        ]
+      ],
+      "after": [
+        [
+          32,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 5,
+      "output": "f",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          46,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 5,
+      "output": "g",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 9,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 9,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 9,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [
+        [
+          28,
+          false
+        ]
+      ],
+      "after": [
+        [
+          32,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 9,
+      "output": "f",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          46,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 9,
+      "output": "g",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 1,
+      "output": "f",
+      "extra_ticks": 6,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          46,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 2,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          54,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 2,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          50,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 3,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          54,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 3,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          50,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 2,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          54,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 2,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          50,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 3,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          54,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 3,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          50,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 4,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          42,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 5,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          42,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 12,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          42,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 13,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          42,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 11,
+      "to": 6,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [
+        [
+          62,
+          true
+        ]
+      ],
+      "after": [
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 1,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 2,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 2,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          50,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 2,
+      "output": "f",
+      "extra_ticks": 6,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 3,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          52,
+          true
+        ],
+        [
+          54,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 3,
+      "output": "d",
+      "extra_ticks": 6,
+      "before": [
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          50,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 9,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 1,
+      "output": "f",
+      "extra_ticks": 6,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          44,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 1,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 9,
+      "output": "e",
+      "extra_ticks": 6,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 6,
+      "output": "a",
+      "extra_ticks": 6,
+      "before": [
+        [
+          62,
+          true
+        ]
+      ],
+      "after": [
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 3,
+      "output": "a",
+      "extra_ticks": 4,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          48,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 3,
+      "output": "d",
+      "extra_ticks": 4,
+      "before": [
+        [
+          36,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          44,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 2,
+      "output": "f",
+      "extra_ticks": 4,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 5,
+      "output": "d",
+      "extra_ticks": 4,
+      "before": [
+        [
+          42,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 14,
+      "output": "a",
+      "extra_ticks": 4,
+      "before": [
+        [
+          44,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 14,
+      "output": "d",
+      "extra_ticks": 4,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 14,
+      "output": "f",
+      "extra_ticks": 4,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          46,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 14,
+      "output": "g",
+      "extra_ticks": 4,
+      "before": [
+        [
+          36,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          40,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 7,
+      "output": "a",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          50,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 11,
+      "output": "a",
+      "extra_ticks": 4,
+      "before": [
+        [
+          42,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          50,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 1,
+      "output": "c",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          32,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 3,
+      "output": "c",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          28,
+          false
+        ],
+        [
+          32,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 3,
+      "output": "g",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          38,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 4,
+      "output": "g",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 8,
+      "output": "a",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          48,
+          false
+        ],
+        [
+          52,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 8,
+      "output": "d",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          44,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 8,
+      "output": "f",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          46,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 8,
+      "output": "g",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 4,
+      "output": "g",
+      "extra_ticks": 4,
+      "before": [
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          36,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 8,
+      "output": "d",
+      "extra_ticks": 4,
+      "before": [
+        [
+          46,
+          true
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          44,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 8,
+      "output": "f",
+      "extra_ticks": 4,
+      "before": [
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          46,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 8,
+      "output": "g",
+      "extra_ticks": 4,
+      "before": [
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          36,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 0,
+      "output": "c",
+      "extra_ticks": 4,
+      "before": [
+        [
+          28,
+          true
+        ]
+      ],
+      "after": [
+        [
+          28,
+          true
+        ],
+        [
+          30,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 3,
+      "output": "f",
+      "extra_ticks": 4,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 6,
+      "output": "b",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 10,
+      "output": "a",
+      "extra_ticks": 4,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          58,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 10,
+      "output": "d",
+      "extra_ticks": 4,
+      "before": [
+        [
+          46,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 10,
+      "output": "f",
+      "extra_ticks": 4,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 10,
+      "output": "g",
+      "extra_ticks": 4,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 11,
+      "output": "e",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          32,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 15,
+      "output": "e",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          32,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 2,
+      "output": "f",
+      "extra_ticks": 4,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 4,
+      "output": "a",
+      "extra_ticks": 4,
+      "before": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 4,
+      "output": "d",
+      "extra_ticks": 4,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 7,
+      "output": "f",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 7,
+      "output": "g",
+      "extra_ticks": 4,
+      "before": [],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 10,
+      "output": "a",
+      "extra_ticks": 4,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          58,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 10,
+      "output": "d",
+      "extra_ticks": 4,
+      "before": [
+        [
+          46,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 10,
+      "output": "f",
+      "extra_ticks": 4,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 10,
+      "output": "g",
+      "extra_ticks": 4,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 0,
+      "output": "c",
+      "extra_ticks": 4,
+      "before": [
+        [
+          28,
+          true
+        ]
+      ],
+      "after": [
+        [
+          28,
+          true
+        ],
+        [
+          30,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          52,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          48,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 10,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          42,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          false
+        ],
+        [
+          54,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 10,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 10,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 10,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 11,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          false
+        ],
+        [
+          54,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 11,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          36,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 11,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 0,
+      "to": 11,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 2,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 2,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          36,
+          true
+        ],
+        [
+          38,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          48,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 10,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 11,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          52,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          54,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 11,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 11,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 1,
+      "to": 11,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 10,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          44,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          false
+        ],
+        [
+          54,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 10,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 10,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 10,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          36,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 11,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          44,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          false
+        ],
+        [
+          54,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 11,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 11,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 2,
+      "to": 11,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          36,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 0,
+      "output": "c",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          32,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 10,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          44,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          false
+        ],
+        [
+          54,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 10,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 10,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 10,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          36,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 11,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          44,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          false
+        ],
+        [
+          54,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 11,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 11,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 3,
+      "to": 11,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          36,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 1,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          46,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 1,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          46,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 8,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 9,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 11,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          52,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 11,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          46,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 11,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          46,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 4,
+      "to": 11,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          40,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          40,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 8,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 9,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          40,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 11,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          46,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 11,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          46,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 11,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          false
+        ],
+        [
+          40,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          40,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 15,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          42,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          false
+        ],
+        [
+          48,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 5,
+      "to": 15,
+      "output": "b",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 0,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 4,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 5,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          46,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 6,
+      "to": 5,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          42,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 0,
+      "output": "c",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          32,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 0,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          46,
+          true
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 2,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 4,
+      "output": "b",
+      "extra_ticks": 2,
+      "before": [
+        [
+          34,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          46,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 4,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 4,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          42,
+          true
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          42,
+          false
+        ],
+        [
+          44,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 11,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          44,
+          false
+        ],
+        [
+          50,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ],
+      "after": [
+        [
+          50,
+          false
+        ],
+        [
+          52,
+          true
+        ],
+        [
+          60,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 11,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          46,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          56,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 11,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          46,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 11,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          46,
+          false
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 12,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 12,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          42,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 7,
+      "to": 12,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          36,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 2,
+      "output": "b",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          36,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 2,
+      "output": "e",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          38,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 8,
+      "to": 6,
+      "output": "e",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          36,
+          false
+        ],
+        [
+          38,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 2,
+      "output": "b",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          36,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 9,
+      "to": 3,
+      "output": "b",
+      "extra_ticks": 2,
+      "before": [],
+      "after": [
+        [
+          34,
+          false
+        ],
+        [
+          36,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 10,
+      "to": 1,
+      "output": "c",
+      "extra_ticks": 2,
+      "before": [
+        [
+          28,
+          true
+        ]
+      ],
+      "after": [
+        [
+          28,
+          true
+        ],
+        [
+          30,
+          false
+        ],
+        [
+          32,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 11,
+      "to": 0,
+      "output": "c",
+      "extra_ticks": 2,
+      "before": [
+        [
+          28,
+          true
+        ]
+      ],
+      "after": [
+        [
+          28,
+          true
+        ],
+        [
+          32,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 1,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          50,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          54,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 1,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          46,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          50,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 2,
+      "output": "e",
+      "extra_ticks": 2,
+      "before": [
+        [
+          28,
+          true
+        ]
+      ],
+      "after": [
+        [
+          32,
+          true
+        ],
+        [
+          36,
+          false
+        ],
+        [
+          38,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 5,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ],
+        [
+          42,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 6,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          56,
+          true
+        ]
+      ],
+      "after": [
+        [
+          48,
+          true
+        ],
+        [
+          58,
+          false
+        ],
+        [
+          60,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 6,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          52,
+          true
+        ]
+      ],
+      "after": [
+        [
+          44,
+          true
+        ],
+        [
+          54,
+          false
+        ],
+        [
+          56,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 6,
+      "output": "e",
+      "extra_ticks": 2,
+      "before": [
+        [
+          28,
+          true
+        ]
+      ],
+      "after": [
+        [
+          32,
+          true
+        ],
+        [
+          36,
+          false
+        ],
+        [
+          38,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 6,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          54,
+          true
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          52,
+          false
+        ],
+        [
+          54,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 12,
+      "to": 6,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          46,
+          true
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          46,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 3,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          48,
+          true
+        ],
+        [
+          52,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 6,
+      "output": "f",
+      "extra_ticks": 2,
+      "before": [
+        [
+          60,
+          true
+        ]
+      ],
+      "after": [
+        [
+          40,
+          true
+        ],
+        [
+          52,
+          false
+        ],
+        [
+          54,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 6,
+      "output": "g",
+      "extra_ticks": 2,
+      "before": [
+        [
+          52,
+          true
+        ]
+      ],
+      "after": [
+        [
+          36,
+          true
+        ],
+        [
+          46,
+          false
+        ],
+        [
+          48,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 13,
+      "to": 7,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          38,
+          true
+        ],
+        [
+          40,
+          false
+        ]
+      ],
+      "after": [
+        [
+          34,
+          true
+        ],
+        [
+          38,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 1,
+      "output": "c",
+      "extra_ticks": 2,
+      "before": [
+        [
+          28,
+          true
+        ]
+      ],
+      "after": [
+        [
+          28,
+          true
+        ],
+        [
+          30,
+          false
+        ],
+        [
+          32,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 14,
+      "to": 3,
+      "output": "c",
+      "extra_ticks": 2,
+      "before": [
+        [
+          28,
+          true
+        ]
+      ],
+      "after": [
+        [
+          28,
+          true
+        ],
+        [
+          30,
+          false
+        ],
+        [
+          32,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 0,
+      "output": "c",
+      "extra_ticks": 2,
+      "before": [
+        [
+          28,
+          true
+        ]
+      ],
+      "after": [
+        [
+          28,
+          true
+        ],
+        [
+          32,
+          false
+        ],
+        [
+          34,
+          true
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 4,
+      "output": "a",
+      "extra_ticks": 2,
+      "before": [
+        [
+          44,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ],
+      "after": [
+        [
+          42,
+          true
+        ],
+        [
+          48,
+          false
+        ]
+      ]
+    },
+    {
+      "from": 15,
+      "to": 4,
+      "output": "d",
+      "extra_ticks": 2,
+      "before": [
+        [
+          40,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ],
+      "after": [
+        [
+          38,
+          true
+        ],
+        [
+          44,
+          false
+        ]
+      ]
+    }
+  ],
+  "target_witness": {
+    "from": 4,
+    "to": 0,
+    "output": "f",
+    "before": [
+      [
+        44,
+        false
+      ],
+      [
+        46,
+        true
+      ]
+    ],
+    "after": []
+  }
+}

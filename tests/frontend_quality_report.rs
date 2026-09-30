@@ -184,6 +184,19 @@ fn measure(top: &str, frontend: &str, netlist: Netlist, outputs: HashMap<String,
             }
         }
     }
+    // Retain complete measurements even when a later quality gate rejects
+    // the candidate; aggregate counters alone cannot locate the new pulse.
+    let diagnostic_target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
+    std::fs::create_dir_all(&diagnostic_target).unwrap();
+    std::fs::write(diagnostic_target.join(format!("driver_timing_{top}_{frontend}.json")),
+        serde_json::to_string_pretty(&json!({"case":top,"frontend":frontend,
+            "world_fingerprint":fingerprint,"worst_driver_change_ticks":worst_driver_ticks,
+            "driver_glitch_transitions":driver_glitch_transitions,
+            "driver_single_input_glitches":driver_single_input_glitches,
+            "worst_driver_pulse_ticks":worst_driver_pulse_ticks,"total_driver_pulse_ticks":total_driver_pulse_ticks,
+            "driver_traces":&driver_traces,"output_traces":&output_traces})).unwrap()).unwrap();
     let single_input_glitches = output_traces
         .iter()
         .filter(|trace| {
