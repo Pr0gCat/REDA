@@ -76,3 +76,8 @@ route/component stages, not adjust lamp simulation or its cap. Reduced glitches
 (6 to 4 drivers, 4 to 0 lamps) are a tradeoff, not acceptance. Both restored
 production files were checked byte-for-byte against HEAD; git diff --check
 passes. No full repository-suite or full ROM-family success is claimed.
+
+Subsequent gate/relay tracing established that the rejected Mux measurement
+ships Legacy after a NoLocalRoute refusal, rather than the proposed typed
+weak-terminal route. See generator-mux-fallback-timing-2026-09-30.md. Its
+original rejection and frozen observations remain valid and unchanged.
