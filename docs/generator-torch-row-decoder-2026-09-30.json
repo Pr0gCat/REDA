@@ -1,0 +1,172 @@
+{
+  "baseline": {
+    "glitched_column_transitions": 0,
+    "total_settle_ticks": 14,
+    "traces": [
+      {
+        "changes": [],
+        "from": 0,
+        "ticks": 0,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "bit": "bit0",
+            "tick": 2,
+            "value": false
+          },
+          {
+            "bit": "bit1",
+            "tick": 4,
+            "value": true
+          }
+        ],
+        "from": 0,
+        "ticks": 6,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "bit": "bit0",
+            "tick": 2,
+            "value": true
+          },
+          {
+            "bit": "bit1",
+            "tick": 4,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 8,
+        "to": 0
+      },
+      {
+        "changes": [],
+        "from": 1,
+        "ticks": 0,
+        "to": 1
+      }
+    ],
+    "worst_settle_ticks": 8
+  },
+  "candidate": {
+    "glitched_column_transitions": 1,
+    "total_settle_ticks": 14,
+    "traces": [
+      {
+        "changes": [],
+        "from": 0,
+        "ticks": 0,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "bit": "bit0",
+            "tick": 2,
+            "value": false
+          },
+          {
+            "bit": "bit2",
+            "tick": 2,
+            "value": false
+          },
+          {
+            "bit": "bit1",
+            "tick": 4,
+            "value": true
+          },
+          {
+            "bit": "bit2",
+            "tick": 4,
+            "value": true
+          }
+        ],
+        "from": 0,
+        "ticks": 6,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "bit": "bit0",
+            "tick": 2,
+            "value": true
+          },
+          {
+            "bit": "bit1",
+            "tick": 4,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 8,
+        "to": 0
+      },
+      {
+        "changes": [],
+        "from": 1,
+        "ticks": 0,
+        "to": 1
+      }
+    ],
+    "worst_settle_ticks": 8
+  },
+  "candidate_fingerprint": "3c269ed00d821b79d5fc4bfe16d98b935eb9bab236b599b9138dcdf3dc3a6d7e",
+  "folded": {
+    "glitched_column_transitions": 0,
+    "total_settle_ticks": 14,
+    "traces": [
+      {
+        "changes": [],
+        "from": 0,
+        "ticks": 0,
+        "to": 0
+      },
+      {
+        "changes": [
+          {
+            "bit": "bit0",
+            "tick": 2,
+            "value": false
+          },
+          {
+            "bit": "bit1",
+            "tick": 4,
+            "value": true
+          }
+        ],
+        "from": 0,
+        "ticks": 6,
+        "to": 1
+      },
+      {
+        "changes": [
+          {
+            "bit": "bit0",
+            "tick": 2,
+            "value": true
+          },
+          {
+            "bit": "bit1",
+            "tick": 4,
+            "value": false
+          }
+        ],
+        "from": 1,
+        "ticks": 8,
+        "to": 0
+      },
+      {
+        "changes": [],
+        "from": 1,
+        "ticks": 0,
+        "to": 1
+      }
+    ],
+    "worst_settle_ticks": 8
+  }
+}
