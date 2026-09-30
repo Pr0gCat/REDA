@@ -1,0 +1,60 @@
+{
+  "production_commit": "3aba78b",
+  "diagnostic_only": true,
+  "records": [
+    {
+      "words": "5,3,2,0",
+      "causal_cut": false,
+      "exit_code": 101,
+      "repeated_stdout_identical": true,
+      "evidence": [
+        "planner=Unified3d,netlist=Netlist { inputs: [\"a\", \"b\"], outputs: [\"g0\", \"g2\", \"g3\"], gates: [Gate { name: \"g0\", inputs: [\"b\"], output: \"g0\", kind: Nor(1) }, Gate { name: \"g1\", inputs: [\"a\"], output: \"g1\", kind: Nor(1) }, Gate { name: \"n0\", inputs: [\"g1\"], output: \"n0\", kind: Nor(1) }, Gate { name: \"n1\", inputs: [\"n0\", \"g0\"], output: \"n1\", kind: Nor(2) }, Gate { name: \"n2\", inputs: [\"g1\", \"b\"], output: \"n2\", kind: Nor(2) }, Gate { name: \"g2\", inputs: [\"n1\", \"n2\"], output: \"g2\", kind: Or(2) }, Gate { name: \"n3\", inputs: [\"g0\"], output: \"n3\", kind: Nor(1) }, Gate { name: \"g3\", inputs: [\"n3\", \"n0\"], output: \"g3\", kind: Nor(2) }] }",
+        "incorrect gate g3 from=0,to=0,address=0,at=(38,1,35),expected=true,state=BlockState { kind: WallTorch, facing: Some(South), face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wall_torch\", extra_properties: {} }",
+        "false-input backfeed signal=n3,peak=(15, Anchor { x: 39, y: 1, z: 34 })",
+        "shared receiver=g3,owner=Some(\"n0\"),logical=Some(false),kind=RepeaterIntoSupport,landing=Anchor { x: 37, y: 1, z: 34 },state=BlockState { kind: Repeater, facing: Some(West), face: None, power: 0, delay: 1, lit: true, half: None, name: \"minecraft:repeater\", extra_properties: {} }",
+        "shared receiver=g3,owner=Some(\"n3\"),logical=Some(false),kind=DirectedDustIntoSupport,landing=Anchor { x: 39, y: 1, z: 34 },state=BlockState { kind: RedstoneWire, facing: None, face: None, power: 15, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }",
+        "false-input backfeed signal=n0,peak=(15, Anchor { x: 31, y: 1, z: 37 })",
+        "shared receiver=n1,owner=Some(\"g0\"),logical=Some(true),kind=RepeaterIntoSupport,landing=Anchor { x: 33, y: 1, z: 37 },state=BlockState { kind: Repeater, facing: Some(East), face: None, power: 0, delay: 1, lit: true, half: None, name: \"minecraft:repeater\", extra_properties: {} }",
+        "shared receiver=n1,owner=Some(\"n0\"),logical=Some(false),kind=DirectedDustIntoSupport,landing=Anchor { x: 31, y: 1, z: 37 },state=BlockState { kind: RedstoneWire, facing: None, face: None, power: 15, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }"
+      ]
+    },
+    {
+      "words": "5,3,2,0",
+      "causal_cut": true,
+      "exit_code": 101,
+      "repeated_stdout_identical": true,
+      "evidence": [
+        "planner=Unified3d,netlist=Netlist { inputs: [\"a\", \"b\"], outputs: [\"g0\", \"g2\", \"g3\"], gates: [Gate { name: \"g0\", inputs: [\"b\"], output: \"g0\", kind: Nor(1) }, Gate { name: \"g1\", inputs: [\"a\"], output: \"g1\", kind: Nor(1) }, Gate { name: \"n0\", inputs: [\"g1\"], output: \"n0\", kind: Nor(1) }, Gate { name: \"n1\", inputs: [\"n0\", \"g0\"], output: \"n1\", kind: Nor(2) }, Gate { name: \"n2\", inputs: [\"g1\", \"b\"], output: \"n2\", kind: Nor(2) }, Gate { name: \"g2\", inputs: [\"n1\", \"n2\"], output: \"g2\", kind: Or(2) }, Gate { name: \"n3\", inputs: [\"g0\"], output: \"n3\", kind: Nor(1) }, Gate { name: \"g3\", inputs: [\"n3\", \"n0\"], output: \"g3\", kind: Nor(2) }] }",
+        "incorrect gate g3 from=0,to=0,address=0,at=(38,1,35),expected=true,state=BlockState { kind: WallTorch, facing: Some(South), face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wall_torch\", extra_properties: {} }",
+        "false-input backfeed signal=n3,peak=(15, Anchor { x: 39, y: 1, z: 34 })",
+        "shared receiver=g3,owner=Some(\"n0\"),logical=Some(false),kind=RepeaterIntoSupport,landing=Anchor { x: 37, y: 1, z: 34 },state=BlockState { kind: Repeater, facing: Some(West), face: None, power: 0, delay: 1, lit: true, half: None, name: \"minecraft:repeater\", extra_properties: {} }",
+        "shared receiver=g3,owner=Some(\"n3\"),logical=Some(false),kind=DirectedDustIntoSupport,landing=Anchor { x: 39, y: 1, z: 34 },state=BlockState { kind: RedstoneWire, facing: None, face: None, power: 15, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }",
+        "false-input backfeed signal=n0,peak=(15, Anchor { x: 31, y: 1, z: 37 })",
+        "shared receiver=n1,owner=Some(\"g0\"),logical=Some(true),kind=RepeaterIntoSupport,landing=Anchor { x: 33, y: 1, z: 37 },state=BlockState { kind: Repeater, facing: Some(East), face: None, power: 0, delay: 1, lit: true, half: None, name: \"minecraft:repeater\", extra_properties: {} }",
+        "shared receiver=n1,owner=Some(\"n0\"),logical=Some(false),kind=DirectedDustIntoSupport,landing=Anchor { x: 31, y: 1, z: 37 },state=BlockState { kind: RedstoneWire, facing: None, face: None, power: 15, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }",
+        "diagnostic cut at=Anchor { x: 33, y: 1, z: 37 }; removes a required source, not a candidate implementation",
+        "retained-history causal intervention gate=g3,before=false,after=true,expected=true,settle=5,cuts=1"
+      ]
+    },
+    {
+      "words": "4,1,0,2",
+      "causal_cut": true,
+      "exit_code": 0,
+      "repeated_stdout_identical": true,
+      "evidence": [
+        "planner=Unified3d,netlist=Netlist { inputs: [\"a\", \"b\"], outputs: [\"g1\", \"g2\", \"g4\"], gates: [Gate { name: \"g0\", inputs: [\"b\"], output: \"g0\", kind: Nor(1) }, Gate { name: \"n0\", inputs: [\"a\"], output: \"n0\", kind: Nor(1) }, Gate { name: \"n1\", inputs: [\"g0\"], output: \"n1\", kind: Nor(1) }, Gate { name: \"g1\", inputs: [\"n0\", \"n1\"], output: \"g1\", kind: Nor(2) }, Gate { name: \"g2\", inputs: [\"n0\", \"g0\"], output: \"g2\", kind: Nor(2) }, Gate { name: \"g3\", inputs: [\"a\"], output: \"g3\", kind: Nor(1) }, Gate { name: \"n2\", inputs: [\"g3\"], output: \"n2\", kind: Nor(1) }, Gate { name: \"g4\", inputs: [\"n1\", \"n2\"], output: \"g4\", kind: Nor(2) }] }",
+        "all 32 setup/target history phases have correct gate drivers and output lamps"
+      ]
+    },
+    {
+      "words": "4,3,2,5",
+      "causal_cut": true,
+      "exit_code": 0,
+      "repeated_stdout_identical": true,
+      "evidence": [
+        "planner=Unified3d,netlist=Netlist { inputs: [\"a\", \"b\"], outputs: [\"g3\", \"g1\", \"g2\"], gates: [Gate { name: \"g0\", inputs: [\"a\"], output: \"g0\", kind: Nor(1) }, Gate { name: \"n0\", inputs: [\"g0\"], output: \"n0\", kind: Nor(1) }, Gate { name: \"n1\", inputs: [\"b\"], output: \"n1\", kind: Nor(1) }, Gate { name: \"n2\", inputs: [\"n0\", \"n1\"], output: \"n2\", kind: Nor(2) }, Gate { name: \"n3\", inputs: [\"g0\", \"b\"], output: \"n3\", kind: Nor(2) }, Gate { name: \"g1\", inputs: [\"n2\", \"n3\"], output: \"g1\", kind: Or(2) }, Gate { name: \"n4\", inputs: [\"g0\", \"n1\"], output: \"n4\", kind: Nor(2) }, Gate { name: \"n5\", inputs: [\"n0\", \"b\"], output: \"n5\", kind: Nor(2) }, Gate { name: \"g2\", inputs: [\"n4\", \"n5\"], output: \"g2\", kind: Or(2) }, Gate { name: \"g3\", inputs: [\"g0\"], output: \"g3\", kind: Nor(1) }] }",
+        "all 32 setup/target history phases have correct gate drivers and output lamps"
+      ]
+    }
+  ]
+}

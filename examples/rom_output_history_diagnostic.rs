@@ -1,4 +1,6 @@
 //! Manual route/power diagnostic: four comma-separated ROM words, or `xor2`.
+//! Optional --cut-strong-landing removes an attributed active foreign terminal
+//! after a failure, retaining physical history. It always fails acceptance.
 use reda::compile::{compile, lowering::lower_optimised};
 use reda::frontend::{compile_systemverilog, CompileOptions, SourceInput};
 use reda::redstone::simulator::Simulator;
@@ -79,17 +81,6 @@ fn main() {
             );
         }
     }
-    for route in plan.routes() {
-        for (at, state) in route.anchors().iter().zip(route.realisation()) {
-            if at.y == 1 && (40..=43).contains(&at.x) && (41..=43).contains(&at.z) {
-                println!(
-                    "route={},owner={:?},at={at:?},state={state:?}",
-                    route.id(),
-                    route.owner()
-                );
-            }
-        }
-    }
     let mut sim = Simulator::new(circuit.world.clone());
     sim.run_until_stable(2000).unwrap();
     let order = source.combinational_order().unwrap();
@@ -123,6 +114,84 @@ fn main() {
                     };
                     if actual != expected {
                         println!("incorrect gate {} from={from},to={to},address={address},at=({x},{y},{z}),expected={expected},state={state:?}", gate.output);
+                        // Trace false logical inputs that have live route dust.
+                        // Attribution uses the current verified route ledger, not
+                        // fixed coordinates or ROM/gate names.
+                        let mut cuts = std::collections::BTreeSet::new();
+                        for input in &gate.inputs {
+                            if values[input] {
+                                continue;
+                            }
+                            for affected in plan
+                                .routes()
+                                .iter()
+                                .filter(|r| r.owner() == Some(input.as_str()))
+                            {
+                                let peak = affected
+                                    .anchors()
+                                    .iter()
+                                    .filter_map(|at| {
+                                        let cell = sim.world().get(at.x, at.y, at.z);
+                                        (cell.kind == BlockKind::RedstoneWire && cell.power > 0)
+                                            .then_some((cell.power, *at))
+                                    })
+                                    .max();
+                                let Some(peak) = peak else {
+                                    continue;
+                                };
+                                println!("false-input backfeed signal={input},peak={peak:?}");
+                                for terminal in affected.terminals() {
+                                    if terminal.kind != reda::compile::planner::RouteTerminalKind::DirectedDustIntoSupport {
+                                        continue;
+                                    }
+                                    for foreign in plan.routes() {
+                                        for incoming in foreign
+                                            .terminals()
+                                            .iter()
+                                            .filter(|t| t.sink.gate == terminal.sink.gate)
+                                        {
+                                            let at = incoming.sink.anchor;
+                                            let cell = sim.world().get(at.x, at.y, at.z);
+                                            println!("shared receiver={},owner={:?},logical={:?},kind={:?},landing={at:?},state={cell:?}", terminal.sink.gate, foreign.owner(), foreign.owner().and_then(|n| values.get(n)), incoming.kind);
+                                            if cell.kind == BlockKind::Repeater
+                                                && cell.lit
+                                                && foreign.owner() != affected.owner()
+                                                && foreign.owner().and_then(|n| values.get(n))
+                                                    == Some(&true)
+                                            {
+                                                cuts.insert(at);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if std::env::args().any(|a| a == "--cut-strong-landing") && !cuts.is_empty()
+                        {
+                            let before = if state.kind == BlockKind::RedstoneWire {
+                                state.power > 0
+                            } else {
+                                state.lit
+                            };
+                            for at in &cuts {
+                                println!("diagnostic cut at={at:?}; removes a required source, not a candidate implementation");
+                                sim.world_mut().set(
+                                    at.x,
+                                    at.y,
+                                    at.z,
+                                    reda::redstone::world::block::BlockState::air(),
+                                );
+                            }
+                            let cut_ticks = sim.run_until_stable(2000).unwrap();
+                            let after = sim.world().get(x, y, z);
+                            let actual = if after.kind == BlockKind::RedstoneWire {
+                                after.power > 0
+                            } else {
+                                after.lit
+                            };
+                            println!("retained-history causal intervention gate={},before={before},after={actual},expected={expected},settle={cut_ticks},cuts={}",gate.output,cuts.len());
+                            panic!("diagnostic intervention is not physical acceptance");
+                        }
                         for dy in -1..=1 {
                             for dz in -2..=2 {
                                 for dx in -2..=2 {
