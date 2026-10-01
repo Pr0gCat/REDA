@@ -761,11 +761,23 @@ fn typed_world_candidate(
         let at = candidate.observations[&observation(source)].site.at;
         let p = Position::new(at.x, at.y, at.z);
         let root = if player && world.get(p.x, p.y, p.z).kind == BlockKind::Lever {
-            [Facing::North, Facing::South, Facing::East, Facing::West]
-                .into_iter()
-                .map(|f| p.offset(f))
-                .find(|n| world.get(n.x, n.y, n.z).kind == BlockKind::Repeater)
-                .unwrap()
+            let direct = if let PhysicalEndpointId::PrimitiveOutput(id) = landing {
+                candidate.placements[&id]
+                    .blocks
+                    .iter()
+                    .find(|b| b.state.kind == BlockKind::Repeater)
+                    .map(|b| Position::new(b.at.x, b.at.y, b.at.z))
+                    .filter(|r| r.x.abs_diff(p.x) + r.y.abs_diff(p.y) + r.z.abs_diff(p.z) == 1)
+            } else {
+                None
+            };
+            direct.unwrap_or_else(|| {
+                [Facing::North, Facing::South, Facing::East, Facing::West]
+                    .into_iter()
+                    .map(|f| p.offset(f))
+                    .find(|n| world.get(n.x, n.y, n.z).kind == BlockKind::RedstoneWire)
+                    .unwrap()
+            })
         } else if world.get(p.x, p.y, p.z).kind == BlockKind::Repeater {
             if player {
                 p
@@ -799,8 +811,13 @@ fn typed_world_candidate(
             }
             PhysicalEndpointId::Junction(_) => {
                 if player && world.get(root.x, root.y, root.z).kind == BlockKind::Repeater {
-                    root.offset(world.get(root.x, root.y, root.z).facing.unwrap().opposite())
-                        .down()
+                    let forward =
+                        root.offset(world.get(root.x, root.y, root.z).facing.unwrap().opposite());
+                    if world.get(forward.x, forward.y, forward.z).kind == BlockKind::RedstoneWire {
+                        forward
+                    } else {
+                        forward.down()
+                    }
                 } else {
                     root
                 }
@@ -808,7 +825,11 @@ fn typed_world_candidate(
             PhysicalEndpointId::DeclaredOutput(_) => {
                 let at = candidate.observations[&observation(landing)].site.at;
                 if player {
-                    Position::new(at.x - 1, at.y, at.z)
+                    [Facing::North, Facing::West, Facing::East, Facing::South]
+                        .into_iter()
+                        .map(|f| Position::new(at.x, at.y, at.z).offset(f))
+                        .find(|n| world.get(n.x, n.y, n.z).kind == BlockKind::RedstoneWire)
+                        .unwrap()
                 } else {
                     Position::new(at.x, at.y, at.z - 1)
                 }

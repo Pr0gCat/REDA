@@ -206,7 +206,7 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Connectivity,
-                semantic_version: 3,
+                semantic_version: 4,
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Coupling,
@@ -1088,6 +1088,12 @@ fn reverse_junction_contributors(
     if !is_signal_path_kind(emitted.world.get(start.x, start.y, start.z).kind) {
         return Ok(BTreeSet::new());
     }
+    let declared_carrier: HashSet<_> = candidate.junctions[&junction]
+        .cells
+        .iter()
+        .filter(|b| b.state.kind == BlockKind::RedstoneWire)
+        .map(|b| Position::new(b.at.x, b.at.y, b.at.z))
+        .collect();
     let mut observed = BTreeSet::new();
     let mut visited = HashSet::from([start]);
     let mut queue = VecDeque::from([start]);
@@ -1119,9 +1125,13 @@ fn reverse_junction_contributors(
                 Some(PhysicalBlockRole::RouteTerminal { sink, target, .. }) => {
                     let source = route_source(candidate, junction, target, sink.route, at)?;
                     if source == PhysicalEndpointId::Junction(junction) {
-                        continue;
-                    }
-                    if matches!(target, PhysicalEndpointId::Landing(_)) {
+                        // A tap inside the carrier is still part of the OR region.
+                        // Inspect every physical predecessor, including foreign
+                        // injections; stop only on branches outside the carrier.
+                        if !declared_carrier.contains(&position) {
+                            continue;
+                        }
+                    } else if matches!(target, PhysicalEndpointId::Landing(_)) {
                         if !listed.contains_key(&target) {
                             return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
                                 junction,
@@ -1143,14 +1153,16 @@ fn reverse_junction_contributors(
                                 y: predecessor.y,
                                 z: predecessor.z,
                             };
-                            let declared_region = matches!(
-                                emitted.owner_at(predecessor_at),
-                                Some(PhysicalBlockRole::Junction(owner)) if owner == junction
-                            ) || matches!(
-                                emitted.owner_at(predecessor_at),
-                                Some(PhysicalBlockRole::RouteTerminal { target, .. })
-                                    if listed.contains_key(&target)
-                            );
+                            let declared_region = declared_carrier.contains(&predecessor)
+                                || matches!(
+                                    emitted.owner_at(predecessor_at),
+                                    Some(PhysicalBlockRole::Junction(owner)) if owner == junction
+                                )
+                                || matches!(
+                                    emitted.owner_at(predecessor_at),
+                                    Some(PhysicalBlockRole::RouteTerminal { target, .. })
+                                        if listed.contains_key(&target)
+                                );
                             if declared_region
                                 && !visited.contains(&predecessor)
                                 && directed_conductor_step(&emitted.world, predecessor, position)
@@ -1160,14 +1172,15 @@ fn reverse_junction_contributors(
                             }
                         }
                         continue;
+                    } else {
+                        return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                            junction,
+                            contributor: source,
+                            route: Some(sink.route),
+                            contributor_at: at,
+                            junction_at,
+                        });
                     }
-                    return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
-                        junction,
-                        contributor: source,
-                        route: Some(sink.route),
-                        contributor_at: at,
-                        junction_at,
-                    });
                 }
                 Some(PhysicalBlockRole::RouteConductor(route)) => {
                     let source = route_source(
@@ -2388,6 +2401,33 @@ mod tests {
             Ok(()),
             "outbound landing terminal was classified as incoming: {actual:?}"
         );
+
+        // Once this tap is declared inside the shared carrier, a foreign
+        // input directly driving it must not disappear at the outbound cut.
+        candidate
+            .junctions
+            .get_mut(&junction)
+            .unwrap()
+            .cells
+            .push(PlacedBlock {
+                at: terminal_at,
+                state: crate::compile::dust(),
+            });
+        let foreign_at = Anchor { x: 4, y: 1, z: 4 };
+        let foreign = PhysicalEndpointId::PrimaryInput(PortId(9));
+        let mut blocks = emitted
+            .owners()
+            .map(|(at, role)| (at, emitted.world.get(at.x, at.y, at.z).clone(), role))
+            .collect::<Vec<_>>();
+        let lever = crate::compile::lever(true);
+        blocks.push((foreign_at, lever, PhysicalBlockRole::Boundary(foreign)));
+        let injected = emit_typed(&ShortedRoutes { blocks }, (8, 4, 8)).unwrap();
+        assert!(matches!(
+            verify_junction_closure(&candidate, &injected),
+            Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                contributor, contributor_at, ..
+            }) if contributor == foreign && contributor_at == foreign_at
+        ));
     }
 
     #[test]

@@ -33,43 +33,86 @@ fn wire(w: &mut World, p: Position) {
     put(w, Position::new(p.x, p.y - 1, p.z), BlockKind::Solid);
     put(w, p, BlockKind::RedstoneWire);
 }
+fn program_rows(words: [u8; 4]) -> Vec<(usize, u8, u8, u8)> {
+    let high = words.into_iter().fold(7, |a, b| a & b);
+    let mut rows = BTreeMap::new();
+    for bit in 0..3 {
+        let table: Vec<_> = words.iter().map(|w| w & !high & (1 << bit) != 0).collect();
+        for cube in cover::cover(&table, true) {
+            *rows.entry((cube.bits, cube.mask)).or_insert(0u8) |= 1 << bit;
+        }
+    }
+    assert!(rows.len() <= 6);
+    rows.into_iter()
+        .enumerate()
+        .map(|(index, ((bits, mask), word))| (index, bits as u8, mask as u8, word))
+        .collect()
+}
+fn source_x(rows: &[(usize, u8, u8, u8)]) -> i32 {
+    16.max(
+        rows.iter()
+            .map(|r| 2 + 3 * r.0 as i32 + 4)
+            .max()
+            .unwrap_or(16),
+    )
+}
+
 fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Position; 3]) {
-    let pitch = 3;
-    let prune = true;
-    let source_delay = 1;
-    let mut w = World::new(20, 8, 19);
-    let address_z = [4, 4 + pitch];
-    let inputs = address_z.map(|z| Position::new(16, 5, z));
-    for z in address_z {
-        for x in 0..=16 {
-            wire(&mut w, Position::new(x, 5, z));
-        }
-        put(&mut w, Position::new(16, 5, z), BlockKind::Lever);
-    }
-    let always_high = if prune {
-        words.into_iter().fold(7, |a, b| a & b)
-    } else {
-        0
-    };
-    if source_delay > 0 && words.into_iter().any(|word| word & !always_high != 0) {
-        for z in address_z {
-            put(&mut w, Position::new(15, 5, z), BlockKind::Repeater);
-            let mut r = w.get(15, 5, z).clone();
-            r.facing = Some(Facing::East);
-            r.delay = source_delay;
-            w.set(15, 5, z, r);
-        }
-    }
-    for (address, word) in words.into_iter().enumerate() {
-        let word = word & !always_high;
-        if prune && word == 0 {
+    let rows = program_rows(words);
+    let source_x = source_x(&rows);
+    let dual = rows.len() == 6;
+    let mut w = World::new((source_x + 5).max(20), 10, 21);
+    let address_z = [4, 7];
+    let inputs = address_z.map(|z| Position::new(source_x, 5, z));
+    let always_high = words.into_iter().fold(7, |a, b| a & b);
+    for (bit, z) in address_z.into_iter().enumerate() {
+        let used = rows.iter().any(|r| r.2 & (1 << bit) != 0);
+        wire(&mut w, Position::new(source_x, 5, z));
+        put(&mut w, Position::new(source_x, 5, z), BlockKind::Lever);
+        if !used {
             continue;
         }
-        let x = 2 + 3 * address as i32;
+        for x in 0..source_x {
+            wire(&mut w, Position::new(x, 5, z));
+        }
+        put(
+            &mut w,
+            Position::new(source_x - 1, 5, z),
+            BlockKind::Repeater,
+        );
+        let mut r = w.get(source_x - 1, 5, z).clone();
+        r.facing = Some(Facing::East);
+        w.set(source_x - 1, 5, z, r);
+        if dual {
+            for p in [
+                Position::new(22, 5, z),
+                Position::new(24, 7, z),
+                Position::new(25, 8, z),
+                Position::new(23, 6, z),
+            ] {
+                wire(&mut w, p);
+            }
+            for x in 13..=25 {
+                wire(&mut w, Position::new(x, 8, z + 1));
+            }
+            wire(&mut w, Position::new(12, 7, z + 1));
+            wire(&mut w, Position::new(11, 6, z + 1));
+            wire(&mut w, Position::new(10, 5, z + 1));
+            put(&mut w, Position::new(14, 8, z + 1), BlockKind::Repeater);
+            let mut r = w.get(14, 8, z + 1).clone();
+            r.facing = Some(Facing::East);
+            w.set(14, 8, z + 1, r);
+        }
+    }
+    for &(row, address, mask, word) in &rows {
+        let x = 2 + 3 * row as i32;
         for z in 3..=16 {
             wire(&mut w, Position::new(x, 3, z));
         }
         for (bit, z) in address_z.into_iter().enumerate() {
+            if mask & (1 << bit) == 0 {
+                continue;
+            }
             if address & (1 << bit) != 0 {
                 let at = Position::new(x, 4, z - 1);
                 put(&mut w, at, BlockKind::WallTorch);
@@ -93,22 +136,24 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
             }
         }
     }
-    let drivers = [10, 13, 16].map(|z| Position::new(16, 1, z));
-    let lamps = [10, 13, 16].map(|z| Position::new(17, 1, z));
-    for z in [10, 13, 16] {
-        for x in 1..=16 {
+    let drivers = [10, 13, 16].map(|z| Position::new(10, 1, z));
+    let lamps = [10, 13, 16].map(|z| Position::new(10, 1, z + 2));
+    for (bit, z) in [10, 13, 16].into_iter().enumerate() {
+        for x in 1..=source_x {
             wire(&mut w, Position::new(x, 1, z));
         }
-        put(&mut w, Position::new(17, 0, z), BlockKind::Solid);
-        put(&mut w, Position::new(17, 1, z), BlockKind::Lamp);
+        wire(&mut w, Position::new(10, 1, z + 1));
+        let p = lamps[bit];
+        put(&mut w, p.down(), BlockKind::Solid);
+        put(&mut w, p, BlockKind::Lamp);
     }
     for (bit, z) in [10, 13, 16].into_iter().enumerate() {
         if always_high & (1 << bit) != 0 {
-            put(&mut w, Position::new(17, 2, z), BlockKind::Solid);
-            put(&mut w, Position::new(16, 2, z), BlockKind::WallTorch);
-            let mut t = w.get(16, 2, z).clone();
+            put(&mut w, Position::new(source_x + 1, 2, z), BlockKind::Solid);
+            put(&mut w, Position::new(source_x, 2, z), BlockKind::WallTorch);
+            let mut t = w.get(source_x, 2, z).clone();
             t.facing = Some(Facing::West);
-            w.set(16, 2, z, t);
+            w.set(source_x, 2, z, t);
         }
     }
     // A low output has an explicit NOR0 -> NOR1 driver, rather than floating dust.
@@ -117,25 +162,21 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
         let ever_high = words.into_iter().fold(0, |a, b| a | b);
         for (bit, z) in [10, 13, 16].into_iter().enumerate() {
             if ever_high & (1 << bit) == 0 {
-                put(&mut w, Position::new(15, 4, z + 1), BlockKind::Solid);
-                wire(&mut w, Position::new(15, 3, z));
+                put(
+                    &mut w,
+                    Position::new(source_x - 1, 4, z + 1),
+                    BlockKind::Solid,
+                );
+                wire(&mut w, Position::new(source_x - 1, 3, z));
                 for (at, facing) in [
-                    (Position::new(15, 4, z), Facing::North),
-                    (Position::new(16, 2, z), Facing::East),
+                    (Position::new(source_x - 1, 4, z), Facing::North),
+                    (Position::new(source_x, 2, z), Facing::East),
                 ] {
                     put(&mut w, at, BlockKind::WallTorch);
                     let mut t = w.get(at.x, at.y, at.z).clone();
                     t.facing = Some(facing);
                     w.set(at.x, at.y, at.z, t);
                 }
-            }
-        }
-    }
-    if words.into_iter().all(|word| word & !always_high == 0) {
-        for z in address_z {
-            for x in 0..16 {
-                w.set(x, 5, z, BlockState::air());
-                w.set(x, 4, z, BlockState::air());
             }
         }
     }
@@ -146,6 +187,9 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
     let mut gates = Vec::new();
     let mut positions = BTreeMap::new();
     let mut terms: [Vec<String>; 3] = std::array::from_fn(|_| Vec::new());
+    let rows = program_rows(words);
+    let source_x = source_x(&rows);
+    let dual = rows.len() == 6;
     let high = words.into_iter().fold(7, |a, b| a & b);
     let mut add = |gate: Gate, at: Position| {
         positions.insert(gate.output.clone(), at);
@@ -157,40 +201,57 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
         inputs: vec![source.into()],
         kind: GateKind::Buf,
     };
-    if words.into_iter().any(|word| word & !high != 0) {
-        for (bit, name) in ["a", "b"].into_iter().enumerate() {
+    for (bit, name) in ["a", "b"].into_iter().enumerate() {
+        if !rows.iter().any(|r| r.2 & (1 << bit) != 0) {
+            continue;
+        }
+        let z = 4 + 3 * bit as i32;
+        if dual {
+            let right = format!("source{bit}_right");
+            let left = format!("source{bit}_left");
+            add(buf(right.clone(), name), Position::new(source_x - 1, 5, z));
+            add(buf(left.clone(), name), Position::new(14, 8, z + 1));
+            add(
+                Gate::merge(format!("source{bit}"), &[&right, &left]),
+                Position::new(source_x - 5, 5, z),
+            );
+        } else {
             add(
                 buf(format!("source{bit}"), name),
-                Position::new(15, 5, 4 + 3 * bit as i32),
+                Position::new(source_x - 1, 5, z),
             );
         }
     }
-    for (address, word) in words.into_iter().enumerate() {
-        let word = word & !high;
-        if word == 0 {
-            continue;
-        }
+    for &(address, bits, mask, word) in &rows {
         let x = 2 + 3 * address as i32;
         let mut mismatches = Vec::new();
         for bit in 0..2 {
+            if mask & (1 << bit) == 0 {
+                continue;
+            }
             let name = format!("row{address}_mismatch{bit}");
             let source = format!("source{bit}");
             let z = 4 + 3 * bit as i32;
-            if address & (1 << bit) != 0 {
+            if bits & (1 << bit) != 0 {
                 add(Gate::nor(&name, &[&source]), Position::new(x, 4, z - 1));
             } else {
                 add(buf(name.clone(), &source), Position::new(x + 1, 4, z));
             }
             mismatches.push(name);
         }
-        let control = format!("row{address}_control");
-        add(
-            Gate::merge(
-                &control,
-                &mismatches.iter().map(String::as_str).collect::<Vec<_>>(),
-            ),
-            Position::new(x, 3, 8),
-        );
+        let control = if mismatches.len() == 1 {
+            mismatches[0].clone()
+        } else {
+            let control = format!("row{address}_control");
+            add(
+                Gate::merge(
+                    &control,
+                    &mismatches.iter().map(String::as_str).collect::<Vec<_>>(),
+                ),
+                Position::new(x, 3, 8),
+            );
+            control
+        };
         for (bit, z) in [10, 13, 16].into_iter().enumerate() {
             if word & (1 << bit) == 0 {
                 continue;
@@ -204,13 +265,13 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
     for (bit, z) in [10, 13, 16].into_iter().enumerate() {
         let output = if high & (1 << bit) != 0 {
             let name = format!("constant_high{bit}");
-            add(Gate::nor(&name, &[]), Position::new(16, 2, z));
+            add(Gate::nor(&name, &[]), Position::new(source_x, 2, z));
             name
         } else if terms[bit].is_empty() {
             let hi = format!("constant_high{bit}");
             let lo = format!("constant_low{bit}");
-            add(Gate::nor(&hi, &[]), Position::new(15, 4, z));
-            add(Gate::nor(&lo, &[&hi]), Position::new(16, 2, z));
+            add(Gate::nor(&hi, &[]), Position::new(source_x - 1, 4, z));
+            add(Gate::nor(&lo, &[&hi]), Position::new(source_x, 2, z));
             lo
         } else if terms[bit].len() == 1 {
             terms[bit][0].clone()
@@ -221,7 +282,7 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
                     &name,
                     &terms[bit].iter().map(String::as_str).collect::<Vec<_>>(),
                 ),
-                Position::new(16, 1, z),
+                Position::new(10, 1, z),
             );
             name
         };
@@ -238,6 +299,16 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
 }
 
 pub(super) fn candidate(
+    words: [u8; 4],
+) -> (
+    Netlist,
+    World,
+    super::super::candidate::ExpandedPhysicalCandidate,
+) {
+    build_candidate(words)
+}
+
+fn build_candidate(
     words: [u8; 4],
 ) -> (
     Netlist,
@@ -264,6 +335,27 @@ mod tests {
         realise::{realise_and_verify_expanded, CertificationError},
     };
     use crate::compile::verification::ExpandedPhysicalError;
+
+    #[test]
+    fn every_wide_cover_observes_a_real_shared_carrier() {
+        let mut wide = 0;
+        for encoding in 0..4096u16 {
+            let words = std::array::from_fn(|i| ((encoding >> (3 * i)) & 7) as u8);
+            if program_rows(words).len() != 6 {
+                continue;
+            }
+            wide += 1;
+            let (netlist, world, candidate) = candidate(words);
+            for (name, at) in player_logic(words).1 {
+                if name == "source0" || name == "source1" {
+                    assert_eq!(world.get(at.x, at.y, at.z).kind, BlockKind::RedstoneWire);
+                }
+            }
+            realise_and_verify_expanded(&candidate, &netlist, &typed_matrix_library())
+                .unwrap_or_else(|error| panic!("wide cover {words:?}: {error:?}"));
+        }
+        assert_eq!(wide, 48);
+    }
 
     #[test]
     fn supported_endpoint_contracts_fail_closed() {

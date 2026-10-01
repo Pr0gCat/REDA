@@ -1,10 +1,12 @@
-"""Compare a full family with frozen shipping controls; wrong controls are separate."""
+"""Compare frozen shipping pairs; optionally use their certified candidate as control."""
 import gzip
 import json
 import sys
 
 from compare_matrix_probe import quality
 
+candidate_control = sys.argv[3:] == ['--candidate-control']
+assert not sys.argv[3:] or candidate_control
 with gzip.open(sys.argv[1], 'rt') as f:
     fixed = [json.loads(l) for l in f]
 with open(sys.argv[2]) as f:
@@ -15,6 +17,10 @@ for encoding, (old, new) in enumerate(zip(fixed, rows)):
     words = [(encoding >> (3 * i)) & 7 for i in range(4)]
     assert old['encoding'] == new['encoding'] == encoding and old['words'] == new['words'] == words
     assert old['control'] == new['control'], encoding
+    control = old['candidate'] if candidate_control else old['control']
+    if candidate_control:
+        assert control['correct'] and control['certified']
+        assert not new['candidate']['correct'] or new['candidate']['certified']
     for arm in [new['control'], new['candidate']]:
         if 'generation_error' in arm:
             assert arm is new['candidate'] and arm['correct'] is False and (arm['certified'] is False) and (arm['phases'] == [])
@@ -34,7 +40,7 @@ for encoding, (old, new) in enumerate(zip(fixed, rows)):
                     assert all((0 <= e['tick'] <= p['ticks'] for e in events))
                     assert not events or events[-1]['value'] == value
         assert arm['correct'] == correct
-    a = quality(new['control'], words) if new['control']['correct'] else None
+    a = quality(control, words) if control['correct'] else None
     b = quality(new['candidate'], words) if new['candidate']['correct'] else None
     worse = [k for k in a if b[k] > a[k]] if a is not None and b is not None else None
     better = [k for k in a if b[k] < a[k]] if a is not None and b is not None else None
@@ -54,6 +60,8 @@ summary = {
     ),
     'all_fixed_controls_exact': True,
 }
+if candidate_control:
+    summary['quality_control_arm'] = 'frozen_certified_candidate'
 print(json.dumps({'summary': summary, 'cases': cases}))
 if summary['candidate_correct'] != 4096 or summary['regressed_on_correct_controls']:
     sys.exit(1)

@@ -2396,6 +2396,8 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
     };
     for words in [
         [1, 6, 3, 5],
+        [2, 7, 7, 1], // The last zero tap formerly overwrote the source observation.
+        [2, 5, 5, 6], // Six rows require two independently isolated buffers.
         [3, 6, 6, 1],
         [0, 0, 0, 7],
         [0; 4],
