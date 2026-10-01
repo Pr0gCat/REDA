@@ -368,27 +368,36 @@ fn independent_negative_inputs(words: [u8; 4]) -> Option<Vec<(usize, u8)>> {
                 .collect()
         })
 }
+#[cfg(test)]
 fn independent_literal_inputs(words: [u8; 4]) -> Option<Vec<(usize, u8, bool)>> {
+    disjoint_literal_inputs(words).filter(|clusters| {
+        clusters
+            .iter()
+            .map(|c| c.0)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == clusters.len()
+    })
+}
+fn disjoint_literal_inputs(words: [u8; 4]) -> Option<Vec<(usize, u8, bool)>> {
     let rows = program_rows(words);
     if rows.is_empty() {
         return None;
     }
     let mut assigned = 0;
-    let mut used_inputs = 0;
     let mut clusters = Vec::new();
     for (_, bits, mask, word) in rows {
-        if mask.count_ones() != 1 || word & assigned != 0 || used_inputs & mask != 0 {
+        if mask.count_ones() != 1 || word & assigned != 0 {
             return None;
         }
         assigned |= word;
-        used_inputs |= mask;
         clusters.push((mask.trailing_zeros() as usize, word, bits & mask != 0));
     }
     Some(clusters)
 }
 
 pub(super) fn library_for(words: [u8; 4]) -> crate::compile::topology::Library {
-    if independent_literal_inputs(words).is_some() {
+    if disjoint_literal_inputs(words).is_some() {
         comparator_library()
     } else {
         super::typed_matrix_library()
@@ -460,11 +469,29 @@ fn shared_negative_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
-    let constant_offset = 8 * (clusters.len() as i32 - 1);
+    let used: Vec<_> = clusters
+        .iter()
+        .map(|c| c.0)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let dual = used.len() != clusters.len();
+    let base = |index: usize, bit: usize| {
+        if dual {
+            7 + 16 * used.iter().position(|b| *b == bit).unwrap() as i32
+        } else {
+            3 + 8 * index as i32
+        }
+    };
+    let constant_offset = if dual {
+        16 * used.len() as i32 - 1
+    } else {
+        8 * (clusters.len() as i32 - 1)
+    };
     let mut w = World::new(16 + constant_offset, 6, 12);
     let mut inputs = [Position::new(14 + constant_offset, 2, 11); 2];
     for (index, &(bit, _, _)) in clusters.iter().enumerate() {
-        inputs[bit] = Position::new(3 + 8 * index as i32, 2, 2);
+        inputs[bit] = Position::new(base(index, bit), 2, 2);
     }
     for p in inputs {
         put(&mut w, p.down(), BlockKind::Solid);
@@ -476,17 +503,24 @@ fn shared_negative_candidate(
     let mut gates = Vec::new();
     let mut positions = BTreeMap::new();
     for (index, &(bit, variable, positive)) in clusters.iter().enumerate() {
-        let x = 3 + 8 * index as i32;
-        let cmp = Position::new(x, 1, 3);
+        let x = base(index, bit);
+        let cmp = if dual && positive {
+            Position::new(x - 2, 3, 3)
+        } else {
+            Position::new(x, 1, 3)
+        };
         put(&mut w, cmp.down(), BlockKind::Solid);
         if positive {
             wire(&mut w, Position::new(x - 1, 2, 2));
-            wire(&mut w, Position::new(x - 1, 1, 3));
+            wire(&mut w, Position::new(x - 1, if dual { 3 } else { 1 }, 3));
             put(&mut w, cmp, BlockKind::Repeater);
-            let mut r = w.get(x, 1, 3).clone();
-            r.facing = Some(Facing::West);
-            w.set(x, 1, 3, r);
-            wire(&mut w, Position::new(x + 1, 1, 3));
+            let mut r = w.get(cmp.x, cmp.y, cmp.z).clone();
+            r.facing = Some(if dual { Facing::East } else { Facing::West });
+            w.set(cmp.x, cmp.y, cmp.z, r);
+            wire(
+                &mut w,
+                Position::new(if dual { x - 3 } else { x + 1 }, cmp.y, 3),
+            );
         } else {
             let mut c = BlockState::air();
             c.kind = BlockKind::Comparator;
@@ -501,9 +535,18 @@ fn shared_negative_candidate(
             w.set(x + 1, 1, 3, t);
         }
         let last = (0..3).filter(|b| variable & (1 << b) != 0).max().unwrap();
-        let rail = if positive { x + 2 } else { x - 1 };
+        let y = if dual && positive { 3 } else { 1 };
+        let rail = if positive {
+            if dual {
+                x - 4
+            } else {
+                x + 2
+            }
+        } else {
+            x - 1
+        };
         for z in 3..=3 + 3 * last {
-            wire(&mut w, Position::new(rail, 1, z));
+            wire(&mut w, Position::new(rail, y, z));
         }
         let name = format!("shared_condition{index}");
         gates.push(if positive {
@@ -524,13 +567,30 @@ fn shared_negative_candidate(
             .iter()
             .position(|(_, variable, _)| variable & (1 << output) != 0)
         {
-            let x = 3 + 8 * index as i32;
+            let x = base(index, clusters[index].0);
             let positive = clusters[index].2;
-            let spur = if positive { x + 3 } else { x - 2 };
-            let lamp_x = if positive { x + 4 } else { x - 3 };
-            wire(&mut w, Position::new(spur, 1, z));
+            let y = if dual && positive { 3 } else { 1 };
+            let spur = if positive {
+                if dual {
+                    x - 5
+                } else {
+                    x + 3
+                }
+            } else {
+                x - 2
+            };
+            let lamp_x = if positive {
+                if dual {
+                    x - 6
+                } else {
+                    x + 4
+                }
+            } else {
+                x - 3
+            };
+            wire(&mut w, Position::new(spur, y, z));
             (
-                Position::new(lamp_x, 1, z),
+                Position::new(lamp_x, y, z),
                 format!("shared_condition{index}"),
             )
         } else {
@@ -598,7 +658,7 @@ fn build_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
-    if let Some(clusters) = independent_literal_inputs(words) {
+    if let Some(clusters) = disjoint_literal_inputs(words) {
         return shared_negative_candidate(words, &clusters);
     }
     let (netlist, positions) = player_logic(words);
@@ -924,7 +984,7 @@ mod tests {
                     word | (u8::from(high) << output)
                 })
             });
-            let Some(clusters) = independent_literal_inputs(words) else {
+            let Some(clusters) = disjoint_literal_inputs(words) else {
                 continue;
             };
             let (source, _) = player_logic(words);
@@ -965,15 +1025,113 @@ mod tests {
 
             checked += 1;
         }
-        assert_eq!(checked, 148);
-        assert!(
-            independent_literal_inputs([1, 2, 1, 2]).is_none(),
-            "both polarities of one input retain the existing layout"
-        );
+        assert_eq!(checked, 208);
+        assert_eq!(disjoint_literal_inputs([1, 2, 1, 2]).unwrap().len(), 2);
         assert!(
             independent_literal_inputs([0, 1, 1, 1]).is_none(),
             "reconvergent literal outputs retain synchronization"
         );
+    }
+
+    #[test]
+    fn dual_polarity_layers_share_one_boundary_and_certify_separate_outputs() {
+        for bit in 0..2 {
+            let mut w = World::new(20, 6, 14);
+            let mut inputs = [Position::new(16, 2, 11); 2];
+            inputs[bit] = Position::new(7, 2, 2);
+            for p in inputs {
+                put(&mut w, p.down(), BlockKind::Solid);
+                put(&mut w, p, BlockKind::Lever);
+            }
+            let cmp = Position::new(7, 1, 3);
+            put(&mut w, cmp.down(), BlockKind::Solid);
+            let mut c = BlockState::air();
+            c.kind = BlockKind::Comparator;
+            c.name = "minecraft:comparator".into();
+            c.facing = Some(Facing::East);
+            c.extra_properties.insert("mode".into(), "subtract".into());
+            w.set(7, 1, 3, c);
+            put(&mut w, Position::new(9, 1, 3), BlockKind::Solid);
+            put(&mut w, Position::new(8, 1, 3), BlockKind::WallTorch);
+            let mut t = w.get(8, 1, 3).clone();
+            t.facing = Some(Facing::West);
+            w.set(8, 1, 3, t);
+            wire(&mut w, Position::new(6, 2, 2));
+            wire(&mut w, Position::new(6, 3, 3));
+            let relay = Position::new(5, 3, 3);
+            put(&mut w, relay.down(), BlockKind::Solid);
+            put(&mut w, relay, BlockKind::Repeater);
+            let mut r = w.get(5, 3, 3).clone();
+            r.facing = Some(Facing::East);
+            w.set(5, 3, 3, r);
+            wire(&mut w, Position::new(4, 3, 3));
+            for z in 3..=9 {
+                wire(&mut w, Position::new(6, 1, z));
+            }
+            for z in 3..=6 {
+                wire(&mut w, Position::new(3, 3, z));
+            }
+            let lamps = [
+                Position::new(4, 1, 3),
+                Position::new(1, 3, 6),
+                Position::new(4, 1, 9),
+            ];
+            for (output, p) in lamps.into_iter().enumerate() {
+                wire(
+                    &mut w,
+                    Position::new(if output == 1 { 2 } else { 5 }, p.y, p.z),
+                );
+                put(&mut w, p.down(), BlockKind::Solid);
+                put(&mut w, p, BlockKind::Lamp);
+            }
+            let source = ["a", "b"][bit];
+            let netlist = Netlist {
+                inputs: vec!["a".into(), "b".into()],
+                outputs: vec!["negative".into(), "positive".into(), "negative".into()],
+                gates: vec![
+                    Gate::nor("negative", &[source]),
+                    Gate {
+                        name: "positive".into(),
+                        output: "positive".into(),
+                        inputs: vec![source.into()],
+                        kind: GateKind::Buf,
+                    },
+                ],
+            };
+            let library = comparator_library();
+            let (netlist, _, candidate) = super::super::typed_world_candidate_with_library(
+                netlist,
+                w,
+                inputs.to_vec(),
+                lamps.to_vec(),
+                BTreeMap::from([("negative".into(), cmp), ("positive".into(), relay)]),
+                true,
+                &library,
+            );
+            let certified = realise_and_verify_expanded(&candidate, &netlist, &library).unwrap();
+            let mut sim = crate::redstone::simulator::Simulator::new(certified.into_world());
+            sim.run_until_stable(2000).unwrap();
+            for from in 0..4 {
+                for to in 0..4 {
+                    for address in [from, to] {
+                        for (input, p) in inputs.into_iter().enumerate() {
+                            let mut v = sim.world().get(p.x, p.y, p.z).clone();
+                            v.lit = address & (1 << input) != 0;
+                            sim.world_mut().set(p.x, p.y, p.z, v);
+                        }
+                        sim.run_until_stable(2000).unwrap();
+                        let high = address & (1 << bit) != 0;
+                        for (output, p) in lamps.into_iter().enumerate() {
+                            assert_eq!(
+                                sim.world().get(p.x, p.y, p.z).lit,
+                                if output == 1 { high } else { !high }
+                            );
+                        }
+                        assert!(sim.world().get(8, 1, 3).lit);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
