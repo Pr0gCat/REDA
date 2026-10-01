@@ -1,0 +1,126 @@
+{
+  "parent_commit": "8461a99",
+  "status": "qualified_generator_improvement",
+  "problem": "Shared negative single-literal output still passes through a relay and data torches; repeated switching can burn out torch shortcuts.",
+  "root_cause": "Player matrix lowers a shared negative literal into row mismatch buffer and separate data inversion, despite all output occurrences sharing one Boolean function.",
+  "solution": "Recognize one negative single-literal shared cube structurally and implement its common inversion with an isolated subtract comparator, constant rear torch, owned primary strong side support, and short passive fanout. Applies symmetrically to either input; no names, encodings, holds, or history resets.",
+  "fixed_control": "generator-player-positive-path-experiment-2026-10-01-family.jsonl.gz (31c2a80); unchanged shipping raw controls also verified.",
+  "quality": {
+    "cases": 4096,
+    "control_correct": 4096,
+    "candidate_correct": 4096,
+    "truth_recovered": 0,
+    "regressed_on_correct_controls": 0,
+    "improved_without_regression_on_correct_controls": 2,
+    "tied_on_correct_controls": 4094,
+    "all_fixed_controls_exact": true,
+    "quality_control_arm": "frozen_certified_candidate"
+  },
+  "changes": [
+    {
+      "encoding": 63,
+      "words": [
+        7,
+        7,
+        0,
+        0
+      ],
+      "control": {
+        "worst_settle_ticks": 8,
+        "total_settle_ticks": 52,
+        "driver_glitches": 0,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 4,
+        "driver_total_pulse_ticks": 0,
+        "driver_worst_pulse_ticks": 0,
+        "lamp_glitches": 0,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 8,
+        "lamp_total_pulse_ticks": 0,
+        "lamp_worst_pulse_ticks": 0
+      },
+      "candidate": {
+        "worst_settle_ticks": 6,
+        "total_settle_ticks": 36,
+        "driver_glitches": 0,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 2,
+        "driver_total_pulse_ticks": 0,
+        "driver_worst_pulse_ticks": 0,
+        "lamp_glitches": 0,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 6,
+        "lamp_total_pulse_ticks": 0,
+        "lamp_worst_pulse_ticks": 0
+      },
+      "regressed": [],
+      "improved": [
+        "worst_settle_ticks",
+        "total_settle_ticks",
+        "driver_last_change_ticks",
+        "lamp_last_change_ticks"
+      ]
+    },
+    {
+      "encoding": 455,
+      "words": [
+        7,
+        0,
+        7,
+        0
+      ],
+      "control": {
+        "worst_settle_ticks": 8,
+        "total_settle_ticks": 52,
+        "driver_glitches": 0,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 4,
+        "driver_total_pulse_ticks": 0,
+        "driver_worst_pulse_ticks": 0,
+        "lamp_glitches": 0,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 8,
+        "lamp_total_pulse_ticks": 0,
+        "lamp_worst_pulse_ticks": 0
+      },
+      "candidate": {
+        "worst_settle_ticks": 6,
+        "total_settle_ticks": 36,
+        "driver_glitches": 0,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 2,
+        "driver_total_pulse_ticks": 0,
+        "driver_worst_pulse_ticks": 0,
+        "lamp_glitches": 0,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 6,
+        "lamp_total_pulse_ticks": 0,
+        "lamp_worst_pulse_ticks": 0
+      },
+      "regressed": [],
+      "improved": [
+        "worst_settle_ticks",
+        "total_settle_ticks",
+        "driver_last_change_ticks",
+        "lamp_last_change_ticks"
+      ]
+    }
+  ],
+  "extra": {
+    "caps_passed": 2744,
+    "setup_regressions": [],
+    "setup_glitches": 0
+  },
+  "regressions": {
+    "player_unit": 6,
+    "physical": 16,
+    "structure": 13,
+    "frontend": "player_matrix_certifies_native_and_fresh_yosys_sources passed"
+  },
+  "limits": "Only all three outputs sharing the same negative single-literal cube currently use this layout. Other cubes and constants remain on the existing player geometry. Automatic compile selection remains disabled. Further optimization must handle mixed output functions without weakening physical isolation or signal strength.",
+  "repeat": {
+    "records": 4096,
+    "byte_identical": true,
+    "sha256": "6f6c34ce7241029e20122b3692315de6076fb325d71713472adad5c2993cec56"
+  }
+}

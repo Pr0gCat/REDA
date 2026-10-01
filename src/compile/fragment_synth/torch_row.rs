@@ -87,7 +87,11 @@ fn compile_matrix(
         source,
         &implemented,
         &candidate,
-        &typed_matrix_library(),
+        &if player {
+            player::library_for(words)
+        } else {
+            typed_matrix_library()
+        },
         &implemented.inputs,
         &implemented.outputs,
         proof_work_limit,

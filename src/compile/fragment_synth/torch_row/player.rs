@@ -357,6 +357,112 @@ pub(super) fn candidate(
     build_candidate(words)
 }
 
+fn shared_negative_input(words: [u8; 4]) -> Option<usize> {
+    let rows = program_rows(words);
+    match rows.as_slice() {
+        [(_, bits, mask, word)] if *bits == 0 && mask.count_ones() == 1 && *word == 7 => {
+            Some(mask.trailing_zeros() as usize)
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn library_for(words: [u8; 4]) -> crate::compile::topology::Library {
+    if shared_negative_input(words).is_some() {
+        comparator_library()
+    } else {
+        super::typed_matrix_library()
+    }
+}
+
+fn comparator_library() -> crate::compile::topology::Library {
+    use crate::compile::topology::{
+        ComparatorInverterContract, Library, LibraryEntry, LibraryEntryId, Primitive, Template,
+        TemplateNode,
+    };
+    let mut library = Library::new(BTreeMap::from([(
+        GateKind::Nor(1),
+        vec![LibraryEntry {
+            name: "comparator inverter experiment",
+            template: Template {
+                nodes: vec![
+                    (TemplateNode::Torch, Primitive::Torch),
+                    (TemplateNode::SecondTorch, Primitive::Comparator),
+                ],
+                internal_edges: vec![(TemplateNode::Torch, TemplateNode::SecondTorch)],
+                inputs: vec![TemplateNode::SecondTorch],
+                output: Some(TemplateNode::SecondTorch),
+                embedding_hints: vec![],
+            },
+        }],
+    )]));
+    library
+        .register_comparator_inverter(
+            LibraryEntryId {
+                kind: GateKind::Nor(1),
+                ordinal: 0,
+            },
+            ComparatorInverterContract {
+                comparator: TemplateNode::SecondTorch,
+                rear_constant: TemplateNode::Torch,
+                side_input: 0,
+            },
+        )
+        .unwrap();
+    library
+}
+fn shared_negative_candidate(
+    bit: usize,
+) -> (
+    Netlist,
+    World,
+    super::super::candidate::ExpandedPhysicalCandidate,
+) {
+    let mut w = World::new(8, 4, 12);
+    let mut inputs = [Position::new(6, 2, 10); 2];
+    inputs[bit] = Position::new(3, 2, 2);
+    for p in inputs {
+        put(&mut w, p.down(), BlockKind::Solid);
+        put(&mut w, p, BlockKind::Lever);
+    }
+    let cmp = Position::new(3, 1, 3);
+    put(&mut w, cmp.down(), BlockKind::Solid);
+    let mut c = BlockState::air();
+    c.kind = BlockKind::Comparator;
+    c.name = "minecraft:comparator".into();
+    c.facing = Some(Facing::East);
+    c.extra_properties.insert("mode".into(), "subtract".into());
+    w.set(cmp.x, cmp.y, cmp.z, c);
+    put(&mut w, Position::new(5, 1, 3), BlockKind::Solid);
+    put(&mut w, Position::new(4, 1, 3), BlockKind::WallTorch);
+    let mut t = w.get(4, 1, 3).clone();
+    t.facing = Some(Facing::West);
+    w.set(4, 1, 3, t);
+    for z in 3..=9 {
+        wire(&mut w, Position::new(2, 1, z));
+    }
+    let lamps = [3, 6, 9].map(|z| Position::new(0, 1, z));
+    for p in lamps {
+        wire(&mut w, Position::new(1, 1, p.z));
+        put(&mut w, p.down(), BlockKind::Solid);
+        put(&mut w, p, BlockKind::Lamp);
+    }
+    let netlist = Netlist {
+        inputs: vec!["a".into(), "b".into()],
+        outputs: vec!["shared_inverse".into(); 3],
+        gates: vec![Gate::nor("shared_inverse", &[["a", "b"][bit]])],
+    };
+    super::typed_world_candidate_with_library(
+        netlist,
+        w,
+        inputs.to_vec(),
+        lamps.to_vec(),
+        BTreeMap::from([("shared_inverse".into(), cmp)]),
+        true,
+        &comparator_library(),
+    )
+}
+
 fn build_candidate(
     words: [u8; 4],
 ) -> (
@@ -364,6 +470,9 @@ fn build_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
+    if let Some(bit) = shared_negative_input(words) {
+        return shared_negative_candidate(bit);
+    }
     let (netlist, positions) = player_logic(words);
     let (world, inputs, _, lamps) = player_world(words);
     typed_world_candidate(
@@ -387,39 +496,7 @@ mod tests {
 
     #[test]
     fn comparator_candidate_certifies_distinct_inputs_and_retained_history() {
-        use crate::compile::topology::{
-            ComparatorInverterContract, Library, LibraryEntry, LibraryEntryId, Primitive, Template,
-            TemplateNode,
-        };
-        let mut library = Library::new(BTreeMap::from([(
-            GateKind::Nor(1),
-            vec![LibraryEntry {
-                name: "comparator inverter experiment",
-                template: Template {
-                    nodes: vec![
-                        (TemplateNode::Torch, Primitive::Torch),
-                        (TemplateNode::SecondTorch, Primitive::Comparator),
-                    ],
-                    internal_edges: vec![(TemplateNode::Torch, TemplateNode::SecondTorch)],
-                    inputs: vec![TemplateNode::SecondTorch],
-                    output: Some(TemplateNode::SecondTorch),
-                    embedding_hints: vec![],
-                },
-            }],
-        )]));
-        library
-            .register_comparator_inverter(
-                LibraryEntryId {
-                    kind: GateKind::Nor(1),
-                    ordinal: 0,
-                },
-                ComparatorInverterContract {
-                    comparator: TemplateNode::SecondTorch,
-                    rear_constant: TemplateNode::Torch,
-                    side_input: 0,
-                },
-            )
-            .unwrap();
+        let library = comparator_library();
         let mut w = World::new(8, 4, 8);
         let input = Position::new(3, 2, 2);
         put(&mut w, input.down(), BlockKind::Solid);
@@ -593,6 +670,37 @@ mod tests {
                 realise_and_verify_expanded(&invalid, &netlist, &library).is_err(),
                 "invalid electrical cell {mutation} must not certify"
             );
+        }
+    }
+
+    #[test]
+    fn shared_negative_generation_uses_structure_with_renamed_sources() {
+        for bit in 0..2 {
+            let words =
+                std::array::from_fn(|address| if address & (1 << bit) == 0 { 7 } else { 0 });
+            let (mut source, _) = player_logic(words);
+            let rename = |name: &str| format!("renamed_{name}");
+            source.inputs = source.inputs.iter().map(|n| rename(n)).collect();
+            source.outputs = source.outputs.iter().map(|n| rename(n)).collect();
+            for g in &mut source.gates {
+                g.name = rename(&g.name);
+                g.output = rename(&g.output);
+                g.inputs = g.inputs.iter().map(|n| rename(n)).collect();
+            }
+            let result = super::super::compile_player_torch_row(&source, 1_000_000).unwrap();
+            assert_eq!(result.implemented().gates.len(), 1);
+            assert_eq!(
+                result
+                    .physical()
+                    .world()
+                    .positions_of(BlockKind::Comparator)
+                    .count(),
+                1
+            );
+            assert_eq!(result.source_output_positions().len(), 3);
+        }
+        for words in [[0, 7, 0, 7], [0, 0, 7, 7], [7, 7, 7, 7], [7, 0, 0, 0]] {
+            assert!(shared_negative_input(words).is_none());
         }
     }
 
