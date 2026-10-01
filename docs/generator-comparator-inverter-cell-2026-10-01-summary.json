@@ -1,0 +1,27 @@
+{
+  "status": "independent_cell_experiment_passed_not_certified",
+  "compiler_changed": false,
+  "control": "one repeater driving a solid support with a wall torch inverter",
+  "candidate": "subtract comparator, rear constant wall torch; side solid support strongly powered by floor lever",
+  "first_attempt": "Direct side lever did not provide modeled strong side input; assertion rejected it.",
+  "input_bits_checked": [
+    0,
+    1
+  ],
+  "phases_per_bit": 32,
+  "retained_history": true,
+  "all_driver_and_lamp_truth_correct": true,
+  "every_phase_settle_and_driver_lamp_last_change_nonregressing": true,
+  "public_glitches": 0,
+  "target_worst_before": 8,
+  "target_worst_after": 6,
+  "target_total_before_per_bit": 52,
+  "target_total_after_per_bit": 36,
+  "complete_replay_byte_identical": true,
+  "simulator_changed": false,
+  "certification_work_remaining": [
+    "Comparator output terminal currently returns UnsupportedOutput in terminal_geometry.rs.",
+    "Comparator inversion requires an explicit side-input port and a sealed constant rear source; the existing placement input terminal selects ComparatorRear.",
+    "Full source rewrite, strict ownership and retained-history 4096-table comparison are required before production selection."
+  ]
+}
