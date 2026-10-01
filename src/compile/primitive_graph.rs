@@ -399,6 +399,171 @@ fn instantiate_stateful(
     }
 }
 
+/// Project an already certified rewrite's selected instances into the flat
+/// display graph. Do not choose a library entry or infer merge isolation again.
+pub fn from_certified_rewrite(
+    rewrite: &super::fragment_synth::rewrite::CertifiedPhysicalRewrite,
+) -> PrimitiveGraph {
+    use super::fragment_synth::{
+        identity::{InstanceId, PhysicalEndpointId, PrimitiveId},
+        instance_graph::{InstanceDriver, PhysicalDriver, PhysicalSink},
+        topology::{ConnectionTarget, ContributorSpec, OutputSpec},
+    };
+    fn endpoint_nodes(
+        endpoint: PhysicalEndpointId,
+        inputs: &[NodeId],
+        primitives: &BTreeMap<PrimitiveId, NodeId>,
+        junctions: &BTreeMap<InstanceId, Vec<NodeId>>,
+    ) -> Vec<NodeId> {
+        match endpoint {
+            PhysicalEndpointId::PrimaryInput(port) => vec![inputs[port.0 as usize]],
+            PhysicalEndpointId::PrimitiveOutput(id) => vec![primitives[&id]],
+            PhysicalEndpointId::Junction(id) => junctions[&id].clone(),
+            _ => unreachable!("certified connection sources are input or instance outputs"),
+        }
+    }
+    let candidate = rewrite.implemented_candidate();
+    let netlist = rewrite.implemented();
+    let mut graph = PrimitiveGraph::empty(netlist.gates.len());
+    let input_bindings = rewrite
+        .rewrite_certificate()
+        .rewritten_inputs_in_source_order();
+    let inputs: Vec<_> = netlist
+        .inputs
+        .iter()
+        .map(|name| {
+            let source_ordinal = input_bindings
+                .iter()
+                .position(|binding| binding == name)
+                .expect("rewrite proves every input binding");
+            graph.push_node(
+                Primitive::Lever,
+                Provenance::PrimaryInput {
+                    name: rewrite.source().inputs[source_ordinal].clone(),
+                },
+            )
+        })
+        .collect();
+    let mut remaining_output_bindings: Vec<_> = rewrite
+        .rewrite_certificate()
+        .rewritten_outputs_in_source_order()
+        .iter()
+        .enumerate()
+        .collect();
+    let output_names: Vec<_> = netlist
+        .outputs
+        .iter()
+        .map(|name| {
+            let ordinal = remaining_output_bindings
+                .iter()
+                .position(|(_, binding)| *binding == name)
+                .expect("rewrite proves every output occurrence binding");
+            let (source_ordinal, _) = remaining_output_bindings.remove(ordinal);
+            rewrite.source().outputs[source_ordinal].clone()
+        })
+        .collect();
+    let mut primitives = BTreeMap::new();
+    for instance in &candidate.instances.instances {
+        let gate = instance.logical_gate.0 as usize;
+        for primitive in &instance.expanded.topology.primitives {
+            let node = graph.push_node(
+                primitive.primitive,
+                Provenance::Gate {
+                    gate,
+                    role: primitive.role,
+                },
+            );
+            primitives.insert(primitive.id, node);
+            graph.gate_nodes[gate].push(node);
+        }
+    }
+    let mut junctions = BTreeMap::new();
+    for gate in netlist
+        .combinational_order()
+        .expect("rewrite proves an acyclic graph")
+    {
+        for instance in candidate
+            .instances
+            .instances
+            .iter()
+            .filter(|instance| instance.logical_gate.0 as usize == gate)
+        {
+            let nodes = match &instance.expanded.topology.output {
+                OutputSpec::Primitive(id) => vec![primitives[id]],
+                OutputSpec::Junction {
+                    logical_owner,
+                    contributors,
+                } => {
+                    let mut nodes = Vec::new();
+                    for contributor in contributors {
+                        nodes.extend(match contributor {
+                            ContributorSpec::Primitive(id) => vec![primitives[id]],
+                            ContributorSpec::Landing(connection) => endpoint_nodes(
+                                candidate.connections[connection].source,
+                                &inputs,
+                                &primitives,
+                                &junctions,
+                            ),
+                        });
+                    }
+                    nodes.sort_unstable();
+                    nodes.dedup();
+                    junctions.insert(*logical_owner, nodes.clone());
+                    nodes
+                }
+            };
+            graph.output_nodes[gate].extend(nodes);
+        }
+        graph.output_nodes[gate].sort_unstable();
+        graph.output_nodes[gate].dedup();
+    }
+    for instance in &candidate.instances.instances {
+        for connection in &instance.expanded.topology.connections {
+            if let ConnectionTarget::Primitive(target) = connection.target {
+                for from in endpoint_nodes(
+                    candidate.connections[&connection.id].source,
+                    &inputs,
+                    &primitives,
+                    &junctions,
+                ) {
+                    graph.edges.push(Edge {
+                        from,
+                        to: primitives[&target],
+                        kind: EdgeKind::Signal,
+                    });
+                }
+            }
+        }
+    }
+    for assignment in &candidate.instances.assignments {
+        if let PhysicalSink::DeclaredOutput(port) = assignment.sink {
+            let nodes = match &assignment.driver {
+                PhysicalDriver::PrimaryInput(port) => vec![inputs[port.0 as usize]],
+                PhysicalDriver::Instance(InstanceDriver::Primitive { terminals, .. }) => {
+                    terminals.iter().map(|id| primitives[id]).collect()
+                }
+                PhysicalDriver::Instance(InstanceDriver::Junction { logical_owner, .. }) => {
+                    junctions[logical_owner].clone()
+                }
+            };
+            let lamp = graph.push_node(
+                Primitive::Lamp,
+                Provenance::PrimaryOutput {
+                    name: output_names[port.0 as usize].clone(),
+                },
+            );
+            for from in nodes {
+                graph.edges.push(Edge {
+                    from,
+                    to: lamp,
+                    kind: EdgeKind::Signal,
+                });
+            }
+        }
+    }
+    graph
+}
+
 /// Substitute each gate in `netlist` for its `library` entry and stitch the
 /// signals between them together, producing one flat [`PrimitiveGraph`] for
 /// the whole circuit -- "a mechanical pass, not a decision" (spec, "The

@@ -731,16 +731,8 @@ struct TopologyGate {
     /// carried through separately from `PrimitiveGraph`, which only ever
     /// remembers a gate by its index (see `Provenance::Gate`'s doc comment).
     output: String,
-    /// `"nor"` or `"merge"` -- the two things redstone builds, and the one
-    /// field that lets this view stop calling everything a NOR.
-    ///
-    /// Every hand-written circuit in [`CIRCUITS`] is pure NOR, so until the
-    /// Verilog-derived circuits reached this crate there was nothing else
-    /// for a gate to be and nothing lost by assuming it. A merge is a
-    /// fundamentally different object -- no torch, no support, no gate body
-    /// at all, just the point where several producers' dust are allowed to
-    /// touch -- and a view that draws it as one more NOR is not
-    /// simplifying, it is wrong.
+    /// The actual implementation gate kind, including comparator subtraction
+    /// and buffers when a certified physical rewrite selected them.
     kind: &'static str,
     /// The **gate-level** cell this torch or merge came from, as
     /// `"<kind> <output>"` -- e.g. `"mux g20"`, `"nand g12"` -- or `None` if
@@ -940,6 +932,8 @@ struct GateLevel {
 
 #[derive(Serialize)]
 struct Topology {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    boundary_rewritten: bool,
     gate_level: GateLevel,
     primitive_level: PrimitiveLevel,
 }
@@ -1017,6 +1011,7 @@ pub struct Session {
     source_netlist: Netlist,
     /// Per source-gate facts, indexed as `source_netlist.gates` is.
     cell_meta: Vec<CellMeta>,
+    boundary_rewritten: bool,
 }
 
 /// The per-cell facts [`Session::topology`]'s gate level reports that are not
@@ -1038,11 +1033,72 @@ struct CellMeta {
 struct GateMeta {
     output: String,
     arity: usize,
-    is_merge: bool,
+    kind: &'static str,
     /// See [`TopologyGate::source`]. `None` when the source gate was already
     /// realisable, since "this NOR came from that NOR" says nothing.
     source: Option<String>,
     layer: i32,
+}
+
+fn topology_views(
+    source: &Netlist,
+    lowered: &Netlist,
+    provenance: &[usize],
+    source_terminals: &[Vec<usize>],
+    rewrite: Option<&reda::compile::fragment_synth::rewrite::CertifiedPhysicalRewrite>,
+) -> (PrimitiveGraph, Vec<GateMeta>, Vec<CellMeta>) {
+    let implemented = rewrite.map_or(lowered, |rewrite| rewrite.implemented());
+    let graph = if let Some(rewrite) = rewrite {
+        primitive_graph::from_certified_rewrite(rewrite)
+    } else {
+        primitive_graph::expand(lowered, &Library::default_library())
+            .expect("compilation accepted the lowered topology")
+    };
+    let gates = implemented
+        .gates
+        .iter()
+        .enumerate()
+        .zip(compute_gate_layers(implemented))
+        .map(|((index, gate), layer)| {
+            let origin = if rewrite.is_none() {
+                Some(&source.gates[provenance[index]])
+            } else {
+                None
+            };
+            GateMeta {
+                output: gate.output.clone(),
+                arity: gate.inputs.len(),
+                kind: gate.kind.wire_name(),
+                source: origin
+                    .filter(|origin| !origin.kind.is_realisable())
+                    .map(|origin| format!("{} {}", origin.kind.wire_name(), origin.output)),
+                layer,
+            }
+        })
+        .collect();
+    let mut lowered_by_source = vec![Vec::new(); source.gates.len()];
+    if rewrite.is_none() {
+        for (index, &owner) in provenance.iter().enumerate() {
+            lowered_by_source[owner].push(index);
+        }
+    }
+    // A boundary equivalence proof does not assign ownership of generated
+    // primitives to removed source gates. Keep the logical source diagram,
+    // with no fabricated physical containment or terminal correspondences.
+    let cells = compute_gate_layers(source)
+        .into_iter()
+        .enumerate()
+        .map(|(index, layer)| CellMeta {
+            layer,
+            lowered: lowered_by_source[index].clone(),
+            terminals: if rewrite.is_none() {
+                source_terminals[index].clone()
+            } else {
+                Vec::new()
+            },
+        })
+        .collect();
+    (graph, gates, cells)
 }
 
 fn source_terminals_by_declared_output(
@@ -1106,6 +1162,7 @@ impl Session {
         // own, rather than the row/channel/track one it merely realises and
         // checks. They are different circuits computing the same function,
         // which is the whole point of being able to look at both.
+        let mut rewrite_view = None;
         let (world, input_positions, input_controls, output_positions_by_signal, pinned_outputs) =
             match baked {
                 // A pre-baked world skips compilation entirely: the litematic IS
@@ -1174,6 +1231,7 @@ impl Session {
                         compile(&netlist)
                             .map_err(|error| format!("this circuit does not compile: {error}"))?
                     };
+                    rewrite_view = compiled.physical_rewrite().cloned();
                     let input_controls = compiled
                         .input_positions
                         .keys()
@@ -1189,68 +1247,13 @@ impl Session {
                 }
             };
 
-        // Every gate in `netlist` is a NOR or a merge of fan-in 1..=3 --
-        // `lower` produces nothing else, and `compile()` above rejects
-        // anything that is not -- which is the same range
-        // `Library::default_library` covers. `compile()` succeeding also
-        // means every input
-        // and output name it checks (`CompileError::UndrivenSignal`) already
-        // resolves, and that it found no combinational cycle either -- the
-        // third thing `expand` re-checks now that a merge forces it to walk
-        // gates in topological order. So `expand` has no way to fail here
-        // that `compile` would not already have caught; see
-        // `topology::Library`'s doc comment and `primitive_graph::expand`'s
-        // `ExpandError` for what it does check.
-        let primitive_graph = primitive_graph::expand(&netlist, &Library::default_library())
-            .unwrap_or_else(|error| {
-                panic!("expand() failed on a netlist compile() already accepted: {error}")
-            });
-        let gate_meta: Vec<GateMeta> = {
-            let layers = compute_gate_layers(&netlist);
-            netlist
-                .gates
-                .iter()
-                .enumerate()
-                .zip(layers)
-                .map(|((index, gate), layer)| {
-                    let origin = &source_netlist.gates[provenance[index]];
-                    GateMeta {
-                        output: gate.output.clone(),
-                        arity: gate.inputs.len(),
-                        is_merge: gate.is_merge(),
-                        source: (!origin.kind.is_realisable())
-                            .then(|| format!("{} {}", origin.kind.wire_name(), origin.output)),
-                        layer,
-                    }
-                })
-                .collect()
-        };
-
-        // The gate level, indexed as `source_netlist.gates` is.
-        //
-        // `compute_gate_layers` on the *source* netlist is sound for the same
-        // reason it is on the lowered one: lowering rewrites each gate into
-        // an expansion but never introduces a dependency between two source
-        // gates that was not already there, so the lowered netlist being
-        // acyclic (which `compile()` above checked) makes this one acyclic
-        // too.
-        let cell_meta: Vec<CellMeta> = {
-            let layers = compute_gate_layers(&source_netlist);
-            let mut lowered: Vec<Vec<usize>> = vec![Vec::new(); source_netlist.gates.len()];
-            for (lowered_index, &source) in provenance.iter().enumerate() {
-                lowered[source].push(lowered_index);
-            }
-            layers
-                .into_iter()
-                .zip(lowered)
-                .zip(source_terminals)
-                .map(|((layer, lowered), terminals)| CellMeta {
-                    layer,
-                    lowered,
-                    terminals,
-                })
-                .collect()
-        };
+        let (primitive_graph, gate_meta, cell_meta) = topology_views(
+            &source_netlist,
+            &netlist,
+            &provenance,
+            &source_terminals,
+            rewrite_view.as_ref(),
+        );
 
         let output_positions = outputs
             .into_iter()
@@ -1305,6 +1308,7 @@ impl Session {
             gate_meta,
             source_netlist,
             cell_meta,
+            boundary_rewritten: rewrite_view.is_some(),
         })
     }
 
@@ -1479,6 +1483,7 @@ impl Session {
             gate_meta: Vec::new(),
             source_netlist,
             cell_meta: Vec::new(),
+            boundary_rewritten: false,
         })
     }
 
@@ -1773,7 +1778,7 @@ impl Session {
             .map(|(index, ((meta, nodes), outputs))| TopologyGate {
                 index,
                 output: meta.output.clone(),
-                kind: if meta.is_merge { "merge" } else { "nor" },
+                kind: meta.kind,
                 source: meta.source.clone(),
                 arity: meta.arity,
                 layer: meta.layer,
@@ -1787,6 +1792,7 @@ impl Session {
             gates,
         };
         serde_wasm_bindgen::to_value(&Topology {
+            boundary_rewritten: self.boundary_rewritten,
             gate_level,
             primitive_level,
         })
@@ -2291,6 +2297,7 @@ mod repeater_delay_geometry_tests {
             gate_meta: Vec::new(),
             source_netlist: empty_netlist,
             cell_meta: Vec::new(),
+            boundary_rewritten: false,
         }
     }
 
@@ -2772,5 +2779,77 @@ mod baked_pinout_format_tests {
             error,
             "output port `y` at caller cell [53, 1, 10]: expected handover [53, 1, 11], but shipped world has no output terminal beside that caller cell"
         );
+    }
+}
+
+#[cfg(test)]
+mod rewritten_topology_tests {
+    use super::*;
+    use reda::compile::{fragment_synth::torch_row::compile_player_torch_row, Gate};
+
+    #[test]
+    fn rewritten_topology_shows_selected_primitives_without_invented_source_containment() {
+        let source = Netlist {
+            inputs: vec!["left".into(), "right".into()],
+            outputs: vec![
+                "negative_left".into(),
+                "negative_right".into(),
+                "sum".into(),
+            ],
+            gates: vec![
+                Gate::nor("absorbed", &["left", "right"]),
+                Gate::nor("negative_left", &["left"]),
+                Gate::nor("negative_right", &["right"]),
+                Gate::merge("sum", &["negative_left", "negative_right"]),
+            ],
+        };
+        let (lowered, provenance) = lower_with_provenance(&source).unwrap();
+        let terminals = source_terminals_by_declared_output(&source, &lowered, &provenance);
+        let rewrite = compile_player_torch_row(&lowered, 1_000_000).unwrap();
+        let (graph, gates, cells) =
+            topology_views(&source, &lowered, &provenance, &terminals, Some(&rewrite));
+        assert_eq!(gates.len(), rewrite.implemented().gates.len());
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.primitive == TopoPrimitive::Comparator)
+                .count(),
+            2
+        );
+        assert!(gates.iter().any(|gate| gate.kind == "buf"));
+        assert!(gates.iter().any(|gate| gate.kind == "merge"));
+        assert!(gates.iter().all(|gate| gate.source.is_none()));
+        assert_eq!(cells.len(), source.gates.len());
+        assert!(cells
+            .iter()
+            .all(|cell| cell.lowered.is_empty() && cell.terminals.is_empty()));
+        let compiled = reda::compile::CompiledCircuit::from_certified_rewrite(rewrite);
+        let session = Session {
+            circuit_name: "rewritten_fixture".into(),
+            simulator: Simulator::new(compiled.world.clone()),
+            initial_world: compiled.world,
+            input_positions: compiled.input_positions,
+            input_controls: source
+                .inputs
+                .iter()
+                .map(|name| (name.clone(), InputControl::Lever))
+                .collect(),
+            output_positions: compiled.output_positions.into_iter().collect(),
+            pinned_outputs: Vec::new(),
+            primitive_graph: graph,
+            gate_meta: gates,
+            source_netlist: source,
+            cell_meta: cells,
+            boundary_rewritten: true,
+        };
+        let gate_level = session.gate_level();
+        assert_eq!(gate_level.cells.len(), 4);
+        assert!(gate_level
+            .cells
+            .iter()
+            .all(|cell| cell.nodes.is_empty() && cell.lowered.is_empty()));
+        assert!(gate_level.shared_edges.is_empty());
+        assert!(session.boundary_rewritten);
     }
 }

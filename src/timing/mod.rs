@@ -339,14 +339,45 @@ pub fn measure_typed_transition(
 /// gate's actual output torch (which includes the netlist's declared
 /// outputs -- a declared output's signal name is some gate's `output`).
 pub fn watch_all_nets(compiled: &CompiledCircuit) -> Vec<(Position, String)> {
-    let mut watched =
-        Vec::with_capacity(compiled.input_positions.len() + compiled.gate_output_positions.len());
+    let mut watched = Vec::new();
     for (name, &(x, y, z)) in &compiled.input_positions {
+        if compiled
+            .physical_rewrite()
+            .is_some_and(|rewrite| rewrite.source().outputs.contains(name))
+        {
+            continue;
+        }
         watched.push((Position::new(x, y, z), name.clone()));
     }
     for (name, &(x, y, z)) in &compiled.gate_output_positions {
-        watched.push((Position::new(x, y, z), name.clone()));
+        watched.push((
+            Position::new(x, y, z),
+            compiled.implementation_signal_label(name),
+        ));
     }
+    if let Some(rewrite) = compiled.physical_rewrite() {
+        for (name, &(x, y, z)) in rewrite.implemented().inputs.iter().map(|name| {
+            (
+                name,
+                &rewrite.implemented_observations().input_positions[name],
+            )
+        }) {
+            watched.push((
+                Position::new(x, y, z),
+                compiled.implementation_signal_label(name),
+            ));
+        }
+        for (name, &(x, y, z)) in rewrite
+            .source()
+            .outputs
+            .iter()
+            .zip(rewrite.source_output_driver_positions())
+        {
+            watched.push((Position::new(x, y, z), name.clone()));
+        }
+    }
+    let mut labels = std::collections::BTreeSet::new();
+    watched.retain(|(_, label)| labels.insert(label.clone()));
     watched
 }
 
@@ -767,14 +798,44 @@ pub fn summarize_worst_case(
         .max_by_key(|name| arrivals.get(name.as_str()).copied().unwrap_or(0))
         .cloned()
         .expect("outputs was checked non-empty above");
-    let path = critical_path(netlist, &arrivals, &critical_output);
+    let implementation = compiled.implementation_netlist(netlist);
+    let implementation_arrivals = implementation
+        .inputs
+        .iter()
+        .chain(implementation.gates.iter().map(|gate| &gate.output))
+        .filter_map(|signal| {
+            arrivals
+                .get(&compiled.implementation_signal_label(signal))
+                .map(|&tick| (signal.clone(), tick))
+        })
+        .collect();
+    let implementation_output =
+        compiled
+            .physical_rewrite()
+            .map_or(critical_output.as_str(), |rewrite| {
+                let ordinal = rewrite
+                    .source()
+                    .outputs
+                    .iter()
+                    .position(|name| name == &critical_output)
+                    .expect("outputs belong to the compiled source boundary");
+                rewrite
+                    .rewrite_certificate()
+                    .rewritten_outputs_in_source_order()[ordinal]
+                    .as_str()
+            });
+    let path = critical_path(
+        implementation,
+        &implementation_arrivals,
+        implementation_output,
+    );
 
-    let depth = logic_depth(netlist);
+    let depth = logic_depth(implementation);
     let bound = depth as u64 * TORCH_DELAY_GAME_TICKS;
     let ratio = worst_ticks as f64 / bound.max(1) as f64;
 
-    let critical_path_gate_count = critical_path_non_merge_gate_count(netlist, &path);
-    let critical_path_repeater_count = critical_path_repeaters(netlist, compiled, &path);
+    let critical_path_gate_count = critical_path_non_merge_gate_count(implementation, &path);
+    let critical_path_repeater_count = critical_path_repeaters(implementation, compiled, &path);
     // The critical output's own net (the driving gate's output torch, not the
     // physical lamp -- see `watch_all_nets`) carries the lamp's own final
     // value: the lamp sits directly under that torch's output pin with

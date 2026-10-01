@@ -1,0 +1,78 @@
+{
+  "physical_control_commit": "9779496",
+  "basis": "frozen complete polarity-sum family",
+  "candidate_policy": "player when correct shipping is absent or player dominates all twelve target metrics; shipping otherwise",
+  "prospective_player_cases": 3656,
+  "prospective_shipping_cases": 440,
+  "prior_cap_tables": 2744,
+  "prior_cap_regressions": 139,
+  "witness_encodings": [
+    21,
+    35,
+    49,
+    560,
+    562
+  ],
+  "status": "rejected_policy_not_enabled",
+  "setup_comparison": "not evaluated; target caps already fail",
+  "required_next_action": "generate a structurally general candidate that resolves remaining delay/glitch tradeoffs, then qualify default selection and fallback against the complete fixed family and prior caps",
+  "reproduce_command": "python3 tools/probe_default_selection_tradeoff.py docs/generator-polarity-sum-experiment-2026-10-01-family.jsonl.gz docs/generator-torch-row-prior-nonconstant-caps-2026-09-30.json",
+  "measured_report": {
+    "cases": 4096,
+    "choices": {
+      "player": 3656,
+      "shipping": 440
+    },
+    "retained_cap_tables": 2744,
+    "cap_regressions": 139,
+    "witnesses": [
+      {
+        "encoding": 21,
+        "metrics": [
+          "driver_glitches",
+          "lamp_glitches",
+          "worst_driver_pulse_ticks",
+          "total_driver_pulse_ticks"
+        ]
+      },
+      {
+        "encoding": 35,
+        "metrics": [
+          "driver_glitches",
+          "lamp_glitches",
+          "worst_driver_pulse_ticks",
+          "total_driver_pulse_ticks"
+        ]
+      },
+      {
+        "encoding": 49,
+        "metrics": [
+          "driver_glitches",
+          "lamp_glitches",
+          "worst_driver_pulse_ticks",
+          "total_driver_pulse_ticks"
+        ]
+      },
+      {
+        "encoding": 560,
+        "metrics": [
+          "driver_glitches",
+          "lamp_glitches",
+          "worst_driver_pulse_ticks",
+          "total_driver_pulse_ticks"
+        ]
+      },
+      {
+        "encoding": 562,
+        "metrics": [
+          "driver_glitches",
+          "lamp_glitches",
+          "worst_driver_pulse_ticks",
+          "total_driver_pulse_ticks"
+        ]
+      }
+    ],
+    "setup_evaluated": false,
+    "automatic_selection_enabled": false
+  }
+}

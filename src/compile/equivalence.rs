@@ -347,6 +347,12 @@ pub struct NetlistRewriteCertificate {
 }
 
 impl NetlistRewriteCertificate {
+    pub fn rewritten_inputs_in_source_order(&self) -> &[String] {
+        &self.rewritten_inputs_in_source_order
+    }
+    pub fn rewritten_outputs_in_source_order(&self) -> &[String] {
+        &self.rewritten_outputs_in_source_order
+    }
     pub fn fingerprint(&self) -> &Fingerprint {
         &self.fingerprint
     }

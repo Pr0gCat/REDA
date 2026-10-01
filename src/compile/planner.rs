@@ -11426,6 +11426,7 @@ mod tests {
                             gate_facings: (0..netlist.gates.len())
                                 .map(|gate| plan.facing_of(gate))
                                 .collect(),
+                            physical_rewrite: None,
                             planner_kind: compile::PlannerKind::Unified3d,
                             legacy_emission: None,
                         };
@@ -26140,6 +26141,7 @@ mod tests {
                                 gate_facings: (0..netlist.gates.len())
                                     .map(|g| plan.facing_of(g))
                                     .collect(),
+                                physical_rewrite: None,
                                 planner_kind: compile::PlannerKind::Unified3d,
                                 legacy_emission: None,
                             };
@@ -26279,6 +26281,7 @@ mod tests {
             gate_facings: (0..netlist.gates.len())
                 .map(|g| plan.facing_of(g))
                 .collect(),
+            physical_rewrite: None,
             planner_kind: compile::PlannerKind::Unified3d,
             legacy_emission: None,
         };
@@ -27868,6 +27871,7 @@ mod tests {
             gate_facings: (0..netlist.gates.len())
                 .map(|g| plan.facing_of(g))
                 .collect(),
+            physical_rewrite: None,
             planner_kind: compile::PlannerKind::Unified3d,
             legacy_emission: None,
         };
@@ -28786,6 +28790,7 @@ mod tests {
             gate_facings: (0..netlist.gates.len())
                 .map(|g| plan.facing_of(g))
                 .collect(),
+            physical_rewrite: None,
             planner_kind: compile::PlannerKind::Unified3d,
             legacy_emission: None,
         };
@@ -29366,6 +29371,7 @@ mod tests {
                 gate_facings: (0..case.netlist.gates.len())
                     .map(|g| plan.facing_of(g))
                     .collect(),
+                physical_rewrite: None,
                 planner_kind: compile::PlannerKind::Unified3d,
                 legacy_emission: None,
             };

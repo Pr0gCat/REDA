@@ -1765,9 +1765,12 @@ pub struct CompiledCircuit {
     /// lamp and no block of any kind: this records the **caller's** own cell,
     /// which ships empty. High means that cell is powered in the game's own
     /// sense, and whatever the caller puts there is what reads it.
+    /// For a rewritten source with repeated output names this compatibility
+    /// map retains the last occurrence. physical_rewrite() retains every
+    /// occurrence's distinct terminal in source declaration order.
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
-    /// Every gate's actual output position -- the wall torch that is this
-    /// gate's real output -- keyed by the gate's output signal name.
+    /// Actual implementation gate outputs, keyed by implementation signal name.
+    /// Removed source gates never receive fabricated positions.
     ///
     /// Unlike `output_positions`, which only covers the netlist's *declared*
     /// outputs and points one game tick further down the line at the
@@ -1778,7 +1781,7 @@ pub struct CompiledCircuit {
     /// (`LAMP_TURN_ON_DELAY_GAME_TICKS` / `LAMP_TURN_OFF_DELAY_GAME_TICKS`)
     /// is a display convenience, not part of the logic.
     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
-    /// Which way each gate's cell was built, by gate index.
+    /// Which way each implementation gate's cell was built, by gate index.
     ///
     /// Recorded by whoever placed it, never read back off the world: a merge's
     /// junction is dust, and dust has no facing to read. A verifier that
@@ -1792,9 +1795,98 @@ pub struct CompiledCircuit {
     /// emitter involved, and nothing downstream may pretend otherwise.
     legacy_emission: Option<LegacyEmission>,
     planner_kind: PlannerKind,
+    physical_rewrite: Option<fragment_synth::rewrite::CertifiedPhysicalRewrite>,
 }
 
 impl CompiledCircuit {
+    /// Build the public compiled view from an already sealed physical rewrite.
+    /// The manifest retains implementation identities and distinct source ports.
+    pub fn from_certified_rewrite(
+        rewrite: fragment_synth::rewrite::CertifiedPhysicalRewrite,
+    ) -> Self {
+        use fragment_synth::topology::OutputSpec;
+        let candidate = rewrite.implemented_candidate();
+        let gate_facings = (0..rewrite.implemented().gates.len())
+            .map(|gate| {
+                let instance = candidate
+                    .instances
+                    .instances
+                    .iter()
+                    .find(|instance| {
+                        instance.logical_gate.0 as usize == gate
+                            && instance.role
+                                == fragment_synth::instance_graph::InstanceRole::Canonical
+                    })
+                    .expect("certification checked every canonical gate instance");
+                match &instance.expanded.topology.output {
+                    OutputSpec::Primitive(id) => candidate.placements[id].facing,
+                    OutputSpec::Junction { logical_owner, .. } => {
+                        candidate.junctions[logical_owner].facing
+                    }
+                }
+            })
+            .collect();
+        let source = rewrite.source();
+        let input_positions = source
+            .inputs
+            .iter()
+            .cloned()
+            .zip(rewrite.source_input_positions().iter().copied())
+            .collect();
+        let output_positions = source
+            .outputs
+            .iter()
+            .cloned()
+            .zip(rewrite.source_output_positions().iter().copied())
+            .collect();
+        Self {
+            world: rewrite.physical().world().clone(),
+            input_positions,
+            output_positions,
+            gate_output_positions: rewrite
+                .implemented_observations()
+                .gate_output_positions
+                .clone(),
+            gate_facings,
+            observations: CircuitObservations::from_expanded(candidate),
+            legacy_emission: None,
+            planner_kind: PlannerKind::FragmentSynth,
+            physical_rewrite: Some(rewrite),
+        }
+    }
+
+    /// Sealed source-to-implementation mapping, when a physical rewrite was used.
+    pub fn physical_rewrite(&self) -> Option<&fragment_synth::rewrite::CertifiedPhysicalRewrite> {
+        self.physical_rewrite.as_ref()
+    }
+
+    /// The graph corresponding to physical gate positions and facings.
+    pub fn implementation_netlist<'a>(&'a self, source: &'a Netlist) -> &'a Netlist {
+        self.physical_rewrite
+            .as_ref()
+            .map_or(source, |rewrite| rewrite.implemented())
+    }
+
+    /// Stable observation labels for actual implementation nets. Keep them
+    /// separate from source ports even when a user name matches a generated net.
+    pub fn implementation_signal_label(&self, signal: &str) -> String {
+        let Some(rewrite) = &self.physical_rewrite else {
+            return signal.to_string();
+        };
+        let source = rewrite.source();
+        let mut prefix = "implemented:".to_string();
+        while source
+            .inputs
+            .iter()
+            .chain(&source.outputs)
+            .chain(source.gates.iter().map(|gate| &gate.output))
+            .any(|name| name.starts_with(&prefix))
+        {
+            prefix.push(':');
+        }
+        format!("{prefix}{signal}")
+    }
+
     pub(crate) fn legacy_emission(&self) -> Option<&LegacyEmission> {
         self.legacy_emission.as_ref()
     }
@@ -8095,6 +8187,7 @@ fn compile_channelled_with_reserve(
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
         gate_facings: vec![geometry::CellFacing::NORTH; netlist.gates.len()],
+        physical_rewrite: None,
         planner_kind: PlannerKind::Legacy,
         legacy_emission: Some(legacy_emission),
     })
@@ -8191,6 +8284,7 @@ pub fn compile_grown(
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
         gate_facings,
+        physical_rewrite: None,
         planner_kind: PlannerKind::Unified3d,
         legacy_emission: None,
     })
@@ -8229,6 +8323,7 @@ fn compile_planned_within(
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
         gate_facings,
+        physical_rewrite: None,
         planner_kind: PlannerKind::Unified3d,
         legacy_emission: None,
     })
