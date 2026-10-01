@@ -67,6 +67,24 @@ fn direct_zero_product(rows: &[(usize, u8, u8, u8)]) -> Option<u8> {
     rows.iter().find(|r| r.1 == 0).map(|r| r.3)
 }
 
+// Independent 00, 11 and mixed full cubes each drive one output. Keep
+// matched restoration for the shared decoder, but feed the mixed comparator
+// from the two public lever floors, avoiding both decoder restoration stages.
+fn independent_mixed_product(rows: &[(usize, u8, u8, u8)]) -> Option<(u8, u8)> {
+    direct_zero_product(rows)?;
+    rows.iter()
+        .find(|r| r.1 == 1 || r.1 == 2)
+        .map(|r| (r.1, r.3))
+}
+
+fn matrix_address_z(rows: &[(usize, u8, u8, u8)]) -> [i32; 2] {
+    match independent_mixed_product(rows) {
+        Some((1, _)) => [8, 2],
+        Some(_) => [2, 8],
+        None => [4, 7],
+    }
+}
+
 fn source_x(rows: &[(usize, u8, u8, u8)]) -> i32 {
     if direct_zero_product(rows).is_some() {
         return 14;
@@ -97,13 +115,27 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
     let source_x = source_x(&rows);
     let buffered = needs_input_buffer(&rows);
     let dual = rows.len() >= 5;
-    let mut w = World::new((source_x + 5).max(20), 10, 21);
-    let address_z = if direct_zero_product(&rows).is_some() {
-        [2, 8]
+    let mut w = World::new(
+        if independent_mixed_product(&rows).is_some() {
+            28
+        } else {
+            (source_x + 5).max(20)
+        },
+        10,
+        21,
+    );
+    let address_z = matrix_address_z(&rows);
+    let inputs = if independent_mixed_product(&rows).is_some() {
+        address_z.map(|z| {
+            if z == 8 {
+                Position::new(20, 5, 4)
+            } else {
+                Position::new(21, 5, 5)
+            }
+        })
     } else {
-        [4, 7]
+        address_z.map(|z| Position::new(source_x, 5, z))
     };
-    let inputs = address_z.map(|z| Position::new(source_x, 5, z));
     let always_high = words.into_iter().fold(7, |a, b| a & b);
     let output_z = if direct_zero_product(&rows).is_some() {
         [10, 12, 14]
@@ -113,7 +145,9 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
     for (bit, z) in address_z.into_iter().enumerate() {
         let used = rows.iter().any(|r| r.2 & (1 << bit) != 0);
         wire(&mut w, Position::new(source_x, 5, z));
-        put(&mut w, Position::new(source_x, 5, z), BlockKind::Lever);
+        if independent_mixed_product(&rows).is_none() {
+            put(&mut w, Position::new(source_x, 5, z), BlockKind::Lever);
+        }
         if !used {
             continue;
         }
@@ -156,7 +190,7 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
         }
     }
     for &(row, address, mask, word) in &rows {
-        if address == 0 && direct_zero_product(&rows).is_some() {
+        if direct_zero_product(&rows).is_some() && address != 3 {
             continue;
         }
         let x = row_x(row)
@@ -165,13 +199,15 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
             } else {
                 0
             };
-        for z in (address_z[0] - 1)..=if positive_literal(address, mask) && word & 4 != 0 {
-            17
-        } else if direct_zero_product(&rows).is_some() {
-            14
-        } else {
-            16
-        } {
+        for z in (*address_z.iter().min().unwrap() - 1)
+            ..=if positive_literal(address, mask) && word & 4 != 0 {
+                17
+            } else if direct_zero_product(&rows).is_some() {
+                14
+            } else {
+                16
+            }
+        {
             wire(&mut w, Position::new(x, 3, z));
         }
         for (bit, z) in address_z.into_iter().enumerate() {
@@ -257,8 +293,46 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
         put(&mut w, lamps[bit].down(), BlockKind::Solid);
         put(&mut w, lamps[bit], BlockKind::Lamp);
     }
+    if let Some((_, word)) = independent_mixed_product(&rows) {
+        // Separate raw arms feed the old matched source relays. The mixed
+        // product reads strong lever floors directly; dust never bridges them.
+        for x in 14..=23 {
+            wire(&mut w, Position::new(x, 5, 2));
+        }
+        for z in 3..=5 {
+            wire(&mut w, Position::new(23, 5, z));
+        }
+        wire(&mut w, Position::new(22, 5, 5));
+        for x in 14..=18 {
+            wire(&mut w, Position::new(x, 5, 8));
+        }
+        for z in 4..=7 {
+            wire(&mut w, Position::new(18, 5, z));
+        }
+        wire(&mut w, Position::new(19, 5, 4));
+        for at in inputs {
+            put(&mut w, at.down(), BlockKind::Solid);
+            put(&mut w, at, BlockKind::Lever);
+        }
+        put(&mut w, Position::new(20, 3, 5), BlockKind::Solid);
+        let mut c = BlockState::air();
+        c.kind = BlockKind::Comparator;
+        c.name = "minecraft:comparator".into();
+        c.facing = Some(Facing::North);
+        c.extra_properties.insert("mode".into(), "subtract".into());
+        w.set(20, 4, 5, c);
+        wire(&mut w, Position::new(20, 4, 6));
+        wire(&mut w, Position::new(20, 4, 7));
+        let bit = word.trailing_zeros() as usize;
+        drivers[bit] = Position::new(20, 4, 7);
+        lamps[bit] = Position::new(20, 4, 8);
+        put(&mut w, lamps[bit].down(), BlockKind::Solid);
+        put(&mut w, lamps[bit], BlockKind::Lamp);
+    }
     for (bit, z) in output_z.into_iter().enumerate() {
-        if direct_zero_product(&rows).is_some_and(|word| word & (1 << bit) != 0) {
+        if direct_zero_product(&rows).is_some_and(|word| word & (1 << bit) != 0)
+            || independent_mixed_product(&rows).is_some_and(|(_, word)| word & (1 << bit) != 0)
+        {
             continue;
         }
         for x in 1..=source_x {
@@ -313,11 +387,7 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
     let mut terms: [Vec<String>; 3] = std::array::from_fn(|_| Vec::new());
     let rows = program_rows(words);
     let source_x = source_x(&rows);
-    let address_z = if direct_zero_product(&rows).is_some() {
-        [2, 8]
-    } else {
-        [4, 7]
-    };
+    let address_z = matrix_address_z(&rows);
     let buffered = needs_input_buffer(&rows);
     let dual = rows.len() >= 5;
     let high = words.into_iter().fold(7, |a, b| a & b);
@@ -368,6 +438,20 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
                 Position::new(4, 4, 6),
             );
             terms[word.trailing_zeros() as usize].push(name.into());
+            continue;
+        }
+        if independent_mixed_product(&rows).is_some() && (bits == 1 || bits == 2) {
+            let positive = bits.trailing_zeros() as usize;
+            add(
+                Gate {
+                    name: "mixed_product".into(),
+                    output: "mixed_product".into(),
+                    inputs: vec![["a", "b"][positive].into(), ["a", "b"][1 - positive].into()],
+                    kind: GateKind::AndNot,
+                },
+                Position::new(20, 4, 5),
+            );
+            terms[word.trailing_zeros() as usize].push("mixed_product".into());
             continue;
         }
         let x = row_x(address)
@@ -552,6 +636,24 @@ fn subtract_library(composed: bool) -> crate::compile::topology::Library {
     };
     let mut library = Library::new(BTreeMap::from([
         (GateKind::Nor(0), vec![copy(GateKind::Nor(0), 0)]),
+        (GateKind::Buf, vec![copy(GateKind::Buf, 0)]),
+        (
+            GateKind::Nor(2),
+            vec![{
+                let d = super::typed_matrix_library();
+                let e = d.entry_at(GateKind::Nor(2), 0).unwrap();
+                LibraryEntry {
+                    name: e.name,
+                    template: Template {
+                        nodes: e.template.nodes.clone(),
+                        internal_edges: e.template.internal_edges.clone(),
+                        inputs: e.template.inputs.clone(),
+                        output: e.template.output,
+                        embedding_hints: e.template.embedding_hints.clone(),
+                    },
+                }
+            }],
+        ),
         (
             GateKind::Nor(1),
             if composed {
@@ -715,7 +817,9 @@ fn nor_library(literals: bool) -> crate::compile::topology::Library {
 }
 
 pub(super) fn library_for(words: [u8; 4]) -> crate::compile::topology::Library {
-    if polarity_sum_conditions(words).is_some_and(|(polarity, _)| polarity != 3) {
+    if independent_mixed_product(&program_rows(words)).is_some() {
+        subtract_library(true)
+    } else if polarity_sum_conditions(words).is_some_and(|(polarity, _)| polarity != 3) {
         comparator_library()
     } else if let Some((bits, _)) = mixed_product_literals(words) {
         if bits == 0 {
@@ -1926,6 +2030,14 @@ fn build_candidate(
 }
 
 // Keep generic routing fixtures independent of optional product selection.
+fn matrix_library(words: [u8; 4]) -> crate::compile::topology::Library {
+    if independent_mixed_product(&program_rows(words)).is_some() {
+        subtract_library(true)
+    } else {
+        super::typed_matrix_library()
+    }
+}
+
 fn matrix_candidate(
     words: [u8; 4],
 ) -> (
@@ -1935,13 +2047,14 @@ fn matrix_candidate(
 ) {
     let (netlist, positions) = player_logic(words);
     let (world, inputs, _, lamps) = player_world(words);
-    typed_world_candidate(
+    super::typed_world_candidate_with_library(
         netlist,
         world,
         inputs.to_vec(),
         lamps.to_vec(),
         positions,
         true,
+        &matrix_library(words),
     )
 }
 
@@ -2900,7 +3013,7 @@ mod tests {
         for words in tables {
             let (netlist, _, candidate) = matrix_candidate(words);
             let world =
-                realise_and_verify_expanded(&candidate, &netlist, &typed_matrix_library()).unwrap();
+                realise_and_verify_expanded(&candidate, &netlist, &matrix_library(words)).unwrap();
             let views = candidate.compatibility_views(&netlist).unwrap();
             let mut sim = crate::redstone::simulator::Simulator::new(world.world().clone());
             sim.run_until_stable(2000).unwrap();

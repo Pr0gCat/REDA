@@ -1,0 +1,38 @@
+{
+  "reference": "beb8bbf",
+  "summary": {
+    "cases": 4096,
+    "control_correct": 4096,
+    "candidate_correct": 4096,
+    "truth_recovered": 0,
+    "regressed_on_correct_controls": 0,
+    "improved_without_regression_on_correct_controls": 12,
+    "tied_on_correct_controls": 4084,
+    "all_fixed_controls_exact": true,
+    "quality_control_arm": "frozen_certified_candidate"
+  },
+  "history": {
+    "records": 4096,
+    "caps_passed": 2744,
+    "setup_regressions": [],
+    "setup_glitches": 0
+  },
+  "repeat_sha256": "af7ce60a93b31420bf6d24a13c6ec3286753d316c2c9dca017c8ce010c4963cd",
+  "independent_product_permutations": 12,
+  "source_cases": 77,
+  "player_tests": 17,
+  "physical_rewrite_view_tests": 5,
+  "fragment_api_tests": 14,
+  "prospective_default_selection": {
+    "cases": 4096,
+    "choices": {
+      "player": 4060,
+      "shipping": 36
+    },
+    "retained_cap_tables": 2744,
+    "cap_regressions": 0,
+    "witnesses": [],
+    "setup_evaluated": false,
+    "automatic_selection_enabled": false
+  }
+}
