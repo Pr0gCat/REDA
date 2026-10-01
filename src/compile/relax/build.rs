@@ -441,6 +441,20 @@ pub struct Cell {
 /// - the **torch** and the **pin** carry the gate's own output net.
 /// - a **floor** -- a repeater's, a junction's, a lever's -- carries nothing.
 pub fn cells(body: &Body) -> Vec<Cell> {
+    cells_with_runways(body, false)
+}
+
+/// Sequential graphs keep their existing cell geometry because their routes
+/// retain ordinary terminal contracts rather than weak dust runways.
+pub(crate) fn cells_for_graph(graph: &BodyGraph, body: &Body) -> Vec<Cell> {
+    let weak = !graph
+        .bodies
+        .iter()
+        .any(|b| matches!(b.what, BodyKind::DffPosedge { .. }));
+    cells_with_runways(body, weak)
+}
+
+fn cells_with_runways(body: &Body, weak: bool) -> Vec<Cell> {
     let facing = body.facing;
     let mut cells = Vec::new();
 
@@ -530,6 +544,15 @@ pub fn cells(body: &Body) -> Vec<Cell> {
                     offset: (step.x, step.y, step.z),
                     carries: vec![signal.clone()],
                 });
+                if weak && matches!(body.what, BodyKind::Primitive { kind: Primitive::Torch, .. }) && body.inputs.len() > 1 {
+                    // The relocated relay needs an approach and its own floor.
+                    // Reserve geometry on each actual input face, not a
+                    // uniform spacing increment on unrelated bodies.
+                    for hops in [2, 3] {
+                        cells.push(Cell { offset: (step.x * hops, step.y, step.z * hops), carries: vec![signal.clone()] });
+                    }
+                    cells.push(Cell { offset: (step.x * 2, step.y - 1, step.z * 2), carries: Vec::new() });
+                }
             }
 
             let out = geometry::output_direction(facing);
@@ -984,6 +1007,27 @@ mod tests {
     use crate::compile::primitive_graph::expand;
     use crate::compile::topology::Library;
     use crate::compile::{Gate, Netlist};
+
+    #[test]
+    fn sequential_graph_keeps_original_input_footprints() {
+        let mut source = Netlist {
+            inputs: vec!["a".into(), "b".into(), "clock".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::nor("y", &["a", "b"])],
+        };
+        let combinational = built(&source);
+        let body = &combinational.bodies[combinational.anchor_body[0]];
+        assert!(cells_for_graph(&combinational, body).len() > cells(body).len());
+        source.gates.push(Gate {
+            name: "q".into(), output: "q".into(),
+            inputs: vec!["y".into(), "clock".into()], kind: GateKind::DffPosedge,
+        });
+        source.outputs = vec!["q".into()];
+        let sequential = built(&source);
+        for body in &sequential.bodies {
+            assert_eq!(cells_for_graph(&sequential, body), cells(body));
+        }
+    }
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {
         Gate::nor(output, inputs)

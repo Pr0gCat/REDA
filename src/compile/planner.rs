@@ -5341,6 +5341,7 @@ fn typed_legacy_request_parts(
     // `Repeater` and not `Exact`, because the *diode* is the requirement; which
     // repeater kind satisfies it stays the router's decision, the way it is for
     // every other automatically terminated sink.
+    let selected_gates = arrival_balance_gates(netlist).unwrap_or_default();
     let feeds_observed_output = netlist.outputs.iter().any(|output| output == signal)
         || consumers.iter().any(|consumer| matches!(consumer, NetConsumer::Terminal { .. }));
     let mut sinks = Vec::with_capacity(consumers.len());
@@ -5368,6 +5369,12 @@ fn typed_legacy_request_parts(
                     TerminalRequirement::Exact(RouteTerminalKind::BareMergeRepeater)
                 } else if netlist.gates[*gate].is_merge() {
                     TerminalRequirement::Exact(RouteTerminalKind::RepeaterIntoSupport)
+                } else if matches!(netlist.gates[*gate].kind, crate::compile::topology::GateKind::Nor(n) if n > 0)
+                    && selected_gates.contains(gate)
+                    && !feeds_observed_output
+                    && !netlist.gates.iter().any(|g| g.kind.is_sequential())
+                    && !consumers.iter().any(|c| matches!(c, NetConsumer::Terminal { .. })) {
+                    TerminalRequirement::DirectedDustRunway
                 } else if feeds_observed_output {
                     TerminalRequirement::Repeater
                 } else {
@@ -5429,6 +5436,188 @@ fn typed_legacy_request_parts(
     )
 }
 
+#[cfg(test)]
+mod arrival_balance_tests {
+    use super::*;
+
+    #[test]
+    fn selection_recognises_literals_and_preserves_deep_receiver_skew() {
+        for prefix in ["n", "renamed"] {
+            let name = |i| format!("{prefix}{i}");
+            let source = Netlist {
+                inputs: vec!["a".into(), "b".into(), "c".into()],
+                outputs: vec!["y".into()],
+                gates: vec![
+                    compile::Gate::nor(name(0), &["a"]),
+                    compile::Gate::nor(name(1), &[&name(0)]),
+                    compile::Gate::nor(name(2), &[&name(1)]),
+                    compile::Gate::nor("literal", &[&name(0), "b"]),
+                    compile::Gate::nor("y", &[&name(2), "b", "c"]),
+                ],
+            };
+            let selected = arrival_balance_gates(&source).unwrap();
+            assert!(selected.contains(&3));
+            assert!(!selected.contains(&4));
+            let mut sequential = source.clone();
+            sequential.inputs.push("clock".into());
+            sequential.gates.push(compile::Gate {
+                name: "q".into(),
+                output: "q".into(),
+                inputs: vec!["y".into(), "clock".into()],
+                kind: crate::compile::topology::GateKind::DffPosedge,
+            });
+            assert!(arrival_balance_gates(&sequential).is_none());
+        }
+    }
+}
+
+fn arrival_balance_gates(netlist: &Netlist) -> Option<std::collections::HashSet<usize>> {
+    if netlist.gates.iter().any(|g| g.kind.is_sequential()) {
+        return None;
+    }
+    let mut depths: std::collections::HashMap<String, usize> =
+        netlist.inputs.iter().map(|n| (n.clone(), 0)).collect();
+    let mut supports: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        netlist
+            .inputs
+            .iter()
+            .map(|n| (n.clone(), std::collections::HashSet::from([n.clone()])))
+            .collect();
+    let mut selected = std::collections::HashSet::new();
+    for index in netlist.combinational_order()? {
+        let gate = &netlist.gates[index];
+        let shared = gate.inputs.iter().enumerate().any(|(i, a)| {
+            gate.inputs
+                .iter()
+                .skip(i + 1)
+                .any(|b| !supports[a].is_disjoint(&supports[b]))
+        });
+        let equal_depth = gate
+            .inputs
+            .first()
+            .is_some_and(|a| gate.inputs.iter().all(|b| depths[a] == depths[b]));
+        let literal_layer = gate.inputs.iter().all(|name| {
+            netlist.inputs.contains(name)
+                || netlist.gates.iter().any(|g| {
+                    g.output == *name
+                        && matches!(g.kind, crate::compile::topology::GateKind::Nor(1))
+                        && netlist.inputs.contains(&g.inputs[0])
+                })
+        });
+        if shared || equal_depth || literal_layer {
+            selected.insert(index);
+        }
+        let depth = gate.inputs.iter().map(|n| depths[n]).max().unwrap_or(0) + 1;
+        let support = gate
+            .inputs
+            .iter()
+            .flat_map(|n| supports[n].iter().cloned())
+            .collect();
+        depths.insert(gate.output.clone(), depth);
+        supports.insert(gate.output.clone(), support);
+    }
+    Some(selected)
+}
+
+// Balance reconvergent, equal-depth, or literal input layers. Logical depth
+// counts merge stages too; physical arrival separately treats them as zero.
+// Clone transactionally so insufficient insertion geometry leaves no partial
+// retiming. The normal emitted-world verifier still checks the result.
+fn balance_candidate_arrivals(seed: &PlanCandidate, netlist: &Netlist) -> Option<PlanCandidate> {
+    use crate::redstone::world::block::BlockKind;
+    if netlist.gates.iter().any(|g| g.kind.is_sequential()) {
+        return None;
+    }
+    let order = netlist.combinational_order()?;
+    let mut candidate = seed.clone();
+    let mut usage = std::collections::HashMap::new();
+    for route in &candidate.routes {
+        for path in &route.branch_paths {
+            for at in path {
+                *usage.entry(*at).or_insert(0usize) += 1;
+            }
+        }
+    }
+    let mut arrivals: std::collections::HashMap<String, u64> =
+        netlist.inputs.iter().map(|n| (n.clone(), 0)).collect();
+    let selected = arrival_balance_gates(netlist)?;
+    for index in order {
+        let gate = &netlist.gates[index];
+        let balance = selected.contains(&index);
+        let mut inputs = Vec::new();
+        for (port, name) in gate.inputs.iter().enumerate() {
+            let (ri, ti) = candidate.routes.iter().enumerate().find_map(|(ri, r)| {
+                r.terminals
+                    .iter()
+                    .position(|t| t.sink.gate == gate.name && t.sink.input_index == port)
+                    .map(|ti| (ri, ti))
+            })?;
+            let route = &candidate.routes[ri];
+            let path = route.branch_paths.get(ti)?;
+            let delay = path.iter().try_fold(0u64, |sum, at| {
+                let cell = route
+                    .realisation
+                    .get(route.anchors.iter().position(|a| a == at)?)?;
+                Some(
+                    sum + if cell.kind == BlockKind::Repeater {
+                        2 * u64::from(cell.delay)
+                    } else {
+                        0
+                    },
+                )
+            })?;
+            inputs.push((ri, ti, *arrivals.get(name)? + delay));
+        }
+        let latest = inputs.iter().map(|i| i.2).max().unwrap_or(0);
+        for (ri, ti, time) in inputs {
+            let mut missing = if balance {
+                latest.checked_sub(time)?
+            } else {
+                0
+            };
+            let route = &mut candidate.routes[ri];
+            let path = route.branch_paths.get(ti)?.clone();
+            for w in path.windows(3).rev() {
+                if missing == 0 {
+                    break;
+                }
+                let (prev, at, next) = (w[0], w[1], w[2]);
+                if usage.get(&at) != Some(&1) {
+                    continue;
+                }
+                let ci = route.anchors.iter().position(|a| *a == at)?;
+                if route.realisation[ci].kind != BlockKind::RedstoneWire
+                    || route.floors.get(ci)?.kind != BlockKind::Solid
+                {
+                    continue;
+                }
+                let facing = facing_between(at, next);
+                let mut relay = compile::repeater(facing);
+                relay.delay = 1;
+                if !compile::routing::route_step_is_legal(prev, at, next, &relay) {
+                    continue;
+                }
+                route.realisation[ci] = relay;
+                // Count the actual replacement on every branch containing it.
+                for (terminal, branch) in route.terminals.iter_mut().zip(&route.branch_paths) {
+                    if branch.contains(&at) {
+                        terminal.repeaters += 1;
+                    }
+                }
+                missing = missing.checked_sub(2)?;
+            }
+            if missing != 0 {
+                return None;
+            }
+        }
+        arrivals.insert(
+            gate.output.clone(),
+            latest + if gate.is_merge() { 0 } else { 2 },
+        );
+    }
+    Some(candidate)
+}
+
 fn route_in_order(
     mut candidate: PlanCandidate,
     netlist: &Netlist,
@@ -5478,6 +5667,9 @@ fn route_in_order(
     }
 
     candidate.routes = routes;
+    if let Some(balanced) = balance_candidate_arrivals(&candidate, netlist) {
+        candidate = balanced;
+    }
     Ok(candidate)
 }
 

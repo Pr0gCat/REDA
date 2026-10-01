@@ -7,7 +7,7 @@
 //! layout that is nearly legal.
 
 use crate::compile::geometry;
-use crate::compile::relax::build::{cells, BodyGraph, BodyKind, Weld};
+use crate::compile::relax::build::{cells_for_graph, BodyGraph, BodyKind, Weld};
 use crate::redstone::simulator::position::Position;
 
 /// Two conductors of different signals need two cells of clearance.
@@ -432,7 +432,7 @@ pub fn placed_cells(graph: &BodyGraph) -> Vec<Vec<PlacedCell>> {
         .bodies
         .iter()
         .map(|body| {
-            cells(body)
+            cells_for_graph(graph, body)
                 .into_iter()
                 .map(|cell| PlacedCell {
                     at: [
@@ -670,7 +670,7 @@ fn lift_above_bound(graph: &mut BodyGraph) -> bool {
         let mut lift_z = 0.0f64;
         for &body in &bodies {
             let position = graph.bodies[body].position;
-            for cell in cells(&graph.bodies[body]) {
+            for cell in cells_for_graph(graph, &graph.bodies[body]) {
                 lift_x = lift_x.max(f64::from(bound.x) - (position[0] + f64::from(cell.offset.0)));
                 lift_z = lift_z.max(f64::from(bound.z) - (position[2] + f64::from(cell.offset.2)));
             }

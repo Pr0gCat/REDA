@@ -35,8 +35,10 @@ pass. But native/fresh-Yosys DFF physical qualification still refuses a safe
 local route from (41,1,58) to (42,1,59). Disabling the retiming analysis alone
 does not undo the generic multi-input NOR approach-space reservation, which
 also influences layouts around sequential primitives. Additional regressions also reject it: the multi-input receiver inverter
-fixture exceeds its independently frozen total-driver-pulse cap (observed 18
-ticks at arity 3, chain length 3). Four other inverter quality tests pass.
+fixture exceeds its independently frozen total-driver-pulse cap. The last
+printed passing tuple is arity 3, chain length 3, with 18 pulse ticks equal to
+its cap. The failure occurs at the next tuple (length 4); its metrics were not
+printed before the assertion. The earlier attribution to length 3 was incorrect. Four other inverter quality tests pass.
 Observed-output isolation refuses a DirectedDustIntoSupport landing that its
 unchanged contract requires to be one-way. Upstream relocation of a relay
 does not itself satisfy this support-side isolation contract. These are material

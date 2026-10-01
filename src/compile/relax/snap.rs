@@ -437,10 +437,9 @@ mod tests {
     /// more without `d` being a multiple of four, where the fraction is zero
     /// and the two reachable losses are nothing and a whole cell.
     ///
-    /// The requirement is between *cells*, not centres: `m`'s socket for `b`
-    /// reaches one cell east and `out`'s socket for `m` one cell west, so the
-    /// centre gap that puts the closest foreign cells exactly at the
-    /// requirement is two more than the requirement itself.
+    /// The requirement is between *cells*, not centres. The centre gap
+    /// includes the actual input runway extent on both bodies so the closest
+    /// foreign cells sit exactly at the unchanged clearance requirement.
     #[test]
     fn a_pair_at_its_requirement_survives_rounding_toward_each_other() {
         let netlist = wide();
@@ -459,7 +458,18 @@ mod tests {
             required[0], 3.75,
             "`m` is the degree-three body this fixture is for"
         );
-        let gap = required[0].max(required[1]) + 2.0;
+        // Keep the same exact-margin witness when endpoint runways grow.
+        // Every legal/just-illegal and rounding-loss assertion below remains.
+        let footprints = crate::compile::relax::project::placed_cells(&built);
+        let west_extent = footprints[0]
+            .iter()
+            .map(|c| c.at[0])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let east_extent = footprints[1]
+            .iter()
+            .map(|c| c.at[0])
+            .fold(f64::INFINITY, f64::min);
+        let gap = required[0].max(required[1]) + west_extent - east_extent;
         built.bodies[0].position = [0.5, 1.0, 0.5];
         built.bodies[1].position = [0.5 + gap, 1.0, 0.5];
         // The two levers say nothing here and are parked out of reach, on

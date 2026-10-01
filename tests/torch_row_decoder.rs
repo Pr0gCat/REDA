@@ -2341,6 +2341,26 @@ fn torch_row_entry_records_quality_against_current_shipping_layouts() {
         );
         cases.push(json!({"words":words,"shipping":current,"torch_row":candidate}));
     }
+    // Preserve the independent pre-experiment shipping controls per metric;
+    // one improved case cannot compensate for a different ROM regression.
+    let frozen: serde_json::Value = serde_json::from_str(include_str!(
+        "../docs/generator-torch-row-shipping-comparison-2026-09-30.json"
+    )).unwrap();
+    for case in &cases {
+        let baseline = frozen["cases"].as_array().unwrap().iter()
+            .find(|row| row["words"] == case["words"]).unwrap();
+        for metric in [
+            "driver_glitches", "driver_single_input_glitches",
+            "lamp_glitches", "lamp_single_input_glitches",
+            "total_driver_pulse_ticks", "total_settle_ticks",
+            "worst_driver_change_ticks", "worst_driver_pulse_ticks",
+            "worst_settle_ticks",
+        ] {
+            assert!(case["shipping"][metric].as_u64().unwrap()
+                <= baseline["shipping"][metric].as_u64().unwrap(),
+                "ROM {:?}: frozen shipping {metric} regression", case["words"]);
+        }
+    }
     let report = json!({"comparison_commit":"5d9d64c","measured_transitions_per_arm":96,"cases":cases,
         "automatic_selection_enabled":false});
     println!("{report}");

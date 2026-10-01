@@ -186,6 +186,8 @@ pub enum TerminalRequirement {
     Automatic,
     Repeater,
     DirectedDust,
+    /// Require a straight dust landing and refresh upstream when needed.
+    DirectedDustRunway,
     Exact(RouteTerminalKind),
 }
 
@@ -1626,7 +1628,17 @@ where
                 price,
                 guidance,
                 &source_runway,
-                &ForcedChain::new(runways.sinks, sink.anchor, sink.allowed_entry),
+                &ForcedChain::new(
+                    if sink.terminal.sink_parts().is_some_and(|(_, _, r)| {
+                        r == TerminalRequirement::DirectedDustRunway
+                    }) {
+                        TerminalRunway::Forced { cells: runways.sinks.cells().max(1) }
+                    } else {
+                        runways.sinks
+                    },
+                    sink.anchor,
+                    sink.allowed_entry,
+                ),
                 planned
                     .get(ordinal)
                     .map(|branch| {
@@ -2564,7 +2576,9 @@ fn select_terminal_kind(
         }
         TerminalRequirement::Exact(kind) => kind,
         TerminalRequirement::Repeater => RouteTerminalKind::RepeaterIntoSupport,
-        TerminalRequirement::DirectedDust => RouteTerminalKind::DirectedDustIntoSupport,
+        TerminalRequirement::DirectedDust | TerminalRequirement::DirectedDustRunway => {
+            RouteTerminalKind::DirectedDustIntoSupport
+        }
         TerminalRequirement::Automatic if budget_needs_repeater => {
             RouteTerminalKind::RepeaterIntoSupport
         }
@@ -3464,7 +3478,7 @@ fn sink_connection(sink: &RouteSink) -> Result<ConnectionId, RouterFailure> {
 fn terminal_may_be_repeater(requirement: TerminalRequirement) -> bool {
     match requirement {
         TerminalRequirement::Automatic | TerminalRequirement::Repeater => true,
-        TerminalRequirement::DirectedDust => false,
+        TerminalRequirement::DirectedDust | TerminalRequirement::DirectedDustRunway => false,
         TerminalRequirement::Exact(kind) => matches!(
             kind,
             RouteTerminalKind::RepeaterIntoSupport

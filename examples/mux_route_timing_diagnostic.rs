@@ -11,18 +11,33 @@ use serde_json::json;
 use std::collections::HashMap;
 fn main() {
     let argument = std::env::args().nth(1);
+    let receiver = argument.as_deref() == Some("receiver3");
     let and_native = argument.as_deref() == Some("and4-native");
     let and = and_native || argument.as_deref() == Some("and4-yosys");
     let xor = argument.as_deref() == Some("xor2");
     let names: &[&str] = if and {
         &["a", "b", "c", "d"]
+    } else if receiver {
+        &["in0", "in1", "in2"]
     } else if xor {
         &["a", "b"]
     } else {
         &["a", "b", "s"]
     };
     let states = 1usize << names.len();
-    let (source, ports) = if and && !and_native {
+    let (source, ports) = if receiver {
+        let source = reda::compile::Netlist {
+            inputs: names.iter().map(|n| n.to_string()).collect(),
+            outputs: vec!["y".into()],
+            gates: vec![
+                reda::compile::Gate::nor("stage0", &["in0"]),
+                reda::compile::Gate::nor("stage1", &["stage0"]),
+                reda::compile::Gate::nor("stage2", &["stage1"]),
+                reda::compile::Gate::nor("y", &["stage2", "in1", "in2"]),
+            ],
+        };
+        (source, HashMap::from([("y".into(), "y".into())]))
+    } else if and && !and_native {
         synthesize_verilog(include_str!("../tests/fixtures/and4.sv"), "and4").unwrap()
     } else {
         let artifact = compile_systemverilog(
@@ -283,7 +298,9 @@ fn main() {
                         gate.output
                     );
                 }
-                let expected = if and {
+                let expected = if receiver {
+                    value & 1 != 0 && value & 6 == 0
+                } else if and {
                     value == 15
                 } else if xor {
                     (value & 1 != 0) != (value & 2 != 0)
