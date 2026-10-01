@@ -1,0 +1,514 @@
+{
+  "shipping_choices": 36,
+  "setup_regressions_against_player": [
+    {
+      "encoding": 550,
+      "metrics": [
+        "worst_settle_ticks",
+        "driver_last_change_ticks",
+        "lamp_last_change_ticks"
+      ]
+    },
+    {
+      "encoding": 646,
+      "metrics": [
+        "worst_settle_ticks",
+        "driver_last_change_ticks",
+        "lamp_last_change_ticks"
+      ]
+    },
+    {
+      "encoding": 774,
+      "metrics": [
+        "worst_settle_ticks",
+        "driver_last_change_ticks",
+        "lamp_last_change_ticks"
+      ]
+    }
+  ],
+  "setup_glitched_choices": [],
+  "target_tradeoffs": [
+    {
+      "encoding": 518,
+      "words": [
+        6,
+        0,
+        0,
+        1
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 550,
+      "words": [
+        6,
+        4,
+        0,
+        1
+      ],
+      "target_stock_worse": [
+        "worst_settle_ticks",
+        "driver_last_change_ticks",
+        "lamp_last_change_ticks"
+      ],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 646,
+      "words": [
+        6,
+        0,
+        2,
+        1
+      ],
+      "target_stock_worse": [
+        "worst_settle_ticks",
+        "driver_last_change_ticks",
+        "lamp_last_change_ticks"
+      ],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 774,
+      "words": [
+        6,
+        0,
+        4,
+        1
+      ],
+      "target_stock_worse": [
+        "worst_settle_ticks",
+        "driver_last_change_ticks",
+        "lamp_last_change_ticks"
+      ],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1025,
+      "words": [
+        1,
+        0,
+        0,
+        2
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1029,
+      "words": [
+        5,
+        0,
+        0,
+        2
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1540,
+      "words": [
+        4,
+        0,
+        0,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1548,
+      "words": [
+        4,
+        1,
+        0,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1556,
+      "words": [
+        4,
+        2,
+        0,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1580,
+      "words": [
+        4,
+        5,
+        0,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1588,
+      "words": [
+        4,
+        6,
+        0,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1636,
+      "words": [
+        4,
+        4,
+        1,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1700,
+      "words": [
+        4,
+        4,
+        2,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1804,
+      "words": [
+        4,
+        1,
+        4,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1812,
+      "words": [
+        4,
+        2,
+        4,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1860,
+      "words": [
+        4,
+        0,
+        5,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 1924,
+      "words": [
+        4,
+        0,
+        6,
+        3
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2049,
+      "words": [
+        1,
+        0,
+        0,
+        4
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2050,
+      "words": [
+        2,
+        0,
+        0,
+        4
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2051,
+      "words": [
+        3,
+        0,
+        0,
+        4
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2562,
+      "words": [
+        2,
+        0,
+        0,
+        5
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2570,
+      "words": [
+        2,
+        1,
+        0,
+        5
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2594,
+      "words": [
+        2,
+        4,
+        0,
+        5
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2610,
+      "words": [
+        2,
+        6,
+        0,
+        5
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2626,
+      "words": [
+        2,
+        0,
+        1,
+        5
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2635,
+      "words": [
+        3,
+        1,
+        1,
+        5
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2722,
+      "words": [
+        2,
+        4,
+        2,
+        5
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2834,
+      "words": [
+        2,
+        2,
+        4,
+        5
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 2946,
+      "words": [
+        2,
+        0,
+        6,
+        5
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 3073,
+      "words": [
+        1,
+        0,
+        0,
+        6
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 3089,
+      "words": [
+        1,
+        2,
+        0,
+        6
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 3105,
+      "words": [
+        1,
+        4,
+        0,
+        6
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 3201,
+      "words": [
+        1,
+        0,
+        2,
+        6
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 3219,
+      "words": [
+        3,
+        2,
+        2,
+        6
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 3329,
+      "words": [
+        1,
+        0,
+        4,
+        6
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    },
+    {
+      "encoding": 3365,
+      "words": [
+        5,
+        4,
+        4,
+        6
+      ],
+      "target_stock_worse": [],
+      "target_player_worse": [
+        "total_settle_ticks"
+      ]
+    }
+  ],
+  "setup_evaluated": true,
+  "automatic_selection_enabled": false
+}

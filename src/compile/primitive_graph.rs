@@ -67,7 +67,7 @@ pub enum Provenance {
 }
 
 /// One node of the flat graph: a primitive kind, and where it came from.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Node {
     pub primitive: Primitive,
     pub provenance: Provenance,
@@ -98,7 +98,7 @@ pub struct Edge {
 /// into the owning [`PrimitiveGraph`], so the graph has one source of truth
 /// for every relationship while consumers can still recognise the DFF as a
 /// single region.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct StatefulRegion {
     pub gate: usize,
     pub d_landing: NodeId,
@@ -122,7 +122,7 @@ impl StatefulRegion {
 /// [`expand`]. No gate boundaries: a NOR gate's torch sits in exactly the
 /// same `nodes`/`edges` as every other gate's, tied back to their gate only
 /// through `Node::provenance` / [`PrimitiveGraph::gate_nodes`].
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct PrimitiveGraph {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,

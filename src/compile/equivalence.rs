@@ -98,6 +98,9 @@ use crate::redstone::world::block::BlockKind;
 /// Why the compiled world does not match what `expand` says it should be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EquivalenceError {
+    CertifiedRewriteViewMismatch {
+        detail: String,
+    },
     UnsupportedStatefulProof {
         gate: GateIndex,
     },
@@ -870,11 +873,27 @@ struct NetEdge {
 /// accounts for exactly what `compiled` (built by `compile(netlist)`, the
 /// same `netlist`) actually contains -- see this module's doc comment for
 /// what "accounts for" means precisely and why.
+/// Physical rewrites instead require `primitive_graph::from_certified_rewrite`
+/// and validate the exact sealed source, world and observation view.
 pub fn verify_expansion_matches_compiled(
     netlist: &Netlist,
     graph: &PrimitiveGraph,
     compiled: &CompiledCircuit,
 ) -> Result<(), EquivalenceError> {
+    if let Some(rewrite) = compiled.physical_rewrite() {
+        compiled.validate_rewrite_view(netlist).map_err(|detail| {
+            EquivalenceError::CertifiedRewriteViewMismatch {
+                detail: detail.into(),
+            }
+        })?;
+        if *graph != super::primitive_graph::from_certified_rewrite(rewrite) {
+            return Err(EquivalenceError::CertifiedRewriteViewMismatch {
+                detail: "graph differs from certified implementation".into(),
+            });
+        }
+        return Ok(());
+    }
+
     let resolution = resolve_contributors(netlist);
 
     verify_counts(netlist, graph, &resolution)?;

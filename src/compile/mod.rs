@@ -1860,6 +1860,36 @@ impl CompiledCircuit {
         self.physical_rewrite.as_ref()
     }
 
+    /// Check that the public view still represents its sealed physical rewrite.
+    /// Exact block states include comparator mode and all retained properties.
+    pub fn validate_rewrite_view(&self, source: &Netlist) -> Result<(), &'static str> {
+        let Some(rewrite) = &self.physical_rewrite else {
+            return Ok(());
+        };
+        if source != rewrite.source() {
+            return Err("source netlist differs from certified rewrite");
+        }
+        let sealed = rewrite.physical().world();
+        if self.world.size() != sealed.size()
+            || self.world.cells().iter().enumerate().any(|(flat, &index)| {
+                let (x, y, z) = self.world.decode(flat);
+                self.world.palette().get(index) != Some(sealed.get(x, y, z))
+            })
+        {
+            return Err("world differs from certified rewrite");
+        }
+        let expected = Self::from_certified_rewrite(rewrite.clone());
+        if self.input_positions != expected.input_positions
+            || self.output_positions != expected.output_positions
+            || self.gate_output_positions != expected.gate_output_positions
+            || self.gate_facings != expected.gate_facings
+            || self.observations != expected.observations
+        {
+            return Err("compiled observations differ from certified rewrite");
+        }
+        Ok(())
+    }
+
     /// The graph corresponding to physical gate positions and facings.
     pub fn implementation_netlist<'a>(&'a self, source: &'a Netlist) -> &'a Netlist {
         self.physical_rewrite

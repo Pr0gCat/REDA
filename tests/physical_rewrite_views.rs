@@ -284,6 +284,12 @@ fn compiled_and_flat_views_follow_proved_permuted_port_bindings() {
     }
 
     let compiled = CompiledCircuit::from_certified_rewrite(rewrite);
+    reda::compile::equivalence::verify_expansion_matches_compiled(&source, &graph, &compiled)
+        .unwrap();
+    let partition =
+        reda::compile::world_partition::partition_world(&source, &graph, &compiled).unwrap();
+    assert!(partition.unexplained.is_empty());
+    assert_eq!(partition.graph_explained, graph.nodes.len());
     let watched = watch_all_nets(&compiled);
     let actual_a = watched
         .iter()
@@ -351,6 +357,8 @@ fn flat_projection_covers_qualified_generation_techniques_and_constants() {
         [2, 7, 7, 1],
         [0, 0, 0, 0],
         [7, 7, 7, 7],
+        [4, 0, 1, 2],
+        [6, 7, 1, 1],
     ] {
         let mut source = Netlist {
             inputs: vec!["a".into(), "b".into()],
@@ -422,5 +430,90 @@ fn flat_projection_covers_qualified_generation_techniques_and_constants() {
             .edges
             .iter()
             .all(|edge| edge.from < graph.nodes.len() && edge.to < graph.nodes.len()));
+        let compiled = CompiledCircuit::from_certified_rewrite(rewrite);
+        reda::compile::equivalence::verify_expansion_matches_compiled(&source, &graph, &compiled)
+            .unwrap();
+        let partition =
+            reda::compile::world_partition::partition_world(&source, &graph, &compiled).unwrap();
+        assert!(partition.unexplained.is_empty(), "{words:?}");
+        assert_eq!(partition.graph_explained, graph.nodes.len(), "{words:?}");
     }
+}
+
+#[test]
+fn rewrite_equivalence_and_partition_require_the_exact_sealed_view() {
+    use reda::compile::{
+        equivalence::verify_expansion_matches_compiled, world_partition::partition_world,
+    };
+    use reda::redstone::world::block::BlockKind;
+    let source = source();
+    let rewrite = compile_player_torch_row(&source, 1_000_000).unwrap();
+    let graph = primitive_graph::from_certified_rewrite(&rewrite);
+    let compiled = CompiledCircuit::from_certified_rewrite(rewrite);
+    verify_expansion_matches_compiled(&source, &graph, &compiled).unwrap();
+    let partition = partition_world(&source, &graph, &compiled).unwrap();
+    assert!(partition.unexplained.is_empty());
+    let non_air = compiled
+        .world
+        .cells()
+        .iter()
+        .filter(|&&index| compiled.world.palette().get(index).unwrap().kind != BlockKind::Air)
+        .count();
+    assert_eq!(partition.total_non_air(), non_air);
+    let reject = |source: &Netlist,
+                  graph: &reda::compile::primitive_graph::PrimitiveGraph,
+                  compiled: &CompiledCircuit| {
+        assert!(verify_expansion_matches_compiled(source, graph, compiled).is_err());
+        assert!(partition_world(source, graph, compiled).is_err());
+    };
+    let mut other_source = source.clone();
+    other_source.gates[0].name.push_str("changed");
+    reject(&other_source, &graph, &compiled);
+    let mut other_graph =
+        primitive_graph::from_certified_rewrite(compiled.physical_rewrite().unwrap());
+    other_graph.edges.pop().unwrap();
+    reject(&source, &other_graph, &compiled);
+    let mut wrong_technique =
+        primitive_graph::from_certified_rewrite(compiled.physical_rewrite().unwrap());
+    wrong_technique
+        .nodes
+        .iter_mut()
+        .find(|node| node.primitive == Primitive::Comparator)
+        .unwrap()
+        .primitive = Primitive::Torch;
+    reject(&source, &wrong_technique, &compiled);
+    let mut changed =
+        CompiledCircuit::from_certified_rewrite(compiled.physical_rewrite().unwrap().clone());
+    let (x, y, z) = changed
+        .world
+        .cells()
+        .iter()
+        .enumerate()
+        .find_map(|(flat, &index)| {
+            (changed.world.palette().get(index).unwrap().kind == BlockKind::Comparator)
+                .then(|| changed.world.decode(flat))
+        })
+        .unwrap();
+    let mut comparator = changed.world.get(x, y, z).clone();
+    comparator
+        .extra_properties
+        .insert("mode".into(), "compare".into());
+    changed.world.set(x, y, z, comparator);
+    reject(&source, &graph, &changed);
+    let mut changed =
+        CompiledCircuit::from_certified_rewrite(compiled.physical_rewrite().unwrap().clone());
+    changed.gate_output_positions.clear();
+    reject(&source, &graph, &changed);
+    let mut changed =
+        CompiledCircuit::from_certified_rewrite(compiled.physical_rewrite().unwrap().clone());
+    changed.input_positions.clear();
+    reject(&source, &graph, &changed);
+    let mut changed =
+        CompiledCircuit::from_certified_rewrite(compiled.physical_rewrite().unwrap().clone());
+    changed.output_positions.clear();
+    reject(&source, &graph, &changed);
+    let mut changed =
+        CompiledCircuit::from_certified_rewrite(compiled.physical_rewrite().unwrap().clone());
+    changed.observations.declared_outputs.clear();
+    reject(&source, &graph, &changed);
 }

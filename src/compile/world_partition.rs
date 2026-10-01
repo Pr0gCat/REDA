@@ -125,6 +125,9 @@ impl WorldPartition {
 /// compiled `World` serious enough that no partition would mean anything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PartitionError {
+    CertifiedRewriteViewMismatch {
+        detail: String,
+    },
     /// `Netlist`'s own declared arity, the number of edges the graph lands
     /// on this gate's own node cluster from outside it, and the compiled
     /// world's own independently-counted repeaters-facing-the-support
@@ -142,14 +145,20 @@ pub enum PartitionError {
     /// Two different graph nodes resolved to the same world position -- the
     /// graph cannot be a lossless account of the world if two of its own
     /// primitives collide.
-    DuplicateExplainedPosition { position: (i32, i32, i32) },
+    DuplicateExplainedPosition {
+        position: (i32, i32, i32),
+    },
     /// A graph node's own resolved position holds nothing (`Air`) in the
     /// compiled world -- the graph claims a primitive the world never
     /// actually built.
-    ExplainedPositionIsAir { position: (i32, i32, i32) },
+    ExplainedPositionIsAir {
+        position: (i32, i32, i32),
+    },
     /// A graph node could not be resolved to a world position at all --
     /// some `CompiledCircuit` lookup it depends on came back empty.
-    CannotResolveNodePosition { detail: String },
+    CannotResolveNodePosition {
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for PartitionError {
@@ -166,6 +175,8 @@ impl std::error::Error for PartitionError {}
 /// each category uses. `graph` must be `primitive_graph::expand(netlist,
 /// ..)`'s output for this same `netlist`, and `compiled` must be
 /// `compile(netlist)`'s output for the same `netlist`.
+/// A physical rewrite requires `primitive_graph::from_certified_rewrite`;
+/// its exact sealed manifest identifies primitive cells and routing fill.
 ///
 /// This does not call `equivalence::verify_expansion_matches_compiled` --
 /// the two checks are deliberately independent implementations of
@@ -176,6 +187,69 @@ pub fn partition_world(
     graph: &PrimitiveGraph,
     compiled: &CompiledCircuit,
 ) -> Result<WorldPartition, PartitionError> {
+    if let Some(rewrite) = compiled.physical_rewrite() {
+        compiled.validate_rewrite_view(netlist).map_err(|detail| {
+            PartitionError::CertifiedRewriteViewMismatch {
+                detail: detail.into(),
+            }
+        })?;
+        if *graph != super::primitive_graph::from_certified_rewrite(rewrite) {
+            return Err(PartitionError::CertifiedRewriteViewMismatch {
+                detail: "graph differs from certified implementation".into(),
+            });
+        }
+        let candidate = rewrite.implemented_candidate();
+        let explained: HashSet<_> = candidate
+            .placements
+            .values()
+            .flat_map(|placement| &placement.blocks)
+            .chain(
+                candidate
+                    .boundaries
+                    .values()
+                    .flat_map(|boundary| &boundary.blocks),
+            )
+            .filter(|block| {
+                matches!(
+                    block.state.kind,
+                    BlockKind::Torch
+                        | BlockKind::WallTorch
+                        | BlockKind::Repeater
+                        | BlockKind::Comparator
+                        | BlockKind::Lever
+                        | BlockKind::Lamp
+                )
+            })
+            .map(|block| Position::new(block.at.x, block.at.y, block.at.z))
+            .collect();
+        let mut partition = WorldPartition::default();
+        for (flat, &index) in compiled.world.cells().iter().enumerate() {
+            let state = compiled
+                .world
+                .palette()
+                .get(index)
+                .expect("valid world palette");
+            if state.kind == BlockKind::Air {
+                continue;
+            }
+            let (x, y, z) = compiled.world.decode(flat);
+            if explained.contains(&Position::new(x, y, z)) {
+                partition.graph_explained += 1;
+            } else {
+                match state.kind {
+                    BlockKind::RedstoneWire => partition.routing_fill_dust += 1,
+                    BlockKind::Repeater => partition.routing_fill_repeater += 1,
+                    BlockKind::Solid => partition.routing_fill_support += 1,
+                    kind => partition.unexplained.push(UnexplainedBlock {
+                        position: (x, y, z),
+                        kind,
+                    }),
+                }
+            }
+        }
+        return Ok(partition);
+    }
+
     // Independent restatement of `expand`'s own bare/isolated decision per
     // merge branch -- needed below because a bare branch legitimately has
     // zero owned nodes and zero world repeaters (see this module's own doc
