@@ -1,0 +1,175 @@
+{
+  "status": "rejected_local_physical_prototypes",
+  "reference_commit": "b4daaa4",
+  "certified": false,
+  "variants": {
+    "upper": [
+      {
+        "swapped": false,
+        "correct": false,
+        "first_failure": {
+          "address": 1,
+          "driver": [
+            false,
+            true,
+            true
+          ],
+          "events": [],
+          "expected": [
+            false,
+            false,
+            true
+          ],
+          "from": 0,
+          "lamp": [
+            false,
+            true,
+            true
+          ],
+          "phase": 1,
+          "ticks": 2,
+          "to": 1
+        }
+      },
+      {
+        "swapped": true,
+        "correct": false,
+        "first_failure": {
+          "address": 1,
+          "driver": [
+            false,
+            true,
+            true
+          ],
+          "events": [],
+          "expected": [
+            false,
+            true,
+            false
+          ],
+          "from": 0,
+          "lamp": [
+            false,
+            true,
+            true
+          ],
+          "phase": 1,
+          "ticks": 2,
+          "to": 1
+        }
+      }
+    ],
+    "lower-north": [
+      {
+        "swapped": false,
+        "correct": false,
+        "first_failure": {
+          "address": 2,
+          "driver": [
+            false,
+            true,
+            true
+          ],
+          "events": [],
+          "expected": [
+            false,
+            true,
+            false
+          ],
+          "from": 0,
+          "lamp": [
+            false,
+            true,
+            true
+          ],
+          "phase": 1,
+          "ticks": 2,
+          "to": 2
+        }
+      },
+      {
+        "swapped": true,
+        "correct": false,
+        "first_failure": {
+          "address": 1,
+          "driver": [
+            false,
+            true,
+            true
+          ],
+          "events": [],
+          "expected": [
+            false,
+            true,
+            false
+          ],
+          "from": 0,
+          "lamp": [
+            false,
+            true,
+            true
+          ],
+          "phase": 1,
+          "ticks": 2,
+          "to": 1
+        }
+      }
+    ],
+    "lower-south": [
+      {
+        "swapped": false,
+        "correct": false,
+        "first_failure": {
+          "address": 0,
+          "driver": [
+            true,
+            true,
+            true
+          ],
+          "events": [],
+          "expected": [
+            false,
+            true,
+            true
+          ],
+          "from": 0,
+          "lamp": [
+            true,
+            true,
+            true
+          ],
+          "phase": 0,
+          "ticks": 0,
+          "to": 0
+        }
+      },
+      {
+        "swapped": true,
+        "correct": false,
+        "first_failure": {
+          "address": 0,
+          "driver": [
+            true,
+            true,
+            true
+          ],
+          "events": [],
+          "expected": [
+            false,
+            true,
+            true
+          ],
+          "from": 0,
+          "lamp": [
+            true,
+            true,
+            true
+          ],
+          "phase": 0,
+          "ticks": 0,
+          "to": 0
+        }
+      }
+    ]
+  }
+}
