@@ -506,7 +506,7 @@ fn negative_product(words: [u8; 4]) -> Option<u8> {
     (mask.count_ones() == 2 && bits & mask == 0).then_some(outputs)
 }
 
-fn nor_library() -> crate::compile::topology::Library {
+fn nor_library(literals: bool) -> crate::compile::topology::Library {
     use crate::compile::topology::{
         ComparatorInverterContract, Library, LibraryEntry, LibraryEntryId, Template, TemplateNode,
     };
@@ -528,7 +528,26 @@ fn nor_library() -> crate::compile::topology::Library {
     let e = unary.entry_at(GateKind::Nor(1), 0).unwrap();
     let mut library = Library::new(BTreeMap::from([
         (GateKind::Nor(0), vec![copy(GateKind::Nor(0))]),
-        (GateKind::Nor(1), vec![copy(GateKind::Nor(1))]),
+        (
+            GateKind::Nor(1),
+            if literals {
+                vec![
+                    LibraryEntry {
+                        name: e.name,
+                        template: Template {
+                            nodes: e.template.nodes.clone(),
+                            inputs: e.template.inputs.clone(),
+                            internal_edges: e.template.internal_edges.clone(),
+                            output: e.template.output,
+                            embedding_hints: e.template.embedding_hints.clone(),
+                        },
+                    },
+                    copy(GateKind::Nor(1)),
+                ]
+            } else {
+                vec![copy(GateKind::Nor(1))]
+            },
+        ),
         (
             GateKind::Nor(2),
             vec![LibraryEntry {
@@ -557,14 +576,34 @@ fn nor_library() -> crate::compile::topology::Library {
             },
         )
         .unwrap();
+    if literals {
+        library
+            .register_comparator_inverter(
+                LibraryEntryId {
+                    kind: GateKind::Nor(1),
+                    ordinal: 0,
+                },
+                ComparatorInverterContract {
+                    comparator: TemplateNode::SecondTorch,
+                    rear_constant: TemplateNode::Torch,
+                    side_input: 0,
+                    second_side_input: None,
+                },
+            )
+            .unwrap();
+    }
     library
 }
 
 pub(super) fn library_for(words: [u8; 4]) -> crate::compile::topology::Library {
-    if mixed_product_literals(words).is_some() {
-        subtract_library(true)
+    if let Some((bits, _)) = mixed_product_literals(words) {
+        if bits == 0 {
+            nor_library(true)
+        } else {
+            subtract_library(true)
+        }
     } else if negative_product(words).is_some() {
-        nor_library()
+        nor_library(false)
     } else if positive_product(words).is_some() {
         subtract_library(true)
     } else if subtract_cube(words).is_some() {
@@ -895,7 +934,7 @@ fn mixed_product_literals(words: [u8; 4]) -> Option<(u8, [usize; 3])> {
         if terms.next().is_some() {
             return None;
         }
-        conditions[output] = if mask == 3 && bits & mask != 0 {
+        conditions[output] = if mask == 3 {
             if product_bits.is_some_and(|prior| prior != bits & mask) {
                 return None;
             }
@@ -913,6 +952,93 @@ fn mixed_product_literals(words: [u8; 4]) -> Option<(u8, [usize; 3])> {
     Some((product_bits?, conditions))
 }
 
+fn mixed_nor_candidate(
+    conditions: [usize; 3],
+) -> (
+    Netlist,
+    World,
+    super::super::candidate::ExpandedPhysicalCandidate,
+) {
+    let mut w = World::new(36, 6, 16);
+    let inputs = [Position::new(11, 2, 7), Position::new(11, 2, 5)];
+    for p in inputs {
+        put(&mut w, p.down(), BlockKind::Solid);
+        put(&mut w, p, BlockKind::Lever);
+    }
+    let names = ["shared_product", "negative_a", "negative_b"];
+    let mut gates = Vec::new();
+    let mut positions = BTreeMap::new();
+    for (condition, z) in [(0, 6), (1, 8), (2, 4)] {
+        if condition != 0 && !conditions.contains(&condition) {
+            continue;
+        }
+        let p = Position::new(11, 1, z);
+        put(&mut w, p.down(), BlockKind::Solid);
+        let mut c = BlockState::air();
+        c.kind = BlockKind::Comparator;
+        c.name = "minecraft:comparator".into();
+        c.facing = Some(Facing::East);
+        c.extra_properties.insert("mode".into(), "subtract".into());
+        w.set(p.x, p.y, p.z, c);
+        put(&mut w, Position::new(13, 1, z), BlockKind::Solid);
+        let torch = Position::new(12, 1, z);
+        put(&mut w, torch, BlockKind::WallTorch);
+        let mut t = w.get(torch.x, torch.y, torch.z).clone();
+        t.facing = Some(Facing::West);
+        w.set(torch.x, torch.y, torch.z, t);
+        gates.push(if condition == 0 {
+            Gate::nor(names[condition], &["a", "b"])
+        } else {
+            Gate::nor(names[condition], &[["a", "b"][condition - 1]])
+        });
+        positions.insert(names[condition].into(), p);
+        for x in (if condition == 0 { 0 } else { 6 })..=10 {
+            wire(&mut w, Position::new(x, 1, z));
+        }
+    }
+    let mut lamps = Vec::new();
+    let mut outputs = Vec::new();
+    for (output, condition) in conditions.into_iter().enumerate() {
+        let (lamp, name) = if condition >= 3 {
+            constant_output(
+                &mut w,
+                &mut gates,
+                &mut positions,
+                output,
+                condition == 4,
+                16,
+                6 + 3 * output as i32,
+            )
+        } else {
+            let (x, z, lamp_z) = match condition {
+                0 => (2 * output as i32, 5, 4),
+                1 => (6 + 2 * output as i32, 9, 10),
+                _ => (6 + 2 * output as i32, 3, 2),
+            };
+            wire(&mut w, Position::new(x, 1, z));
+            (Position::new(x, 1, lamp_z), names[condition].to_string())
+        };
+        put(&mut w, lamp.down(), BlockKind::Solid);
+        put(&mut w, lamp, BlockKind::Lamp);
+        lamps.push(lamp);
+        outputs.push(name);
+    }
+    let netlist = Netlist {
+        inputs: vec!["a".into(), "b".into()],
+        outputs,
+        gates,
+    };
+    super::typed_world_candidate_with_library(
+        netlist,
+        w,
+        inputs.to_vec(),
+        lamps,
+        positions,
+        true,
+        &nor_library(true),
+    )
+}
+
 fn mixed_product_candidate(
     product_bits: u8,
     conditions: [usize; 3],
@@ -921,6 +1047,9 @@ fn mixed_product_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
+    if product_bits == 0 {
+        return mixed_nor_candidate(conditions);
+    }
     let mut w = World::new(36, 6, 16);
     let composed = product_bits == 3;
     let positive = if composed {
@@ -1226,7 +1355,7 @@ fn product_candidate(
         positions,
         true,
         &if nor {
-            nor_library()
+            nor_library(false)
         } else {
             subtract_library(composed)
         },
@@ -1345,7 +1474,7 @@ mod tests {
     #[test]
     fn mixed_product_and_negative_literals_certify_shared_boundaries() {
         let mut checked = 0;
-        for product_bits in 1..=3u8 {
+        for product_bits in 0..=3u8 {
             for a in 0..5 {
                 for b in 0..5 {
                     for c in 0..5 {
@@ -1408,7 +1537,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 126);
+        assert_eq!(checked, 168);
         assert!(mixed_product_literals([0, 1, 2, 7]).is_none());
     }
 

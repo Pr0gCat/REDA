@@ -2395,6 +2395,14 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
     };
     for words in [
+        [7, 4, 2, 0], // Shared NOR and both negative literals.
+        [7, 2, 4, 0], // Exchange public negative literal ports.
+        [3, 2, 0, 0], // Shared NOR with negative a and constant low.
+        [7, 6, 4, 4], // Shared NOR with negative b and constant high.
+        [7, 5, 0, 0], // NOR and negative-a aliases.
+        [7, 0, 5, 0], // NOR and negative-b aliases.
+        [6, 0, 1, 0], // NOR aliases beside negative b.
+        [6, 1, 0, 0], // NOR aliases beside negative a.
         [6, 5, 2, 0], // Direct subtraction with both independent negative outputs.
         [6, 2, 5, 0], // Reverse input roles and negative output order.
         [6, 1, 6, 0], // Negative-a aliases beside a AND NOT b.
