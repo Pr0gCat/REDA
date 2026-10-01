@@ -1,0 +1,59 @@
+{
+  "shipping_comparison": {
+    "cases": 4096,
+    "control_correct": 4069,
+    "candidate_correct": 4096,
+    "truth_recovered": 27,
+    "regressed_on_correct_controls": 1045,
+    "improved_without_regression_on_correct_controls": 2978,
+    "tied_on_correct_controls": 46,
+    "all_fixed_controls_exact": true
+  },
+  "rejected_cover_shipping_comparison": {
+    "cases": 4096,
+    "control_correct": 4069,
+    "candidate_correct": 4084,
+    "truth_recovered": 27,
+    "regressed_on_correct_controls": 1044,
+    "improved_without_regression_on_correct_controls": 2967,
+    "tied_on_correct_controls": 46,
+    "all_fixed_controls_exact": true
+  },
+  "rejected_cover_vs_certified_player": {
+    "correct": 4084,
+    "failed": 12,
+    "regressed": 0,
+    "improved_without_regression": 328,
+    "tied": 3756
+  },
+  "production_experiment_reverted": true,
+  "production_baseline_commit": "e1a8adf",
+  "source_boundary": "two input bits; three ordered output occurrences",
+  "profile": "16 from/to pairs, setup+target, retained physical history, no hold",
+  "automatic_shipping_selection": false,
+  "artifacts": {
+    "generator-player-shipping-comparison-2026-10-01-backfeed-errors.log.gz": "389e990c7aa5320b995c11a3bfb8c6d3cd035fbcc70756403b3cb65e2287dbdc",
+    "generator-player-shipping-comparison-2026-10-01-controls.jsonl.gz": "13b0d13ecef27583ca2efcb207108dab453ec48aa15f335fe27eb26aa84c703b",
+    "generator-player-shipping-comparison-2026-10-01-family.jsonl.gz": "2789abbb5c37277174ba06ee020e136730df01e63d9e6e6487a71d24b52ec20d",
+    "generator-player-shipping-comparison-2026-10-01-quality.json.gz": "0e3a883119d7bff6834e07bd800b524e6b4a58194a3ea80b94eb4bb57a7c2dc3",
+    "generator-player-shipping-comparison-2026-10-01-rejected-cover-errors.log.gz": "3e37d6d2b02adf7733ed1c2f6d23e8fdd51d585b4e4adad299d01f63d628a8db",
+    "generator-player-shipping-comparison-2026-10-01-rejected-cover-family.jsonl.gz": "87c8acab0748429d876ffe43daac410864008d9832dd5b9ae50b1d9b12f8e60a",
+    "generator-player-shipping-comparison-2026-10-01-rejected-cover-quality.json.gz": "5f05cda5b495f077f4dba9c57599ca0f2fb8698e58c46018b02d0020ea544dc6",
+    "generator-player-shipping-comparison-2026-10-01-rejected-cover.patch.gz": "446001057964786d0998129c3f5c73d1886f057255f7f9f9cb64cd0f3a7cc8fc",
+    "generator-player-shipping-comparison-2026-10-01-shipping-replay.log.gz": "9c0933d74d75009df5314b4796f8cb4c917f974da13b57bc77f9bb53235442fe"
+  },
+  "shipping_full_raw_replay_byte_identical": true,
+  "comparator_quality_replay_byte_identical": true,
+  "rejected_cover_first_backfeed_scan": {
+    "cases": 4096,
+    "failed": 36
+  },
+  "final_checks": {
+    "python_compile": true,
+    "diff_check": true,
+    "producer_exit_code": 1,
+    "comparison_exit_code": 1,
+    "expected_rejection": true,
+    "production_source_identical_to_parent": true
+  }
+}

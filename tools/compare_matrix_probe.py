@@ -28,21 +28,25 @@ def quality(arm,words):
       width=b['tick']-a['tick'];q[kind+'_total_pulse_ticks']+=width;q[kind+'_worst_pulse_ticks']=max(q[kind+'_worst_pulse_ticks'],width)
  return q
 
-with gzip.open(sys.argv[1],'rt') as f:fixed=[json.loads(l) for l in f]
-with open(sys.argv[2]) as f:rows=[json.loads(l) for l in f]
-assert len(fixed)==len(rows)==4096
-cases=[]
-for encoding,(old,new) in enumerate(zip(fixed,rows)):
- assert old["encoding"]==encoding and old["words"]==[(encoding>>(3*i))&7 for i in range(4)]
- assert old['encoding']==new['encoding'] and old['words']==new['words']
- assert old['control']==new['control'],new['encoding']
- a=quality(old['control'],old['words'])
- b=quality(new['candidate'],new['words']) if new['candidate']['correct'] else None
- worse=[k for k in a if b[k]>a[k]] if b else None
- better=[k for k in a if b[k]<a[k]] if b else None
- cases.append({'encoding':new['encoding'],'words':new['words'],'control':a,'candidate':b,'regressed':worse,'improved':better})
-summary={'cases':4096,'correct':sum(c['candidate'] is not None for c in cases),'regressed':sum(bool(c['regressed']) for c in cases),'improved_without_regression':sum(bool(c['improved']) and not c['regressed'] for c in cases),'tied':sum(c['candidate'] is not None and not c['improved'] and not c['regressed'] for c in cases),'all_fixed_controls_exact':True}
-print(json.dumps({'summary':summary,'cases':cases}))
+def main():
+ with gzip.open(sys.argv[1],'rt') as f:fixed=[json.loads(l) for l in f]
+ with open(sys.argv[2]) as f:rows=[json.loads(l) for l in f]
+ assert len(fixed)==len(rows)==4096
+ cases=[]
+ for encoding,(old,new) in enumerate(zip(fixed,rows)):
+  assert old["encoding"]==encoding and old["words"]==[(encoding>>(3*i))&7 for i in range(4)]
+  assert old['encoding']==new['encoding'] and old['words']==new['words']
+  assert old['control']==new['control'],new['encoding']
+  a=quality(old['control'],old['words'])
+  b=quality(new['candidate'],new['words']) if new['candidate']['correct'] else None
+  worse=[k for k in a if b[k]>a[k]] if b else None
+  better=[k for k in a if b[k]<a[k]] if b else None
+  cases.append({'encoding':new['encoding'],'words':new['words'],'control':a,'candidate':b,'regressed':worse,'improved':better})
+ summary={'cases':4096,'correct':sum(c['candidate'] is not None for c in cases),'regressed':sum(bool(c['regressed']) for c in cases),'improved_without_regression':sum(bool(c['improved']) and not c['regressed'] for c in cases),'tied':sum(c['candidate'] is not None and not c['improved'] and not c['regressed'] for c in cases),'all_fixed_controls_exact':True}
+ print(json.dumps({'summary':summary,'cases':cases}))
 
-if summary["correct"] != 4096 or summary["regressed"]:
- sys.exit(1)
+ if summary["correct"] != 4096 or summary["regressed"]:
+  sys.exit(1)
+
+if __name__ == "__main__":
+ main()

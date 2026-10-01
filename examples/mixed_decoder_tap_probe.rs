@@ -116,6 +116,7 @@ fn main() {
             || a == "--certified-control"
             || a == "--player-driven"
             || a == "--player-typed"
+            || a == "--shipping-control"
     }) {
         let args: Vec<_> = std::env::args().collect();
         let start = args.get(2).map(|s| s.parse::<u16>().unwrap()).unwrap_or(0);
@@ -448,15 +449,20 @@ fn matrix_probe_world(
     prune: bool,
     source_delay: u8,
 ) -> serde_json::Value {
+    let shipping_control = !player && std::env::args().any(|a| a == "--shipping-control");
+    let typed_player = player
+        && std::env::args().any(|a| ["--player-typed", "--shipping-control"].contains(&a.as_str()));
     let certified_control = !player
         && std::env::args().any(|a| {
             ["--certified-control", "--player-driven", "--player-typed"].contains(&a.as_str())
         });
     let build = || {
-        if player && std::env::args().any(|a| a == "--player-typed") {
+        if typed_player {
             certified_matrix_impl(words, true)
         } else if player {
             player_matrix(words, pitch, prune, source_delay)
+        } else if shipping_control {
+            shipping_matrix(words)
         } else if certified_control {
             certified_matrix(words)
         } else {
@@ -467,7 +473,7 @@ fn matrix_probe_world(
     let fp = reda::compile::fragment_synth::benchmark::canonical_world_fingerprint;
     assert_eq!(fp(&w), fp(&build().0));
     let fingerprint = fp(&w);
-    let internal_truth = if player && std::env::args().any(|a| a == "--player-typed") {
+    let internal_truth = if typed_player {
         let result = certified_result(words, true);
         assert_eq!(fingerprint, fp(result.physical().world()));
         Some((
@@ -513,6 +519,7 @@ fn matrix_probe_world(
             .chain(internal_sites),
     );
     let mut phases = Vec::new();
+    let mut all_correct = true;
     for from in 0..4 {
         for to in 0..4 {
             for (phase, address) in [from, to].into_iter().enumerate() {
@@ -567,6 +574,10 @@ fn matrix_probe_world(
             "expected":expected,"driver":actual_driver,"lamp":actual_lamp,
             "events":sim.observations().iter().map(|e|json!({"label":e.label,"tick":e.tick-start,"value":e.value})).collect::<Vec<_>>()}));
                 if !correct {
+                    if shipping_control {
+                        all_correct = false;
+                        continue;
+                    }
                     if player {
                         return json!({"correct":false,"certified":false,"fingerprint":fingerprint,"phases":phases});
                     }
@@ -596,7 +607,7 @@ fn matrix_probe_world(
             }
         }
     }
-    json!({"correct":true,"certified":certified_control || (player && std::env::args().any(|a|a=="--player-typed")),"fingerprint":fingerprint,"phases":phases})
+    json!({"correct":all_correct,"certified":certified_control || typed_player,"fingerprint":fingerprint,"phases":phases})
 }
 
 fn certified_matrix(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Position; 3]) {
@@ -631,6 +642,16 @@ fn certified_result(
     words: [u8; 4],
     player: bool,
 ) -> reda::compile::fragment_synth::rewrite::CertifiedPhysicalRewrite {
+    let source = native_source(words);
+    if player {
+        reda::compile::fragment_synth::torch_row::compile_player_torch_row(&source, 1_000_000)
+    } else {
+        reda::compile::fragment_synth::torch_row::compile_torch_row(&source, 1_000_000)
+    }
+    .unwrap()
+}
+
+fn native_source(words: [u8; 4]) -> reda::compile::Netlist {
     use reda::{
         compile::lowering::lower_optimised,
         frontend::{compile_systemverilog, CompileOptions, SourceInput},
@@ -657,10 +678,41 @@ fn certified_result(
     source.outputs = (0..3)
         .map(|bit| ports[&format!("y{bit}")].clone())
         .collect();
-    if player {
-        reda::compile::fragment_synth::torch_row::compile_player_torch_row(&source, 1_000_000)
-    } else {
-        reda::compile::fragment_synth::torch_row::compile_torch_row(&source, 1_000_000)
-    }
-    .unwrap()
+    source
+}
+
+fn shipping_matrix(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Position; 3]) {
+    let mut source = native_source(words);
+    let public = source.outputs.clone();
+    let mut seen = std::collections::BTreeSet::new();
+    source.outputs.retain(|n| seen.insert(n.clone()));
+    let c = reda::compile::compile(&source).unwrap();
+    let position = |(x, y, z)| Position::new(x, y, z);
+    let inputs = source
+        .inputs
+        .iter()
+        .map(|n| position(c.input_positions[n]))
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    let drivers = public
+        .iter()
+        .map(|n| {
+            position(
+                *c.gate_output_positions
+                    .get(n)
+                    .or_else(|| c.input_positions.get(n))
+                    .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    let lamps = public
+        .iter()
+        .map(|n| position(c.output_positions[n]))
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    (c.world, inputs, drivers, lamps)
 }
