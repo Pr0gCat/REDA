@@ -2510,3 +2510,30 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
     )
     .is_err());
 }
+
+#[test]
+fn certified_rewrite_retains_actual_selected_techniques_and_placements() {
+    use reda::compile::fragment_synth::torch_row::compile_player_torch_row;
+    use reda::compile::topology::Primitive;
+    for words in [[7, 4, 2, 0], [7, 5, 3, 0], [6, 4, 2, 1]] {
+        let source = matrix_frontend_source(words);
+        let rewrite = compile_player_torch_row(&source, 1_000_000).unwrap();
+        let candidate = rewrite.implemented_candidate();
+        assert_eq!(candidate.instances.instances.len(), rewrite.implemented().gates.len());
+        assert!(candidate.instances.instances.iter().any(|instance|
+            instance.expanded.topology.primitives.iter().any(|primitive|
+                primitive.primitive == Primitive::Comparator)));
+        assert_eq!(candidate.compatibility_views(rewrite.implemented()).unwrap(),
+            *rewrite.implemented_observations());
+        for placement in candidate.placements.values() {
+            for block in &placement.blocks {
+                assert_eq!(&block.state,
+                    rewrite.physical().world().get(block.at.x, block.at.y, block.at.z));
+            }
+        }
+        // Mutation of a caller's clone cannot change the sealed manifest.
+        let mut detached = candidate.clone();
+        detached.placements.clear();
+        assert!(!rewrite.implemented_candidate().placements.is_empty());
+    }
+}

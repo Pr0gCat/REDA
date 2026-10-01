@@ -29,6 +29,7 @@ pub struct CertifiedPhysicalRewrite {
     rewrite: NetlistRewriteCertificate,
     equivalence: EquivalenceCertificate,
     physical: CertifiedWorld,
+    implemented_candidate: ExpandedPhysicalCandidate,
     observations: CompatibilityViews,
     source_inputs: Vec<(i32, i32, i32)>,
     source_outputs: Vec<(i32, i32, i32)>,
@@ -50,6 +51,12 @@ impl CertifiedPhysicalRewrite {
     }
     pub fn physical(&self) -> &CertifiedWorld {
         &self.physical
+    }
+    /// The exact techniques, placements, routes and observations certified
+    /// for implemented(). Consumers must use this manifest rather than expand
+    /// source() or substitute the default library's techniques.
+    pub fn implemented_candidate(&self) -> &ExpandedPhysicalCandidate {
+        &self.implemented_candidate
     }
     /// All internal positions belong to implemented(), never source().
     pub fn implemented_observations(&self) -> &CompatibilityViews {
@@ -146,6 +153,7 @@ pub fn realise_physical_rewrite(
         rewrite,
         equivalence,
         physical,
+        implemented_candidate: candidate.clone(),
         observations,
         source_inputs,
         source_outputs,
