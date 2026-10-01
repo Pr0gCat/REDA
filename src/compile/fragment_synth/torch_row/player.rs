@@ -830,15 +830,67 @@ enum ProductImplementation {
     Nor,
 }
 
-// Each exported condition must be one product or one negative literal. Shared
-// output occurrences use the same gate, while the internal side inverter keeps
-// a private conductor domain.
+// Reuse the ordinary high/low torch construction in a separate output domain.
+fn constant_output(
+    w: &mut World,
+    gates: &mut Vec<Gate>,
+    positions: &mut BTreeMap<String, Position>,
+    output: usize,
+    is_high: bool,
+    constant_offset: i32,
+    z: i32,
+) -> (Position, String) {
+    let hi = format!("constant_high{output}");
+    let at = Position::new(12 + constant_offset, if is_high { 2 } else { 4 }, z);
+    put(
+        w,
+        Position::new(13 + constant_offset, at.y, z),
+        BlockKind::Solid,
+    );
+    put(w, at, BlockKind::WallTorch);
+    let mut t = w.get(at.x, at.y, at.z).clone();
+    t.facing = Some(Facing::West);
+    w.set(at.x, at.y, at.z, t);
+    gates.push(Gate::nor(&hi, &[]));
+    positions.insert(hi.clone(), at);
+    let name = if is_high {
+        hi
+    } else {
+        wire(w, Position::new(12 + constant_offset, 3, z));
+        put(
+            w,
+            Position::new(11 + constant_offset, 2, z),
+            BlockKind::WallTorch,
+        );
+        let mut t = w.get(11 + constant_offset, 2, z).clone();
+        t.facing = Some(Facing::West);
+        w.set(11 + constant_offset, 2, z, t);
+        let lo = format!("constant_low{output}");
+        gates.push(Gate::nor(&lo, &[&hi]));
+        positions.insert(lo.clone(), Position::new(11 + constant_offset, 2, z));
+        lo
+    };
+    for x in 9 + constant_offset..=constant_offset + if is_high { 12 } else { 11 } {
+        wire(w, Position::new(x, 1, z));
+    }
+    (Position::new(8 + constant_offset, 1, z), name)
+}
+
+// Product, negative literal, and constant output dependencies are recognised
+// from the cover. Repeated conditions share a producer, not a public terminal.
 fn mixed_product_literals(words: [u8; 4]) -> Option<[usize; 3]> {
     let rows = program_rows(words);
     let mut conditions = [0; 3];
     for output in 0..3 {
         let mut terms = rows.iter().filter(|r| r.3 & (1 << output) != 0);
-        let &(_, bits, mask, _) = terms.next()?;
+        let Some(&(_, bits, mask, _)) = terms.next() else {
+            conditions[output] = if words.iter().all(|w| w & (1 << output) != 0) {
+                4
+            } else {
+                3
+            };
+            continue;
+        };
         if terms.next().is_some() {
             return None;
         }
@@ -850,7 +902,7 @@ fn mixed_product_literals(words: [u8; 4]) -> Option<[usize; 3]> {
             return None;
         };
     }
-    (conditions.contains(&0) && conditions.iter().any(|c| *c != 0)).then_some(conditions)
+    (conditions.contains(&0) && conditions.iter().any(|c| matches!(c, 1 | 2))).then_some(conditions)
 }
 
 fn mixed_product_candidate(
@@ -860,7 +912,7 @@ fn mixed_product_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
-    let mut w = World::new(18, 4, 12);
+    let mut w = World::new(36, 6, 16);
     let inputs = [Position::new(9, 2, 6), Position::new(7, 2, 4)];
     for p in inputs {
         put(&mut w, p.down(), BlockKind::Solid);
@@ -948,21 +1000,38 @@ fn mixed_product_candidate(
     }
     // Aliases share the producer but retain distinct public terminals.
     let mut lamp_sites = [Position::new(0, 0, 0); 3];
+    let mut outputs = Vec::new();
     for (output, condition) in conditions.into_iter().enumerate() {
-        let (x, z) = match condition {
-            0 => (3 + 2 * output as i32, 9),
-            1 => (12 + 2 * output as i32, 4),
-            _ => (2 * output as i32, 4),
+        let (lamp, name) = if condition >= 3 {
+            constant_output(
+                &mut w,
+                &mut gates,
+                &mut positions,
+                output,
+                condition == 4,
+                16,
+                6 + 3 * output as i32,
+            )
+        } else {
+            let (x, z) = match condition {
+                0 => (3 + 2 * output as i32, 9),
+                1 => (12 + 2 * output as i32, 4),
+                _ => (2 * output as i32, 4),
+            };
+            wire(&mut w, Position::new(x, 1, z));
+            (
+                Position::new(x, 1, if condition == 0 { 10 } else { 3 }),
+                names[condition].to_string(),
+            )
         };
-        wire(&mut w, Position::new(x, 1, z));
-        let lamp = Position::new(x, 1, if condition == 0 { 10 } else { 3 });
         put(&mut w, lamp.down(), BlockKind::Solid);
         put(&mut w, lamp, BlockKind::Lamp);
         lamp_sites[output] = lamp;
+        outputs.push(name);
     }
     let netlist = Netlist {
         inputs: vec!["a".into(), "b".into()],
-        outputs: conditions.map(|i| names[i].into()).to_vec(),
+        outputs,
         gates,
     };
     super::typed_world_candidate_with_library(
@@ -1062,41 +1131,15 @@ fn product_candidate(
             wire(&mut w, Position::new(5, 1, z));
             (Position::new(4, 1, z), name.clone())
         } else {
-            let hi = format!("constant_high{output}");
-            let is_high = high & (1 << output) != 0;
-            let at = Position::new(12 + constant_offset, if is_high { 2 } else { 4 }, z);
-            put(
+            constant_output(
                 &mut w,
-                Position::new(13 + constant_offset, at.y, z),
-                BlockKind::Solid,
-            );
-            put(&mut w, at, BlockKind::WallTorch);
-            let mut t = w.get(at.x, at.y, at.z).clone();
-            t.facing = Some(Facing::West);
-            w.set(at.x, at.y, at.z, t);
-            gates.push(Gate::nor(&hi, &[]));
-            positions.insert(hi.clone(), at);
-            let name = if is_high {
-                hi
-            } else {
-                wire(&mut w, Position::new(12 + constant_offset, 3, z));
-                put(
-                    &mut w,
-                    Position::new(11 + constant_offset, 2, z),
-                    BlockKind::WallTorch,
-                );
-                let mut t = w.get(11 + constant_offset, 2, z).clone();
-                t.facing = Some(Facing::West);
-                w.set(11 + constant_offset, 2, z, t);
-                let lo = format!("constant_low{output}");
-                gates.push(Gate::nor(&lo, &[&hi]));
-                positions.insert(lo.clone(), Position::new(11 + constant_offset, 2, z));
-                lo
-            };
-            for x in 9 + constant_offset..=constant_offset + if is_high { 12 } else { 11 } {
-                wire(&mut w, Position::new(x, 1, z));
-            }
-            (Position::new(8 + constant_offset, 1, z), name)
+                &mut gates,
+                &mut positions,
+                output as usize,
+                high & (1 << output) != 0,
+                constant_offset,
+                z,
+            )
         };
         put(&mut w, lamp.down(), BlockKind::Solid);
         put(&mut w, lamp, BlockKind::Lamp);
@@ -1235,11 +1278,11 @@ mod tests {
     #[test]
     fn mixed_product_and_negative_literals_certify_shared_boundaries() {
         let mut checked = 0;
-        for a in 0..3 {
-            for b in 0..3 {
-                for c in 0..3 {
+        for a in 0..5 {
+            for b in 0..5 {
+                for c in 0..5 {
                     let conditions = [a, b, c];
-                    if !conditions.contains(&0) || conditions.iter().all(|i| *i == 0) {
+                    if !conditions.contains(&0) || !conditions.iter().any(|i| matches!(i, 1 | 2)) {
                         continue;
                     }
                     let words = std::array::from_fn(|address| {
@@ -1250,7 +1293,8 @@ mod tests {
                                 let value = match condition {
                                     0 => address == 3,
                                     1 => address & 1 == 0,
-                                    _ => address & 2 == 0,
+                                    2 => address & 2 == 0,
+                                    _ => *condition == 4,
                                 };
                                 word | if value { 1 << bit } else { 0 }
                             })
@@ -1290,7 +1334,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 18);
+        assert_eq!(checked, 42);
         assert!(mixed_product_literals([0, 1, 2, 7]).is_none());
     }
 

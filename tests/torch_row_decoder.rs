@@ -2395,6 +2395,10 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
     };
     for words in [
+        [2, 0, 2, 1], // Mixed product/negative-a with constant low.
+        [6, 4, 6, 5], // Mixed product/negative-a with constant high.
+        [2, 2, 0, 1], // Mixed product/negative-b with constant low.
+        [6, 6, 4, 5], // Mixed product/negative-b with constant high.
         [6, 4, 2, 1], // Product and both negative literals share primary supports.
         [6, 2, 4, 1], // Exchange which public port observes each negative literal.
         [6, 6, 0, 1], // Negative aliases retain separate public terminals.
