@@ -57,9 +57,18 @@ fn source_x(rows: &[(usize, u8, u8, u8)]) -> i32 {
     )
 }
 
+fn needs_input_buffer(rows: &[(usize, u8, u8, u8)]) -> bool {
+    // Retain timing isolation for torch controls and reconverging data outputs.
+    // Repeater-only controls with one data torch per output have at most three
+    // rows; the 16-block input position still reaches every real input tap.
+    rows.iter().any(|r| r.1 & r.2 != 0)
+        || (0..3).any(|bit| rows.iter().filter(|r| r.3 & (1 << bit) != 0).count() > 1)
+}
+
 fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Position; 3]) {
     let rows = program_rows(words);
     let source_x = source_x(&rows);
+    let buffered = needs_input_buffer(&rows);
     let dual = rows.len() == 6;
     let mut w = World::new((source_x + 5).max(20), 10, 21);
     let address_z = [4, 7];
@@ -75,14 +84,16 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
         for x in 0..source_x {
             wire(&mut w, Position::new(x, 5, z));
         }
-        put(
-            &mut w,
-            Position::new(source_x - 1, 5, z),
-            BlockKind::Repeater,
-        );
-        let mut r = w.get(source_x - 1, 5, z).clone();
-        r.facing = Some(Facing::East);
-        w.set(source_x - 1, 5, z, r);
+        if buffered {
+            put(
+                &mut w,
+                Position::new(source_x - 1, 5, z),
+                BlockKind::Repeater,
+            );
+            let mut r = w.get(source_x - 1, 5, z).clone();
+            r.facing = Some(Facing::East);
+            w.set(source_x - 1, 5, z, r);
+        }
         if dual {
             for p in [
                 Position::new(22, 5, z),
@@ -189,6 +200,7 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
     let mut terms: [Vec<String>; 3] = std::array::from_fn(|_| Vec::new());
     let rows = program_rows(words);
     let source_x = source_x(&rows);
+    let buffered = needs_input_buffer(&rows);
     let dual = rows.len() == 6;
     let high = words.into_iter().fold(7, |a, b| a & b);
     let mut add = |gate: Gate, at: Position| {
@@ -206,6 +218,9 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
             continue;
         }
         let z = 4 + 3 * bit as i32;
+        if !buffered {
+            continue;
+        }
         if dual {
             let right = format!("source{bit}_right");
             let left = format!("source{bit}_left");
@@ -230,7 +245,11 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
                 continue;
             }
             let name = format!("row{address}_mismatch{bit}");
-            let source = format!("source{bit}");
+            let source = if buffered {
+                format!("source{bit}")
+            } else {
+                ["a", "b"][bit].to_string()
+            };
             let z = 4 + 3 * bit as i32;
             if bits & (1 << bit) != 0 {
                 add(Gate::nor(&name, &[&source]), Position::new(x, 4, z - 1));
@@ -335,6 +354,23 @@ mod tests {
         realise::{realise_and_verify_expanded, CertificationError},
     };
     use crate::compile::verification::ExpandedPhysicalError;
+
+    #[test]
+    fn input_buffers_protect_torch_and_reconverging_paths() {
+        for words in [[1, 1, 1, 0], [0, 0, 0, 1], [0, 0, 1, 1]] {
+            assert!(needs_input_buffer(&program_rows(words)));
+        }
+        for words in [[1, 1, 0, 0], [1, 0, 0, 0]] {
+            let rows = program_rows(words);
+            assert!(!needs_input_buffer(&rows));
+            assert!(rows
+                .iter()
+                .all(|r| source_x(&rows) - (2 + 3 * r.0 as i32 + 2) <= 15));
+            let (netlist, _, candidate) = candidate(words);
+            assert!(!netlist.gates.iter().any(|g| g.output.starts_with("source")));
+            realise_and_verify_expanded(&candidate, &netlist, &typed_matrix_library()).unwrap();
+        }
+    }
 
     #[test]
     fn every_wide_cover_observes_a_real_shared_carrier() {

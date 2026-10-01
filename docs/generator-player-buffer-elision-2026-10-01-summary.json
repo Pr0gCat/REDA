@@ -1,0 +1,92 @@
+{
+  "baseline_commit": "143a40c",
+  "entry": "compile_player_torch_row",
+  "automatic_selection_enabled": false,
+  "source_boundary": {
+    "inputs": 2,
+    "ordered_output_occurrences": 3,
+    "combinational_only": true
+  },
+  "rejected_span_only_experiment": {
+    "cases": 4096,
+    "control_correct": 4096,
+    "candidate_correct": 4096,
+    "truth_recovered": 0,
+    "regressed_on_correct_controls": 155,
+    "improved_without_regression_on_correct_controls": 3573,
+    "tied_on_correct_controls": 368,
+    "all_fixed_controls_exact": true,
+    "quality_control_arm": "frozen_certified_candidate"
+  },
+  "qualified_structural_elision": {
+    "cases": 4096,
+    "control_correct": 4096,
+    "candidate_correct": 4096,
+    "truth_recovered": 0,
+    "regressed_on_correct_controls": 0,
+    "improved_without_regression_on_correct_controls": 117,
+    "tied_on_correct_controls": 3979,
+    "all_fixed_controls_exact": true,
+    "quality_control_arm": "frozen_certified_candidate"
+  },
+  "shipping_comparison": {
+    "cases": 4096,
+    "control_correct": 4069,
+    "candidate_correct": 4096,
+    "truth_recovered": 27,
+    "regressed_on_correct_controls": 1019,
+    "improved_without_regression_on_correct_controls": 3023,
+    "tied_on_correct_controls": 27,
+    "all_fixed_controls_exact": true
+  },
+  "source_rewrite_instance_equivalence_and_expanded_strict": true,
+  "all_implemented_nodes_checked_in_every_phase": true,
+  "target_transitions": 65536,
+  "setup_transitions": 65536,
+  "every_world_rebuild_fingerprint_exact": true,
+  "complete_repeat_byte_identical": true,
+  "unchanged_candidate_records_exact": 3979,
+  "frozen_nine_metric_caps_passed": 2744,
+  "control_total_settle_ticks": 416536,
+  "candidate_total_settle_ticks": 414032,
+  "control_worst_settle_ticks": 10,
+  "candidate_worst_settle_ticks": 10,
+  "player_unit_regressions_passed": 4,
+  "targeted_integration_tests_passed": 2,
+  "fresh_native_yosys_source_cases": 10,
+  "full_decoder_suite_rerun": false,
+  "known_prior_fixture_failure_unchanged": {
+    "test": "decoded_rows_match_rom_truth_and_record_hazards_against_existing_generator",
+    "line": 197,
+    "actual": 10,
+    "expected": 8,
+    "assertion_changed": false
+  },
+  "simulator_semantics_changed": false,
+  "frozen_baseline_sha256": "a6bbd76055333aa8e9a3368785ac48d30550ef47e6353d55c46557157bbdc0b4",
+  "frozen_caps_sha256": "98d956a57118412b7c7cd21a78cbc494363cbf18515bc8160a28b6fef7a9c9ba",
+  "artifacts": {
+    "generator-player-buffer-elision-2026-10-01-buffered-73-internal.jsonl.gz": "f780502222123bc30b633da77ee444511720237e85b4ec3f3290c29e5a992908",
+    "generator-player-buffer-elision-2026-10-01-burnout-witness.json": "1a5701cd33eaf9fee9ce94ddda839cc4f2c91aa8082e69c6e91c09f7abad8feb",
+    "generator-player-buffer-elision-2026-10-01-family.jsonl.gz": "efdf21116fc1da485a362438da54d9bf8201b0b6bb6ec0da0b9389f694800c03",
+    "generator-player-buffer-elision-2026-10-01-frontend-tests.log.gz": "c1d8f4e149396d032b4e136b9c89da9e5bf10c9285ba716d84cf391bf5b33b2b",
+    "generator-player-buffer-elision-2026-10-01-quality.json.gz": "07463486e2900a90a449ca576e1d0ce5f6f76ce5470b3b35b2b317d3e25a80aa",
+    "generator-player-buffer-elision-2026-10-01-recognition-tests.log.gz": "6172fa777eddc1672eec98c3426604f7a19edcc18c32bea35c8b21e5f9531b0a",
+    "generator-player-buffer-elision-2026-10-01-rejected-73-internal.jsonl.gz": "db327125255860d66edea2aaaaa8838f6dfefd6baad1934027d2abfb2aacb9ec",
+    "generator-player-buffer-elision-2026-10-01-rejected-family.jsonl.gz": "3267d8cbeed9df97710859ab33dbd35ce1e5ff15c47217b7ea4d6d2c7fb60342",
+    "generator-player-buffer-elision-2026-10-01-rejected-quality.json.gz": "0e25e23f4100b8068d2bd6e1f32ece6a4b9917370823fa2c759184fbe4fbb185",
+    "generator-player-buffer-elision-2026-10-01-rejected.patch.gz": "f6bd8f8c80cb394a69b29c86cdf6277298333df5a30099f57c8ec45057990e16",
+    "generator-player-buffer-elision-2026-10-01-replay.log.gz": "d3d0229b9a1dfb19358a7c92da5948afc075ef32b3328b4ccac6dda812532fc7",
+    "generator-player-buffer-elision-2026-10-01-shipping-quality.json.gz": "84bc7f1f180de230e24d0e80ca9b1fc4fe12cefa47a797a4db3034c65adfca71",
+    "generator-player-buffer-elision-2026-10-01-unit-tests.log.gz": "9fd4eb3b8b1f65fb20c2d5d33fc2654484de6b2aacae8fe0c59dc6fb06be07d9",
+    "generator-player-buffer-elision-2026-10-01-setup-check.json.gz": "68eaf9ec7dbd038bbd207366b908cb2b23d02bdf5a21194a3bd6820c582f6549"
+  },
+  "additional_setup_quality_check": {
+    "cases": 4096,
+    "setup_regressed": 0,
+    "candidate_setup_driver_glitches": 0,
+    "candidate_setup_lamp_glitches": 0,
+    "baseline_caps_unchanged": true,
+    "additional_check_only": true
+  }
+}
