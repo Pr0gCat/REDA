@@ -1,0 +1,60 @@
+{
+  "player_original_samples": [
+    {
+      "family": "decode003",
+      "correct": true,
+      "phases": 512,
+      "quality": {
+        "worst_settle_ticks": 32,
+        "total_settle_ticks": 1222,
+        "driver_glitches": 10,
+        "driver_single_input_glitches": 0,
+        "driver_change_ticks": 28,
+        "driver_total_pulse_ticks": 72,
+        "driver_worst_pulse_ticks": 24,
+        "lamp_glitches": 10,
+        "lamp_single_input_glitches": 0,
+        "lamp_change_ticks": 32,
+        "lamp_total_pulse_ticks": 102,
+        "lamp_worst_pulse_ticks": 27
+      },
+      "original_schematic_sha256": "ba0d8ba981b5c9dd2f1e4adf26413c6058a12f9f72933c4ecf064ea08e778a8f",
+      "fingerprint": "35d2a1361842812a78c32f3e3fb511223294fcb55ba9f487bd9042ba0b474879"
+    },
+    {
+      "family": "encode003",
+      "correct": true,
+      "phases": 512,
+      "quality": {
+        "worst_settle_ticks": 19,
+        "total_settle_ticks": 1442,
+        "driver_glitches": 88,
+        "driver_single_input_glitches": 12,
+        "driver_change_ticks": 18,
+        "driver_total_pulse_ticks": 224,
+        "driver_worst_pulse_ticks": 14,
+        "lamp_glitches": 4,
+        "lamp_single_input_glitches": 4,
+        "lamp_change_ticks": 19,
+        "lamp_total_pulse_ticks": 44,
+        "lamp_worst_pulse_ticks": 11
+      },
+      "original_schematic_sha256": "5cd4e0fe2b8eab183a5d5d925ffc4d2703f6796d8c055799577e9093f4b7505f",
+      "fingerprint": "3c6ad31244bc2e9daea081f14de6eb54884c4c16a59c7cb47c9d3a0753d95b3f"
+    }
+  ],
+  "mixed_matrix_experiment": {
+    "status": "rejected",
+    "control_correct": 4096,
+    "candidate_correct": 8,
+    "candidate_incorrect": 4088,
+    "production_changed": false,
+    "raw_sha256": "8990ee9bb11156d736d2f6501807e9e99ea7091ee7a70e453c02076f02cdb331",
+    "final_repeat_matches_initial_physics": true,
+    "artifact": "generator-player-design-analysis-2026-10-01-rejected-matrix.jsonl.gz"
+  },
+  "decode002": {
+    "status": "refused_unmodeled_stained_glass",
+    "original_schematic_sha256": "14582b017b2d39821a3d0629a85717efd7912915b2063dcff69c32d5936f8d36"
+  }
+}
