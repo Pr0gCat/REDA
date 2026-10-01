@@ -594,7 +594,35 @@ fn typed_world_candidate_with_library(
         y: p.y,
         z: p.z,
     };
-    let graph = InstanceGraph::one_to_one(&netlist, library).unwrap();
+    let mut implementations = BTreeMap::new();
+    for (index, gate) in netlist.gates.iter().enumerate() {
+        let entry = crate::compile::topology::LibraryEntryId {
+            kind: gate.kind,
+            ordinal: 0,
+        };
+        let p = positions[&gate.output];
+        if library.comparator_inverter_contract(entry).is_some()
+            && world.get(p.x, p.y, p.z).kind == BlockKind::WallTorch
+        {
+            let ordinal = library
+                .entries_for(gate.kind)
+                .iter()
+                .position(|e| {
+                    e.template.nodes.len() == 1
+                        && e.template.nodes[0].1 == crate::compile::topology::Primitive::Torch
+                        && e.template.output == Some(e.template.nodes[0].0)
+                        && e.template.internal_edges.is_empty()
+                        && e.template.inputs.len() == gate.inputs.len()
+                })
+                .expect("wall torch placement needs a matching declared library technique");
+            implementations.insert(
+                InstanceId(index as u32),
+                ImplementationKey::Library(library.entry_id_at(gate.kind, ordinal).unwrap()),
+            );
+        }
+    }
+    let graph = InstanceGraph::one_to_one_with_implementations(&netlist, library, &implementations)
+        .unwrap();
     let mut candidate = ExpandedPhysicalCandidate::empty(graph, PortPlacements::default());
     let placed = |p: Position| PlacedBlock {
         at: anchor(p),

@@ -360,7 +360,7 @@ pub(super) fn candidate(
 fn shared_negative_input(words: [u8; 4]) -> Option<usize> {
     let rows = program_rows(words);
     match rows.as_slice() {
-        [(_, bits, mask, word)] if *bits == 0 && mask.count_ones() == 1 && *word == 7 => {
+        [(_, bits, mask, word)] if *bits == 0 && mask.count_ones() == 1 && *word != 0 => {
             Some(mask.trailing_zeros() as usize)
         }
         _ => None,
@@ -380,22 +380,42 @@ fn comparator_library() -> crate::compile::topology::Library {
         ComparatorInverterContract, Library, LibraryEntry, LibraryEntryId, Primitive, Template,
         TemplateNode,
     };
-    let mut library = Library::new(BTreeMap::from([(
-        GateKind::Nor(1),
-        vec![LibraryEntry {
-            name: "comparator inverter experiment",
+    let default = Library::default_library();
+    let copy_entry = |kind| {
+        let e = default.entry_at(kind, 0).unwrap();
+        LibraryEntry {
+            name: e.name,
             template: Template {
-                nodes: vec![
-                    (TemplateNode::Torch, Primitive::Torch),
-                    (TemplateNode::SecondTorch, Primitive::Comparator),
-                ],
-                internal_edges: vec![(TemplateNode::Torch, TemplateNode::SecondTorch)],
-                inputs: vec![TemplateNode::SecondTorch],
-                output: Some(TemplateNode::SecondTorch),
-                embedding_hints: vec![],
+                nodes: e.template.nodes.clone(),
+                internal_edges: e.template.internal_edges.clone(),
+                inputs: e.template.inputs.clone(),
+                output: e.template.output,
+                embedding_hints: e.template.embedding_hints.clone(),
             },
-        }],
-    )]));
+        }
+    };
+    let mut library = Library::new(BTreeMap::from([
+        (
+            GateKind::Nor(1),
+            vec![
+                LibraryEntry {
+                    name: "comparator inverter experiment",
+                    template: Template {
+                        nodes: vec![
+                            (TemplateNode::Torch, Primitive::Torch),
+                            (TemplateNode::SecondTorch, Primitive::Comparator),
+                        ],
+                        internal_edges: vec![(TemplateNode::Torch, TemplateNode::SecondTorch)],
+                        inputs: vec![TemplateNode::SecondTorch],
+                        output: Some(TemplateNode::SecondTorch),
+                        embedding_hints: vec![],
+                    },
+                },
+                copy_entry(GateKind::Nor(1)),
+            ],
+        ),
+        (GateKind::Nor(0), vec![copy_entry(GateKind::Nor(0))]),
+    ]));
     library
         .register_comparator_inverter(
             LibraryEntryId {
@@ -412,13 +432,14 @@ fn comparator_library() -> crate::compile::topology::Library {
     library
 }
 fn shared_negative_candidate(
+    words: [u8; 4],
     bit: usize,
 ) -> (
     Netlist,
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
-    let mut w = World::new(8, 4, 12);
+    let mut w = World::new(16, 6, 12);
     let mut inputs = [Position::new(6, 2, 10); 2];
     inputs[bit] = Position::new(3, 2, 2);
     for p in inputs {
@@ -438,26 +459,66 @@ fn shared_negative_candidate(
     let mut t = w.get(4, 1, 3).clone();
     t.facing = Some(Facing::West);
     w.set(4, 1, 3, t);
-    for z in 3..=9 {
+    let high = words.into_iter().fold(7, |a, b| a & b);
+    let variable = program_rows(words)[0].3;
+    let last = (0..3).filter(|b| variable & (1 << b) != 0).max().unwrap();
+    for z in 3..=3 + 3 * last {
         wire(&mut w, Position::new(2, 1, z));
     }
-    let lamps = [3, 6, 9].map(|z| Position::new(0, 1, z));
-    for p in lamps {
-        wire(&mut w, Position::new(1, 1, p.z));
-        put(&mut w, p.down(), BlockKind::Solid);
-        put(&mut w, p, BlockKind::Lamp);
+    let mut lamps = Vec::new();
+    let mut outputs = Vec::new();
+    let mut gates = vec![Gate::nor("shared_inverse", &[["a", "b"][bit]])];
+    let mut positions = BTreeMap::from([("shared_inverse".into(), cmp)]);
+    for output in 0..3 {
+        let z = 3 + 3 * output;
+        let (lamp, name) = if variable & (1 << output) != 0 {
+            wire(&mut w, Position::new(1, 1, z));
+            (Position::new(0, 1, z), "shared_inverse".to_string())
+        } else {
+            let hi = format!("constant_high{output}");
+            let is_high = high & (1 << output) != 0;
+            let at = Position::new(12, if is_high { 2 } else { 4 }, z);
+            put(&mut w, Position::new(13, at.y, z), BlockKind::Solid);
+            put(&mut w, at, BlockKind::WallTorch);
+            let mut t = w.get(at.x, at.y, at.z).clone();
+            t.facing = Some(Facing::West);
+            w.set(at.x, at.y, at.z, t);
+            gates.push(Gate::nor(&hi, &[]));
+            positions.insert(hi.clone(), at);
+            let name = if is_high {
+                hi
+            } else {
+                wire(&mut w, Position::new(12, 3, z));
+                put(&mut w, Position::new(11, 2, z), BlockKind::WallTorch);
+                let mut t = w.get(11, 2, z).clone();
+                t.facing = Some(Facing::West);
+                w.set(11, 2, z, t);
+                let lo = format!("constant_low{output}");
+                gates.push(Gate::nor(&lo, &[&hi]));
+                positions.insert(lo.clone(), Position::new(11, 2, z));
+                lo
+            };
+            for x in 9..=if is_high { 12 } else { 11 } {
+                wire(&mut w, Position::new(x, 1, z));
+            }
+            (Position::new(8, 1, z), name)
+        };
+        put(&mut w, lamp.down(), BlockKind::Solid);
+        put(&mut w, lamp, BlockKind::Lamp);
+        lamps.push(lamp);
+        outputs.push(name);
     }
     let netlist = Netlist {
         inputs: vec!["a".into(), "b".into()],
-        outputs: vec!["shared_inverse".into(); 3],
-        gates: vec![Gate::nor("shared_inverse", &[["a", "b"][bit]])],
+        outputs,
+        gates,
     };
     super::typed_world_candidate_with_library(
         netlist,
         w,
         inputs.to_vec(),
-        lamps.to_vec(),
-        BTreeMap::from([("shared_inverse".into(), cmp)]),
+        lamps,
+        positions,
         true,
         &comparator_library(),
     )
@@ -471,7 +532,7 @@ fn build_candidate(
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
     if let Some(bit) = shared_negative_input(words) {
-        return shared_negative_candidate(bit);
+        return shared_negative_candidate(words, bit);
     }
     let (netlist, positions) = player_logic(words);
     let (world, inputs, _, lamps) = player_world(words);
@@ -705,6 +766,41 @@ mod tests {
     }
 
     #[test]
+    fn mixed_constant_outputs_use_their_declared_implementations() {
+        let mut checked = 0;
+        for bit in 0..2 {
+            for variable in 1..8u8 {
+                for high in 0..8u8 {
+                    if variable & high != 0 {
+                        continue;
+                    }
+                    let words = std::array::from_fn(|address| {
+                        high | if address & (1 << bit) == 0 {
+                            variable
+                        } else {
+                            0
+                        }
+                    });
+                    let (source, _) = player_logic(words);
+                    let result =
+                        super::super::compile_player_torch_row(&source, 1_000_000).unwrap();
+                    assert_eq!(
+                        result
+                            .physical()
+                            .world()
+                            .positions_of(BlockKind::Comparator)
+                            .count(),
+                        1
+                    );
+                    assert_eq!(result.source_output_positions().len(), 3);
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 38);
+    }
+
+    #[test]
     fn input_buffers_protect_torch_and_reconverging_paths() {
         for words in [[1, 1, 1, 0], [0, 0, 0, 1], [1, 1, 0, 1]] {
             assert!(needs_input_buffer(&program_rows(words)));
@@ -723,7 +819,7 @@ mod tests {
                 .all(|r| source_x(&rows) - (row_x(r.0) + 2) <= 15));
             let (netlist, _, candidate) = candidate(words);
             assert!(!netlist.gates.iter().any(|g| g.output.starts_with("source")));
-            realise_and_verify_expanded(&candidate, &netlist, &typed_matrix_library()).unwrap();
+            realise_and_verify_expanded(&candidate, &netlist, &library_for(words)).unwrap();
         }
     }
 
