@@ -384,8 +384,17 @@ fn connection_target_owner_matches(
                         || (connection == req.side_input
                             && branch.terminal.kind == RouteTerminalKind::ComparatorSideSupport);
                     return matches
-                        && matches!(source, PhysicalEndpointId::PrimaryInput(_))
-                        && owner == TerminalCellOwner::Boundary(source);
+                        && match source {
+                            PhysicalEndpointId::PrimaryInput(_) => {
+                                owner == TerminalCellOwner::Boundary(source)
+                            }
+                            PhysicalEndpointId::PrimitiveOutput(_)
+                                if req.allow_inverter_side && connection == req.side_input =>
+                            {
+                                owner == TerminalCellOwner::Route(route)
+                            }
+                            _ => false,
+                        };
                 }
             }
             let Some(req) = &instance.expanded.topology.comparator_inverter else {

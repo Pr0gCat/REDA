@@ -67,6 +67,8 @@ pub struct ComparatorInverterRequirements {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ComparatorSubtractRequirements {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub allow_inverter_side: bool,
     pub comparator: PrimitiveId,
     pub rear_input: ConnectionId,
     pub side_input: ConnectionId,
@@ -606,6 +608,7 @@ fn instantiate_library_entry(
         library
             .comparator_subtract_contract(entry_id)
             .map(|c| ComparatorSubtractRequirements {
+                allow_inverter_side: c.allow_inverter_side,
                 comparator: role_ids[&c.comparator],
                 rear_input: ConnectionId::External {
                     instance,
@@ -862,6 +865,7 @@ mod tests {
             }],
         )]));
         let contract = ComparatorSubtractContract {
+            allow_inverter_side: false,
             comparator: TemplateNode::Torch,
             rear_input: 0,
             side_input: 1,
@@ -928,6 +932,32 @@ mod tests {
             assert!(super::prove_topology_semantics(&corrupt, GateKind::AndNot).is_err());
         }
         assert!(super::prove_topology_semantics(&topology, GateKind::Nor(2)).is_err());
+        assert!(!serde_json::to_string(&topology)
+            .unwrap()
+            .contains("allow_inverter_side"));
+        let primary_revision = crate::compile::revisions::cell_library_revision(&library);
+        library
+            .register_comparator_subtract(
+                id,
+                ComparatorSubtractContract {
+                    allow_inverter_side: true,
+                    ..contract
+                },
+            )
+            .unwrap();
+        let composed = make(&library);
+        assert_ne!(
+            crate::compile::revisions::cell_library_revision(&library),
+            primary_revision
+        );
+        assert_ne!(composed.fingerprint, topology.fingerprint);
+        assert!(serde_json::to_string(&composed)
+            .unwrap()
+            .contains("allow_inverter_side"));
+        assert_eq!(
+            super::prove_topology_semantics(&composed, GateKind::AndNot),
+            Ok(())
+        );
         let mut ordinary = Library::default_library();
         assert!(ordinary.register_comparator_subtract(id, contract).is_err());
     }

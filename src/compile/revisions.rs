@@ -52,6 +52,8 @@ struct ComparatorInverterDescriptor {
 
 #[derive(Serialize)]
 struct ComparatorSubtractDescriptor {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    allow_inverter_side: bool,
     comparator: String,
     rear_input: usize,
     side_input: usize,
@@ -203,6 +205,7 @@ fn cell_library_descriptor(library: &Library) -> CellLibraryRevisionDescriptor {
                             ordinal: ordinal as u16,
                         })
                         .map(|c| ComparatorSubtractDescriptor {
+                            allow_inverter_side: c.allow_inverter_side,
                             comparator: template_node_name(c.comparator),
                             rear_input: c.rear_input,
                             side_input: c.side_input,

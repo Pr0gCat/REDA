@@ -640,6 +640,7 @@ pub struct ComparatorInverterContract {
 /// Conditional Boolean subtraction requires independently certified 0/15 inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ComparatorSubtractContract {
+    pub allow_inverter_side: bool,
     pub comparator: TemplateNode,
     pub rear_input: usize,
     pub side_input: usize,

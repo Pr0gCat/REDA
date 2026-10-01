@@ -202,7 +202,7 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::RouteContinuity,
-                semantic_version: 4,
+                semantic_version: 5,
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Connectivity,
@@ -210,7 +210,7 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Coupling,
-                semantic_version: 5,
+                semantic_version: 6,
             },
         ],
     }
@@ -718,23 +718,24 @@ fn comparator_interface_branch(
             let Some(binding) = candidate.connections.get(&id) else {
                 return false;
             };
-            if route.source != binding.source
-                || !matches!(route.source, PhysicalEndpointId::PrimaryInput(_))
-                || branch.terminal.kind != expected_kind
-            {
+            if route.source != binding.source || branch.terminal.kind != expected_kind {
                 return false;
             }
             let Some((at, rear, side)) = subtract_cell_inputs(candidate, req) else {
                 return false;
             };
-            let input = if id == req.rear_input { rear } else { side };
+            let support = if id == req.rear_input {
+                rear.down()
+            } else {
+                side.support(&emitted.world).unwrap_or(side.at())
+            };
             return branch.terminal.at
                 == Anchor {
-                    x: input.x,
-                    y: input.y - 1,
-                    z: input.z,
+                    x: support.x,
+                    y: support.y,
+                    z: support.z,
                 }
-                && comparator_subtract_cell_isolated(&emitted.world, at, rear, side).is_ok();
+                && comparator_subtract_drivers_isolated(&emitted.world, at, rear, side).is_ok();
         }
         let Some(req) = &instance.expanded.topology.comparator_inverter else {
             continue;
@@ -1507,7 +1508,7 @@ fn verify_comparator_isolation(
             };
             let (at, rear, side) =
                 subtract_cell_inputs(candidate, req).ok_or_else(|| fail(Position::new(0, 0, 0)))?;
-            comparator_subtract_cell_isolated(&emitted.world, at, rear, side).map_err(fail)?;
+            comparator_subtract_drivers_isolated(&emitted.world, at, rear, side).map_err(fail)?;
         }
         let Some(req) = &instance.expanded.topology.comparator_inverter else {
             continue;
@@ -1542,7 +1543,7 @@ fn verify_comparator_isolation(
 fn subtract_cell_inputs(
     candidate: &ExpandedPhysicalCandidate,
     req: &super::fragment_synth::topology::ComparatorSubtractRequirements,
-) -> Option<(Position, Position, Position)> {
+) -> Option<(Position, Position, ComparatorSupportDriver)> {
     let cell = candidate
         .placements
         .get(&req.comparator)?
@@ -1559,20 +1560,87 @@ fn subtract_cell_inputs(
             .find(|b| b.state.kind == BlockKind::Lever)?;
         Some(Position::new(lever.at.x, lever.at.y, lever.at.z))
     };
+    let side_source = candidate.connections.get(&req.side_input)?.source;
+    let side = match side_source {
+        PhysicalEndpointId::PrimaryInput(_) => {
+            ComparatorSupportDriver::FloorLever(input(req.side_input)?)
+        }
+        PhysicalEndpointId::PrimitiveOutput(id) if req.allow_inverter_side => {
+            let driver = candidate
+                .placements
+                .get(&id)?
+                .blocks
+                .iter()
+                .find(|b| b.state.kind == BlockKind::Comparator)?;
+            ComparatorSupportDriver::Comparator(Position::new(
+                driver.at.x,
+                driver.at.y,
+                driver.at.z,
+            ))
+        }
+        _ => return None,
+    };
     Some((
         Position::new(cell.at.x, cell.at.y, cell.at.z),
         input(req.rear_input)?,
-        input(req.side_input)?,
+        side,
     ))
 }
 
+#[derive(Clone, Copy)]
+enum ComparatorSupportDriver {
+    FloorLever(Position),
+    Comparator(Position),
+}
+impl ComparatorSupportDriver {
+    fn at(self) -> Position {
+        match self {
+            Self::FloorLever(at) | Self::Comparator(at) => at,
+        }
+    }
+    fn support(self, world: &World) -> Result<Position, Position> {
+        let at = self.at();
+        let block = world.get(at.x, at.y, at.z);
+        match self {
+            Self::FloorLever(_)
+                if block.kind == BlockKind::Lever
+                    && block.face == Some(crate::redstone::world::block::Face::Floor) =>
+            {
+                Ok(at.down())
+            }
+            Self::Comparator(_)
+                if block.kind == BlockKind::Comparator
+                    && block.extra_properties.get("mode").map(String::as_str)
+                        == Some("subtract") =>
+            {
+                Ok(at.offset(block.facing.ok_or(at)?.opposite()))
+            }
+            _ => Err(at),
+        }
+    }
+}
+
+#[cfg(test)]
 fn comparator_subtract_cell_isolated(
     world: &World,
     at: Position,
     rear_input: Position,
     side_input: Position,
 ) -> Result<(), Position> {
-    use crate::redstone::world::block::Face;
+    comparator_subtract_drivers_isolated(
+        world,
+        at,
+        rear_input,
+        ComparatorSupportDriver::FloorLever(side_input),
+    )
+}
+
+fn comparator_subtract_drivers_isolated(
+    world: &World,
+    at: Position,
+    rear_input: Position,
+    side_driver: ComparatorSupportDriver,
+) -> Result<(), Position> {
     let comparator = world.get(at.x, at.y, at.z);
     if comparator.kind != BlockKind::Comparator
         || comparator.extra_properties.get("mode").map(String::as_str) != Some("subtract")
@@ -1586,22 +1654,23 @@ fn comparator_subtract_cell_isolated(
         _ => return Err(at),
     };
     let rear = rear_input.down();
-    let side = side_input.down();
+    let side = side_driver.support(world)?;
     if rear != at.offset(facing) {
         return Err(rear_input);
     }
-    if !sides.into_iter().any(|f| side == at.offset(f)) || rear_input == side_input {
-        return Err(side_input);
+    if !sides.into_iter().any(|f| side == at.offset(f)) || rear_input == side_driver.at() {
+        return Err(side_driver.at());
     }
-    for (input, support, strong_only) in [(rear_input, rear, false), (side_input, side, true)] {
-        let lever = world.get(input.x, input.y, input.z);
-        if lever.kind != BlockKind::Lever
-            || lever.face != Some(Face::Floor)
+    for (driver, support, strong_only) in [
+        (ComparatorSupportDriver::FloorLever(rear_input), rear, false),
+        (side_driver, side, true),
+    ] {
+        if driver.support(world)? != support
             || world.get(support.x, support.y, support.z).kind != BlockKind::Solid
         {
-            return Err(input);
+            return Err(driver.at());
         }
-        reject_potential_block_drivers(world, support, Some(input), strong_only)?;
+        reject_potential_block_drivers(world, support, Some(driver.at()), strong_only)?;
     }
     let unused = sides
         .into_iter()
@@ -1992,6 +2061,73 @@ fn union_routes(parent: &mut BTreeMap<RouteId, RouteId>, left: RouteId, right: R
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn composed_subtract_side_requires_a_direct_strong_comparator_output() {
+        use crate::redstone::{
+            simulator::position::Position,
+            world::{
+                block::{BlockKind, BlockState, Face, Facing},
+                storage::World,
+            },
+        };
+        let mut world = World::new(16, 4, 16);
+        let mut solid = BlockState::air();
+        solid.kind = BlockKind::Solid;
+        for x in 0..16 {
+            for z in 0..16 {
+                world.set(x, 0, z, solid.clone());
+            }
+        }
+        let at = Position::new(8, 1, 6);
+        let driver = Position::new(8, 1, 4);
+        let rear = Position::new(9, 2, 6);
+        for (p, facing) in [(at, Facing::East), (driver, Facing::North)] {
+            let mut b = BlockState::air();
+            b.kind = BlockKind::Comparator;
+            b.facing = Some(facing);
+            b.extra_properties.insert("mode".into(), "subtract".into());
+            world.set(p.x, p.y, p.z, b);
+        }
+        let mut lever = BlockState::air();
+        lever.kind = BlockKind::Lever;
+        lever.face = Some(Face::Floor);
+        world.set(rear.x, rear.y, rear.z, lever);
+        for p in [rear.down(), Position::new(8, 1, 5)] {
+            world.set(p.x, p.y, p.z, solid.clone());
+        }
+        let check = |w: &World| {
+            super::comparator_subtract_drivers_isolated(
+                w,
+                at,
+                rear,
+                super::ComparatorSupportDriver::Comparator(driver),
+            )
+        };
+        assert_eq!(check(&world), Ok(()));
+        for mutation in 0..4 {
+            let mut bad = world.clone();
+            match mutation {
+                0 | 1 => {
+                    let mut b = bad.get(driver.x, driver.y, driver.z).clone();
+                    if mutation == 0 {
+                        b.facing = Some(Facing::South);
+                    } else {
+                        b.extra_properties.insert("mode".into(), "compare".into());
+                    }
+                    bad.set(driver.x, driver.y, driver.z, b);
+                }
+                2 => {
+                    let mut b = BlockState::air();
+                    b.kind = BlockKind::Repeater;
+                    b.facing = Some(Facing::West);
+                    bad.set(7, 1, 5, b);
+                }
+                _ => bad.set(8, 1, 5, BlockState::air()),
+            }
+            assert!(check(&bad).is_err());
+        }
+    }
+
     #[test]
     fn subtract_isolation_distinguishes_rear_weak_power_and_side_strong_power() {
         use crate::redstone::{

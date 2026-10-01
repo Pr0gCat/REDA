@@ -521,6 +521,54 @@ fn validate_comparator_subtract_sources(
         return Err(bad);
     }
     for (source, is_rear) in [(rear, true), (side, false)] {
+        if !is_rear && requirements.allow_inverter_side {
+            if let PhysicalEndpointId::PrimitiveOutput(id) = source {
+                // Only an independently selected, certified 0/15 inverter
+                // guarantees the exact analog high level needed by subtraction.
+                if id == requirements.comparator
+                    || !candidate.instances.instances.iter().any(|instance| {
+                        instance
+                            .expanded
+                            .topology
+                            .comparator_inverter
+                            .as_ref()
+                            .is_some_and(|r| {
+                                r.comparator == id
+                                    && r.mode == "subtract"
+                                    && r.rear_strength == 15
+                                    && r.side_high_strength == 15
+                            })
+                    })
+                {
+                    return Err(bad);
+                }
+                let driver = candidate
+                    .placements
+                    .get(&id)
+                    .ok_or(bad)?
+                    .blocks
+                    .iter()
+                    .find(|b| b.state.kind == BlockKind::Comparator)
+                    .ok_or(bad)?;
+                let driver_at = Position::new(driver.at.x, driver.at.y, driver.at.z);
+                let support = driver_at.offset(driver.state.facing.ok_or(bad)?.opposite());
+                if !sides.into_iter().any(|f| support == at.offset(f)) {
+                    return Err(bad);
+                }
+                let binding = &candidate.connections[&requirements.side_input];
+                let route = candidate.routes.get(&binding.route).ok_or(bad)?;
+                if !route.cells.iter().any(|b| {
+                    b.at == (Anchor {
+                        x: support.x,
+                        y: support.y,
+                        z: support.z,
+                    }) && b.state.kind == BlockKind::Solid
+                }) {
+                    return Err(bad);
+                }
+                continue;
+            }
+        }
         if !matches!(source, PhysicalEndpointId::PrimaryInput(_)) {
             return Err(bad);
         }
@@ -1908,6 +1956,7 @@ mod tests {
             .insert("mode".into(), "subtract".into());
         candidate.placements.insert(cmp, placement);
         let req = super::super::topology::ComparatorSubtractRequirements {
+            allow_inverter_side: false,
             comparator: cmp,
             rear_input: fixture.external,
             side_input: fixture.internal,
@@ -2074,6 +2123,7 @@ mod tests {
         let topology = &mut candidate.instances.instances[0].expanded.topology;
         topology.comparator_subtract =
             Some(super::super::topology::ComparatorSubtractRequirements {
+                allow_inverter_side: false,
                 comparator: topology.primitives[0].id,
                 rear_input: topology.connections[0].id,
                 side_input: topology.connections[0].id,

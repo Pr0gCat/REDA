@@ -2395,6 +2395,10 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
     };
     for words in [
+        [0, 0, 0, 1], // Comparator AND with one selected variable output.
+        [0, 0, 0, 3], // Comparator AND shares its condition across two outputs.
+        [2, 2, 2, 7], // Comparator AND and constant high output.
+        [1, 1, 1, 7], // Constant first port preserves ordered AND outputs.
         [0, 7, 0, 0], // Direct subtract cube: a AND NOT b with shared output fanout.
         [0, 0, 7, 0], // Reverse the comparator rear/side input roles.
         [2, 7, 2, 2], // Mixed-sign cube coexists with constant high output.

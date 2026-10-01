@@ -850,9 +850,23 @@ fn typed_world_candidate_with_library(
         } else {
             None
         };
+        let inverter_side = candidate.instances.instances.iter().any(|instance| {
+            instance
+                .expanded
+                .topology
+                .comparator_subtract
+                .as_ref()
+                .is_some_and(|req| {
+                    req.allow_inverter_side
+                        && Some(req.side_input) == connection
+                        && matches!(source, PhysicalEndpointId::PrimitiveOutput(_))
+                })
+        });
         let root = if let Some(_at) = direct_comparator {
             if matches!(source, PhysicalEndpointId::PrimaryInput(_)) {
                 p.down()
+            } else if inverter_side {
+                p.offset(world.get(p.x, p.y, p.z).facing.unwrap().opposite())
             } else {
                 p
             }
@@ -1076,6 +1090,8 @@ fn typed_world_candidate_with_library(
                         } else {
                             crate::compile::routing::RouteTerminalKind::ComparatorSideSupport
                         }
+                    } else if inverter_side {
+                        crate::compile::routing::RouteTerminalKind::ComparatorSideSupport
                     } else {
                         crate::compile::routing::RouteTerminalKind::ComparatorRearSource
                     }

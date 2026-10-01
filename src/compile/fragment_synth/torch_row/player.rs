@@ -408,14 +408,18 @@ fn subtract_cube(words: [u8; 4]) -> Option<(usize, u8)> {
         .then_some(((bits & mask).trailing_zeros() as usize, outputs))
 }
 
-fn subtract_library() -> crate::compile::topology::Library {
+fn subtract_library(composed: bool) -> crate::compile::topology::Library {
     use crate::compile::topology::{
         ComparatorSubtractContract, Library, LibraryEntry, LibraryEntryId, Primitive, Template,
         TemplateNode,
     };
-    let default = super::typed_matrix_library();
-    let copy = |kind| {
-        let e = default.entry_at(kind, 0).unwrap();
+    let default = if composed {
+        comparator_library()
+    } else {
+        super::typed_matrix_library()
+    };
+    let copy = |kind, ordinal| {
+        let e = default.entry_at(kind, ordinal).unwrap();
         LibraryEntry {
             name: e.name,
             template: Template {
@@ -428,8 +432,15 @@ fn subtract_library() -> crate::compile::topology::Library {
         }
     };
     let mut library = Library::new(BTreeMap::from([
-        (GateKind::Nor(0), vec![copy(GateKind::Nor(0))]),
-        (GateKind::Nor(1), vec![copy(GateKind::Nor(1))]),
+        (GateKind::Nor(0), vec![copy(GateKind::Nor(0), 0)]),
+        (
+            GateKind::Nor(1),
+            if composed {
+                vec![copy(GateKind::Nor(1), 0), copy(GateKind::Nor(1), 1)]
+            } else {
+                vec![copy(GateKind::Nor(1), 0)]
+            },
+        ),
         (
             GateKind::AndNot,
             vec![LibraryEntry {
@@ -451,18 +462,45 @@ fn subtract_library() -> crate::compile::topology::Library {
                 ordinal: 0,
             },
             ComparatorSubtractContract {
+                allow_inverter_side: composed,
                 comparator: TemplateNode::Torch,
                 rear_input: 0,
                 side_input: 1,
             },
         )
         .unwrap();
+    if composed {
+        library
+            .register_comparator_inverter(
+                LibraryEntryId {
+                    kind: GateKind::Nor(1),
+                    ordinal: 0,
+                },
+                crate::compile::topology::ComparatorInverterContract {
+                    comparator: TemplateNode::SecondTorch,
+                    rear_constant: TemplateNode::Torch,
+                    side_input: 0,
+                },
+            )
+            .unwrap();
+    }
     library
 }
 
+fn positive_product(words: [u8; 4]) -> Option<u8> {
+    let rows = program_rows(words);
+    if rows.len() != 1 {
+        return None;
+    }
+    let (_, bits, mask, outputs) = rows[0];
+    (mask.count_ones() == 2 && bits & mask == mask).then_some(outputs)
+}
+
 pub(super) fn library_for(words: [u8; 4]) -> crate::compile::topology::Library {
-    if subtract_cube(words).is_some() {
-        subtract_library()
+    if positive_product(words).is_some() {
+        subtract_library(true)
+    } else if subtract_cube(words).is_some() {
+        subtract_library(false)
     } else if disjoint_literal_inputs(words).is_some() {
         comparator_library()
     } else {
@@ -721,13 +759,18 @@ fn subtract_candidate(
     words: [u8; 4],
     positive: usize,
     variable: u8,
+    composed: bool,
 ) -> (
     Netlist,
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
     let mut w = World::new(32, 6, 16);
-    let mut inputs = [Position::new(8, 2, 5); 2];
+    let mut inputs = [if composed {
+        Position::new(7, 2, 4)
+    } else {
+        Position::new(8, 2, 5)
+    }; 2];
     inputs[positive] = Position::new(9, 2, 6);
     for p in inputs {
         put(&mut w, p.down(), BlockKind::Solid);
@@ -754,6 +797,23 @@ fn subtract_candidate(
         inputs: vec![["a", "b"][positive].into(), ["a", "b"][1 - positive].into()],
     }];
     let mut positions = BTreeMap::from([(name.clone(), cmp)]);
+    if composed {
+        let inverter = "side_inverter".to_string();
+        gates[0].inputs[1] = inverter.clone();
+        gates.insert(0, Gate::nor(&inverter, &[["a", "b"][1 - positive]]));
+        let at = Position::new(8, 1, 4);
+        positions.insert(inverter, at);
+        let mut c = w.get(cmp.x, cmp.y, cmp.z).clone();
+        c.facing = Some(Facing::North);
+        w.set(at.x, at.y, at.z, c);
+        put(&mut w, at.down(), BlockKind::Solid);
+        put(&mut w, Position::new(8, 1, 5), BlockKind::Solid);
+        put(&mut w, Position::new(8, 1, 2), BlockKind::Solid);
+        put(&mut w, Position::new(8, 1, 3), BlockKind::WallTorch);
+        let mut t = w.get(8, 1, 3).clone();
+        t.facing = Some(Facing::South);
+        w.set(8, 1, 3, t);
+    }
     let mut lamps = Vec::new();
     let mut outputs = Vec::new();
     let high = words.into_iter().fold(7, |a, b| a & b);
@@ -817,7 +877,7 @@ fn subtract_candidate(
         lamps,
         positions,
         true,
-        &subtract_library(),
+        &subtract_library(composed),
     )
 }
 
@@ -828,8 +888,11 @@ fn build_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
+    if let Some(variable) = positive_product(words) {
+        return subtract_candidate(words, 0, variable, true);
+    }
     if let Some((positive, variable)) = subtract_cube(words) {
-        return subtract_candidate(words, positive, variable);
+        return subtract_candidate(words, positive, variable, false);
     }
     if let Some(clusters) = disjoint_literal_inputs(words) {
         return shared_negative_candidate(words, &clusters);
@@ -925,6 +988,76 @@ mod tests {
         assert_eq!(checked, 38);
         for words in [[0, 0, 0, 7], [7, 0, 0, 0], [0, 7, 7, 0], [0, 1, 2, 0]] {
             assert!(subtract_cube(words).is_none());
+        }
+    }
+
+    #[test]
+    fn positive_product_certifies_constants_fanout_and_retained_history() {
+        let mut checked = 0;
+
+        for variable in 1..8u8 {
+            for high in 0..8u8 {
+                if high & variable != 0 {
+                    continue;
+                }
+                let words =
+                    std::array::from_fn(|address| high | if address == 3 { variable } else { 0 });
+                assert_eq!(positive_product(words), Some(variable));
+                let (source, _) = player_logic(words);
+                let result = super::super::compile_player_torch_row(&source, 1_000_000)
+                    .unwrap_or_else(|e| panic!("positive-product {words:?}: {e:?}"));
+                let replay = || {
+                    let mut sim = crate::redstone::simulator::Simulator::new(
+                        result.physical().world().clone(),
+                    );
+                    sim.run_until_stable(2000).unwrap();
+                    sim.attach_observer(
+                        result
+                            .source_output_positions()
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &(x, y, z))| (Position::new(x, y, z), format!("output{i}"))),
+                    );
+                    let mut records = Vec::new();
+                    for from in 0..4 {
+                        for to in 0..4 {
+                            for address in [from, to] {
+                                sim.reset_observer();
+                                let start = sim.current_tick();
+                                for (input, &(x, y, z)) in
+                                    result.source_input_positions().iter().enumerate()
+                                {
+                                    let mut lever = sim.world().get(x, y, z).clone();
+                                    lever.lit = address & (1 << input) != 0;
+                                    sim.world_mut().set(x, y, z, lever);
+                                }
+                                let ticks = sim.run_until_stable(2000).unwrap();
+                                for (output, &(x, y, z)) in
+                                    result.source_output_positions().iter().enumerate()
+                                {
+                                    assert_eq!(sim.world().get(x,y,z).lit, words[address] & (1 << output) != 0,
+                                    "positive-product {words:?} {from}->{to} address {address} output {output}");
+                                }
+                                records.push((
+                                    ticks,
+                                    sim.observations()
+                                        .iter()
+                                        .map(|e| (e.label.clone(), e.tick - start, e.value))
+                                        .collect::<Vec<_>>(),
+                                ));
+                            }
+                        }
+                    }
+                    records
+                };
+                assert_eq!(replay(), replay());
+                checked += 1;
+            }
+        }
+
+        assert_eq!(checked, 19);
+        for words in [[0, 7, 0, 0], [7, 0, 0, 0], [0, 7, 7, 0], [0, 1, 2, 0]] {
+            assert!(positive_product(words).is_none());
         }
     }
 
