@@ -1,0 +1,62 @@
+{
+  "baseline_commit": "31c2a80",
+  "status": "rejected_and_reverted",
+  "rule": "When the structural timing guard permits unbuffered inputs, locate each input with a negative single-literal cube next to that cube, on the north side of its address rail. Replace that negative control repeater with a south-side descending dust connection; data NOR reads the original input directly.",
+  "initial_rejection": "Putting the lever in the middle of the rail cut the conductor path; moving it to the side preserves the rail.",
+  "smoke": {
+    "encoding": 65,
+    "certified": true,
+    "correct": true,
+    "driver_ticks_before": 4,
+    "driver_ticks_after": 2,
+    "lamp_off_ticks_before": 8,
+    "lamp_off_ticks_after": 6
+  },
+  "full_family_acceptance_pending": false,
+  "complete_family": {
+    "cases": 4096,
+    "control_correct": 4096,
+    "candidate_correct": 4096,
+    "truth_recovered": 0,
+    "regressed_on_correct_controls": 55,
+    "improved_without_regression_on_correct_controls": 241,
+    "tied_on_correct_controls": 3800,
+    "all_fixed_controls_exact": true,
+    "quality_control_arm": "frozen_certified_candidate"
+  },
+  "burnout_witness": {
+    "encoding": 9,
+    "words": [
+      1,
+      1,
+      0,
+      0
+    ],
+    "transition": [
+      2,
+      1
+    ],
+    "phase": 1,
+    "phase_start_relative_to_initial_settle": 42,
+    "prior_genuine_torch_changes": [
+      2,
+      8,
+      11,
+      17,
+      20,
+      26,
+      29,
+      35,
+      38
+    ],
+    "normal_on_time_relative": 44,
+    "actual_on_time_relative": 62,
+    "recent_change_count_at_normal_on": 9,
+    "driver_last_change_before": 4,
+    "driver_last_change_after": 20,
+    "worst_settle_before": 8,
+    "worst_settle_after": 21,
+    "mechanism": "More than eight genuine changes within the 60-tick window block torch turn-on. At relative tick 62, the first recorded change at tick 2 leaves the strict window, allowing recovery. Simulator behavior unchanged."
+  },
+  "next_direction": "A faster negative path must avoid the switching torch history bottleneck, or prove a physically justified structure that avoids it across the complete frozen transition workload. Moving the source alone is insufficient."
+}
