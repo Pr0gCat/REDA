@@ -108,6 +108,50 @@ fn probe(relay: bool, inverted: bool) -> serde_json::Value {
     json!({"relay":relay,"inverted":inverted,"fingerprint":fingerprint,"correct":correct,"certified":false,"phases":phases})
 }
 fn main() {
+    if std::env::args().any(|a| {
+        a == "--player-matrix"
+            || a == "--player-isolated"
+            || a == "--player-pruned"
+            || a == "--player-restored"
+            || a == "--certified-control"
+    }) {
+        let args: Vec<_> = std::env::args().collect();
+        let start = args.get(2).map(|s| s.parse::<u16>().unwrap()).unwrap_or(0);
+        let end = args
+            .get(3)
+            .map(|s| s.parse::<u16>().unwrap())
+            .unwrap_or(4096);
+        assert!(start < end && end <= 4096);
+        let mut failed = false;
+        for encoding in start..end {
+            let words = std::array::from_fn(|i| ((encoding >> (3 * i)) & 7) as u8);
+            let control = matrix_probe(words, false);
+            let pitch = if args[1] != "--player-matrix" { 3 } else { 2 };
+            let candidate = matrix_probe_world(
+                words,
+                false,
+                true,
+                pitch,
+                args[1] == "--player-pruned"
+                    || args[1] == "--player-restored"
+                    || args[1] == "--certified-control",
+                if args[1] == "--player-restored" || args[1] == "--certified-control" {
+                    1
+                } else {
+                    0
+                },
+            );
+            failed |= control["correct"] != true || candidate["correct"] != true;
+            println!(
+                "{}",
+                json!({"encoding":encoding,"words":words,"control":control,"candidate":candidate})
+            );
+        }
+        if failed {
+            std::process::exit(1);
+        }
+        return;
+    }
     if std::env::args().any(|a| a == "--matrix-witness") {
         println!(
             "{}",
@@ -214,10 +258,198 @@ fn matrix(words: [u8; 4], mixed: bool) -> (World, [Position; 2], [Position; 3], 
 }
 
 fn matrix_probe(words: [u8; 4], mixed: bool) -> serde_json::Value {
-    let (w, inputs, drivers, lamps) = matrix(words, mixed);
+    matrix_probe_world(words, mixed, false, 2, false, 0)
+}
+
+// Player DECODE003's 3-wide stencil, lifted above a programmable torch matrix.
+// No existing player world is pasted and no source/module name is recognized.
+fn player_matrix(
+    words: [u8; 4],
+    pitch: i32,
+    prune: bool,
+    source_delay: u8,
+) -> (World, [Position; 2], [Position; 3], [Position; 3]) {
+    assert!([2, 3].contains(&pitch));
+    let mut w = World::new(20, 8, 19);
+    let address_z = [4, 4 + pitch];
+    let inputs = address_z.map(|z| Position::new(16, 5, z));
+    for z in address_z {
+        for x in 0..=16 {
+            wire(&mut w, Position::new(x, 5, z));
+        }
+        put(&mut w, Position::new(16, 5, z), BlockKind::Lever);
+    }
+    let always_high = if prune {
+        words.into_iter().fold(7, |a, b| a & b)
+    } else {
+        0
+    };
+    let mut word_lines = Vec::new();
+    if source_delay > 0 && words.into_iter().any(|word| word & !always_high != 0) {
+        for z in address_z {
+            put(&mut w, Position::new(15, 5, z), BlockKind::Repeater);
+            let mut r = w.get(15, 5, z).clone();
+            r.facing = Some(Facing::East);
+            r.delay = source_delay;
+            w.set(15, 5, z, r);
+        }
+    }
+    for (address, word) in words.into_iter().enumerate() {
+        let word = word & !always_high;
+        if prune && word == 0 {
+            continue;
+        }
+        let x = 2 + 3 * address as i32;
+        word_lines.push(Position::new(x, 3, 8));
+        for z in 3..=16 {
+            wire(&mut w, Position::new(x, 3, z));
+        }
+        for (bit, z) in address_z.into_iter().enumerate() {
+            if address & (1 << bit) != 0 {
+                let at = Position::new(x, 4, z - 1);
+                put(&mut w, at, BlockKind::WallTorch);
+                let mut t = w.get(at.x, at.y, at.z).clone();
+                t.facing = Some(Facing::North);
+                w.set(at.x, at.y, at.z, t);
+            } else {
+                // Raw bus passes over the relay instead of connecting to its output.
+                wire(&mut w, Position::new(x, 6, z));
+                wire(&mut w, Position::new(x + 1, 6, z));
+                put(&mut w, Position::new(x + 1, 3, z), BlockKind::Solid);
+                put(&mut w, Position::new(x + 1, 4, z), BlockKind::Repeater);
+                let mut r = w.get(x + 1, 4, z).clone();
+                r.facing = Some(Facing::East);
+                w.set(x + 1, 4, z, r);
+            }
+        }
+        for (bit, z) in [10, 13, 16].into_iter().enumerate() {
+            if word & (1 << bit) != 0 {
+                put(&mut w, Position::new(x + 1, 2, z), BlockKind::WallTorch);
+            }
+        }
+    }
+    let drivers = [10, 13, 16].map(|z| Position::new(16, 1, z));
+    let lamps = [10, 13, 16].map(|z| Position::new(17, 1, z));
+    for z in [10, 13, 16] {
+        for x in 1..=16 {
+            wire(&mut w, Position::new(x, 1, z));
+        }
+        put(&mut w, Position::new(17, 0, z), BlockKind::Solid);
+        put(&mut w, Position::new(17, 1, z), BlockKind::Lamp);
+    }
+    for (bit, z) in [10, 13, 16].into_iter().enumerate() {
+        if always_high & (1 << bit) != 0 {
+            put(&mut w, Position::new(17, 2, z), BlockKind::Solid);
+            put(&mut w, Position::new(16, 2, z), BlockKind::WallTorch);
+            let mut t = w.get(16, 2, z).clone();
+            t.facing = Some(Facing::West);
+            w.set(16, 2, z, t);
+        }
+    }
+    if pitch == 3 {
+        let mut domains = address_z.map(|z| Position::new(14, 5, z)).to_vec();
+        domains.extend(word_lines);
+        domains.extend(drivers);
+        verify_player_isolation(&w, &domains);
+    }
+    (w, inputs, drivers, lamps)
+}
+
+// Necessary local guards for this stencil, not a sealed physical certificate.
+fn verify_player_isolation(w: &World, domains: &[Position]) {
+    use reda::redstone::{
+        rules::taxonomy::{power_emitted_toward, PowerOutput},
+        simulator::{
+            component::torch_support_position, connectivity::dust_connections, position::HORIZONTAL,
+        },
+    };
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let mut owners = HashMap::new();
+    for (id, &start) in domains.iter().enumerate() {
+        assert_eq!(
+            w.get(start.x, start.y, start.z).kind,
+            BlockKind::RedstoneWire
+        );
+        let mut queue = VecDeque::from([start]);
+        let mut visited = HashSet::new();
+        while let Some(at) = queue.pop_front() {
+            if !visited.insert(at) {
+                continue;
+            }
+            if let Some(old) = owners.insert(at, id) {
+                assert_eq!(old, id, "dust bypass between stencil domains at {at:?}");
+            }
+            for direction in HORIZONTAL {
+                queue.extend(dust_connections(w, at, direction).iter());
+            }
+        }
+    }
+    let torches: Vec<_> = w
+        .positions_of(BlockKind::WallTorch)
+        .map(|flat| {
+            let (x, y, z) = w.decode(flat);
+            Position::new(x, y, z)
+        })
+        .collect();
+    for &from in &torches {
+        let state = w.get(from.x, from.y, from.z);
+        for &to in &torches {
+            if from == to {
+                continue;
+            }
+            let support = torch_support_position(w.get(to.x, to.y, to.z), to).unwrap();
+            for direction in HORIZONTAL.into_iter().chain([Facing::Up, Facing::Down]) {
+                if from.offset(direction) == support {
+                    assert_eq!(
+                        power_emitted_toward(state, direction),
+                        PowerOutput::INERT,
+                        "foreign tap can power another torch support: {from:?} -> {support:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn matrix_probe_world(
+    words: [u8; 4],
+    mixed: bool,
+    player: bool,
+    pitch: i32,
+    prune: bool,
+    source_delay: u8,
+) -> serde_json::Value {
+    let certified_control = !player && std::env::args().any(|a| a == "--certified-control");
+    let build = || {
+        if player {
+            player_matrix(words, pitch, prune, source_delay)
+        } else if certified_control {
+            certified_matrix(words)
+        } else {
+            matrix(words, mixed)
+        }
+    };
+    let (w, inputs, drivers, lamps) = build();
     let fp = reda::compile::fragment_synth::benchmark::canonical_world_fingerprint;
-    assert_eq!(fp(&w), fp(&matrix(words, mixed).0));
+    assert_eq!(fp(&w), fp(&build().0));
     let fingerprint = fp(&w);
+    let mut internal_sites = Vec::new();
+    if player && std::env::args().any(|a| a == "--internal") {
+        let (sx, sy, sz) = w.size();
+        for x in 0..sx {
+            for y in 0..sy {
+                for z in 0..sz {
+                    if matches!(
+                        w.get(x, y, z).kind,
+                        BlockKind::WallTorch | BlockKind::Repeater
+                    ) {
+                        internal_sites
+                            .push((Position::new(x, y, z), format!("internal{x}_{y}_{z}")));
+                    }
+                }
+            }
+        }
+    }
     let mut sim = Simulator::new(w);
     sim.run_until_stable(2000).unwrap();
     sim.attach_observer(
@@ -230,7 +462,8 @@ fn matrix_probe(words: [u8; 4], mixed: bool) -> serde_json::Value {
                     .into_iter()
                     .enumerate()
                     .map(|(i, p)| (p, format!("lamp{i}"))),
-            ),
+            )
+            .chain(internal_sites),
     );
     let mut phases = Vec::new();
     for from in 0..4 {
@@ -244,7 +477,14 @@ fn matrix_probe(words: [u8; 4], mixed: bool) -> serde_json::Value {
                     sim.world_mut().set(input.x, input.y, input.z, b);
                 }
                 let ticks = sim.run_until_stable(2000).unwrap();
-                let actual_driver = drivers.map(|p| sim.world().get(p.x, p.y, p.z).power > 0);
+                let actual_driver = drivers.map(|p| {
+                    let b = sim.world().get(p.x, p.y, p.z);
+                    if b.kind == BlockKind::RedstoneWire {
+                        b.power > 0
+                    } else {
+                        b.lit
+                    }
+                });
                 let actual_lamp = lamps.map(|p| sim.world().get(p.x, p.y, p.z).lit);
                 let expected: [bool; 3] =
                     std::array::from_fn(|bit| words[address] & (1 << bit) != 0);
@@ -253,6 +493,9 @@ fn matrix_probe(words: [u8; 4], mixed: bool) -> serde_json::Value {
             "expected":expected,"driver":actual_driver,"lamp":actual_lamp,
             "events":sim.observations().iter().map(|e|json!({"label":e.label,"tick":e.tick-start,"value":e.value})).collect::<Vec<_>>()}));
                 if !correct {
+                    if player {
+                        return json!({"correct":false,"certified":false,"fingerprint":fingerprint,"phases":phases});
+                    }
                     let witness: Vec<_> = (0..4).map(|row| {
                         let z=3+3*row;
                         let cells: Vec<_> = [Position::new(2,5,z),Position::new(8,5,z),
@@ -279,5 +522,53 @@ fn matrix_probe(words: [u8; 4], mixed: bool) -> serde_json::Value {
             }
         }
     }
-    json!({"correct":true,"certified":false,"fingerprint":fingerprint,"phases":phases})
+    json!({"correct":true,"certified":certified_control,"fingerprint":fingerprint,"phases":phases})
+}
+
+fn certified_matrix(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Position; 3]) {
+    use reda::{
+        compile::lowering::lower_optimised,
+        frontend::{compile_systemverilog, CompileOptions, SourceInput},
+    };
+    let mut text = String::from("module source_rom(input logic a,b,output logic y0,y1,y2);\n");
+    for bit in 0..3 {
+        let values = words.map(|word| (word >> bit) & 1);
+        text.push_str(&format!(
+            "assign y{bit} = b ? (a ? 1'b{} : 1'b{}) : (a ? 1'b{} : 1'b{});\n",
+            values[3], values[2], values[1], values[0]
+        ));
+    }
+    text.push_str("endmodule");
+    let artifact = compile_systemverilog(
+        &[SourceInput {
+            name: "source_rom.sv",
+            text: &text,
+        }],
+        &CompileOptions::new("source_rom"),
+    )
+    .unwrap();
+    let ports = artifact.output_map();
+    let mut source = lower_optimised(&artifact.netlist).unwrap();
+    source.outputs = (0..3)
+        .map(|bit| ports[&format!("y{bit}")].clone())
+        .collect();
+    let result =
+        reda::compile::fragment_synth::torch_row::compile_torch_row(&source, 1_000_000).unwrap();
+    let positions = |ps: &[(i32, i32, i32)]| {
+        ps.iter()
+            .map(|&(x, y, z)| Position::new(x, y, z))
+            .collect::<Vec<_>>()
+    };
+    (
+        result.physical().world().clone(),
+        positions(result.source_input_positions())
+            .try_into()
+            .unwrap(),
+        positions(result.source_output_driver_positions())
+            .try_into()
+            .unwrap(),
+        positions(result.source_output_positions())
+            .try_into()
+            .unwrap(),
+    )
 }

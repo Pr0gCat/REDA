@@ -1,0 +1,85 @@
+{
+  "baseline_commit": "823a1cb",
+  "production_generator_changed": false,
+  "candidate_certified": false,
+  "variants": {
+    "shared": {
+      "summary": {
+        "cases": 4096,
+        "correct": 4096,
+        "regressed": 1950,
+        "improved_without_regression": 2146,
+        "tied": 0,
+        "all_fixed_controls_exact": true
+      },
+      "raw_sha256": "dd694afb0f8d28fd9a71225ecfabf5bead45df87f95dddc9cac654e377e73e36",
+      "raw_artifact": "generator-player-matrix-generation-2026-10-01-shared.jsonl.gz",
+      "quality_artifact": "generator-player-matrix-generation-2026-10-01-shared-quality.json.gz"
+    },
+    "isolated": {
+      "summary": {
+        "cases": 4096,
+        "correct": 4096,
+        "regressed": 58,
+        "improved_without_regression": 4038,
+        "tied": 0,
+        "all_fixed_controls_exact": true
+      },
+      "raw_sha256": "9ca3380f7635a444ba7b8062030e402beeab5730b7ccd3d255a3497a2d588a2c",
+      "raw_artifact": "generator-player-matrix-generation-2026-10-01-isolated.jsonl.gz",
+      "quality_artifact": "generator-player-matrix-generation-2026-10-01-isolated-quality.json.gz"
+    },
+    "pruned": {
+      "summary": {
+        "cases": 4096,
+        "correct": 4096,
+        "regressed": 74,
+        "improved_without_regression": 4022,
+        "tied": 0,
+        "all_fixed_controls_exact": true
+      },
+      "raw_sha256": "a687d64a1c2c87208fe31aacd9e0056eb01b7369f17a4dabe312cbd42dcfcbb4",
+      "raw_artifact": "generator-player-matrix-generation-2026-10-01-pruned.jsonl.gz",
+      "quality_artifact": "generator-player-matrix-generation-2026-10-01-pruned-quality.json.gz"
+    },
+    "restored": {
+      "summary": {
+        "cases": 4096,
+        "correct": 4096,
+        "regressed": 0,
+        "improved_without_regression": 4096,
+        "tied": 0,
+        "all_fixed_controls_exact": true
+      },
+      "raw_sha256": "eebf1ca2a7c19d978dfcde5b43957d34ed515d9feee0491680a0b341cef1f09a",
+      "raw_artifact": "generator-player-matrix-generation-2026-10-01-restored.jsonl.gz",
+      "quality_artifact": "generator-player-matrix-generation-2026-10-01-restored-quality.json.gz"
+    },
+    "certified": {
+      "summary": {
+        "cases": 4096,
+        "correct": 4096,
+        "regressed": 0,
+        "improved_without_regression": 4088,
+        "tied": 8,
+        "all_fixed_controls_exact": true
+      },
+      "raw_sha256": "79cf7a9f2118f12ed89ea0711e764b776ca6886fa3e9e74208c9152fec7f6441",
+      "raw_artifact": "generator-player-matrix-generation-2026-10-01-certified.jsonl.gz",
+      "quality_artifact": "generator-player-matrix-generation-2026-10-01-certified-quality.json.gz"
+    }
+  },
+  "final_repeat_byte_identical": true,
+  "local_isolation_checks_all_4096": true,
+  "existing_nonconstant_caps_preserved": 2744,
+  "certified_reference": {
+    "native_frontend": true,
+    "all_4096_reconstructed_twice_per_scan": true,
+    "measurements": 65536,
+    "control_total_settle_ticks": 608752,
+    "candidate_total_settle_ticks": 419784,
+    "control_worst_settle_ticks": 16,
+    "candidate_worst_settle_ticks": 10,
+    "all_driver_lamp_glitches_and_pulses_zero": true
+  }
+}
