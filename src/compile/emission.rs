@@ -31,6 +31,12 @@ pub(crate) enum PhysicalBlockRole {
         kind: TerminalKind,
         repeaters: u64,
     },
+    /// One primary-owned support read by multiple selected comparator inputs.
+    /// Individual sink contracts remain in the candidate's route branches.
+    SharedPrimaryComparatorSupport {
+        route: RouteId,
+        source: PhysicalEndpointId,
+    },
     DeclaredOutputLamp(PhysicalEndpointId),
 }
 

@@ -41,6 +41,7 @@ struct TerminalClaim {
     target: PhysicalEndpointId,
     kind: TerminalKind,
     repeaters: u64,
+    shared_primary: Option<PhysicalEndpointId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,12 @@ enum TerminalCellOwner {
 
 impl TerminalClaim {
     fn role(self) -> PhysicalBlockRole {
+        if let Some(source) = self.shared_primary {
+            return PhysicalBlockRole::SharedPrimaryComparatorSupport {
+                route: self.sink.route,
+                source,
+            };
+        }
         PhysicalBlockRole::RouteTerminal {
             sink: self.sink,
             target: self.target,
@@ -110,13 +117,42 @@ impl<'a> ExpandedCandidateAdapter<'a> {
                     target: target_endpoint(branch.target),
                     kind: terminal_kind(branch.terminal.kind),
                     repeaters: branch.terminal.repeaters,
+                    shared_primary: None,
                 };
                 if let Some(first) = terminals.insert(branch.terminal.at, claim) {
-                    return Err(ExpandedAdapterError::DuplicateTerminalCell {
-                        at: branch.terminal.at,
-                        first: first.sink,
-                        second: branch.sink,
-                    });
+                    let primary_support =
+                        matches!(route.source, PhysicalEndpointId::PrimaryInput(_))
+                            && first.sink.route == route.id
+                            && first.sink != claim.sink
+                            && first.target != claim.target
+                            && route
+                                .branches
+                                .iter()
+                                .filter(|b| b.terminal.at == branch.terminal.at)
+                                .all(|b| {
+                                    matches!(
+                                        b.terminal.kind,
+                                        RouteTerminalKind::ComparatorSideSupport
+                                            | RouteTerminalKind::ComparatorRearSupport
+                                    ) && b.terminal.state.kind == BlockKind::Solid
+                                        && matches!(b.target, RouteTarget::Connection(_))
+                                        && b.terminal.repeaters == 0
+                                        && b.terminal.delayed_owner.is_none()
+                                        && b.path.len() == 1
+                                        && b.path[0] == b.terminal.at
+                                        && b.root == b.terminal.at
+                                });
+                    if !primary_support {
+                        return Err(ExpandedAdapterError::DuplicateTerminalCell {
+                            at: branch.terminal.at,
+                            first: first.sink,
+                            second: branch.sink,
+                        });
+                    }
+                    terminals
+                        .get_mut(&branch.terminal.at)
+                        .unwrap()
+                        .shared_primary = Some(route.source);
                 }
 
                 let mut owner = None;

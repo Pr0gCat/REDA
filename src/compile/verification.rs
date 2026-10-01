@@ -202,15 +202,15 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::RouteContinuity,
-                semantic_version: 6,
+                semantic_version: 7,
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Connectivity,
-                semantic_version: 4,
+                semantic_version: 5,
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Coupling,
-                semantic_version: 7,
+                semantic_version: 8,
             },
         ],
     }
@@ -1963,7 +1963,8 @@ fn component_owner(role: PhysicalBlockRole) -> Option<StablePhysicalOwnerId> {
         PhysicalBlockRole::Junction(instance) => Some(StablePhysicalOwnerId::Junction(instance)),
         PhysicalBlockRole::RouteConductor(_)
         | PhysicalBlockRole::RouteFloor(_)
-        | PhysicalBlockRole::RouteTerminal { .. } => None,
+        | PhysicalBlockRole::RouteTerminal { .. }
+        | PhysicalBlockRole::SharedPrimaryComparatorSupport { .. } => None,
     }
 }
 
@@ -2067,6 +2068,7 @@ fn route_owner(role: Option<PhysicalBlockRole>) -> Option<RouteId> {
     match role {
         Some(PhysicalBlockRole::RouteConductor(route)) => Some(route),
         Some(PhysicalBlockRole::RouteTerminal { sink, .. }) => Some(sink.route),
+        Some(PhysicalBlockRole::SharedPrimaryComparatorSupport { route, .. }) => Some(route),
         _ => None,
     }
 }

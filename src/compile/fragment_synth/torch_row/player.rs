@@ -561,7 +561,9 @@ fn nor_library() -> crate::compile::topology::Library {
 }
 
 pub(super) fn library_for(words: [u8; 4]) -> crate::compile::topology::Library {
-    if negative_product(words).is_some() {
+    if mixed_product_literals(words).is_some() {
+        subtract_library(true)
+    } else if negative_product(words).is_some() {
         nor_library()
     } else if positive_product(words).is_some() {
         subtract_library(true)
@@ -828,6 +830,152 @@ enum ProductImplementation {
     Nor,
 }
 
+// Each exported condition must be one product or one negative literal. Shared
+// output occurrences use the same gate, while the internal side inverter keeps
+// a private conductor domain.
+fn mixed_product_literals(words: [u8; 4]) -> Option<[usize; 3]> {
+    let rows = program_rows(words);
+    let mut conditions = [0; 3];
+    for output in 0..3 {
+        let mut terms = rows.iter().filter(|r| r.3 & (1 << output) != 0);
+        let &(_, bits, mask, _) = terms.next()?;
+        if terms.next().is_some() {
+            return None;
+        }
+        conditions[output] = if mask == 3 && bits & mask == mask {
+            0
+        } else if mask.count_ones() == 1 && bits & mask == 0 {
+            1 + mask.trailing_zeros() as usize
+        } else {
+            return None;
+        };
+    }
+    (conditions.contains(&0) && conditions.iter().any(|c| *c != 0)).then_some(conditions)
+}
+
+fn mixed_product_candidate(
+    conditions: [usize; 3],
+) -> (
+    Netlist,
+    World,
+    super::super::candidate::ExpandedPhysicalCandidate,
+) {
+    let mut w = World::new(18, 4, 12);
+    let inputs = [Position::new(9, 2, 6), Position::new(7, 2, 4)];
+    for p in inputs {
+        put(&mut w, p.down(), BlockKind::Solid);
+        put(&mut w, p, BlockKind::Lever);
+    }
+    let mut comparator = |p: Position, facing: Facing| {
+        put(&mut w, p.down(), BlockKind::Solid);
+        let mut c = BlockState::air();
+        c.kind = BlockKind::Comparator;
+        c.name = "minecraft:comparator".into();
+        c.facing = Some(facing);
+        c.extra_properties.insert("mode".into(), "subtract".into());
+        w.set(p.x, p.y, p.z, c);
+    };
+    comparator(Position::new(8, 1, 4), Facing::North);
+    comparator(Position::new(8, 1, 6), Facing::East);
+    let names = ["shared_product", "negative_a", "negative_b"];
+    let mut gates = vec![
+        Gate::nor("side_inverter", &["b"]),
+        Gate {
+            name: names[0].into(),
+            output: names[0].into(),
+            inputs: vec!["a".into(), "side_inverter".into()],
+            kind: GateKind::AndNot,
+        },
+    ];
+    let mut positions = BTreeMap::from([
+        ("side_inverter".into(), Position::new(8, 1, 4)),
+        (names[0].into(), Position::new(8, 1, 6)),
+    ]);
+    for (index, p, facing) in [
+        (1, Position::new(10, 1, 6), Facing::South),
+        (2, Position::new(6, 1, 4), Facing::North),
+    ] {
+        if conditions.contains(&index) {
+            comparator(p, facing);
+            gates.push(Gate::nor(names[index], &[["a", "b"][index - 1]]));
+            positions.insert(names[index].into(), p);
+        }
+    }
+    for (index, p, support, facing) in [
+        (
+            0,
+            Position::new(8, 1, 3),
+            Position::new(8, 1, 2),
+            Facing::South,
+        ),
+        (
+            1,
+            Position::new(10, 1, 7),
+            Position::new(10, 1, 8),
+            Facing::North,
+        ),
+        (
+            2,
+            Position::new(6, 1, 3),
+            Position::new(6, 1, 2),
+            Facing::South,
+        ),
+    ] {
+        if index == 0 || conditions.contains(&index) {
+            put(&mut w, support, BlockKind::Solid);
+            put(&mut w, p, BlockKind::WallTorch);
+            let mut t = w.get(p.x, p.y, p.z).clone();
+            t.facing = Some(facing);
+            w.set(p.x, p.y, p.z, t);
+        }
+    }
+    put(&mut w, Position::new(8, 1, 5), BlockKind::Solid);
+    for z in 6..=8 {
+        wire(&mut w, Position::new(7, 1, z));
+    }
+    for x in 3..=6 {
+        wire(&mut w, Position::new(x, 1, 8));
+    }
+    if conditions.contains(&1) {
+        for x in 10..=16 {
+            wire(&mut w, Position::new(x, 1, 5));
+        }
+    }
+    if conditions.contains(&2) {
+        for x in 0..=6 {
+            wire(&mut w, Position::new(x, 1, 5));
+        }
+    }
+    // Aliases share the producer but retain distinct public terminals.
+    let mut lamp_sites = [Position::new(0, 0, 0); 3];
+    for (output, condition) in conditions.into_iter().enumerate() {
+        let (x, z) = match condition {
+            0 => (3 + 2 * output as i32, 9),
+            1 => (12 + 2 * output as i32, 4),
+            _ => (2 * output as i32, 4),
+        };
+        wire(&mut w, Position::new(x, 1, z));
+        let lamp = Position::new(x, 1, if condition == 0 { 10 } else { 3 });
+        put(&mut w, lamp.down(), BlockKind::Solid);
+        put(&mut w, lamp, BlockKind::Lamp);
+        lamp_sites[output] = lamp;
+    }
+    let netlist = Netlist {
+        inputs: vec!["a".into(), "b".into()],
+        outputs: conditions.map(|i| names[i].into()).to_vec(),
+        gates,
+    };
+    super::typed_world_candidate_with_library(
+        netlist,
+        w,
+        inputs.to_vec(),
+        lamp_sites.to_vec(),
+        positions,
+        true,
+        &subtract_library(true),
+    )
+}
+
 fn product_candidate(
     words: [u8; 4],
     variable: u8,
@@ -982,6 +1130,9 @@ fn build_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
+    if let Some(conditions) = mixed_product_literals(words) {
+        return mixed_product_candidate(conditions);
+    }
     if let Some(variable) = negative_product(words) {
         return product_candidate(words, variable, ProductImplementation::Nor);
     }
@@ -1029,6 +1180,119 @@ mod tests {
         realise::{realise_and_verify_expanded, CertificationError},
     };
     use crate::compile::verification::ExpandedPhysicalError;
+
+    #[test]
+    fn shared_primary_support_rejects_other_terminal_contracts() {
+        use crate::compile::fragment_synth::realise::ExpandedCandidateAdapter;
+        let (_, _, candidate) = mixed_product_candidate([0, 1, 2]);
+        ExpandedCandidateAdapter::new(&candidate).unwrap();
+        let route = candidate
+            .routes
+            .values()
+            .find(|route| {
+                route.branches.iter().any(|a| {
+                    route
+                        .branches
+                        .iter()
+                        .any(|b| a.sink != b.sink && a.terminal.at == b.terminal.at)
+                })
+            })
+            .unwrap();
+        let route_id = route.id;
+        let sink = route.branches[0].sink;
+        for mutation in 0..5 {
+            let mut invalid = candidate.clone();
+            let branch = invalid
+                .routes
+                .get_mut(&route_id)
+                .unwrap()
+                .branches
+                .iter_mut()
+                .find(|b| b.sink == sink)
+                .unwrap();
+            match mutation {
+                0 => {
+                    branch.terminal.kind =
+                        crate::compile::planner::RouteTerminalKind::DirectedDustIntoSupport
+                }
+                1 => branch.terminal.repeaters = 1,
+                2 => branch.path.push(branch.terminal.at),
+                3 => branch.root.x += 1,
+                _ => {
+                    branch.target =
+                        crate::compile::fragment_synth::candidate::RouteTarget::DeclaredOutput(
+                            crate::compile::fragment_synth::identity::PortId(0),
+                        )
+                }
+            }
+            assert!(
+                ExpandedCandidateAdapter::new(&invalid).is_err(),
+                "invalid shared support {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_product_and_negative_literals_certify_shared_boundaries() {
+        let mut checked = 0;
+        for a in 0..3 {
+            for b in 0..3 {
+                for c in 0..3 {
+                    let conditions = [a, b, c];
+                    if !conditions.contains(&0) || conditions.iter().all(|i| *i == 0) {
+                        continue;
+                    }
+                    let words = std::array::from_fn(|address| {
+                        conditions
+                            .iter()
+                            .enumerate()
+                            .fold(0, |word, (bit, condition)| {
+                                let value = match condition {
+                                    0 => address == 3,
+                                    1 => address & 1 == 0,
+                                    _ => address & 2 == 0,
+                                };
+                                word | if value { 1 << bit } else { 0 }
+                            })
+                    });
+                    assert_eq!(mixed_product_literals(words), Some(conditions));
+                    let (source, _) = player_logic(words);
+                    let result = super::super::compile_player_torch_row(&source, 1_000_000)
+                        .unwrap_or_else(|e| panic!("mixed conditions {words:?}: {e:?}"));
+                    let mut sim = crate::redstone::simulator::Simulator::new(
+                        result.physical().world().clone(),
+                    );
+                    sim.run_until_stable(2000).unwrap();
+                    for from in 0..4 {
+                        for to in 0..4 {
+                            for address in [from, to] {
+                                for (bit, &(x, y, z)) in
+                                    result.source_input_positions().iter().enumerate()
+                                {
+                                    let mut lever = sim.world().get(x, y, z).clone();
+                                    lever.lit = address & (1 << bit) != 0;
+                                    sim.world_mut().set(x, y, z, lever);
+                                }
+                                sim.run_until_stable(2000).unwrap();
+                                for (bit, &(x, y, z)) in
+                                    result.source_output_positions().iter().enumerate()
+                                {
+                                    assert_eq!(
+                                        sim.world().get(x, y, z).lit,
+                                        words[address] & (1 << bit) != 0,
+                                        "words={words:?}, from={from}, to={to}, address={address}, output={bit}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 18);
+        assert!(mixed_product_literals([0, 1, 2, 7]).is_none());
+    }
 
     #[test]
     fn mixed_sign_cube_certifies_constants_fanout_and_retained_history() {

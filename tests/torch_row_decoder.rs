@@ -2395,6 +2395,10 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
     };
     for words in [
+        [6, 4, 2, 1], // Product and both negative literals share primary supports.
+        [6, 2, 4, 1], // Exchange which public port observes each negative literal.
+        [6, 6, 0, 1], // Negative aliases retain separate public terminals.
+        [4, 0, 4, 3], // Product aliases retain separate public terminals.
         [1, 0, 0, 0], // Two-side comparator NOR with one variable output.
         [3, 0, 0, 0], // NOR condition shares its restored output across two ports.
         [7, 2, 2, 2], // NOR coexists with a constant high middle output.
