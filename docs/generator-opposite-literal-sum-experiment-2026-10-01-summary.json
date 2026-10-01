@@ -1,0 +1,80 @@
+{
+  "reference": "758c2c6",
+  "summary": {
+    "cases": 4096,
+    "control_correct": 4096,
+    "candidate_correct": 4096,
+    "truth_recovered": 0,
+    "regressed_on_correct_controls": 0,
+    "improved_without_regression_on_correct_controls": 60,
+    "tied_on_correct_controls": 4036,
+    "all_fixed_controls_exact": true,
+    "quality_control_arm": "frozen_certified_candidate"
+  },
+  "history": {
+    "records": 4096,
+    "caps_passed": 2744,
+    "setup_regressions": [],
+    "setup_glitches": 0
+  },
+  "repeat_sha256": "1ed5062d756ac5ad85c8e112ef856869756d54e97599647934cd60419897da8b",
+  "opposite_sum_combinations": 60,
+  "source_cases": 77,
+  "player_tests": 17,
+  "physical_rewrite_view_tests": 5,
+  "prospective_default_selection": {
+    "cases": 4096,
+    "choices": {
+      "player": 4050,
+      "shipping": 46
+    },
+    "retained_cap_tables": 2744,
+    "cap_regressions": 9,
+    "witnesses": [
+      {
+        "encoding": 638,
+        "metrics": [
+          "driver_glitches",
+          "worst_driver_pulse_ticks",
+          "total_driver_pulse_ticks"
+        ]
+      },
+      {
+        "encoding": 974,
+        "metrics": [
+          "driver_glitches",
+          "worst_driver_pulse_ticks",
+          "total_driver_pulse_ticks"
+        ]
+      },
+      {
+        "encoding": 1092,
+        "metrics": [
+          "driver_glitches",
+          "lamp_glitches",
+          "worst_driver_pulse_ticks",
+          "total_driver_pulse_ticks"
+        ]
+      },
+      {
+        "encoding": 1213,
+        "metrics": [
+          "driver_glitches",
+          "worst_driver_pulse_ticks",
+          "total_driver_pulse_ticks"
+        ]
+      },
+      {
+        "encoding": 1281,
+        "metrics": [
+          "driver_glitches",
+          "lamp_glitches",
+          "worst_driver_pulse_ticks",
+          "total_driver_pulse_ticks"
+        ]
+      }
+    ],
+    "setup_evaluated": false,
+    "automatic_selection_enabled": false
+  }
+}
