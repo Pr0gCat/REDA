@@ -1,0 +1,24 @@
+{
+  "status": "geometry_prerequisite_verified_not_inverter_certification",
+  "parent_commit": "589687c",
+  "changes": [
+    "Four comparator physical variants, using the shared diode footprint while preserving distinct comparator rear, left/right side and front port roles.",
+    "Comparator input ordinal 0 selects rear, ordinals 1 and 2 select the declared left/right sides. Invalid ordinals reject.",
+    "Comparator output terminal resolves its front direction."
+  ],
+  "checks": {
+    "physical_tests_passed": 8,
+    "terminal_tests_passed": 9,
+    "player_regressions_passed": 4,
+    "diff_check_passed": true
+  },
+  "player_generator_changed": false,
+  "automatic_selection_changed": false,
+  "simulator_changed": false,
+  "pending": [
+    "Seal compare/subtract mode as authoritative placement state.",
+    "Represent inversion as a constant rear input and strongly powered side input in the instance and endpoint contracts.",
+    "Reject weaker side support, wrong mode, wrong rear source, foreign source injection and reversed facing.",
+    "Strict realisation, source equivalence and the complete frozen 4096-table retained-history quality and replay experiment."
+  ]
+}

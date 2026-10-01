@@ -272,6 +272,46 @@ static REPEATER_VARIANTS: [PhysicalVariant; 4] = [
     },
 ];
 
+// Comparators share the repeater footprint and directional port geometry,
+// but retain distinct electrical roles. Mode is a placement property.
+const fn comparator_blocks(mut blocks: [LocalBlock; 2]) -> [LocalBlock; 2] {
+    blocks[1].kind = BlockKind::Comparator;
+    blocks
+}
+
+const fn comparator_ports(mut ports: [PhysicalPort; 4]) -> [PhysicalPort; 4] {
+    let mut i = 0;
+    while i < ports.len() {
+        ports[i].kind = match ports[i].kind {
+            PortKind::RepeaterRear => PortKind::ComparatorRear,
+            PortKind::RepeaterSide => PortKind::ComparatorSide,
+            PortKind::RepeaterFront => PortKind::ComparatorFront,
+            _ => panic!("unexpected diode port"),
+        };
+        i += 1;
+    }
+    ports
+}
+
+static COMPARATOR_VARIANTS: [PhysicalVariant; 4] = [
+    PhysicalVariant {
+        blocks: &comparator_blocks(REPEATER_NORTH_BLOCKS),
+        ports: &comparator_ports(REPEATER_NORTH_PORTS),
+    },
+    PhysicalVariant {
+        blocks: &comparator_blocks(REPEATER_SOUTH_BLOCKS),
+        ports: &comparator_ports(REPEATER_SOUTH_PORTS),
+    },
+    PhysicalVariant {
+        blocks: &comparator_blocks(REPEATER_EAST_BLOCKS),
+        ports: &comparator_ports(REPEATER_EAST_PORTS),
+    },
+    PhysicalVariant {
+        blocks: &comparator_blocks(REPEATER_WEST_BLOCKS),
+        ports: &comparator_ports(REPEATER_WEST_PORTS),
+    },
+];
+
 static LEVER_NORTH_BLOCKS: [LocalBlock; 2] = [
     block(DOWN, BlockKind::Solid, None, None),
     block(
@@ -360,7 +400,7 @@ pub fn variants(primitive: Primitive) -> &'static [PhysicalVariant] {
     match primitive {
         Primitive::Torch => &TORCH_VARIANTS,
         Primitive::Repeater => &REPEATER_VARIANTS,
-        Primitive::Comparator => &[],
+        Primitive::Comparator => &COMPARATOR_VARIANTS,
         Primitive::Lever => &LEVER_VARIANTS,
         Primitive::Lamp => &LAMP_VARIANTS,
     }

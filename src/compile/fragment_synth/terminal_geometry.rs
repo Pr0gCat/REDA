@@ -58,7 +58,8 @@ pub(crate) fn primitive_output_terminal(
     let kind = match primitive {
         Primitive::Torch => PortKind::TorchOutput,
         Primitive::Repeater => PortKind::RepeaterFront,
-        Primitive::Comparator | Primitive::Lamp | Primitive::Lever => {
+        Primitive::Comparator => PortKind::ComparatorFront,
+        Primitive::Lamp | Primitive::Lever => {
             return Err(PrimitiveTerminalError::UnsupportedOutput { primitive });
         }
     };
@@ -311,7 +312,20 @@ pub(crate) fn primitive_input_terminal(
         Primitive::Repeater => {
             return Err(PrimitiveTerminalError::InvalidInputOrdinal { primitive, ordinal });
         }
-        Primitive::Comparator | Primitive::Lamp | Primitive::Lever => {
+        Primitive::Comparator => {
+            let port = match ordinal {
+                0 => variant.port(PortKind::ComparatorRear),
+                1 | 2 => variant
+                    .ports_of(PortKind::ComparatorSide)
+                    .nth(ordinal - 1)
+                    .unwrap(),
+                _ => {
+                    return Err(PrimitiveTerminalError::InvalidInputOrdinal { primitive, ordinal })
+                }
+            };
+            (port, port.direction)
+        }
+        Primitive::Lamp | Primitive::Lever => {
             return Err(PrimitiveTerminalError::UnsupportedInput { primitive });
         }
     };
@@ -361,6 +375,64 @@ mod tests {
                 Anchor { x: 4, y: 2, z: 8 },
             ]
         );
+    }
+
+    #[test]
+    fn comparator_terminals_match_rear_sides_and_front_in_every_orientation() {
+        let anchor = Anchor { x: 8, y: 3, z: 8 };
+        for (facing, rear, sides, front) in [
+            (
+                CellFacing::NORTH,
+                Facing::North,
+                [Facing::West, Facing::East],
+                Facing::South,
+            ),
+            (
+                CellFacing::SOUTH,
+                Facing::South,
+                [Facing::East, Facing::West],
+                Facing::North,
+            ),
+            (
+                CellFacing::EAST,
+                Facing::East,
+                [Facing::North, Facing::South],
+                Facing::West,
+            ),
+            (
+                CellFacing::WEST,
+                Facing::West,
+                [Facing::South, Facing::North],
+                Facing::East,
+            ),
+        ] {
+            for (ordinal, direction) in [rear, sides[0], sides[1]].into_iter().enumerate() {
+                let input =
+                    primitive_input_terminal(Primitive::Comparator, facing, anchor, ordinal)
+                        .unwrap();
+                assert_eq!(input.support, anchor);
+                assert_eq!(input.terminal, step(anchor, direction));
+                assert_eq!(input.allowed_entry, direction);
+            }
+            let output = primitive_output_terminal(Primitive::Comparator, facing, anchor).unwrap();
+            assert_eq!(output.support, anchor);
+            assert_eq!(output.route_anchor, step(anchor, front));
+            assert_eq!(output.allowed_exit, front);
+            assert_eq!(
+                primitive_input_terminal(Primitive::Comparator, facing, anchor, 3),
+                Err(PrimitiveTerminalError::InvalidInputOrdinal {
+                    primitive: Primitive::Comparator,
+                    ordinal: 3
+                })
+            );
+            let variant = &physical::variants(Primitive::Comparator)[usize::from(facing.index())];
+            assert_eq!(
+                variant
+                    .block_at(crate::redstone::simulator::position::Position::new(0, 0, 0))
+                    .kind,
+                crate::redstone::world::block::BlockKind::Comparator
+            );
+        }
     }
 
     #[test]
