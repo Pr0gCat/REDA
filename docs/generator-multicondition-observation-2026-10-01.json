@@ -1,0 +1,437 @@
+{
+  "reference_commit": "fd4d83f",
+  "reference_artifact": "generator-comparator-nor-experiment-2026-10-01-family.jsonl.gz",
+  "reference_sha256": "d9f3a7d6a10672a47140c9526ec61dbcdf1c5221b15fec1bc649bdfe7a35b852",
+  "purpose": "Observe remaining settling regressions against correct frozen shipping controls; not a quality acceptance report.",
+  "slower_correct_tables": 714,
+  "structural_groups": {
+    "constant+literal+product_or_sum": 228,
+    "constant+product_or_sum": 114,
+    "literal+product_or_sum": 330,
+    "product_or_sum": 42
+  },
+  "top_witnesses": [
+    {
+      "encoding": 678,
+      "words": [
+        6,
+        4,
+        2,
+        1
+      ],
+      "total_excess": 42,
+      "candidate_worst": 10,
+      "control_worst": 8,
+      "worst_transitions": [
+        {
+          "from": 0,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 3,
+          "to": 0,
+          "ticks": 10
+        },
+        {
+          "from": 3,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 3,
+          "to": 2,
+          "ticks": 10
+        }
+      ]
+    },
+    {
+      "encoding": 239,
+      "words": [
+        7,
+        5,
+        3,
+        0
+      ],
+      "total_excess": 34,
+      "candidate_worst": 10,
+      "control_worst": 8,
+      "worst_transitions": [
+        {
+          "from": 0,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "ticks": 10
+        }
+      ]
+    },
+    {
+      "encoding": 247,
+      "words": [
+        7,
+        6,
+        3,
+        0
+      ],
+      "total_excess": 34,
+      "candidate_worst": 10,
+      "control_worst": 8,
+      "worst_transitions": [
+        {
+          "from": 0,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "ticks": 10
+        }
+      ]
+    },
+    {
+      "encoding": 351,
+      "words": [
+        7,
+        3,
+        5,
+        0
+      ],
+      "total_excess": 34,
+      "candidate_worst": 10,
+      "control_worst": 8,
+      "worst_transitions": [
+        {
+          "from": 0,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "ticks": 10
+        }
+      ]
+    },
+    {
+      "encoding": 375,
+      "words": [
+        7,
+        6,
+        5,
+        0
+      ],
+      "total_excess": 34,
+      "candidate_worst": 10,
+      "control_worst": 8,
+      "worst_transitions": [
+        {
+          "from": 0,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "ticks": 10
+        }
+      ]
+    },
+    {
+      "encoding": 415,
+      "words": [
+        7,
+        3,
+        6,
+        0
+      ],
+      "total_excess": 34,
+      "candidate_worst": 10,
+      "control_worst": 8,
+      "worst_transitions": [
+        {
+          "from": 0,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "ticks": 10
+        }
+      ]
+    },
+    {
+      "encoding": 431,
+      "words": [
+        7,
+        5,
+        6,
+        0
+      ],
+      "total_excess": 34,
+      "candidate_worst": 10,
+      "control_worst": 8,
+      "worst_transitions": [
+        {
+          "from": 0,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "ticks": 10
+        }
+      ]
+    },
+    {
+      "encoding": 790,
+      "words": [
+        6,
+        2,
+        4,
+        1
+      ],
+      "total_excess": 32,
+      "candidate_worst": 10,
+      "control_worst": 8,
+      "worst_transitions": [
+        {
+          "from": 0,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 0,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "ticks": 10
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "ticks": 10
+        },
+        {
+          "from": 3,
+          "to": 0,
+          "ticks": 10
+        },
+        {
+          "from": 3,
+          "to": 1,
+          "ticks": 10
+        },
+        {
+          "from": 3,
+          "to": 2,
+          "ticks": 10
+        }
+      ]
+    }
+  ]
+}
