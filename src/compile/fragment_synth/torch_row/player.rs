@@ -1372,8 +1372,7 @@ fn product_candidate(
 
 // Match a sum whose input polarities are shared by its single-literal outputs.
 // Keep sibling outputs on the input side of the sum's isolation.
-// Keep OR restoration independent of unary polarity. Repeated inverse ports
-// retain the existing matrix until each private terminal has an isolated branch.
+// Keep OR restoration independent of unary polarity and output alias count.
 fn positive_sum_with_opposite_literals(words: [u8; 4]) -> Option<[usize; 3]> {
     let rows = program_rows(words);
     let mut conditions = [3; 3];
@@ -1399,10 +1398,7 @@ fn positive_sum_with_opposite_literals(words: [u8; 4]) -> Option<[usize; 3]> {
             _ => return None,
         };
     }
-    (conditions.contains(&0)
-        && conditions.iter().any(|&c| c >= 5)
-        && (5..=6).all(|c| conditions.iter().filter(|&&k| k == c).count() <= 1))
-    .then_some(conditions)
+    (conditions.contains(&0) && conditions.iter().any(|&c| c >= 5)).then_some(conditions)
 }
 
 fn polarity_sum_conditions(words: [u8; 4]) -> Option<(u8, [usize; 3])> {
@@ -1598,13 +1594,23 @@ fn positive_sum_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
-    let mut w = World::new(36, 6, 16);
+    let inverse_counts =
+        std::array::from_fn::<_, 2, _>(|bit| conditions.iter().filter(|&&c| c == 5 + bit).count());
+    let z_shift = if inverse_counts.iter().any(|&count| count > 1) {
+        2
+    } else {
+        0
+    };
+    let mut w = World::new(36, 6, 16 + z_shift);
     let y = if conditions.iter().any(|&c| c >= 5) {
         2
     } else {
         1
     };
-    let inputs = [Position::new(9, y, 4), Position::new(9, y, 8)];
+    let inputs = [
+        Position::new(9, y, 4 + z_shift),
+        Position::new(9, y, 8 + z_shift),
+    ];
     let mut gates = Vec::new();
     let mut positions = BTreeMap::new();
     let names = ["shared_sum", "positive_a", "positive_b"];
@@ -1641,63 +1647,86 @@ fn positive_sum_candidate(
             }
         }
     }
-    for z in 5..=7 {
+    for z in (5 + z_shift)..=(7 + z_shift) {
         wire(&mut w, Position::new(3, y, z));
     }
     gates.push(Gate::merge(names[0], &["sum_input0", "sum_input1"]));
-    positions.insert(names[0].into(), Position::new(3, y, 6));
+    positions.insert(names[0].into(), Position::new(3, y, 6 + z_shift));
     let mut lamps = Vec::new();
     let mut outputs = Vec::new();
+    let mut inverse_aliases = [0; 2];
     for (output, condition) in conditions.into_iter().enumerate() {
         let (lamp, name) = if condition >= 5 {
             let bit = condition - 5;
             let direction = if bit == 0 { -1 } else { 1 };
             let source = inputs[bit];
             let name = format!("negative_literal{bit}");
-            // Preserve the unary restoration stage under continuous torch history;
-            // only the shared OR path loses its redundant second stage.
-            let restore = Position::new(source.x, y, source.z + direction);
-            put(&mut w, restore.down(), BlockKind::Solid);
-            put(&mut w, restore, BlockKind::Repeater);
-            let mut state = w.get(restore.x, restore.y, restore.z).clone();
-            state.facing = Some(if direction < 0 {
-                Facing::South
+            if inverse_aliases[bit] == 0 {
+                // Preserve the unary restoration stage under continuous torch history;
+                // only the shared OR path loses its redundant second stage.
+                let restore = Position::new(source.x, y, source.z + direction);
+                put(&mut w, restore.down(), BlockKind::Solid);
+                put(&mut w, restore, BlockKind::Repeater);
+                let mut state = w.get(restore.x, restore.y, restore.z).clone();
+                state.facing = Some(if direction < 0 {
+                    Facing::South
+                } else {
+                    Facing::North
+                });
+                w.set(restore.x, restore.y, restore.z, state);
+                let restored = format!("negative_input{bit}");
+                gates.push(Gate {
+                    name: restored.clone(),
+                    output: restored.clone(),
+                    kind: GateKind::Buf,
+                    inputs: vec![["a", "b"][bit].into()],
+                });
+                positions.insert(restored.clone(), restore);
+                wire(&mut w, Position::new(source.x, y, source.z + 2 * direction));
+                let torch = Position::new(source.x, y - 1, source.z + 3 * direction);
+                put(&mut w, torch, BlockKind::WallTorch);
+                let mut state = w.get(torch.x, torch.y, torch.z).clone();
+                state.facing = Some(if direction < 0 {
+                    Facing::North
+                } else {
+                    Facing::South
+                });
+                w.set(torch.x, torch.y, torch.z, state);
+                gates.push(Gate::nor(&name, &[&restored]));
+                positions.insert(name.clone(), torch);
+                wire(
+                    &mut w,
+                    Position::new(source.x, y - 1, source.z + 4 * direction),
+                );
+                wire(
+                    &mut w,
+                    Position::new(source.x + 1, y - 1, source.z + 4 * direction),
+                );
+                if inverse_counts[bit] > 1 {
+                    for step in 4..=6 {
+                        wire(
+                            &mut w,
+                            Position::new(source.x + 1, y - 1, source.z + step * direction),
+                        );
+                    }
+                    for step in [4, 6] {
+                        for x in (source.x + 2)..=(source.x + 3) {
+                            wire(&mut w, Position::new(x, y - 1, source.z + step * direction));
+                        }
+                    }
+                }
+            }
+            let lamp = if inverse_counts[bit] > 1 {
+                Position::new(
+                    source.x + 4,
+                    y - 1,
+                    source.z + (4 + 2 * inverse_aliases[bit]) * direction,
+                )
             } else {
-                Facing::North
-            });
-            w.set(restore.x, restore.y, restore.z, state);
-            let restored = format!("negative_input{bit}");
-            gates.push(Gate {
-                name: restored.clone(),
-                output: restored.clone(),
-                kind: GateKind::Buf,
-                inputs: vec![["a", "b"][bit].into()],
-            });
-            positions.insert(restored.clone(), restore);
-            wire(&mut w, Position::new(source.x, y, source.z + 2 * direction));
-            let torch = Position::new(source.x, y - 1, source.z + 3 * direction);
-            put(&mut w, torch, BlockKind::WallTorch);
-            let mut state = w.get(torch.x, torch.y, torch.z).clone();
-            state.facing = Some(if direction < 0 {
-                Facing::North
-            } else {
-                Facing::South
-            });
-            w.set(torch.x, torch.y, torch.z, state);
-            gates.push(Gate::nor(&name, &[&restored]));
-            positions.insert(name.clone(), torch);
-            wire(
-                &mut w,
-                Position::new(source.x, y - 1, source.z + 4 * direction),
-            );
-            wire(
-                &mut w,
-                Position::new(source.x + 1, y - 1, source.z + 4 * direction),
-            );
-            (
-                Position::new(source.x + 2, y - 1, source.z + 4 * direction),
-                name,
-            )
+                Position::new(source.x + 2, y - 1, source.z + 4 * direction)
+            };
+            inverse_aliases[bit] += 1;
+            (lamp, name)
         } else if condition >= 3 {
             constant_output(
                 &mut w,
@@ -1706,13 +1735,28 @@ fn positive_sum_candidate(
                 output,
                 condition == 4,
                 16,
-                6 + 3 * output as i32,
+                6 + 3 * output as i32 + z_shift,
             )
         } else {
             let (x, z, lamp_x, lamp_z) = match condition {
-                0 => (2, 4 + 2 * output as i32, 1, 4 + 2 * output as i32),
-                1 => (12 + 2 * output as i32, 3, 12 + 2 * output as i32, 2),
-                _ => (12 + 2 * output as i32, 9, 12 + 2 * output as i32, 10),
+                0 => (
+                    2,
+                    4 + 2 * output as i32 + z_shift,
+                    1,
+                    4 + 2 * output as i32 + z_shift,
+                ),
+                1 => (
+                    12 + 2 * output as i32,
+                    3 + z_shift,
+                    12 + 2 * output as i32,
+                    2 + z_shift,
+                ),
+                _ => (
+                    12 + 2 * output as i32,
+                    9 + z_shift,
+                    12 + 2 * output as i32,
+                    10 + z_shift,
+                ),
             };
             wire(&mut w, Position::new(x, y, z));
             (
@@ -1920,10 +1964,7 @@ mod tests {
             for b in 0..7 {
                 for c in 0..7 {
                     let conditions = [a, b, c];
-                    if !conditions.contains(&0)
-                        || !conditions.iter().any(|&c| c >= 5)
-                        || (5..=6).any(|c| conditions.iter().filter(|&&k| k == c).count() > 1)
-                    {
+                    if !conditions.contains(&0) || !conditions.iter().any(|&c| c >= 5) {
                         continue;
                     }
                     let words = std::array::from_fn(|address| {
@@ -1973,7 +2014,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 60);
+        assert_eq!(checked, 66);
     }
 
     #[test]
