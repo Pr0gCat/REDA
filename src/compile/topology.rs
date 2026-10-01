@@ -627,9 +627,20 @@ pub struct LibraryEntry {
 /// more, because "the library admits alternatives" is the one property the
 /// spec asks this step to guarantee architecturally, independent of how many
 /// alternatives actually exist yet.
+/// Electrical assumptions required by a comparator implementation of NOT.
+/// This declaration alone does not authorize primitive-level equivalence;
+/// realisation must prove the mode and 15-strength rear/side boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComparatorInverterContract {
+    pub comparator: TemplateNode,
+    pub rear_constant: TemplateNode,
+    pub side_input: usize,
+}
+
 pub struct Library {
     entries: BTreeMap<GateKind, Vec<LibraryEntry>>,
     stateful_entries: BTreeMap<GateKind, StatefulTopology>,
+    comparator_inverters: BTreeMap<LibraryEntryId, ComparatorInverterContract>,
 }
 
 impl Library {
@@ -641,6 +652,7 @@ impl Library {
         Library {
             entries,
             stateful_entries: BTreeMap::new(),
+            comparator_inverters: BTreeMap::new(),
         }
     }
 
@@ -672,6 +684,7 @@ impl Library {
         Library {
             entries,
             stateful_entries,
+            comparator_inverters: BTreeMap::new(),
         }
     }
 
@@ -682,6 +695,41 @@ impl Library {
         entries: Vec<LibraryEntry>,
     ) {
         self.entries.insert(kind, entries);
+    }
+
+    /// Bind an electrical declaration to a structurally matching library entry.
+    pub fn register_comparator_inverter(
+        &mut self,
+        id: LibraryEntryId,
+        contract: ComparatorInverterContract,
+    ) -> Result<(), &'static str> {
+        let entry = self.entry(id).ok_or("unknown library entry")?;
+        let t = &entry.template;
+        if id.kind != GateKind::Nor(1)
+            || t.nodes.len() != 2
+            || !t
+                .nodes
+                .contains(&(contract.comparator, Primitive::Comparator))
+            || !t
+                .nodes
+                .contains(&(contract.rear_constant, Primitive::Torch))
+            || contract.comparator == contract.rear_constant
+            || contract.side_input != 0
+            || t.inputs.as_slice() != [contract.comparator]
+            || t.internal_edges.as_slice() != [(contract.rear_constant, contract.comparator)]
+            || t.output != Some(contract.comparator)
+        {
+            return Err("comparator inverter topology does not match its electrical declaration");
+        }
+        self.comparator_inverters.insert(id, contract);
+        Ok(())
+    }
+
+    pub fn comparator_inverter_contract(
+        &self,
+        id: LibraryEntryId,
+    ) -> Option<ComparatorInverterContract> {
+        self.comparator_inverters.get(&id).copied()
     }
 
     /// Every technique known for `kind`, in the order they were registered.

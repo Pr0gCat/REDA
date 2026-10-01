@@ -34,6 +34,18 @@ struct CellLibraryEntryDescriptor {
     internal_edges: Vec<EdgeDescriptor>,
     output: Option<String>,
     embedding_hints: Vec<EmbeddingHintDescriptor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    comparator_inverter: Option<ComparatorInverterDescriptor>,
+}
+
+#[derive(Serialize)]
+struct ComparatorInverterDescriptor {
+    comparator: String,
+    rear_constant: String,
+    side_input: usize,
+    mode: &'static str,
+    rear_strength: u8,
+    side_high_strength: u8,
 }
 
 #[derive(Serialize)]
@@ -160,6 +172,19 @@ fn cell_library_descriptor(library: &Library) -> CellLibraryRevisionDescriptor {
                 .enumerate()
                 .map(|(ordinal, entry)| CellLibraryEntryDescriptor {
                     entry_ordinal: ordinal as u64,
+                    comparator_inverter: library
+                        .comparator_inverter_contract(crate::compile::topology::LibraryEntryId {
+                            kind,
+                            ordinal: ordinal as u16,
+                        })
+                        .map(|c| ComparatorInverterDescriptor {
+                            comparator: template_node_name(c.comparator),
+                            rear_constant: template_node_name(c.rear_constant),
+                            side_input: c.side_input,
+                            mode: "subtract",
+                            rear_strength: 15,
+                            side_high_strength: 15,
+                        }),
                     nodes: entry
                         .template
                         .nodes
@@ -301,6 +326,50 @@ mod tests {
         schedule::{SamePriorityOrder, TickOrderSemantics, TickPriority},
         ComponentSupport, ComponentSupportRegistration, SimulatorComponentKind,
     };
+
+    #[test]
+    fn comparator_contract_changes_revision_and_rejects_wrong_bindings() {
+        use crate::compile::topology::{ComparatorInverterContract, LibraryEntryId};
+        let id = LibraryEntryId {
+            kind: GateKind::Nor(1),
+            ordinal: 0,
+        };
+        let entry = LibraryEntry {
+            name: "experimental comparator NOT",
+            template: Template {
+                nodes: vec![
+                    (TemplateNode::Torch, Primitive::Torch),
+                    (TemplateNode::SecondTorch, Primitive::Comparator),
+                ],
+                internal_edges: vec![(TemplateNode::Torch, TemplateNode::SecondTorch)],
+                inputs: vec![TemplateNode::SecondTorch],
+                output: Some(TemplateNode::SecondTorch),
+                embedding_hints: vec![],
+            },
+        };
+        let mut library = Library::new(BTreeMap::from([(GateKind::Nor(1), vec![entry])]));
+        let before = cell_library_revision(&library);
+        let contract = ComparatorInverterContract {
+            comparator: TemplateNode::SecondTorch,
+            rear_constant: TemplateNode::Torch,
+            side_input: 0,
+        };
+        assert!(library
+            .register_comparator_inverter(
+                id,
+                ComparatorInverterContract {
+                    side_input: 1,
+                    ..contract
+                }
+            )
+            .is_err());
+        assert_eq!(cell_library_revision(&library), before);
+        library.register_comparator_inverter(id, contract).unwrap();
+        assert_ne!(cell_library_revision(&library), before);
+        assert_eq!(library.comparator_inverter_contract(id), Some(contract));
+        let mut ordinary = Library::default_library();
+        assert!(ordinary.register_comparator_inverter(id, contract).is_err());
+    }
 
     fn one_node_entry(name: &'static str, primitive: Primitive) -> LibraryEntry {
         LibraryEntry {
