@@ -1,0 +1,56 @@
+{
+  "baseline_commit": "ef8fed8",
+  "qualified": true,
+  "automatic_selection_enabled": false,
+  "quality": {
+    "cases": 4096,
+    "control_correct": 4096,
+    "candidate_correct": 4096,
+    "truth_recovered": 0,
+    "regressed_on_correct_controls": 0,
+    "improved_without_regression_on_correct_controls": 387,
+    "tied_on_correct_controls": 3709,
+    "all_fixed_controls_exact": true,
+    "quality_control_arm": "frozen_certified_candidate"
+  },
+  "shipping_comparison": {
+    "cases": 4096,
+    "control_correct": 4069,
+    "candidate_correct": 4096,
+    "truth_recovered": 27,
+    "regressed_on_correct_controls": 837,
+    "improved_without_regression_on_correct_controls": 3162,
+    "tied_on_correct_controls": 70,
+    "all_fixed_controls_exact": true
+  },
+  "additional_checks": {
+    "caps_passed": 2744,
+    "setup_regressions": [],
+    "setup_glitches": 0
+  },
+  "complete_replay_byte_identical": true,
+  "player_unit_passed": 4,
+  "native_fresh_yosys_source_cases": 13,
+  "full_decoder_passed": 18,
+  "full_decoder_known_failure": {
+    "line": 197,
+    "actual": 10,
+    "expected": 8,
+    "assertion_changed": false
+  },
+  "total_settle_ticks_before": 414032,
+  "total_settle_ticks_after": 405336,
+  "worst_settle_ticks_before": 10,
+  "worst_settle_ticks_after": 10,
+  "simulator_semantics_changed": false,
+  "artifacts": {
+    "generator-player-positive-path-experiment-2026-10-01-family.jsonl.gz": "d4b1d74e75ebb35b9fe2aec647ae96ef9b43d757e3601ef82c18258dfd7e02c3",
+    "generator-player-positive-path-experiment-2026-10-01-quality.json.gz": "aec681ea429677b583fc573d326c94f9d1e7d281a0f781f5fb8a0e2d589e9fb6",
+    "generator-player-positive-path-experiment-2026-10-01-shipping-quality.json.gz": "963d37ee2ff37314ec8f648210250644dc41f8a1e1618ef99bbadf06b8715a7e",
+    "generator-player-positive-path-experiment-2026-10-01-extra.json.gz": "02ccb9bd3318868348a523b976e38f64e0f4adb35aa3600dd402f6b3f3caf1e6",
+    "generator-player-positive-path-experiment-2026-10-01-unit.log.gz": "bc3c79e9cb36f7236bf3d552730e749e82cef6a3c452e069d1142f2a43cea4c0",
+    "generator-player-positive-path-experiment-2026-10-01-frontend.log.gz": "d2e44e38f005dbdd45fe1e68a74561ffd7ae666287bc8aa9528ed10d5039f218",
+    "generator-player-positive-path-experiment-2026-10-01-decoder.log.gz": "42e05dc51d1f613d1895d9dabeda31306a31642161e2b861e8d34074e22eb895",
+    "generator-player-positive-path-experiment-2026-10-01-replay.log.gz": "b5c464410918801e6067cc2174f196dbb39711602711ca301ac14f7fbd2bd2ef"
+  }
+}

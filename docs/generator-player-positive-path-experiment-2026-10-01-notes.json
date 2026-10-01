@@ -1,0 +1,11 @@
+{
+  "baseline_commit": "ef8fed8",
+  "status": "qualified",
+  "first_run": {
+    "completed_cases": 2080,
+    "terminal": "conductor-path assertion at encoding 2080",
+    "cause": "positive output 2 needs word rail z17; emitted rail stopped at z16"
+  },
+  "correction": "Extend word rail to z17 when a positive literal drives output 2. Complete family rerun required.",
+  "acceptance": "All 4096 source functions; fixed control exact; twelve independent metrics nonregressing; retained-history physical correctness; deterministic replay and regression tests before commit."
+}

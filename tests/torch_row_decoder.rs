@@ -2398,6 +2398,9 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         [1, 6, 3, 5],
         [1, 1, 0, 0], // Direct primary input to a noninverting tap.
         [7, 1, 2, 0], // Three shared repeater-only rows without input buffers.
+        [0, 1, 0, 1], // Positive a through noninverting control and data repeaters.
+        [0, 0, 4, 4], // Positive b reaches the final output row extension.
+        [0, 1, 1, 1], // Two positive literals merge without torch reconvergence.
         [2, 7, 7, 1], // The last zero tap formerly overwrote the source observation.
         [2, 5, 5, 6], // Six rows require two independently isolated buffers.
         [3, 6, 6, 1],

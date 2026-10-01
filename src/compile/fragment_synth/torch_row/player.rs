@@ -48,28 +48,35 @@ fn program_rows(words: [u8; 4]) -> Vec<(usize, u8, u8, u8)> {
         .map(|(index, ((bits, mask), word))| (index, bits as u8, mask as u8, word))
         .collect()
 }
+fn row_x(index: usize) -> i32 {
+    2 + 4 * index as i32
+}
+
+fn positive_literal(bits: u8, mask: u8) -> bool {
+    mask.count_ones() == 1 && bits & mask == mask
+}
+
 fn source_x(rows: &[(usize, u8, u8, u8)]) -> i32 {
-    16.max(
-        rows.iter()
-            .map(|r| 2 + 3 * r.0 as i32 + 4)
-            .max()
-            .unwrap_or(16),
-    )
+    16.max(rows.iter().map(|r| row_x(r.0) + 4).max().unwrap_or(16))
 }
 
 fn needs_input_buffer(rows: &[(usize, u8, u8, u8)]) -> bool {
     // Retain timing isolation for torch controls and reconverging data outputs.
-    // Repeater-only controls with one data torch per output have at most three
-    // rows; the 16-block input position still reaches every real input tap.
-    rows.iter().any(|r| r.1 & r.2 != 0)
-        || (0..3).any(|bit| rows.iter().filter(|r| r.3 & (1 << bit) != 0).count() > 1)
+    // Pure positive literals use noninverting repeaters throughout. Other
+    // unbuffered outputs each have one data torch, without reconvergence.
+    rows.iter()
+        .any(|r| !positive_literal(r.1, r.2) && r.1 & r.2 != 0)
+        || (0..3).any(|bit| {
+            let terms: Vec<_> = rows.iter().filter(|r| r.3 & (1 << bit) != 0).collect();
+            terms.len() > 1 && terms.iter().any(|r| !positive_literal(r.1, r.2))
+        })
 }
 
 fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Position; 3]) {
     let rows = program_rows(words);
     let source_x = source_x(&rows);
     let buffered = needs_input_buffer(&rows);
-    let dual = rows.len() == 6;
+    let dual = rows.len() >= 5;
     let mut w = World::new((source_x + 5).max(20), 10, 21);
     let address_z = [4, 7];
     let inputs = address_z.map(|z| Position::new(source_x, 5, z));
@@ -95,36 +102,44 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
             w.set(source_x - 1, 5, z, r);
         }
         if dual {
+            let lane = z - 1;
             for p in [
-                Position::new(22, 5, z),
-                Position::new(24, 7, z),
-                Position::new(25, 8, z),
-                Position::new(23, 6, z),
+                Position::new(source_x, 5, lane),
+                Position::new(source_x - 1, 6, lane),
+                Position::new(source_x - 2, 7, lane),
             ] {
                 wire(&mut w, p);
             }
-            for x in 13..=25 {
-                wire(&mut w, Position::new(x, 8, z + 1));
+            for x in 15..=source_x - 3 {
+                wire(&mut w, Position::new(x, 8, lane));
             }
-            wire(&mut w, Position::new(12, 7, z + 1));
-            wire(&mut w, Position::new(11, 6, z + 1));
-            wire(&mut w, Position::new(10, 5, z + 1));
-            put(&mut w, Position::new(14, 8, z + 1), BlockKind::Repeater);
-            let mut r = w.get(14, 8, z + 1).clone();
+            for p in [
+                Position::new(14, 7, lane),
+                Position::new(13, 6, lane),
+                Position::new(12, 5, lane),
+            ] {
+                wire(&mut w, p);
+            }
+            put(&mut w, Position::new(16, 8, lane), BlockKind::Repeater);
+            let mut r = w.get(16, 8, lane).clone();
             r.facing = Some(Facing::East);
-            w.set(14, 8, z + 1, r);
+            w.set(16, 8, lane, r);
         }
     }
     for &(row, address, mask, word) in &rows {
-        let x = 2 + 3 * row as i32;
-        for z in 3..=16 {
+        let x = row_x(row);
+        for z in 3..=if positive_literal(address, mask) && word & 4 != 0 {
+            17
+        } else {
+            16
+        } {
             wire(&mut w, Position::new(x, 3, z));
         }
         for (bit, z) in address_z.into_iter().enumerate() {
             if mask & (1 << bit) == 0 {
                 continue;
             }
-            if address & (1 << bit) != 0 {
+            if address & (1 << bit) != 0 && !positive_literal(address, mask) {
                 let at = Position::new(x, 4, z - 1);
                 put(&mut w, at, BlockKind::WallTorch);
                 let mut t = w.get(at.x, at.y, at.z).clone();
@@ -143,7 +158,18 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
         }
         for (bit, z) in [10, 13, 16].into_iter().enumerate() {
             if word & (1 << bit) != 0 {
-                put(&mut w, Position::new(x + 1, 2, z), BlockKind::WallTorch);
+                if positive_literal(address, mask) {
+                    put(&mut w, Position::new(x, 2, z + 1), BlockKind::Solid);
+                    put(&mut w, Position::new(x + 1, 1, z + 1), BlockKind::Solid);
+                    put(&mut w, Position::new(x + 1, 2, z + 1), BlockKind::Repeater);
+                    let mut r = w.get(x + 1, 2, z + 1).clone();
+                    r.facing = Some(Facing::West);
+                    w.set(x + 1, 2, z + 1, r);
+                    put(&mut w, Position::new(x + 2, 2, z + 1), BlockKind::Solid);
+                    wire(&mut w, Position::new(x + 2, 1, z + 1));
+                } else {
+                    put(&mut w, Position::new(x + 1, 2, z), BlockKind::WallTorch);
+                }
             }
         }
     }
@@ -201,7 +227,7 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
     let rows = program_rows(words);
     let source_x = source_x(&rows);
     let buffered = needs_input_buffer(&rows);
-    let dual = rows.len() == 6;
+    let dual = rows.len() >= 5;
     let high = words.into_iter().fold(7, |a, b| a & b);
     let mut add = |gate: Gate, at: Position| {
         positions.insert(gate.output.clone(), at);
@@ -225,7 +251,7 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
             let right = format!("source{bit}_right");
             let left = format!("source{bit}_left");
             add(buf(right.clone(), name), Position::new(source_x - 1, 5, z));
-            add(buf(left.clone(), name), Position::new(14, 8, z + 1));
+            add(buf(left.clone(), name), Position::new(16, 8, z - 1));
             add(
                 Gate::merge(format!("source{bit}"), &[&right, &left]),
                 Position::new(source_x - 5, 5, z),
@@ -238,7 +264,7 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
         }
     }
     for &(address, bits, mask, word) in &rows {
-        let x = 2 + 3 * address as i32;
+        let x = row_x(address);
         let mut mismatches = Vec::new();
         for bit in 0..2 {
             if mask & (1 << bit) == 0 {
@@ -251,7 +277,7 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
                 ["a", "b"][bit].to_string()
             };
             let z = 4 + 3 * bit as i32;
-            if bits & (1 << bit) != 0 {
+            if bits & (1 << bit) != 0 && !positive_literal(bits, mask) {
                 add(Gate::nor(&name, &[&source]), Position::new(x, 4, z - 1));
             } else {
                 add(buf(name.clone(), &source), Position::new(x + 1, 4, z));
@@ -276,7 +302,11 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
                 continue;
             }
             let name = format!("row{address}_bit{bit}");
-            add(Gate::nor(&name, &[&control]), Position::new(x + 1, 2, z));
+            if positive_literal(bits, mask) {
+                add(buf(name.clone(), &control), Position::new(x + 1, 2, z + 1));
+            } else {
+                add(Gate::nor(&name, &[&control]), Position::new(x + 1, 2, z));
+            }
             terms[bit].push(name);
         }
     }
@@ -357,15 +387,21 @@ mod tests {
 
     #[test]
     fn input_buffers_protect_torch_and_reconverging_paths() {
-        for words in [[1, 1, 1, 0], [0, 0, 0, 1], [0, 0, 1, 1]] {
+        for words in [[1, 1, 1, 0], [0, 0, 0, 1], [1, 1, 0, 1]] {
             assert!(needs_input_buffer(&program_rows(words)));
         }
-        for words in [[1, 1, 0, 0], [1, 0, 0, 0]] {
+        for words in [
+            [1, 1, 0, 0],
+            [1, 0, 0, 0],
+            [0, 0, 1, 1],
+            [0, 1, 0, 1],
+            [0, 1, 1, 1],
+        ] {
             let rows = program_rows(words);
             assert!(!needs_input_buffer(&rows));
             assert!(rows
                 .iter()
-                .all(|r| source_x(&rows) - (2 + 3 * r.0 as i32 + 2) <= 15));
+                .all(|r| source_x(&rows) - (row_x(r.0) + 2) <= 15));
             let (netlist, _, candidate) = candidate(words);
             assert!(!netlist.gates.iter().any(|g| g.output.starts_with("source")));
             realise_and_verify_expanded(&candidate, &netlist, &typed_matrix_library()).unwrap();
