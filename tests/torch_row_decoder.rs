@@ -2395,6 +2395,14 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
     };
     for words in [
+        [0, 3, 5, 7], // Shared positive sum and isolated positive literals.
+        [0, 5, 3, 7], // Reverse the positive literal output order.
+        [0, 3, 1, 3], // Positive sum with a literal and constant low.
+        [4, 5, 7, 7], // Positive sum with b and constant high.
+        [0, 7, 5, 7], // Positive-a aliases remain isolated from the sum.
+        [0, 5, 7, 7], // Positive-b aliases retain distinct public terminals.
+        [0, 3, 3, 3], // Sum aliases share their producer.
+        [4, 5, 5, 5], // Sum plus constant high and low.
         [7, 4, 2, 0], // Shared NOR and both negative literals.
         [7, 2, 4, 0], // Exchange public negative literal ports.
         [3, 2, 0, 0], // Shared NOR with negative a and constant low.

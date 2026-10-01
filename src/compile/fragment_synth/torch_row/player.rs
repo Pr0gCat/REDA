@@ -1362,6 +1362,120 @@ fn product_candidate(
     )
 }
 
+// A positive sum and positive literal outputs need one isolated stage per
+// branch. Keep sibling outputs on the input side of the sum's isolation.
+fn positive_sum_conditions(words: [u8; 4]) -> Option<[usize; 3]> {
+    let rows = program_rows(words);
+    let mut conditions = [3; 3];
+    for (output, condition) in conditions.iter_mut().enumerate() {
+        let terms: Vec<_> = rows.iter().filter(|r| r.3 & (1 << output) != 0).collect();
+        if terms.is_empty() {
+            *condition = if words.iter().all(|w| w & (1 << output) != 0) {
+                4
+            } else {
+                3
+            };
+        } else if terms.iter().all(|r| positive_literal(r.1, r.2)) {
+            *condition = if terms.len() == 2 {
+                0
+            } else {
+                1 + terms[0].2.trailing_zeros() as usize
+            };
+        } else {
+            return None;
+        }
+    }
+    conditions.contains(&0).then_some(conditions)
+}
+
+fn positive_sum_candidate(
+    conditions: [usize; 3],
+) -> (
+    Netlist,
+    World,
+    super::super::candidate::ExpandedPhysicalCandidate,
+) {
+    let mut w = World::new(36, 6, 16);
+    let inputs = [Position::new(9, 1, 4), Position::new(9, 1, 8)];
+    let mut gates = Vec::new();
+    let mut positions = BTreeMap::new();
+    let names = ["shared_sum", "positive_a", "positive_b"];
+    for (bit, p) in inputs.into_iter().enumerate() {
+        put(&mut w, p.down(), BlockKind::Solid);
+        put(&mut w, p, BlockKind::Lever);
+        for (name, x, facing) in [
+            (format!("sum_input{bit}"), 8, Facing::East),
+            (names[bit + 1].to_string(), 10, Facing::West),
+        ] {
+            if x == 10 && !conditions.contains(&(bit + 1)) {
+                continue;
+            }
+            let r = Position::new(x, 1, p.z);
+            put(&mut w, r.down(), BlockKind::Solid);
+            put(&mut w, r, BlockKind::Repeater);
+            let mut b = w.get(r.x, r.y, r.z).clone();
+            b.facing = Some(facing);
+            w.set(r.x, r.y, r.z, b);
+            gates.push(Gate {
+                name: name.clone(),
+                output: name.clone(),
+                kind: GateKind::Buf,
+                inputs: vec![["a", "b"][bit].into()],
+            });
+            positions.insert(name, r);
+        }
+        for x in 3..=7 {
+            wire(&mut w, Position::new(x, 1, p.z));
+        }
+        if conditions.contains(&(bit + 1)) {
+            for x in 11..=16 {
+                wire(&mut w, Position::new(x, 1, p.z));
+            }
+        }
+    }
+    for z in 5..=7 {
+        wire(&mut w, Position::new(3, 1, z));
+    }
+    gates.push(Gate::merge(names[0], &["sum_input0", "sum_input1"]));
+    positions.insert(names[0].into(), Position::new(3, 1, 6));
+    let mut lamps = Vec::new();
+    let mut outputs = Vec::new();
+    for (output, condition) in conditions.into_iter().enumerate() {
+        let (lamp, name) = if condition >= 3 {
+            constant_output(
+                &mut w,
+                &mut gates,
+                &mut positions,
+                output,
+                condition == 4,
+                16,
+                6 + 3 * output as i32,
+            )
+        } else {
+            let (x, z, lamp_x, lamp_z) = match condition {
+                0 => (2, 4 + 2 * output as i32, 1, 4 + 2 * output as i32),
+                1 => (12 + 2 * output as i32, 3, 12 + 2 * output as i32, 2),
+                _ => (12 + 2 * output as i32, 9, 12 + 2 * output as i32, 10),
+            };
+            wire(&mut w, Position::new(x, 1, z));
+            (
+                Position::new(lamp_x, 1, lamp_z),
+                names[condition].to_string(),
+            )
+        };
+        put(&mut w, lamp.down(), BlockKind::Solid);
+        put(&mut w, lamp, BlockKind::Lamp);
+        lamps.push(lamp);
+        outputs.push(name);
+    }
+    let netlist = Netlist {
+        inputs: vec!["a".into(), "b".into()],
+        outputs,
+        gates,
+    };
+    super::typed_world_candidate(netlist, w, inputs.to_vec(), lamps, positions, true)
+}
+
 fn build_candidate(
     words: [u8; 4],
 ) -> (
@@ -1369,6 +1483,9 @@ fn build_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
+    if let Some(conditions) = positive_sum_conditions(words) {
+        return positive_sum_candidate(conditions);
+    }
     if let Some((bits, conditions)) = mixed_product_literals(words) {
         return mixed_product_candidate(bits, conditions);
     }
@@ -1469,6 +1586,66 @@ mod tests {
                 "invalid shared support {mutation}"
             );
         }
+    }
+
+    #[test]
+    fn positive_sums_certify_isolation_aliases_and_retained_history() {
+        let mut checked = 0;
+        for a in 0..5 {
+            for b in 0..5 {
+                for c in 0..5 {
+                    let conditions = [a, b, c];
+                    if !conditions.contains(&0) {
+                        continue;
+                    }
+                    let words = std::array::from_fn(|address| {
+                        conditions
+                            .iter()
+                            .enumerate()
+                            .fold(0, |word, (bit, condition)| {
+                                let value = match condition {
+                                    0 => address != 0,
+                                    1 => address & 1 != 0,
+                                    2 => address & 2 != 0,
+                                    _ => *condition == 4,
+                                };
+                                word | if value { 1 << bit } else { 0 }
+                            })
+                    });
+                    assert_eq!(positive_sum_conditions(words), Some(conditions));
+                    let (source, _) = player_logic(words);
+                    let result = super::super::compile_player_torch_row(&source, 1_000_000)
+                        .unwrap_or_else(|e| panic!("positive sum {words:?}: {e:?}"));
+                    let mut sim = crate::redstone::simulator::Simulator::new(
+                        result.physical().world().clone(),
+                    );
+                    sim.run_until_stable(2000).unwrap();
+                    for from in 0..4 {
+                        for to in 0..4 {
+                            for address in [from, to] {
+                                for (bit, &(x, y, z)) in
+                                    result.source_input_positions().iter().enumerate()
+                                {
+                                    let mut lever = sim.world().get(x, y, z).clone();
+                                    lever.lit = address & (1 << bit) != 0;
+                                    sim.world_mut().set(x, y, z, lever);
+                                }
+                                sim.run_until_stable(2000).unwrap();
+                                for (bit, &(x, y, z)) in
+                                    result.source_output_positions().iter().enumerate()
+                                {
+                                    assert_eq!(sim.world().get(x,y,z).lit, words[address] & (1 << bit) != 0,
+                        "words={words:?}, transition={from}->{to}, address={address}, output={bit}");
+                                }
+                            }
+                        }
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 61);
+        assert!(positive_sum_conditions([0, 1, 1, 2]).is_none());
     }
 
     #[test]
