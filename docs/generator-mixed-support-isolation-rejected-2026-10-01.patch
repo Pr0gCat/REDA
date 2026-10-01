@@ -1,0 +1,17 @@
+diff --git a/src/compile/planner.rs b/src/compile/planner.rs
+index 56e05eb..79e9da0 100644
+--- a/src/compile/planner.rs
++++ b/src/compile/planner.rs
+@@ -5369,6 +5369,12 @@ fn typed_legacy_request_parts(
+                     TerminalRequirement::Exact(RouteTerminalKind::BareMergeRepeater)
+                 } else if netlist.gates[*gate].is_merge() {
+                     TerminalRequirement::Exact(RouteTerminalKind::RepeaterIntoSupport)
++                } else if !netlist.gates.iter().any(|g| g.kind.is_sequential())
++                    && netlist.gates[*gate].inputs.iter().any(|name| netlist.outputs.contains(name)) {
++                    // A public-output input must drive this support through a
++                    // diode. Its strong support power must not return through
++                    // another input's dust landing into a shared source net.
++                    TerminalRequirement::Repeater
+                 } else if matches!(netlist.gates[*gate].kind, crate::compile::topology::GateKind::Nor(n) if n > 0)
+                     && selected_gates.contains(gate)
+                     && !feeds_observed_output

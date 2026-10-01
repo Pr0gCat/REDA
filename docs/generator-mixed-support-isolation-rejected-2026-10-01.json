@@ -1,0 +1,1293 @@
+{
+  "reference": "119a529",
+  "rejected": true,
+  "controls": {
+    "passed": 4068,
+    "incorrect_physics": 28
+  },
+  "candidate": {
+    "passed": 4078,
+    "incorrect_physics": 18
+  },
+  "resolved": [
+    85,
+    99,
+    141,
+    163,
+    267,
+    277,
+    917,
+    931,
+    1379,
+    2129
+  ],
+  "new_functional_failures": [],
+  "remaining_failures": [
+    401,
+    693,
+    819,
+    866,
+    929,
+    1315,
+    1441,
+    1541,
+    1574,
+    1794,
+    1825,
+    2449,
+    2756,
+    2772,
+    3268,
+    3276,
+    3394,
+    3402
+  ],
+  "timing_regressions": [
+    {
+      "encoding": 81,
+      "words": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 97,
+      "words": [
+        1,
+        4,
+        1,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 113,
+      "words": [
+        1,
+        6,
+        1,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 115,
+      "words": [
+        3,
+        6,
+        1,
+        0
+      ],
+      "control_total": 97,
+      "candidate_total": 111,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 117,
+      "words": [
+        5,
+        6,
+        1,
+        0
+      ],
+      "control_total": 97,
+      "candidate_total": 111,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 137,
+      "words": [
+        1,
+        1,
+        2,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 157,
+      "words": [
+        5,
+        3,
+        2,
+        0
+      ],
+      "control_total": 120,
+      "candidate_total": 126,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 162,
+      "words": [
+        2,
+        4,
+        2,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 169,
+      "words": [
+        1,
+        5,
+        2,
+        0
+      ],
+      "control_total": 110,
+      "candidate_total": 114,
+      "control_worst": 12,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 171,
+      "words": [
+        3,
+        5,
+        2,
+        0
+      ],
+      "control_total": 97,
+      "candidate_total": 111,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 173,
+      "words": [
+        5,
+        5,
+        2,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 181,
+      "words": [
+        5,
+        6,
+        2,
+        0
+      ],
+      "control_total": 143,
+      "candidate_total": 160,
+      "control_worst": 14,
+      "candidate_worst": 16
+    },
+    {
+      "encoding": 185,
+      "words": [
+        1,
+        7,
+        2,
+        0
+      ],
+      "control_total": 121,
+      "candidate_total": 136,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 189,
+      "words": [
+        5,
+        7,
+        2,
+        0
+      ],
+      "control_total": 130,
+      "candidate_total": 132,
+      "control_worst": 14,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 227,
+      "words": [
+        3,
+        4,
+        3,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 265,
+      "words": [
+        1,
+        1,
+        4,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 274,
+      "words": [
+        2,
+        2,
+        4,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 283,
+      "words": [
+        3,
+        3,
+        4,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 299,
+      "words": [
+        3,
+        5,
+        4,
+        0
+      ],
+      "control_total": 138,
+      "candidate_total": 146,
+      "control_worst": 16,
+      "candidate_worst": 18
+    },
+    {
+      "encoding": 307,
+      "words": [
+        3,
+        6,
+        4,
+        0
+      ],
+      "control_total": 143,
+      "candidate_total": 160,
+      "control_worst": 14,
+      "candidate_worst": 16
+    },
+    {
+      "encoding": 315,
+      "words": [
+        3,
+        7,
+        4,
+        0
+      ],
+      "control_total": 130,
+      "candidate_total": 132,
+      "control_worst": 14,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 339,
+      "words": [
+        3,
+        2,
+        5,
+        0
+      ],
+      "control_total": 97,
+      "candidate_total": 111,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 341,
+      "words": [
+        5,
+        2,
+        5,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 371,
+      "words": [
+        3,
+        6,
+        5,
+        0
+      ],
+      "control_total": 132,
+      "candidate_total": 154,
+      "control_worst": 14,
+      "candidate_worst": 16
+    },
+    {
+      "encoding": 393,
+      "words": [
+        1,
+        1,
+        6,
+        0
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 395,
+      "words": [
+        3,
+        1,
+        6,
+        0
+      ],
+      "control_total": 97,
+      "candidate_total": 111,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 397,
+      "words": [
+        5,
+        1,
+        6,
+        0
+      ],
+      "control_total": 97,
+      "candidate_total": 111,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 413,
+      "words": [
+        5,
+        3,
+        6,
+        0
+      ],
+      "control_total": 132,
+      "candidate_total": 154,
+      "control_worst": 14,
+      "candidate_worst": 16
+    },
+    {
+      "encoding": 425,
+      "words": [
+        1,
+        5,
+        6,
+        0
+      ],
+      "control_total": 132,
+      "candidate_total": 154,
+      "control_worst": 14,
+      "candidate_worst": 16
+    },
+    {
+      "encoding": 427,
+      "words": [
+        3,
+        5,
+        6,
+        0
+      ],
+      "control_total": 132,
+      "candidate_total": 154,
+      "control_worst": 14,
+      "candidate_worst": 16
+    },
+    {
+      "encoding": 441,
+      "words": [
+        1,
+        7,
+        6,
+        0
+      ],
+      "control_total": 130,
+      "candidate_total": 132,
+      "control_worst": 14,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 682,
+      "words": [
+        2,
+        5,
+        2,
+        1
+      ],
+      "control_total": 93,
+      "candidate_total": 103,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 738,
+      "words": [
+        2,
+        4,
+        3,
+        1
+      ],
+      "control_total": 90,
+      "candidate_total": 95,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 747,
+      "words": [
+        3,
+        5,
+        3,
+        1
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 794,
+      "words": [
+        2,
+        3,
+        4,
+        1
+      ],
+      "control_total": 90,
+      "candidate_total": 95,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 826,
+      "words": [
+        2,
+        7,
+        4,
+        1
+      ],
+      "control_total": 120,
+      "candidate_total": 135,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 850,
+      "words": [
+        2,
+        2,
+        5,
+        1
+      ],
+      "control_total": 93,
+      "candidate_total": 103,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 859,
+      "words": [
+        3,
+        3,
+        5,
+        1
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 882,
+      "words": [
+        2,
+        6,
+        5,
+        1
+      ],
+      "control_total": 120,
+      "candidate_total": 135,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 1035,
+      "words": [
+        3,
+        1,
+        0,
+        2
+      ],
+      "control_total": 111,
+      "candidate_total": 133,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 1063,
+      "words": [
+        7,
+        4,
+        0,
+        2
+      ],
+      "control_total": 138,
+      "candidate_total": 143,
+      "control_worst": 14,
+      "candidate_worst": 16
+    },
+    {
+      "encoding": 1121,
+      "words": [
+        1,
+        4,
+        1,
+        2
+      ],
+      "control_total": 96,
+      "candidate_total": 104,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 1137,
+      "words": [
+        1,
+        6,
+        1,
+        2
+      ],
+      "control_total": 93,
+      "candidate_total": 103,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 1249,
+      "words": [
+        1,
+        4,
+        3,
+        2
+      ],
+      "control_total": 90,
+      "candidate_total": 95,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 1267,
+      "words": [
+        3,
+        6,
+        3,
+        2
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 1289,
+      "words": [
+        1,
+        1,
+        4,
+        2
+      ],
+      "control_total": 109,
+      "candidate_total": 120,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 1305,
+      "words": [
+        1,
+        3,
+        4,
+        2
+      ],
+      "control_total": 90,
+      "candidate_total": 95,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 1321,
+      "words": [
+        1,
+        5,
+        4,
+        2
+      ],
+      "control_total": 136,
+      "candidate_total": 137,
+      "control_worst": 14,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 1337,
+      "words": [
+        1,
+        7,
+        4,
+        2
+      ],
+      "control_total": 120,
+      "candidate_total": 135,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 1417,
+      "words": [
+        1,
+        1,
+        6,
+        2
+      ],
+      "control_total": 93,
+      "candidate_total": 103,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 1435,
+      "words": [
+        3,
+        3,
+        6,
+        2
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 1449,
+      "words": [
+        1,
+        5,
+        6,
+        2
+      ],
+      "control_total": 120,
+      "candidate_total": 135,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 2061,
+      "words": [
+        5,
+        1,
+        0,
+        4
+      ],
+      "control_total": 111,
+      "candidate_total": 133,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 2070,
+      "words": [
+        6,
+        2,
+        0,
+        4
+      ],
+      "control_total": 111,
+      "candidate_total": 133,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 2071,
+      "words": [
+        7,
+        2,
+        0,
+        4
+      ],
+      "control_total": 138,
+      "candidate_total": 143,
+      "control_worst": 14,
+      "candidate_worst": 16
+    },
+    {
+      "encoding": 2133,
+      "words": [
+        5,
+        2,
+        1,
+        4
+      ],
+      "control_total": 137,
+      "candidate_total": 138,
+      "control_worst": 14,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 2161,
+      "words": [
+        1,
+        6,
+        1,
+        4
+      ],
+      "control_total": 93,
+      "candidate_total": 103,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 2185,
+      "words": [
+        1,
+        1,
+        2,
+        4
+      ],
+      "control_total": 96,
+      "candidate_total": 104,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 2189,
+      "words": [
+        5,
+        1,
+        2,
+        4
+      ],
+      "control_total": 161,
+      "candidate_total": 164,
+      "control_worst": 16,
+      "candidate_worst": 16
+    },
+    {
+      "encoding": 2201,
+      "words": [
+        1,
+        3,
+        2,
+        4
+      ],
+      "control_total": 119,
+      "candidate_total": 135,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 2217,
+      "words": [
+        1,
+        5,
+        2,
+        4
+      ],
+      "control_total": 90,
+      "candidate_total": 95,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 2233,
+      "words": [
+        1,
+        7,
+        2,
+        4
+      ],
+      "control_total": 120,
+      "candidate_total": 135,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 2385,
+      "words": [
+        1,
+        2,
+        5,
+        4
+      ],
+      "control_total": 90,
+      "candidate_total": 95,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 2421,
+      "words": [
+        5,
+        6,
+        5,
+        4
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 2441,
+      "words": [
+        1,
+        1,
+        6,
+        4
+      ],
+      "control_total": 93,
+      "candidate_total": 103,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 2457,
+      "words": [
+        1,
+        3,
+        6,
+        4
+      ],
+      "control_total": 120,
+      "candidate_total": 135,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 2477,
+      "words": [
+        5,
+        5,
+        6,
+        4
+      ],
+      "control_total": 79,
+      "candidate_total": 91,
+      "control_worst": 10,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 2655,
+      "words": [
+        7,
+        3,
+        1,
+        5
+      ],
+      "control_total": 111,
+      "candidate_total": 133,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 3083,
+      "words": [
+        3,
+        1,
+        0,
+        6
+      ],
+      "control_total": 118,
+      "candidate_total": 120,
+      "control_worst": 12,
+      "candidate_worst": 12
+    },
+    {
+      "encoding": 3231,
+      "words": [
+        7,
+        3,
+        2,
+        6
+      ],
+      "control_total": 111,
+      "candidate_total": 133,
+      "control_worst": 12,
+      "candidate_worst": 14
+    },
+    {
+      "encoding": 3375,
+      "words": [
+        7,
+        5,
+        4,
+        6
+      ],
+      "control_total": 111,
+      "candidate_total": 133,
+      "control_worst": 12,
+      "candidate_worst": 14
+    }
+  ],
+  "timing_improved_cases": [
+    1067,
+    1285,
+    1287,
+    1323,
+    1345,
+    1348,
+    2063,
+    2115,
+    2119,
+    2179,
+    2183,
+    2241,
+    2242
+  ],
+  "initial_build_failure": "   Compiling reda v0.1.0 (/home/seith/REDA)\nwarning: variable does not need to be mutable\n    --> src/compile/fragment_synth/packing.rs:1298:9\n     |\n1298 |     let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {\n     |         ----^^^^^\n     |         |\n     |         help: remove this `mut`\n     |\n     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default\n\nerror: rustc interrupted by SIGSEGV, printing backtrace\n\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x3ac17ec)[0x77aefd4c17ec]\n/lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x77aef9645330]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm9DbgMarker17getDbgRecordRangeEv+0x0)[0x77aef4dac7f0]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(+0x9875e6e)[0x77aef8675e6e]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm15InstCombinePass3runERNS_8FunctionERNS_15AnalysisManagerIS1_JEEE+0x49f)[0x77aef78e781f]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm11PassManagerINS_8FunctionENS_15AnalysisManagerIS1_JEEEJEE3runERS1_RS3_+0x723)[0x77aef761523f]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm27ModuleToFunctionPassAdaptor3runERNS_6ModuleERNS_15AnalysisManagerIS1_JEEE+0x30b)[0x77aef76e5bdf]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm11PassManagerINS_6ModuleENS_15AnalysisManagerIS1_JEEEJEE3runERS1_RS3_+0x1ef)[0x77aef77748af]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x6340650)[0x77aeffd40650]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x633ea0c)[0x77aeffd3ea0c]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(_RNvXs1_CsktsETOFOqAF_18rustc_codegen_llvmNtB5_18LlvmCodegenBackendNtNtNtCs7pKPTVncLo_17rustc_codegen_ssa6traits5write19WriteBackendMethods8optimize+0x33c)[0x77aeffb75bd6]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(_RINvNtNtCs9k3SxhrAWiO_3std3sys9backtrace28___rust_begin_short_backtraceNCINvNtNtCs7pKPTVncLo_17rustc_codegen_ssa4back5write10spawn_workNtCsktsETOFOqAF_18rustc_codegen_llvm18LlvmCodegenBackendE0uEB2b_+0x16b)[0x77aeffb7c689]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x617c26b)[0x77aeffb7c26b]\n/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x63c2a0e)[0x77aeffdc2a0e]\n/lib/x86_64-linux-gnu/libc.so.6(+0x9cb84)[0x77aef969cb84]\n/lib/x86_64-linux-gnu/libc.so.6(+0x129ecc)[0x77aef9729ecc]\n\nnote: we would appreciate a report at https://github.com/rust-lang/rust\nhelp: you can increase rustc's stack size by setting RUST_MIN_STACK=67108864\nwarning: `reda` (lib) generated 1 warning (run `cargo fix --lib -p reda` to apply 1 suggestion)\nerror: could not compile `reda` (lib); 1 warning emitted\n\nCaused by:\n  process didn't exit successfully: `/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc --crate-name reda --edition=2021 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=5b254954796fc2a2 -C extra-filename=-a694ca04867c4719 --out-dir /home/seith/REDA/target/release/deps -C strip=debuginfo -L dependency=/home/seith/REDA/target/release/deps --extern fastnbt=/home/seith/REDA/target/release/deps/libfastnbt-19476765437a5b65.rmeta --extern flate2=/home/seith/REDA/target/release/deps/libflate2-eff823518b4cc880.rmeta --extern serde=/home/seith/REDA/target/release/deps/libserde-9e3527d4d4179b90.rmeta --extern serde_json=/home/seith/REDA/target/release/deps/libserde_json-6b646c32609bb236.rmeta --extern sha2=/home/seith/REDA/target/release/deps/libsha2-c0083845f9e38631.rmeta --extern thiserror=/home/seith/REDA/target/release/deps/libthiserror-dc21f31298d3c2da.rmeta --extern toml=/home/seith/REDA/target/release/deps/libtoml-54448af94f4f7b1a.rmeta` (signal: 11, SIGSEGV: invalid memory reference)\n",
+  "fixed_suite_retry": "warning: variable does not need to be mutable\n    --> src/compile/fragment_synth/packing.rs:1298:9\n     |\n1298 |     let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {\n     |         ----^^^^^\n     |         |\n     |         help: remove this `mut`\n     |\n     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default\n\nwarning: `reda` (lib) generated 1 warning (run `cargo fix --lib -p reda` to apply 1 suggestion)\n   Compiling reda v0.1.0 (/home/seith/REDA)\n    Finished `release` profile [optimized] target(s) in 3.26s\n     Running tests/dff_physical.rs (target/release/deps/dff_physical-f9295dbc40ac1d9e)\n\nrunning 1 test\ntest native_and_yosys_dffs_match_physical_state_from_power_on ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s\n\n     Running tests/frontend_quality_report.rs (target/release/deps/frontend_quality_report-ac1a6bb2baed8611)\n\nrunning 1 test\ntest compare_frontend_physical_quality ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.34s\n\n     Running tests/generator_quality_matrix.rs (target/release/deps/generator_quality_matrix-62f4aa5423352937)\n\nrunning 1 test\ntest additional_circuit_shapes_match_independent_truth_tables ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s\n\n     Running tests/inverter_bypass_quality.rs (target/release/deps/inverter_bypass_quality-de08b38dea772ec9)\n\nrunning 5 tests\ntest bypass_keeps_exported_inverters_and_rejects_multi_input_support_fanout ... ok\ntest guarded_inverter_bypass_preserves_real_boundaries_and_improves_physical_chains ... ok\ntest inverter_only_fanout_preserves_all_real_output_lamps_and_quality ... ok\ntest multi_input_source_before_inverter_chain_preserves_physical_quality ... ok\ntest inverter_chain_before_multi_input_receiver_preserves_physical_quality ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s\n\n     Running tests/observed_output_isolation.rs (target/release/deps/observed_output_isolation-01c683c187675f60)\n\nrunning 1 test\ntest output_lamp_fanout_has_one_way_gate_landings_and_correct_history ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s\n\n",
+  "rom_fixed_quality": "warning: variable does not need to be mutable\n    --> src/compile/fragment_synth/packing.rs:1298:9\n     |\n1298 |     let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {\n     |         ----^^^^^\n     |         |\n     |         help: remove this `mut`\n     |\n     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default\n\nwarning: `reda` (lib) generated 1 warning (run `cargo fix --lib -p reda` to apply 1 suggestion)\n   Compiling reda v0.1.0 (/home/seith/REDA)\n    Finished `release` profile [optimized] target(s) in 5.40s\n     Running tests/torch_row_decoder.rs (target/release/deps/torch_row_decoder-7f1d1214724aaae1)\n\nrunning 1 test\ntest torch_row_entry_records_quality_against_current_shipping_layouts ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.15s\n\n",
+  "causal_probe": "planner=Unified3d,netlist=Netlist { inputs: [\"a\", \"b\"], outputs: [\"g0\", \"g2\", \"g3\"], gates: [Gate { name: \"g0\", inputs: [\"a\"], output: \"g0\", kind: Nor(1) }, Gate { name: \"g1\", inputs: [\"b\"], output: \"g1\", kind: Nor(1) }, Gate { name: \"n0\", inputs: [\"g1\"], output: \"n0\", kind: Nor(1) }, Gate { name: \"g2\", inputs: [\"g0\", \"n0\"], output: \"g2\", kind: Nor(2) }, Gate { name: \"n1\", inputs: [\"g0\"], output: \"n1\", kind: Nor(1) }, Gate { name: \"g3\", inputs: [\"n1\", \"n0\"], output: \"g3\", kind: Nor(2) }] }\nterminal owner=Some(\"a\"),sink=RouteSink { gate: \"g0\", input_index: 0, anchor: Anchor { x: 23, y: 1, z: 29 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 21, y: 1, z: 29 }, Anchor { x: 22, y: 1, z: 29 }, Anchor { x: 23, y: 1, z: 29 }]\nterminal owner=Some(\"b\"),sink=RouteSink { gate: \"g1\", input_index: 0, anchor: Anchor { x: 32, y: 1, z: 34 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 31, y: 1, z: 35 }, Anchor { x: 31, y: 1, z: 34 }, Anchor { x: 32, y: 1, z: 34 }]\nterminal owner=Some(\"g0\"),sink=RouteSink { gate: \"g2\", input_index: 0, anchor: Anchor { x: 30, y: 1, z: 24 } },kind=RepeaterIntoSupport,tail=[Anchor { x: 28, y: 1, z: 24 }, Anchor { x: 29, y: 1, z: 24 }, Anchor { x: 30, y: 1, z: 24 }]\nterminal owner=Some(\"g0\"),sink=RouteSink { gate: \"n1\", input_index: 0, anchor: Anchor { x: 23, y: 1, z: 24 } },kind=RepeaterIntoSupport,tail=[Anchor { x: 22, y: 1, z: 25 }, Anchor { x: 22, y: 1, z: 24 }, Anchor { x: 23, y: 1, z: 24 }]\nterminal owner=Some(\"g1\"),sink=RouteSink { gate: \"n0\", input_index: 0, anchor: Anchor { x: 33, y: 1, z: 29 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 32, y: 1, z: 30 }, Anchor { x: 32, y: 1, z: 29 }, Anchor { x: 33, y: 1, z: 29 }]\nterminal owner=Some(\"n0\"),sink=RouteSink { gate: \"g2\", input_index: 1, anchor: Anchor { x: 32, y: 1, z: 24 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 33, y: 1, z: 25 }, Anchor { x: 33, y: 1, z: 24 }, Anchor { x: 32, y: 1, z: 24 }]\nterminal owner=Some(\"n0\"),sink=RouteSink { gate: \"g3\", input_index: 1, anchor: Anchor { x: 32, y: 1, z: 18 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 33, y: 1, z: 19 }, Anchor { x: 33, y: 1, z: 18 }, Anchor { x: 32, y: 1, z: 18 }]\nterminal owner=Some(\"n1\"),sink=RouteSink { gate: \"g3\", input_index: 0, anchor: Anchor { x: 30, y: 1, z: 18 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 28, y: 1, z: 18 }, Anchor { x: 29, y: 1, z: 18 }, Anchor { x: 30, y: 1, z: 18 }]\nincorrect gate g3 from=0,to=0,address=0,at=(31,1,17),expected=true,state=BlockState { kind: WallTorch, facing: Some(North), face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wall_torch\", extra_properties: {} }\nfalse-input backfeed signal=n0,peak=(15, Anchor { x: 33, y: 1, z: 18 })\nshared receiver=g2,owner=Some(\"g0\"),logical=Some(true),kind=RepeaterIntoSupport,landing=Anchor { x: 30, y: 1, z: 24 },state=BlockState { kind: Repeater, facing: Some(West), face: None, power: 0, delay: 1, lit: true, half: None, name: \"minecraft:repeater\", extra_properties: {} }\nshared receiver=g2,owner=Some(\"n0\"),logical=Some(false),kind=DirectedDustIntoSupport,landing=Anchor { x: 32, y: 1, z: 24 },state=BlockState { kind: RedstoneWire, facing: None, face: None, power: 15, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\nshared receiver=g3,owner=Some(\"n0\"),logical=Some(false),kind=DirectedDustIntoSupport,landing=Anchor { x: 32, y: 1, z: 18 },state=BlockState { kind: RedstoneWire, facing: None, face: None, power: 14, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\nshared receiver=g3,owner=Some(\"n1\"),logical=Some(false),kind=DirectedDustIntoSupport,landing=Anchor { x: 30, y: 1, z: 18 },state=BlockState { kind: RedstoneWire, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\ndiagnostic cut at=Anchor { x: 30, y: 1, z: 24 }; removes a required source, not a candidate implementation\nretained-history causal intervention gate=g3,before=false,after=true,expected=true,settle=5,cuts=1\n",
+  "causal_probe_error": "\nthread 'main' (9) panicked at examples/rom_output_history_diagnostic.rs:193:29:\ndiagnostic intervention is not physical acceptance\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+  "route_failure": "planner=Unified3d,netlist=Netlist { inputs: [\"a\", \"b\"], outputs: [\"g0\", \"g2\", \"g3\"], gates: [Gate { name: \"g0\", inputs: [\"a\"], output: \"g0\", kind: Nor(1) }, Gate { name: \"g1\", inputs: [\"b\"], output: \"g1\", kind: Nor(1) }, Gate { name: \"n0\", inputs: [\"g1\"], output: \"n0\", kind: Nor(1) }, Gate { name: \"g2\", inputs: [\"g0\", \"n0\"], output: \"g2\", kind: Nor(2) }, Gate { name: \"n1\", inputs: [\"g0\"], output: \"n1\", kind: Nor(1) }, Gate { name: \"g3\", inputs: [\"n1\", \"n0\"], output: \"g3\", kind: Nor(2) }] }\nterminal owner=Some(\"a\"),sink=RouteSink { gate: \"g0\", input_index: 0, anchor: Anchor { x: 23, y: 1, z: 29 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 21, y: 1, z: 29 }, Anchor { x: 22, y: 1, z: 29 }, Anchor { x: 23, y: 1, z: 29 }]\nterminal owner=Some(\"b\"),sink=RouteSink { gate: \"g1\", input_index: 0, anchor: Anchor { x: 32, y: 1, z: 34 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 31, y: 1, z: 35 }, Anchor { x: 31, y: 1, z: 34 }, Anchor { x: 32, y: 1, z: 34 }]\nterminal owner=Some(\"g0\"),sink=RouteSink { gate: \"g2\", input_index: 0, anchor: Anchor { x: 30, y: 1, z: 24 } },kind=RepeaterIntoSupport,tail=[Anchor { x: 28, y: 1, z: 24 }, Anchor { x: 29, y: 1, z: 24 }, Anchor { x: 30, y: 1, z: 24 }]\nterminal owner=Some(\"g0\"),sink=RouteSink { gate: \"n1\", input_index: 0, anchor: Anchor { x: 23, y: 1, z: 24 } },kind=RepeaterIntoSupport,tail=[Anchor { x: 22, y: 1, z: 25 }, Anchor { x: 22, y: 1, z: 24 }, Anchor { x: 23, y: 1, z: 24 }]\nterminal owner=Some(\"g1\"),sink=RouteSink { gate: \"n0\", input_index: 0, anchor: Anchor { x: 33, y: 1, z: 29 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 32, y: 1, z: 30 }, Anchor { x: 32, y: 1, z: 29 }, Anchor { x: 33, y: 1, z: 29 }]\nterminal owner=Some(\"n0\"),sink=RouteSink { gate: \"g2\", input_index: 1, anchor: Anchor { x: 32, y: 1, z: 24 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 33, y: 1, z: 25 }, Anchor { x: 33, y: 1, z: 24 }, Anchor { x: 32, y: 1, z: 24 }]\nterminal owner=Some(\"n0\"),sink=RouteSink { gate: \"g3\", input_index: 1, anchor: Anchor { x: 32, y: 1, z: 18 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 33, y: 1, z: 19 }, Anchor { x: 33, y: 1, z: 18 }, Anchor { x: 32, y: 1, z: 18 }]\nterminal owner=Some(\"n1\"),sink=RouteSink { gate: \"g3\", input_index: 0, anchor: Anchor { x: 30, y: 1, z: 18 } },kind=DirectedDustIntoSupport,tail=[Anchor { x: 28, y: 1, z: 18 }, Anchor { x: 29, y: 1, z: 18 }, Anchor { x: 30, y: 1, z: 18 }]\nincorrect gate g3 from=0,to=0,address=0,at=(31,1,17),expected=true,state=BlockState { kind: WallTorch, facing: Some(North), face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wall_torch\", extra_properties: {} }\nfalse-input backfeed signal=n0,peak=(15, Anchor { x: 33, y: 1, z: 18 })\nshared receiver=g2,owner=Some(\"g0\"),logical=Some(true),kind=RepeaterIntoSupport,landing=Anchor { x: 30, y: 1, z: 24 },state=BlockState { kind: Repeater, facing: Some(West), face: None, power: 0, delay: 1, lit: true, half: None, name: \"minecraft:repeater\", extra_properties: {} }\nshared receiver=g2,owner=Some(\"n0\"),logical=Some(false),kind=DirectedDustIntoSupport,landing=Anchor { x: 32, y: 1, z: 24 },state=BlockState { kind: RedstoneWire, facing: None, face: None, power: 15, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\nshared receiver=g3,owner=Some(\"n0\"),logical=Some(false),kind=DirectedDustIntoSupport,landing=Anchor { x: 32, y: 1, z: 18 },state=BlockState { kind: RedstoneWire, facing: None, face: None, power: 14, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\nshared receiver=g3,owner=Some(\"n1\"),logical=Some(false),kind=DirectedDustIntoSupport,landing=Anchor { x: 30, y: 1, z: 18 },state=BlockState { kind: RedstoneWire, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\ngate neighborhood (31,0,16) BlockState { kind: Lamp, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_lamp\", extra_properties: {} }\ngate neighborhood (29,0,18) BlockState { kind: Solid, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:stone\", extra_properties: {} }\ngate neighborhood (30,0,18) BlockState { kind: Solid, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:stone\", extra_properties: {} }\ngate neighborhood (32,0,18) BlockState { kind: Solid, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:stone\", extra_properties: {} }\ngate neighborhood (33,0,18) BlockState { kind: Solid, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:stone\", extra_properties: {} }\ngate neighborhood (33,0,19) BlockState { kind: Solid, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:stone\", extra_properties: {} }\ngate neighborhood (31,1,16) BlockState { kind: RedstoneWire, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\ngate neighborhood (31,1,17) BlockState { kind: WallTorch, facing: Some(North), face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wall_torch\", extra_properties: {} }\ngate neighborhood (29,1,18) BlockState { kind: RedstoneWire, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\ngate neighborhood (30,1,18) BlockState { kind: RedstoneWire, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\ngate neighborhood (31,1,18) BlockState { kind: Solid, facing: None, face: None, power: 0, delay: 0, lit: false, half: None, name: \"minecraft:stone\", extra_properties: {} }\ngate neighborhood (32,1,18) BlockState { kind: RedstoneWire, facing: None, face: None, power: 14, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\ngate neighborhood (33,1,18) BlockState { kind: RedstoneWire, facing: None, face: None, power: 15, delay: 0, lit: false, half: None, name: \"minecraft:redstone_wire\", extra_properties: {} }\ngate neighborhood (33,1,19) BlockState { kind: Repeater, facing: Some(South), face: None, power: 0, delay: 1, lit: true, half: None, name: \"minecraft:repeater\", extra_properties: {} }\n",
+  "withdrawal_tests": "   Compiling reda v0.1.0 (/home/seith/REDA)\nwarning: variable does not need to be mutable\n    --> src/compile/fragment_synth/packing.rs:1298:9\n     |\n1298 |     let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {\n     |         ----^^^^^\n     |         |\n     |         help: remove this `mut`\n     |\n     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default\n\nwarning: `reda` (lib) generated 1 warning (run `cargo fix --lib -p reda` to apply 1 suggestion)\n    Finished `release` profile [optimized] target(s) in 38.87s\n     Running tests/frontend_quality_report.rs (target/release/deps/frontend_quality_report-ac1a6bb2baed8611)\n\nrunning 1 test\ntest compare_frontend_physical_quality ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.32s\n\n     Running tests/generator_quality_matrix.rs (target/release/deps/generator_quality_matrix-62f4aa5423352937)\n\nrunning 1 test\ntest additional_circuit_shapes_match_independent_truth_tables ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.89s\n\n     Running tests/observed_output_isolation.rs (target/release/deps/observed_output_isolation-01c683c187675f60)\n\nrunning 1 test\ntest output_lamp_fanout_has_one_way_gate_landings_and_correct_history ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s\n\n",
+  "final_exit_status_checks": {
+    "failure": {
+      "exit_code": 1,
+      "report": {
+        "completed_phases": [
+          {
+            "address": 0,
+            "from": 0,
+            "phase": 0,
+            "ticks": 0,
+            "to": 0
+          }
+        ],
+        "encoding": 85,
+        "failures": [
+          {
+            "actual": false,
+            "at": [
+              31,
+              1,
+              17
+            ],
+            "expected": true,
+            "gate": "g3",
+            "state": {
+              "delay": 0,
+              "extra_properties": {},
+              "face": null,
+              "facing": "North",
+              "half": null,
+              "kind": "WallTorch",
+              "lit": false,
+              "name": "minecraft:redstone_wall_torch",
+              "power": 0
+            }
+          },
+          {
+            "actual": false,
+            "at": [
+              31,
+              0,
+              16
+            ],
+            "expected": true,
+            "public_bit": 2
+          }
+        ],
+        "fingerprint": "5173067ea555a81ce3c9b1743920f6e1a07a9e988867715f8cf68c5660de0872",
+        "netlist": "Netlist { inputs: [\"a\", \"b\"], outputs: [\"g0\", \"g2\", \"g3\"], gates: [Gate { name: \"g0\", inputs: [\"a\"], output: \"g0\", kind: Nor(1) }, Gate { name: \"g1\", inputs: [\"b\"], output: \"g1\", kind: Nor(1) }, Gate { name: \"n0\", inputs: [\"g1\"], output: \"n0\", kind: Nor(1) }, Gate { name: \"g2\", inputs: [\"g0\", \"n0\"], output: \"g2\", kind: Nor(2) }, Gate { name: \"n1\", inputs: [\"g0\"], output: \"n1\", kind: Nor(1) }, Gate { name: \"g3\", inputs: [\"n1\", \"n0\"], output: \"g3\", kind: Nor(2) }] }",
+        "planner": "Unified3d",
+        "status": "incorrect_physics",
+        "words": [
+          5,
+          2,
+          1,
+          0
+        ]
+      }
+    },
+    "legacy": {
+      "exit_code": 0,
+      "report": {
+        "encoding": 2716,
+        "fingerprint": "f1d26b0a279d74fd79e1cb0ecb155c937b741807d34e3b0ae0184d656647559e",
+        "phases": [
+          {
+            "address": 0,
+            "from": 0,
+            "phase": 0,
+            "ticks": 0,
+            "to": 0
+          },
+          {
+            "address": 0,
+            "from": 0,
+            "phase": 1,
+            "ticks": 0,
+            "to": 0
+          },
+          {
+            "address": 0,
+            "from": 0,
+            "phase": 0,
+            "ticks": 0,
+            "to": 1
+          },
+          {
+            "address": 1,
+            "from": 0,
+            "phase": 1,
+            "ticks": 18,
+            "to": 1
+          },
+          {
+            "address": 0,
+            "from": 0,
+            "phase": 0,
+            "ticks": 18,
+            "to": 2
+          },
+          {
+            "address": 2,
+            "from": 0,
+            "phase": 1,
+            "ticks": 19,
+            "to": 2
+          },
+          {
+            "address": 0,
+            "from": 0,
+            "phase": 0,
+            "ticks": 22,
+            "to": 3
+          },
+          {
+            "address": 3,
+            "from": 0,
+            "phase": 1,
+            "ticks": 17,
+            "to": 3
+          },
+          {
+            "address": 1,
+            "from": 1,
+            "phase": 0,
+            "ticks": 20,
+            "to": 0
+          },
+          {
+            "address": 0,
+            "from": 1,
+            "phase": 1,
+            "ticks": 18,
+            "to": 0
+          },
+          {
+            "address": 1,
+            "from": 1,
+            "phase": 0,
+            "ticks": 18,
+            "to": 1
+          },
+          {
+            "address": 1,
+            "from": 1,
+            "phase": 1,
+            "ticks": 0,
+            "to": 1
+          },
+          {
+            "address": 1,
+            "from": 1,
+            "phase": 0,
+            "ticks": 0,
+            "to": 2
+          },
+          {
+            "address": 2,
+            "from": 1,
+            "phase": 1,
+            "ticks": 19,
+            "to": 2
+          },
+          {
+            "address": 1,
+            "from": 1,
+            "phase": 0,
+            "ticks": 18,
+            "to": 3
+          },
+          {
+            "address": 3,
+            "from": 1,
+            "phase": 1,
+            "ticks": 17,
+            "to": 3
+          },
+          {
+            "address": 2,
+            "from": 2,
+            "phase": 0,
+            "ticks": 20,
+            "to": 0
+          },
+          {
+            "address": 0,
+            "from": 2,
+            "phase": 1,
+            "ticks": 22,
+            "to": 0
+          },
+          {
+            "address": 2,
+            "from": 2,
+            "phase": 0,
+            "ticks": 19,
+            "to": 1
+          },
+          {
+            "address": 1,
+            "from": 2,
+            "phase": 1,
+            "ticks": 18,
+            "to": 1
+          },
+          {
+            "address": 2,
+            "from": 2,
+            "phase": 0,
+            "ticks": 19,
+            "to": 2
+          },
+          {
+            "address": 2,
+            "from": 2,
+            "phase": 1,
+            "ticks": 0,
+            "to": 2
+          },
+          {
+            "address": 2,
+            "from": 2,
+            "phase": 0,
+            "ticks": 0,
+            "to": 3
+          },
+          {
+            "address": 3,
+            "from": 2,
+            "phase": 1,
+            "ticks": 20,
+            "to": 3
+          },
+          {
+            "address": 3,
+            "from": 3,
+            "phase": 0,
+            "ticks": 0,
+            "to": 0
+          },
+          {
+            "address": 0,
+            "from": 3,
+            "phase": 1,
+            "ticks": 22,
+            "to": 0
+          },
+          {
+            "address": 3,
+            "from": 3,
+            "phase": 0,
+            "ticks": 17,
+            "to": 1
+          },
+          {
+            "address": 1,
+            "from": 3,
+            "phase": 1,
+            "ticks": 20,
+            "to": 1
+          },
+          {
+            "address": 3,
+            "from": 3,
+            "phase": 0,
+            "ticks": 17,
+            "to": 2
+          },
+          {
+            "address": 2,
+            "from": 3,
+            "phase": 1,
+            "ticks": 20,
+            "to": 2
+          },
+          {
+            "address": 3,
+            "from": 3,
+            "phase": 0,
+            "ticks": 20,
+            "to": 3
+          },
+          {
+            "address": 3,
+            "from": 3,
+            "phase": 1,
+            "ticks": 0,
+            "to": 3
+          }
+        ],
+        "planner": "Legacy",
+        "status": "passed",
+        "words": [
+          4,
+          3,
+          2,
+          5
+        ]
+      }
+    }
+  }
+}
