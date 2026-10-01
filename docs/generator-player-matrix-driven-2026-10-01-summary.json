@@ -1,0 +1,15 @@
+{
+  "baseline_commit": "4d8d8f3",
+  "summary": {
+    "cases": 4096,
+    "correct": 4096,
+    "regressed": 0,
+    "improved_without_regression": 4088,
+    "tied": 8,
+    "all_fixed_controls_exact": true
+  },
+  "all_4096_public_waveforms_exact_to_prior_candidate": true,
+  "changed_worlds": 721,
+  "candidate_certified": false,
+  "raw_sha256": "cc4e3b72d8e4d0e2072db734612381d516e956e331a087ee261353cf825f6d37"
+}

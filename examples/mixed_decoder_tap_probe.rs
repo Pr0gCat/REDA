@@ -114,6 +114,7 @@ fn main() {
             || a == "--player-pruned"
             || a == "--player-restored"
             || a == "--certified-control"
+            || a == "--player-driven"
     }) {
         let args: Vec<_> = std::env::args().collect();
         let start = args.get(2).map(|s| s.parse::<u16>().unwrap()).unwrap_or(0);
@@ -134,8 +135,15 @@ fn main() {
                 pitch,
                 args[1] == "--player-pruned"
                     || args[1] == "--player-restored"
-                    || args[1] == "--certified-control",
-                if args[1] == "--player-restored" || args[1] == "--certified-control" {
+                    || args[1] == "--certified-control"
+                    || args[1] == "--player-driven",
+                if [
+                    "--player-restored",
+                    "--certified-control",
+                    "--player-driven",
+                ]
+                .contains(&args[1].as_str())
+                {
                     1
                 } else {
                     0
@@ -346,6 +354,26 @@ fn player_matrix(
             w.set(16, 2, z, t);
         }
     }
+    // A low output has an explicit NOR0 -> NOR1 driver, rather than floating dust.
+    // Keep earlier diagnostic modes unchanged so their frozen controls remain usable.
+    if std::env::args().any(|a| a == "--player-driven") {
+        let ever_high = words.into_iter().fold(0, |a, b| a | b);
+        for (bit, z) in [10, 13, 16].into_iter().enumerate() {
+            if ever_high & (1 << bit) == 0 {
+                put(&mut w, Position::new(15, 4, z + 1), BlockKind::Solid);
+                wire(&mut w, Position::new(15, 3, z));
+                for (at, facing) in [
+                    (Position::new(15, 4, z), Facing::North),
+                    (Position::new(16, 2, z), Facing::East),
+                ] {
+                    put(&mut w, at, BlockKind::WallTorch);
+                    let mut t = w.get(at.x, at.y, at.z).clone();
+                    t.facing = Some(facing);
+                    w.set(at.x, at.y, at.z, t);
+                }
+            }
+        }
+    }
     if pitch == 3 {
         let mut domains = address_z.map(|z| Position::new(14, 5, z)).to_vec();
         domains.extend(word_lines);
@@ -419,7 +447,9 @@ fn matrix_probe_world(
     prune: bool,
     source_delay: u8,
 ) -> serde_json::Value {
-    let certified_control = !player && std::env::args().any(|a| a == "--certified-control");
+    let certified_control = !player
+        && std::env::args()
+            .any(|a| ["--certified-control", "--player-driven"].contains(&a.as_str()));
     let build = || {
         if player {
             player_matrix(words, pitch, prune, source_delay)
