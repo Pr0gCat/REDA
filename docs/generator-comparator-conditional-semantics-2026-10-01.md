@@ -1,0 +1,7 @@
+# Conditional comparator inverter semantics
+
+Parent: `448a086`. Primitive topology proof now recognizes only a declared comparator NOR1 topology with two distinct primitives, an input-free constant rear torch, one external side input and one constant-to-comparator edge. Mode must be subtract and required rear/side-high strength must both be 15. The output must be the declared comparator. The resulting Boolean expression is NOT(input), conditional on those electrical boundaries.
+
+This symbolic result does not certify a physical world. Selected-library authority, mode/source placement checks, exact emission, world isolation, route connectivity and coupling remain required in the existing certified-world pipeline. Generic comparators and uncontracted replacements still reject. Wrong mode, weakened strength, missing constant connection and aliased primitive identities reject.
+
+Validation: 11 topology tests, 13 structural tests, 16 durable physical tests and 4 player generator regressions pass. No default library comparator entry or ROM generator selection is enabled. Next work is an actual candidate carrying both internal rear and external side connections through the full strict pipeline; current matrix adapter assumes external-only connections and will need genuine internal-route support rather than fabricated observations. Full frozen ROM comparison and deterministic replay remain outstanding.

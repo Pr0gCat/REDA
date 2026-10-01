@@ -132,6 +132,8 @@ pub enum TopologyError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TopologySemanticsError {
+    #[error("comparator {primitive:?} has an invalid inverter requirements topology")]
+    InvalidComparatorRequirements { primitive: PrimitiveId },
     #[error("primitive {primitive:?} has no supported combinational semantics")]
     UnknownPrimitiveSemantics { primitive: PrimitiveId },
     #[error("primitive {primitive:?} has {actual} inputs, expected {expected}")]
@@ -200,6 +202,38 @@ pub fn prove_topology_semantics(
     topology: &ValidatedTopology,
     kind: GateKind,
 ) -> Result<(), TopologySemanticsError> {
+    if let Some(req) = &topology.comparator_inverter {
+        let valid = kind == GateKind::Nor(1)
+            && req.mode == "subtract"
+            && req.rear_strength == 15
+            && req.side_high_strength == 15
+            && req.comparator != req.rear_constant
+            && topology.primitives.len() == 2
+            && topology
+                .primitives
+                .iter()
+                .any(|p| p.id == req.comparator && p.primitive == Primitive::Comparator)
+            && topology
+                .primitives
+                .iter()
+                .any(|p| p.id == req.rear_constant && p.primitive == Primitive::Torch)
+            && topology.output == OutputSpec::Primitive(req.comparator)
+            && topology.connections.len() == 2
+            && topology.connections.iter().any(|c| {
+                c.id == req.side_input
+                    && c.target == ConnectionTarget::Primitive(req.comparator)
+                    && c.source == ConnectionSource::ExternalInput { input_index: 0 }
+            })
+            && topology.connections.iter().any(|c| {
+                c.target == ConnectionTarget::Primitive(req.comparator)
+                    && c.source == ConnectionSource::Primitive(req.rear_constant)
+            });
+        if !valid {
+            return Err(TopologySemanticsError::InvalidComparatorRequirements {
+                primitive: req.comparator,
+            });
+        }
+    }
     let mut values = BTreeMap::<PrimitiveId, BooleanMeaning>::new();
     while values.len() < topology.primitives.len() {
         let mut progressed = false;
@@ -220,7 +254,13 @@ pub fn prove_topology_semantics(
             };
             let meaning = match specification.primitive {
                 Primitive::Torch => {
-                    if sources.is_empty() && kind != GateKind::Nor(0) {
+                    if sources.is_empty()
+                        && kind != GateKind::Nor(0)
+                        && !topology
+                            .comparator_inverter
+                            .as_ref()
+                            .is_some_and(|r| r.rear_constant == specification.id)
+                    {
                         return Err(TopologySemanticsError::PrimitiveInputCount {
                             primitive: specification.id,
                             expected: 1,
@@ -239,7 +279,26 @@ pub fn prove_topology_semantics(
                     }
                     sources.into_iter().next().expect("one repeater input")
                 }
-                Primitive::Comparator | Primitive::Lever | Primitive::Lamp => {
+                Primitive::Comparator => {
+                    let Some(req) = topology
+                        .comparator_inverter
+                        .as_ref()
+                        .filter(|r| r.comparator == specification.id)
+                    else {
+                        return Err(TopologySemanticsError::UnknownPrimitiveSemantics {
+                            primitive: specification.id,
+                        });
+                    };
+                    // Conditional on the selected electrical requirements. A
+                    // certified world must independently prove those boundaries.
+                    let side = topology
+                        .connections
+                        .iter()
+                        .find(|c| c.id == req.side_input)
+                        .unwrap();
+                    negate(source_meaning(side.source, &values).unwrap())
+                }
+                Primitive::Lever | Primitive::Lamp => {
                     return Err(TopologySemanticsError::UnknownPrimitiveSemantics {
                         primitive: specification.id,
                     });
@@ -699,6 +758,64 @@ mod tests {
 
     fn implementation(kind: GateKind, ordinal: u16) -> ImplementationKey {
         ImplementationKey::Library(LibraryEntryId { kind, ordinal })
+    }
+
+    #[test]
+    fn contracted_comparator_proves_conditional_inversion_and_rejects_corrupt_requirements() {
+        use crate::compile::topology::ComparatorInverterContract;
+        let mut library = library_with(Template {
+            nodes: vec![
+                (TemplateNode::Torch, Primitive::Torch),
+                (TemplateNode::SecondTorch, Primitive::Comparator),
+            ],
+            internal_edges: vec![(TemplateNode::Torch, TemplateNode::SecondTorch)],
+            inputs: vec![TemplateNode::SecondTorch],
+            output: Some(TemplateNode::SecondTorch),
+            embedding_hints: vec![],
+        });
+        let id = LibraryEntryId {
+            kind: GateKind::Nor(1),
+            ordinal: 0,
+        };
+        library
+            .register_comparator_inverter(
+                id,
+                ComparatorInverterContract {
+                    comparator: TemplateNode::SecondTorch,
+                    rear_constant: TemplateNode::Torch,
+                    side_input: 0,
+                },
+            )
+            .unwrap();
+        let expanded = instantiate(
+            &library,
+            &gate(GateKind::Nor(1), &["a"]),
+            InstanceId(9),
+            &implementation(GateKind::Nor(1), 0),
+        )
+        .unwrap();
+        assert_eq!(
+            super::prove_topology_semantics(&expanded.topology, GateKind::Nor(1)),
+            Ok(())
+        );
+        for mutation in 0..4 {
+            let mut bad = expanded.topology.clone();
+            match mutation {
+                0 => bad.comparator_inverter.as_mut().unwrap().mode = "compare",
+                1 => bad.comparator_inverter.as_mut().unwrap().side_high_strength = 14,
+                2 => {
+                    bad.connections.pop();
+                }
+                _ => {
+                    bad.comparator_inverter.as_mut().unwrap().rear_constant =
+                        bad.comparator_inverter.as_ref().unwrap().comparator
+                }
+            }
+            assert!(super::prove_topology_semantics(&bad, GateKind::Nor(1)).is_err());
+        }
+        let mut no_contract = expanded.topology.clone();
+        no_contract.comparator_inverter = None;
+        assert!(super::prove_topology_semantics(&no_contract, GateKind::Nor(1)).is_err());
     }
 
     #[test]
