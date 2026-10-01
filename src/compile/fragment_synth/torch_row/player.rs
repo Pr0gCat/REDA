@@ -386,7 +386,7 @@ mod tests {
     use crate::compile::verification::ExpandedPhysicalError;
 
     #[test]
-    fn comparator_candidate_records_both_sources_before_strict_route_support() {
+    fn comparator_candidate_certifies_distinct_inputs_and_retained_history() {
         use crate::compile::topology::{
             ComparatorInverterContract, Library, LibraryEntry, LibraryEntryId, Primitive, Template,
             TemplateNode,
@@ -457,15 +457,92 @@ mod tests {
         );
         assert_eq!(candidate.placements.len(), 2);
         assert_eq!(candidate.connections.len(), 2);
-        let result = realise_and_verify_expanded(&candidate, &netlist, &library);
-        assert!(
-            result.is_err(),
-            "strict comparator route support is not implemented yet"
+        let certified = realise_and_verify_expanded(&candidate, &netlist, &library)
+            .expect("declared distinct comparator ports must certify");
+        let replay = || {
+            let mut sim = crate::redstone::simulator::Simulator::new(certified.world().clone());
+            sim.run_until_stable(2000).unwrap();
+            sim.attach_observer([
+                (cmp, "comparator".to_string()),
+                (Position::new(4, 1, 3), "constant".to_string()),
+                (Position::new(2, 1, 3), "driver".to_string()),
+                (lamp, "lamp".to_string()),
+            ]);
+            let mut records = Vec::new();
+            for from in 0..4 {
+                for to in 0..4 {
+                    for address in [from, to] {
+                        sim.reset_observer();
+                        let start = sim.current_tick();
+                        let high = address & 1 != 0;
+                        let mut lever = sim.world().get(input.x, input.y, input.z).clone();
+                        lever.lit = high;
+                        sim.world_mut().set(input.x, input.y, input.z, lever);
+                        let ticks = sim.run_until_stable(2000).unwrap();
+                        assert_eq!(sim.world().get(cmp.x, cmp.y, cmp.z).power > 0, !high);
+                        assert_eq!(sim.world().get(lamp.x, lamp.y, lamp.z).lit, !high);
+                        assert!(
+                            sim.world().get(4, 1, 3).lit,
+                            "constant torch must remain lit"
+                        );
+                        records.push((
+                            ticks,
+                            sim.observations()
+                                .iter()
+                                .map(|e| (e.label.clone(), e.tick - start, e.value))
+                                .collect::<Vec<_>>(),
+                        ));
+                    }
+                }
+            }
+            records
+        };
+        assert_eq!(
+            replay(),
+            replay(),
+            "retained-history replay must be deterministic"
         );
-        eprintln!(
-            "comparator candidate strict refusal: {:?}",
-            result.err().unwrap()
-        );
+        for mutation in ["compare", "reversed", "missing_rear", "displaced_side"] {
+            let mut invalid = candidate.clone();
+            match mutation {
+                "compare" | "reversed" => {
+                    let cell = invalid
+                        .placements
+                        .values_mut()
+                        .flat_map(|p| &mut p.blocks)
+                        .find(|b| b.state.kind == BlockKind::Comparator)
+                        .unwrap();
+                    if mutation == "compare" {
+                        cell.state
+                            .extra_properties
+                            .insert("mode".into(), "compare".into());
+                    } else {
+                        cell.state.facing = Some(Facing::West);
+                    }
+                }
+                "missing_rear" => {
+                    for placement in invalid.placements.values_mut() {
+                        placement
+                            .blocks
+                            .retain(|b| b.state.kind != BlockKind::WallTorch);
+                    }
+                }
+                "displaced_side" => {
+                    let lever = invalid
+                        .boundaries
+                        .values_mut()
+                        .flat_map(|b| &mut b.blocks)
+                        .find(|b| b.state.kind == BlockKind::Lever)
+                        .unwrap();
+                    lever.at.x += 1;
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                realise_and_verify_expanded(&invalid, &netlist, &library).is_err(),
+                "invalid electrical cell {mutation} must not certify"
+            );
+        }
     }
 
     #[test]

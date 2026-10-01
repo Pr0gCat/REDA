@@ -1,0 +1,29 @@
+{
+  "parent_commit": "7baca5b",
+  "status": "certified_cell_and_unchanged_4096_family_verified",
+  "problem": "Comparator rear and side routes previously collapsed onto the comparator body, duplicating terminal ownership.",
+  "solution": "Use actual primary-owned strong side support and constant-primitive-owned rear wall torch as distinct passive electrical interfaces. Only the selected comparator contract authorizes these terminal kinds. Ordinary routing refuses them.",
+  "verification": {
+    "cell": "Complete realise_and_verify_expanded succeeds; 32 consecutive setup/target phases preserve simulator history, produce Boolean inversion, keep rear torch lit, and repeat exactly.",
+    "negative_cells": [
+      "compare mode",
+      "reversed comparator facing",
+      "missing rear wall torch",
+      "displaced primary lever"
+    ],
+    "regression": {
+      "fragment": "419 passed, 8 ignored; only stale verifier identity snapshot failed",
+      "physical": "16 passed",
+      "revisions": "10 passed",
+      "family_records": 4096,
+      "family_exactly_equals_frozen_31c2a80": true,
+      "family_sha256": "20b340069fd1677affa40e49014c6c3ed60684c037e08130fbd06280c2fceb55",
+      "fingerprint_snapshot_recheck": "1 passed",
+      "routing": "ok. 74 passed; 0 failed; 0 ignored; 0 measured; 1154 filtered out; finished in 0.37s",
+      "cell_final": "1 passed"
+    }
+  },
+  "limits": "No automatic generator selection or ROM/MUX integration yet. This cell certificate is a prerequisite, not a family-quality improvement.",
+  "revision_snapshot": "Explicitly updated three identity snapshots for ExpandedStrict RouteContinuity v3 and Coupling v4. No waveform caps or frozen circuit controls changed.",
+  "compiler_stack": "32 MiB rustc stack overflow during final rebuild; retry at 64 MiB succeeded."
+}

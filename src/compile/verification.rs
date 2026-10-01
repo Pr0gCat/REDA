@@ -202,7 +202,7 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::RouteContinuity,
-                semantic_version: 2,
+                semantic_version: 3,
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Connectivity,
@@ -689,6 +689,105 @@ fn verify_repeater_handovers(
     Ok(approved)
 }
 
+fn comparator_interface_branch(
+    candidate: &ExpandedPhysicalCandidate,
+    emitted: &EmittedWorld,
+    route: &super::routing::RealisedRouteTree,
+    branch: &super::routing::RealisedRouteBranch,
+) -> bool {
+    use super::routing::RouteTerminalKind;
+    let super::fragment_synth::candidate::RouteTarget::Connection(id) = branch.target else {
+        return false;
+    };
+    if branch.path.as_slice() != [branch.terminal.at]
+        || branch.root != branch.terminal.at
+        || branch.terminal.delayed_owner.is_some()
+    {
+        return false;
+    }
+    for instance in &candidate.instances.instances {
+        let Some(req) = &instance.expanded.topology.comparator_inverter else {
+            continue;
+        };
+        let Some(spec) = instance
+            .expanded
+            .topology
+            .connections
+            .iter()
+            .find(|c| c.id == id)
+        else {
+            continue;
+        };
+        if spec.target != ConnectionTarget::Primitive(req.comparator) {
+            return false;
+        }
+        let Some(placement) = candidate.placements.get(&req.comparator) else {
+            return false;
+        };
+        let Some(cell) = placement
+            .blocks
+            .iter()
+            .find(|b| b.state.kind == BlockKind::Comparator)
+        else {
+            return false;
+        };
+        let at = Position::new(cell.at.x, cell.at.y, cell.at.z);
+        let comparator = emitted.world.get(at.x, at.y, at.z);
+        if comparator.kind != BlockKind::Comparator
+            || comparator.extra_properties.get("mode").map(String::as_str) != Some("subtract")
+        {
+            return false;
+        }
+        if id == req.side_input && branch.terminal.kind == RouteTerminalKind::ComparatorSideSupport
+        {
+            let Some(binding) = candidate.connections.get(&id) else {
+                return false;
+            };
+            if route.source != binding.source
+                || !matches!(route.source, PhysicalEndpointId::PrimaryInput(_))
+            {
+                return false;
+            }
+            let Some(boundary) = candidate.boundaries.get(&route.source) else {
+                return false;
+            };
+            let Some(lever) = boundary
+                .blocks
+                .iter()
+                .find(|b| b.state.kind == BlockKind::Lever)
+            else {
+                return false;
+            };
+            let input = Position::new(lever.at.x, lever.at.y, lever.at.z);
+            return branch.terminal.at
+                == Anchor {
+                    y: lever.at.y - 1,
+                    ..lever.at
+                }
+                && comparator_cell_isolated(&emitted.world, at, input).is_ok();
+        }
+        if branch.terminal.kind == RouteTerminalKind::ComparatorRearSource
+            && spec.source
+                == super::fragment_synth::topology::ConnectionSource::Primitive(req.rear_constant)
+            && route.source == PhysicalEndpointId::PrimitiveOutput(req.rear_constant)
+        {
+            let Some(facing) = comparator.facing else {
+                return false;
+            };
+            let rear = at.offset(facing);
+            return branch.terminal.at
+                == Anchor {
+                    x: rear.x,
+                    y: rear.y,
+                    z: rear.z,
+                }
+                && emitted.world.get(rear.x, rear.y, rear.z).kind == BlockKind::WallTorch;
+        }
+        return false;
+    }
+    false
+}
+
 fn verify_route_continuity(
     candidate: &ExpandedPhysicalCandidate,
     emitted: &EmittedWorld,
@@ -696,9 +795,14 @@ fn verify_route_continuity(
     let supported = verify_repeater_handovers(candidate, emitted)?;
     for route in candidate.routes.values() {
         for branch in &route.branches {
+            let comparator_interface =
+                comparator_interface_branch(candidate, emitted, route, branch);
             for &at in &branch.path {
                 let actual = emitted.world.get(at.x, at.y, at.z).kind;
-                if !matches!(actual, BlockKind::RedstoneWire | BlockKind::Repeater) {
+                if !matches!(actual, BlockKind::RedstoneWire | BlockKind::Repeater)
+                    && !(comparator_interface
+                        && matches!(actual, BlockKind::Solid | BlockKind::WallTorch))
+                {
                     return Err(ExpandedPhysicalError::NonConductingRouteCell {
                         route: route.id,
                         sink: branch.sink,

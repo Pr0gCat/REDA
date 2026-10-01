@@ -350,7 +350,8 @@ fn terminal_owner_matches(
                 TerminalCellOwner::Route(actual) => actual == route,
                 TerminalCellOwner::Primitive(primitive) => {
                     source == PhysicalEndpointId::PrimitiveOutput(primitive)
-                        && matches!(branch.target, RouteTarget::DeclaredOutput(_))
+                        && (matches!(branch.target, RouteTarget::DeclaredOutput(_))
+                            || branch.terminal.kind == RouteTerminalKind::ComparatorRearSource)
                 }
                 TerminalCellOwner::Boundary(endpoint) => source == endpoint,
                 TerminalCellOwner::Junction(instance) => {
@@ -374,6 +375,26 @@ fn connection_target_owner_matches(
     let Some(target) = topology_connection_target(candidate, connection) else {
         return false;
     };
+    if let ConnectionTarget::Primitive(target_id) = target {
+        for instance in &candidate.instances.instances {
+            let Some(req) = &instance.expanded.topology.comparator_inverter else {
+                continue;
+            };
+            if req.comparator != target_id {
+                continue;
+            }
+            if branch.terminal.kind == RouteTerminalKind::ComparatorSideSupport
+                && connection == req.side_input
+            {
+                return matches!(source, PhysicalEndpointId::PrimaryInput(_))
+                    && owner == TerminalCellOwner::Boundary(source);
+            }
+            if branch.terminal.kind == RouteTerminalKind::ComparatorRearSource {
+                return source == PhysicalEndpointId::PrimitiveOutput(req.rear_constant)
+                    && owner == TerminalCellOwner::Primitive(req.rear_constant);
+            }
+        }
+    }
     match (target, owner) {
         // An ordinary routed terminal is the concrete Landing(connection).
         // A landing absorbed by a component must instead name the exact
@@ -436,6 +457,8 @@ fn target_endpoint(target: RouteTarget) -> PhysicalEndpointId {
 
 fn terminal_kind(kind: RouteTerminalKind) -> TerminalKind {
     match kind {
+        RouteTerminalKind::ComparatorSideSupport => TerminalKind::ComparatorSideSupport,
+        RouteTerminalKind::ComparatorRearSource => TerminalKind::ComparatorRearSource,
         RouteTerminalKind::RepeaterIntoSupport => TerminalKind::RepeaterIntoSupport,
         RouteTerminalKind::DirectedDustIntoSupport => TerminalKind::DirectedDustIntoSupport,
         RouteTerminalKind::BareMergeDust => TerminalKind::BareMergeDust,

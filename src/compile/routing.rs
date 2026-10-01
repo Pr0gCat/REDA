@@ -33,6 +33,8 @@ pub struct PlacedBlock {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RouteTerminalKind {
+    ComparatorSideSupport,
+    ComparatorRearSource,
     RepeaterIntoSupport,
     DirectedDustIntoSupport,
     BareMergeDust,
@@ -1909,6 +1911,15 @@ where
                 isolated,
             );
             let terminal_state = match kind {
+                RouteTerminalKind::ComparatorSideSupport
+                | RouteTerminalKind::ComparatorRearSource => {
+                    return Err(RouterFailure::Refused {
+                        route: request.id,
+                        source: request.source.id,
+                        sink: Some(sink.id),
+                        category: RouterRefusalCategory::PhysicalInvariant,
+                    })
+                }
                 RouteTerminalKind::RepeaterIntoSupport
                 | RouteTerminalKind::BareMergeRepeater
                 | RouteTerminalKind::OutputTerminalRepeater => {

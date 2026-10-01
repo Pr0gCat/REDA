@@ -7593,6 +7593,7 @@ fn verify_one_terminal(
     // `lay_bent_path` like any other, with an ordinary repeater.
     let bare = !drives_a_pinned_port && merge_branch_is_bare(netlist, &nets[net], gate);
     let matches = match terminal.kind {
+        RouteTerminalKind::ComparatorSideSupport | RouteTerminalKind::ComparatorRearSource => false,
         RouteTerminalKind::RepeaterIntoSupport => actual == BlockKind::Repeater && !bare,
         RouteTerminalKind::DirectedDustIntoSupport => actual == BlockKind::RedstoneWire && !bare,
         RouteTerminalKind::BareMergeDust => actual == BlockKind::RedstoneWire && bare,

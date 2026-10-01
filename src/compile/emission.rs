@@ -40,6 +40,8 @@ pub(crate) enum PhysicalBlockRole {
 /// the durable emitter depend on planner-owned policy types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalKind {
+    ComparatorSideSupport,
+    ComparatorRearSource,
     RepeaterIntoSupport,
     DirectedDustIntoSupport,
     BareMergeDust,

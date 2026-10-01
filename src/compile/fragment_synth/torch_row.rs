@@ -818,8 +818,12 @@ fn typed_world_candidate_with_library(
         } else {
             None
         };
-        let root = if let Some(at) = direct_comparator {
-            at
+        let root = if let Some(_at) = direct_comparator {
+            if matches!(source, PhysicalEndpointId::PrimaryInput(_)) {
+                p.down()
+            } else {
+                p
+            }
         } else if player && world.get(p.x, p.y, p.z).kind == BlockKind::Lever {
             let direct = if let PhysicalEndpointId::PrimitiveOutput(id) = landing {
                 candidate.placements[&id]
@@ -855,46 +859,51 @@ fn typed_world_candidate_with_library(
                 .find(|p| world.get(p.x, p.y, p.z).kind == BlockKind::RedstoneWire)
                 .unwrap()
         };
-        let end = match landing {
-            PhysicalEndpointId::PrimitiveOutput(id) => {
-                let support = candidate.placements[&id].anchor;
-                let placement = &candidate.placements[&id];
-                let output = placement
-                    .blocks
-                    .iter()
-                    .find(|b| matches!(b.state.kind, BlockKind::Repeater | BlockKind::Comparator));
-                if let Some(output) = output {
-                    Position::new(output.at.x, output.at.y, output.at.z)
-                } else {
-                    Position::new(support.x, support.y + 1, support.z)
-                }
-            }
-            PhysicalEndpointId::Junction(_) => {
-                if player && world.get(root.x, root.y, root.z).kind == BlockKind::Repeater {
-                    let forward =
-                        root.offset(world.get(root.x, root.y, root.z).facing.unwrap().opposite());
-                    if world.get(forward.x, forward.y, forward.z).kind == BlockKind::RedstoneWire {
-                        forward
+        let end = if direct_comparator.is_some() {
+            root
+        } else {
+            match landing {
+                PhysicalEndpointId::PrimitiveOutput(id) => {
+                    let support = candidate.placements[&id].anchor;
+                    let placement = &candidate.placements[&id];
+                    let output = placement.blocks.iter().find(|b| {
+                        matches!(b.state.kind, BlockKind::Repeater | BlockKind::Comparator)
+                    });
+                    if let Some(output) = output {
+                        Position::new(output.at.x, output.at.y, output.at.z)
                     } else {
-                        forward.down()
+                        Position::new(support.x, support.y + 1, support.z)
                     }
-                } else {
-                    root
                 }
-            }
-            PhysicalEndpointId::DeclaredOutput(_) => {
-                let at = candidate.observations[&observation(landing)].site.at;
-                if player {
-                    [Facing::North, Facing::West, Facing::East, Facing::South]
-                        .into_iter()
-                        .map(|f| Position::new(at.x, at.y, at.z).offset(f))
-                        .find(|n| world.get(n.x, n.y, n.z).kind == BlockKind::RedstoneWire)
-                        .unwrap()
-                } else {
-                    Position::new(at.x, at.y, at.z - 1)
+                PhysicalEndpointId::Junction(_) => {
+                    if player && world.get(root.x, root.y, root.z).kind == BlockKind::Repeater {
+                        let forward = root
+                            .offset(world.get(root.x, root.y, root.z).facing.unwrap().opposite());
+                        if world.get(forward.x, forward.y, forward.z).kind
+                            == BlockKind::RedstoneWire
+                        {
+                            forward
+                        } else {
+                            forward.down()
+                        }
+                    } else {
+                        root
+                    }
                 }
+                PhysicalEndpointId::DeclaredOutput(_) => {
+                    let at = candidate.observations[&observation(landing)].site.at;
+                    if player {
+                        [Facing::North, Facing::West, Facing::East, Facing::South]
+                            .into_iter()
+                            .map(|f| Position::new(at.x, at.y, at.z).offset(f))
+                            .find(|n| world.get(n.x, n.y, n.z).kind == BlockKind::RedstoneWire)
+                            .unwrap()
+                    } else {
+                        Position::new(at.x, at.y, at.z - 1)
+                    }
+                }
+                _ => unreachable!(),
             }
-            _ => unreachable!(),
         };
         let mut parent = BTreeMap::new();
         let mut queue = VecDeque::from([root]);
@@ -1020,7 +1029,13 @@ fn typed_world_candidate_with_library(
                 sink,
                 at: anchor(end),
                 state: world.get(end.x, end.y, end.z).clone(),
-                kind: if target_repeater.is_some() {
+                kind: if direct_comparator.is_some() {
+                    if matches!(source, PhysicalEndpointId::PrimaryInput(_)) {
+                        crate::compile::routing::RouteTerminalKind::ComparatorSideSupport
+                    } else {
+                        crate::compile::routing::RouteTerminalKind::ComparatorRearSource
+                    }
+                } else if target_repeater.is_some() {
                     crate::compile::routing::RouteTerminalKind::RepeaterIntoSupport
                 } else if matches!(landing, PhysicalEndpointId::Junction(_)) {
                     crate::compile::routing::RouteTerminalKind::BareMergeDust
