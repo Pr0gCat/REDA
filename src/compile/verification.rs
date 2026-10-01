@@ -210,7 +210,7 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Coupling,
-                semantic_version: 3,
+                semantic_version: 4,
             },
         ],
     }
@@ -419,6 +419,8 @@ fn semantic_world_difference(
 /// A typed physical refusal for an expanded candidate.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ExpandedPhysicalError {
+    #[error("comparator {primitive:?} electrical isolation fails at {at:?}")]
+    ComparatorIsolation { primitive: PrimitiveId, at: Anchor },
     #[error("observation {observation:?} at {at:?} does not match the emitted block state")]
     ObservationMismatch {
         observation: ObservationId,
@@ -525,7 +527,10 @@ pub(crate) fn verify_expanded_candidate(
                 verify_junction_closure(candidate, emitted)?;
                 verify_typed_connectivity(candidate, emitted)?;
             }
-            PhysicalVerifierRuleId::Coupling => verify_typed_coupling(candidate, emitted)?,
+            PhysicalVerifierRuleId::Coupling => {
+                verify_typed_coupling(candidate, emitted)?;
+                verify_comparator_isolation(candidate, emitted)?;
+            }
             PhysicalVerifierRuleId::Collision
             | PhysicalVerifierRuleId::TorchMergeStructure
             | PhysicalVerifierRuleId::SignalStrength
@@ -1352,6 +1357,120 @@ fn is_signal_path_kind(kind: BlockKind) -> bool {
     )
 }
 
+fn verify_comparator_isolation(
+    candidate: &ExpandedPhysicalCandidate,
+    emitted: &EmittedWorld,
+) -> Result<(), ExpandedPhysicalError> {
+    for instance in &candidate.instances.instances {
+        let Some(req) = &instance.expanded.topology.comparator_inverter else {
+            continue;
+        };
+        let fail = |at: Position| ExpandedPhysicalError::ComparatorIsolation {
+            primitive: req.comparator,
+            at: Anchor {
+                x: at.x,
+                y: at.y,
+                z: at.z,
+            },
+        };
+        let placement = &candidate.placements[&req.comparator];
+        let cell = placement
+            .blocks
+            .iter()
+            .find(|b| b.state.kind == BlockKind::Comparator)
+            .unwrap();
+        let at = Position::new(cell.at.x, cell.at.y, cell.at.z);
+        let source = candidate.connections[&req.side_input].source;
+        let lever = candidate.boundaries[&source]
+            .blocks
+            .iter()
+            .find(|b| b.state.kind == BlockKind::Lever)
+            .unwrap();
+        let input = Position::new(lever.at.x, lever.at.y, lever.at.z);
+        comparator_cell_isolated(&emitted.world, at, input).map_err(fail)?;
+    }
+    Ok(())
+}
+
+/// Prove zero-state isolation using potential electrical outputs, independent
+/// of the current lever, torch and diode states.
+fn comparator_cell_isolated(world: &World, at: Position, input: Position) -> Result<(), Position> {
+    use crate::redstone::world::block::Face;
+    let comparator = world.get(at.x, at.y, at.z);
+    let facing = comparator.facing.ok_or(at)?;
+    let rear = at.offset(facing);
+    let torch = world.get(rear.x, rear.y, rear.z);
+    if torch.kind != BlockKind::WallTorch {
+        return Err(rear);
+    }
+    let constant_support = rear.offset(torch.facing.ok_or(rear)?.opposite());
+    let sides = match facing {
+        Facing::North | Facing::South => [Facing::East, Facing::West],
+        Facing::East | Facing::West => [Facing::North, Facing::South],
+        _ => return Err(at),
+    };
+    let support = input.down();
+    let lever = world.get(input.x, input.y, input.z);
+    if lever.kind != BlockKind::Lever
+        || lever.face != Some(Face::Floor)
+        || world.get(support.x, support.y, support.z).kind != BlockKind::Solid
+        || !sides.into_iter().any(|f| at.offset(f) == support)
+    {
+        return Err(input);
+    }
+    for (target, allowed, strong_only) in [
+        (constant_support, None, false),
+        (support, Some(input), true),
+    ] {
+        if world.get(target.x, target.y, target.z).kind != BlockKind::Solid {
+            return Err(target);
+        }
+        reject_potential_block_drivers(world, target, allowed, strong_only)?;
+    }
+    let unused = sides
+        .into_iter()
+        .map(|f| at.offset(f))
+        .find(|p| *p != support)
+        .unwrap();
+    match world.get(unused.x, unused.y, unused.z).kind {
+        BlockKind::Air => (),
+        BlockKind::Solid => reject_potential_block_drivers(world, unused, None, true)?,
+        _ => return Err(unused),
+    }
+    Ok(())
+}
+
+fn reject_potential_block_drivers(
+    world: &World,
+    target: Position,
+    allowed: Option<Position>,
+    strong_only: bool,
+) -> Result<(), Position> {
+    for direction in [
+        Facing::North,
+        Facing::South,
+        Facing::East,
+        Facing::West,
+        Facing::Up,
+        Facing::Down,
+    ] {
+        let source = target.offset(direction);
+        if Some(source) == allowed {
+            continue;
+        }
+        let (_, power) = super::structural_output_in_world(
+            world,
+            source,
+            world.get(source.x, source.y, source.z),
+            direction.opposite(),
+        );
+        if power != BlockPower::None && (!strong_only || power == BlockPower::Strong) {
+            return Err(source);
+        }
+    }
+    Ok(())
+}
+
 fn verify_typed_coupling(
     candidate: &ExpandedPhysicalCandidate,
     emitted: &EmittedWorld,
@@ -1649,6 +1768,84 @@ fn union_routes(parent: &mut BTreeMap<RouteId, RouteId>, left: RouteId, right: R
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn comparator_isolation_rejects_potential_foreign_drivers_even_when_unpowered() {
+        use crate::redstone::{
+            simulator::position::Position,
+            world::{
+                block::{BlockKind, BlockState, Face, Facing},
+                storage::World,
+            },
+        };
+        fn put(world: &mut World, at: Position, kind: BlockKind, facing: Option<Facing>) {
+            let mut b = BlockState::air();
+            b.kind = kind;
+            b.facing = facing;
+            if kind == BlockKind::Lever {
+                b.face = Some(Face::Floor);
+            }
+            world.set(at.x, at.y, at.z, b);
+        }
+        let mut world = World::new(8, 4, 8);
+        for x in 0..8 {
+            for z in 0..8 {
+                put(&mut world, Position::new(x, 0, z), BlockKind::Solid, None);
+            }
+        }
+        let cmp = Position::new(3, 1, 3);
+        let input = Position::new(3, 2, 2);
+        put(&mut world, cmp, BlockKind::Comparator, Some(Facing::East));
+        put(&mut world, input, BlockKind::Lever, Some(Facing::North));
+        put(&mut world, input.down(), BlockKind::Solid, None);
+        put(
+            &mut world,
+            Position::new(4, 1, 3),
+            BlockKind::WallTorch,
+            Some(Facing::West),
+        );
+        put(&mut world, Position::new(5, 1, 3), BlockKind::Solid, None);
+        assert_eq!(super::comparator_cell_isolated(&world, cmp, input), Ok(()));
+        for (source, kind, facing, extra_support) in [
+            (
+                Position::new(5, 2, 3),
+                BlockKind::Lever,
+                Some(Facing::North),
+                None,
+            ),
+            (
+                Position::new(2, 1, 2),
+                BlockKind::Repeater,
+                Some(Facing::West),
+                None,
+            ),
+            (
+                Position::new(3, 1, 5),
+                BlockKind::Repeater,
+                Some(Facing::South),
+                Some(Position::new(3, 1, 4)),
+            ),
+            (Position::new(5, 2, 3), BlockKind::RedstoneWire, None, None),
+        ] {
+            let mut bad = world.clone();
+            if let Some(at) = extra_support {
+                put(&mut bad, at, BlockKind::Solid, None);
+            }
+            put(&mut bad, source, kind, facing);
+            assert_eq!(
+                super::comparator_cell_isolated(&bad, cmp, input),
+                Err(source)
+            );
+        }
+        let mut away = world.clone();
+        put(
+            &mut away,
+            Position::new(2, 1, 2),
+            BlockKind::Repeater,
+            Some(Facing::East),
+        );
+        assert_eq!(super::comparator_cell_isolated(&away, cmp, input), Ok(()));
+    }
+
     use super::{
         candidate_verifier_pipeline, directed_conductor_reach, directed_conductor_step,
         expanded_strict_physical_verifier_revision_descriptor,
