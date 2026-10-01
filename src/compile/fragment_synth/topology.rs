@@ -54,8 +54,21 @@ pub enum OutputSpec {
     },
 }
 
+/// Selected-library electrical requirements resolved to stable instance IDs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ComparatorInverterRequirements {
+    pub comparator: PrimitiveId,
+    pub rear_constant: PrimitiveId,
+    pub side_input: ConnectionId,
+    pub mode: &'static str,
+    pub rear_strength: u8,
+    pub side_high_strength: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ValidatedTopology {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparator_inverter: Option<ComparatorInverterRequirements>,
     pub fingerprint: Fingerprint,
     pub primitives: Vec<PrimitiveSpec>,
     pub connections: Vec<ConnectionSpec>,
@@ -278,6 +291,8 @@ pub fn prove_topology_semantics(
 
 #[derive(Serialize)]
 struct FingerprintPayload<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    comparator_inverter: &'a Option<ComparatorInverterRequirements>,
     primitives: &'a [PrimitiveSpec],
     connections: &'a [ConnectionSpec],
     output: &'a OutputSpec,
@@ -289,8 +304,10 @@ fn finish_topology(
     connections: Vec<ConnectionSpec>,
     output: OutputSpec,
     embedding_hints: Vec<EmbeddingHint>,
+    comparator_inverter: Option<ComparatorInverterRequirements>,
 ) -> ValidatedTopology {
     let payload = FingerprintPayload {
+        comparator_inverter: &comparator_inverter,
         primitives: &primitives,
         connections: &connections,
         output: &output,
@@ -298,6 +315,7 @@ fn finish_topology(
     };
     let bytes = serde_json::to_vec(&payload).expect("validated topology must serialize");
     ValidatedTopology {
+        comparator_inverter,
         fingerprint: canonical_fingerprint(&bytes),
         primitives,
         connections,
@@ -449,6 +467,19 @@ fn instantiate_library_entry(
         connections,
         OutputSpec::Primitive(output),
         template.embedding_hints.clone(),
+        library
+            .comparator_inverter_contract(entry_id)
+            .map(|c| ComparatorInverterRequirements {
+                comparator: role_ids[&c.comparator],
+                rear_constant: role_ids[&c.rear_constant],
+                side_input: ConnectionId::External {
+                    instance,
+                    input_index: c.side_input as u16,
+                },
+                mode: "subtract",
+                rear_strength: 15,
+                side_high_strength: 15,
+            }),
     ))
 }
 
@@ -536,6 +567,7 @@ fn instantiate_merge(
             contributors,
         },
         Vec::new(),
+        None,
     ))
 }
 

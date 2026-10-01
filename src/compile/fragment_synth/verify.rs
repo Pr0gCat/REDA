@@ -269,7 +269,8 @@ fn compare_expanded(
             );
         }
     }
-    if actual.topology.output != expected.topology.output
+    if actual.topology.comparator_inverter != expected.topology.comparator_inverter
+        || actual.topology.output != expected.topology.output
         || actual.topology.embedding_hints != expected.topology.embedding_hints
         || actual.topology.fingerprint != expected.topology.fingerprint
     {
@@ -1632,6 +1633,30 @@ mod tests {
             fixture.library.revision_fingerprint()
         );
         assert_eq!(certificate.instance_count, 4);
+    }
+
+    #[test]
+    fn candidate_cannot_invent_comparator_requirements_with_an_unchanged_fingerprint() {
+        let fixture = make_fixture();
+        let mut candidate = fixture.candidate.clone();
+        let instance = candidate.instances.instances[0].id;
+        let topology = &mut candidate.instances.instances[0].expanded.topology;
+        let primitive = topology.primitives[0].id;
+        topology.comparator_inverter =
+            Some(super::super::topology::ComparatorInverterRequirements {
+                comparator: primitive,
+                rear_constant: primitive,
+                side_input: topology.connections[0].id,
+                mode: "subtract",
+                rear_strength: 15,
+                side_high_strength: 15,
+            });
+        assert_mismatch(
+            &candidate,
+            &fixture,
+            StructuralMismatchKind::ImplementationTopology,
+            StableStructuralId::Instance(instance),
+        );
     }
 
     #[test]
