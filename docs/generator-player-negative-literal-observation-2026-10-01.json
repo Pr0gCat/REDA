@@ -1,0 +1,80 @@
+{
+  "baseline_commit": "31c2a80",
+  "shipping_regressed_tables": 837,
+  "regressed_metrics": {
+    "total_settle_ticks": 837,
+    "worst_settle_ticks": 253,
+    "driver_last_change_ticks": 216,
+    "lamp_last_change_ticks": 253
+  },
+  "witness": {
+    "encoding": 65,
+    "words": [
+      1,
+      0,
+      1,
+      0
+    ],
+    "function": "y0 = ~a; y1 = y2 = 0",
+    "transition": "0 -> 1",
+    "shipping_driver_tick": 2,
+    "shipping_lamp_tick": 6,
+    "player_control_repeater_tick": 2,
+    "player_data_torch_tick": 4,
+    "player_driver_tick": 4,
+    "player_lamp_tick": 8
+  },
+  "diagnosis": "A negative single-literal cube uses a noninverting control repeater before its data NOR torch. The explicit stage adds two ticks in the witness. This does not prove that all 837 regressions have this cause.",
+  "next_experiment_constraints": [
+    "Preserve isolation between independent word rails and between output contributions.",
+    "Direct dust must retain sufficient signal at every actual torch support; removing a repeater alone is insufficient.",
+    "Preserve history and every frozen per-table waveform metric; do not compensate slower cases by fewer glitches."
+  ],
+  "production_changed": false,
+  "experiment": {
+    "rule": "For every negative single-literal cube, replace the control repeater with descending dust and connect data NOR directly to its input signal.",
+    "first_attempt": "Inline descent rejected by conductor path verifier.",
+    "second_attempt": "Side descent certified, but physical gate truth failed on 0 -> 1 in encoding 65.",
+    "measured_power": [
+      [
+        15,
+        5,
+        4,
+        15
+      ],
+      [
+        3,
+        5,
+        4,
+        3
+      ],
+      [
+        3,
+        4,
+        3,
+        2
+      ],
+      [
+        2,
+        3,
+        3,
+        1
+      ],
+      [
+        2,
+        3,
+        4,
+        0
+      ],
+      [
+        2,
+        3,
+        10,
+        0
+      ]
+    ],
+    "root_cause": "The control repeater also refreshes the attenuated address signal. Direct dust from the remote source expires before the data torch support.",
+    "result": "Rejected; production restored to committed baseline.",
+    "next_direction": "Change input distribution or physical placement to shorten the unbuffered route, preserving row isolation and sufficient signal strength."
+  }
+}
