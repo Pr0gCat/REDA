@@ -355,6 +355,7 @@ fn typed_matrix_library() -> crate::compile::topology::Library {
     for kind in [
         GateKind::Nor(0),
         GateKind::Nor(1),
+        GateKind::Nor(2),
         GateKind::Or(2),
         GateKind::Or(3),
     ] {
@@ -951,11 +952,31 @@ fn typed_world_candidate_with_library(
                 _ => unreachable!(),
             }
         };
+        let mut terminal_cells = vec![end];
+        if let PhysicalEndpointId::PrimitiveOutput(id) = landing {
+            let placement = &candidate.placements[&id];
+            if placement
+                .blocks
+                .iter()
+                .any(|b| b.state.kind == BlockKind::WallTorch)
+                && world.get(end.x, end.y, end.z).kind != BlockKind::RedstoneWire
+            {
+                let support =
+                    Position::new(placement.anchor.x, placement.anchor.y, placement.anchor.z);
+                terminal_cells = [Facing::North, Facing::South, Facing::East, Facing::West]
+                    .into_iter()
+                    .map(|f| support.offset(f))
+                    .filter(|p| world.get(p.x, p.y, p.z).kind == BlockKind::RedstoneWire)
+                    .collect();
+            }
+        }
+        let mut end = end;
         let mut parent = BTreeMap::new();
         let mut queue = VecDeque::from([root]);
         parent.insert(root, root);
         while let Some(p) = queue.pop_front() {
-            if p == end {
+            if terminal_cells.contains(&p) {
+                end = p;
                 break;
             }
             let state = world.get(p.x, p.y, p.z);

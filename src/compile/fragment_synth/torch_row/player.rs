@@ -56,7 +56,21 @@ fn positive_literal(bits: u8, mask: u8) -> bool {
     mask.count_ones() == 1 && bits & mask == mask
 }
 
+fn direct_zero_product(rows: &[(usize, u8, u8, u8)]) -> Option<u8> {
+    if !needs_input_buffer(rows)
+        || rows.len() != 3
+        || !rows.iter().all(|r| r.2.count_ones() == 2)
+        || !(0..3).all(|bit| rows.iter().filter(|r| r.3 & (1 << bit) != 0).count() == 1)
+    {
+        return None;
+    }
+    rows.iter().find(|r| r.1 == 0).map(|r| r.3)
+}
+
 fn source_x(rows: &[(usize, u8, u8, u8)]) -> i32 {
+    if direct_zero_product(rows).is_some() {
+        return 14;
+    }
     // Direct sources lose one cell of reach relative to a restored output.
     // Keep the single carrier close enough to power its farthest torch tap.
     let margin = if needs_input_buffer(rows) { 4 } else { 3 };
@@ -84,9 +98,18 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
     let buffered = needs_input_buffer(&rows);
     let dual = rows.len() >= 5;
     let mut w = World::new((source_x + 5).max(20), 10, 21);
-    let address_z = [4, 7];
+    let address_z = if direct_zero_product(&rows).is_some() {
+        [2, 8]
+    } else {
+        [4, 7]
+    };
     let inputs = address_z.map(|z| Position::new(source_x, 5, z));
     let always_high = words.into_iter().fold(7, |a, b| a & b);
+    let output_z = if direct_zero_product(&rows).is_some() {
+        [10, 12, 14]
+    } else {
+        [10, 13, 16]
+    };
     for (bit, z) in address_z.into_iter().enumerate() {
         let used = rows.iter().any(|r| r.2 & (1 << bit) != 0);
         wire(&mut w, Position::new(source_x, 5, z));
@@ -133,9 +156,19 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
         }
     }
     for &(row, address, mask, word) in &rows {
-        let x = row_x(row);
-        for z in 3..=if positive_literal(address, mask) && word & 4 != 0 {
+        if address == 0 && direct_zero_product(&rows).is_some() {
+            continue;
+        }
+        let x = row_x(row)
+            + if direct_zero_product(&rows).is_some() {
+                2
+            } else {
+                0
+            };
+        for z in (address_z[0] - 1)..=if positive_literal(address, mask) && word & 4 != 0 {
             17
+        } else if direct_zero_product(&rows).is_some() {
+            14
         } else {
             16
         } {
@@ -162,7 +195,7 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
                 w.set(x + 1, 4, z, r);
             }
         }
-        for (bit, z) in [10, 13, 16].into_iter().enumerate() {
+        for (bit, z) in output_z.into_iter().enumerate() {
             if word & (1 << bit) != 0 {
                 if positive_literal(address, mask) {
                     put(&mut w, Position::new(x, 2, z + 1), BlockKind::Solid);
@@ -179,18 +212,66 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
             }
         }
     }
-    let drivers = [10, 13, 16].map(|z| Position::new(10, 1, z));
-    let lamps = [10, 13, 16].map(|z| Position::new(10, 1, z + 2));
-    for (bit, z) in [10, 13, 16].into_iter().enumerate() {
+    let mut drivers = output_z.map(|z| {
+        Position::new(
+            if direct_zero_product(&rows).is_some() {
+                1
+            } else {
+                10
+            },
+            1,
+            z,
+        )
+    });
+    let mut lamps = output_z.map(|z| {
+        if direct_zero_product(&rows).is_some() {
+            Position::new(0, 1, z)
+        } else {
+            Position::new(10, 1, z + 2)
+        }
+    });
+    if let Some(word) = direct_zero_product(&rows) {
+        for (x, y, z) in [
+            (2, 4, 3),
+            (2, 4, 4),
+            (2, 4, 5),
+            (3, 4, 5),
+            (6, 4, 7),
+            (6, 4, 6),
+            (6, 4, 5),
+            (5, 4, 5),
+            (4, 3, 6),
+            (3, 2, 6),
+            (2, 2, 6),
+        ] {
+            wire(&mut w, Position::new(x, y, z));
+        }
+        put(&mut w, Position::new(4, 4, 5), BlockKind::Solid);
+        put(&mut w, Position::new(4, 4, 6), BlockKind::WallTorch);
+        let mut torch = w.get(4, 4, 6).clone();
+        torch.facing = Some(Facing::South);
+        w.set(4, 4, 6, torch);
+        let bit = word.trailing_zeros() as usize;
+        drivers[bit] = Position::new(2, 2, 6);
+        lamps[bit] = Position::new(1, 2, 6);
+        put(&mut w, lamps[bit].down(), BlockKind::Solid);
+        put(&mut w, lamps[bit], BlockKind::Lamp);
+    }
+    for (bit, z) in output_z.into_iter().enumerate() {
+        if direct_zero_product(&rows).is_some_and(|word| word & (1 << bit) != 0) {
+            continue;
+        }
         for x in 1..=source_x {
             wire(&mut w, Position::new(x, 1, z));
         }
-        wire(&mut w, Position::new(10, 1, z + 1));
+        if direct_zero_product(&rows).is_none() {
+            wire(&mut w, Position::new(10, 1, z + 1));
+        }
         let p = lamps[bit];
         put(&mut w, p.down(), BlockKind::Solid);
         put(&mut w, p, BlockKind::Lamp);
     }
-    for (bit, z) in [10, 13, 16].into_iter().enumerate() {
+    for (bit, z) in output_z.into_iter().enumerate() {
         if always_high & (1 << bit) != 0 {
             put(&mut w, Position::new(source_x + 1, 2, z), BlockKind::Solid);
             put(&mut w, Position::new(source_x, 2, z), BlockKind::WallTorch);
@@ -203,7 +284,7 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
     // Keep earlier diagnostic modes unchanged so their frozen controls remain usable.
     {
         let ever_high = words.into_iter().fold(0, |a, b| a | b);
-        for (bit, z) in [10, 13, 16].into_iter().enumerate() {
+        for (bit, z) in output_z.into_iter().enumerate() {
             if ever_high & (1 << bit) == 0 {
                 put(
                     &mut w,
@@ -232,9 +313,19 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
     let mut terms: [Vec<String>; 3] = std::array::from_fn(|_| Vec::new());
     let rows = program_rows(words);
     let source_x = source_x(&rows);
+    let address_z = if direct_zero_product(&rows).is_some() {
+        [2, 8]
+    } else {
+        [4, 7]
+    };
     let buffered = needs_input_buffer(&rows);
     let dual = rows.len() >= 5;
     let high = words.into_iter().fold(7, |a, b| a & b);
+    let output_z = if direct_zero_product(&rows).is_some() {
+        [10, 12, 14]
+    } else {
+        [10, 13, 16]
+    };
     let mut add = |gate: Gate, at: Position| {
         positions.insert(gate.output.clone(), at);
         gates.push(gate);
@@ -249,7 +340,7 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
         if !rows.iter().any(|r| r.2 & (1 << bit) != 0) {
             continue;
         }
-        let z = 4 + 3 * bit as i32;
+        let z = address_z[bit];
         if !buffered {
             continue;
         }
@@ -270,7 +361,21 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
         }
     }
     for &(address, bits, mask, word) in &rows {
-        let x = row_x(address);
+        if bits == 0 && direct_zero_product(&rows).is_some() {
+            let name = "direct_zero_product";
+            add(
+                Gate::nor(name, &["source0", "source1"]),
+                Position::new(4, 4, 6),
+            );
+            terms[word.trailing_zeros() as usize].push(name.into());
+            continue;
+        }
+        let x = row_x(address)
+            + if direct_zero_product(&rows).is_some() {
+                2
+            } else {
+                0
+            };
         let mut mismatches = Vec::new();
         for bit in 0..2 {
             if mask & (1 << bit) == 0 {
@@ -282,7 +387,7 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
             } else {
                 ["a", "b"][bit].to_string()
             };
-            let z = 4 + 3 * bit as i32;
+            let z = address_z[bit];
             if bits & (1 << bit) != 0 && !positive_literal(bits, mask) {
                 add(Gate::nor(&name, &[&source]), Position::new(x, 4, z - 1));
             } else {
@@ -299,11 +404,19 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
                     &control,
                     &mismatches.iter().map(String::as_str).collect::<Vec<_>>(),
                 ),
-                Position::new(x, 3, 8),
+                Position::new(
+                    x,
+                    3,
+                    if direct_zero_product(&rows).is_some() {
+                        12
+                    } else {
+                        8
+                    },
+                ),
             );
             control
         };
-        for (bit, z) in [10, 13, 16].into_iter().enumerate() {
+        for (bit, z) in output_z.into_iter().enumerate() {
             if word & (1 << bit) == 0 {
                 continue;
             }
@@ -317,7 +430,7 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
         }
     }
     let mut outputs = Vec::new();
-    for (bit, z) in [10, 13, 16].into_iter().enumerate() {
+    for (bit, z) in output_z.into_iter().enumerate() {
         let output = if high & (1 << bit) != 0 {
             let name = format!("constant_high{bit}");
             add(Gate::nor(&name, &[]), Position::new(source_x, 2, z));
@@ -2754,8 +2867,10 @@ mod tests {
 
     #[test]
     fn single_carriers_and_restored_arms_preserve_internal_truth() {
-        for words in [
+        let mut tables = vec![
             [5, 2, 0, 0],
+            [4, 0, 1, 2],
+            [4, 1, 0, 2],
             [1, 0, 0, 1],
             [0, 4, 5, 3],
             [5, 3, 3, 0],
@@ -2764,7 +2879,25 @@ mod tests {
             [0, 0, 0, 1],
             [1, 1, 0, 1],
             [0, 1, 1, 1],
-        ] {
+        ];
+        for middle in [1, 2] {
+            let addresses = [0, middle, 3];
+            for a in 0..3 {
+                for b in 0..3 {
+                    for c in 0..3 {
+                        if a == b || b == c || a == c {
+                            continue;
+                        }
+                        let mut words = [0; 4];
+                        for (bit, index) in [a, b, c].into_iter().enumerate() {
+                            words[addresses[index]] = 1 << bit;
+                        }
+                        tables.push(words);
+                    }
+                }
+            }
+        }
+        for words in tables {
             let (netlist, _, candidate) = matrix_candidate(words);
             let world =
                 realise_and_verify_expanded(&candidate, &netlist, &typed_matrix_library()).unwrap();
