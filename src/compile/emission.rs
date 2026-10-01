@@ -41,6 +41,7 @@ pub(crate) enum PhysicalBlockRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalKind {
     ComparatorSideSupport,
+    ComparatorRearSupport,
     ComparatorRearSource,
     RepeaterIntoSupport,
     DirectedDustIntoSupport,

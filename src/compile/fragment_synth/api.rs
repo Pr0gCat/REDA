@@ -777,17 +777,17 @@ mod tests {
     /// The default library now includes a physical NOR(0) constant driver.
     /// Library and verifier revisions intentionally change the case identity, keeping
     /// measurements certified under different rules separate.
-    /// ExpandedStrict RouteContinuity v3 and Coupling v4 bind comparator electrical interfaces.
+    /// ExpandedStrict RouteContinuity v4 and Coupling v5 bind dynamic comparator rear/side interfaces.
     /// Any further change must explicitly update these snapshots.
     #[test]
     fn the_shipping_case_fingerprint_pins_the_current_verifier_revision() {
         const TWO_GATE_CHAIN_CASE: &str =
-            "66bc7fac5c43a22bd719125f1a1a4e5dcd8cbfb31f8841c1042894ebb4f91d0b";
-        const AND4_CASE: &str = "9a20d55b992d093f27513368833d1c6c023d450f480878e9e3c2b67c1f949ac4";
+            "52f5a35bb67be942840bf785e9be17ff720e3dd56fc44250b551325d0868d2d9";
+        const AND4_CASE: &str = "8306ed2508dc750f0b4206d00435d04f390d1d7837abc94acd06f88640148bd0";
         /// The chain on the caller row the contract honours: `a` at
         /// (1,1,4) facing south, `y` at (4,1,4) facing north.
         const PINNED_TWO_GATE_CHAIN_CASE: &str =
-            "0f6864885935d3cc7bb58dfc8b608109b49a4d731b6fc5048604c639a1c5d06b";
+            "b24e5fec43ffff61418b07e07b3adc83d384875e464d3093225bf09e6d9c0a50";
 
         let chain = two_gate_chain();
         let (and4, _) = build_and4_netlist();

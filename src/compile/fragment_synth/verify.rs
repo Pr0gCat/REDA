@@ -272,6 +272,7 @@ fn compare_expanded(
         }
     }
     if actual.topology.comparator_inverter != expected.topology.comparator_inverter
+        || actual.topology.comparator_subtract != expected.topology.comparator_subtract
         || actual.topology.output != expected.topology.output
         || actual.topology.embedding_hints != expected.topology.embedding_hints
         || actual.topology.fingerprint != expected.topology.fingerprint
@@ -446,6 +447,16 @@ fn validate_primitive_placements(
         )?;
     }
     for instance in authority.instances.values() {
+        // Dynamic input ownership is structural; emitted-world verification
+        // independently excludes potential foreign electrical drivers.
+        if let Some(requirements) = &instance.topology.comparator_subtract {
+            validate_comparator_subtract_sources(requirements, candidate).map_err(|kind| {
+                CertificationError::StructuralMismatch {
+                    kind,
+                    affected: StableStructuralId::Primitive(requirements.comparator),
+                }
+            })?;
+        }
         if let Some(requirements) = &instance.topology.comparator_inverter {
             validate_comparator_inverter_side_source(requirements, candidate).map_err(|kind| {
                 CertificationError::StructuralMismatch {
@@ -459,6 +470,81 @@ fn validate_primitive_placements(
                     affected: StableStructuralId::Primitive(requirements.comparator),
                 },
             )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_comparator_subtract_sources(
+    requirements: &super::topology::ComparatorSubtractRequirements,
+    candidate: &ExpandedPhysicalCandidate,
+) -> Result<(), StructuralMismatchKind> {
+    use crate::redstone::simulator::position::Position;
+    use crate::redstone::world::block::{Face, Facing};
+    let bad = StructuralMismatchKind::ComparatorElectricalContract;
+    if requirements.mode != "subtract"
+        || requirements.low_strength != 0
+        || requirements.high_strength != 15
+    {
+        return Err(bad);
+    }
+    let placement = candidate
+        .placements
+        .get(&requirements.comparator)
+        .ok_or(bad)?;
+    let cell = placement
+        .blocks
+        .iter()
+        .find(|b| b.state.kind == BlockKind::Comparator)
+        .ok_or(bad)?;
+    if cell.state.extra_properties.get("mode").map(String::as_str) != Some("subtract") {
+        return Err(bad);
+    }
+    let facing = cell.state.facing.ok_or(bad)?;
+    let at = Position::new(cell.at.x, cell.at.y, cell.at.z);
+    let sides = match facing {
+        Facing::North | Facing::South => [Facing::East, Facing::West],
+        Facing::East | Facing::West => [Facing::North, Facing::South],
+        _ => return Err(bad),
+    };
+    let rear = candidate
+        .connections
+        .get(&requirements.rear_input)
+        .ok_or(bad)?
+        .source;
+    let side = candidate
+        .connections
+        .get(&requirements.side_input)
+        .ok_or(bad)?
+        .source;
+    if rear == side {
+        return Err(bad);
+    }
+    for (source, is_rear) in [(rear, true), (side, false)] {
+        if !matches!(source, PhysicalEndpointId::PrimaryInput(_)) {
+            return Err(bad);
+        }
+        let boundary = candidate.boundaries.get(&source).ok_or(bad)?;
+        let levers: Vec<_> = boundary
+            .blocks
+            .iter()
+            .filter(|b| b.state.kind == BlockKind::Lever)
+            .collect();
+        if levers.len() != 1 || levers[0].state.face != Some(Face::Floor) {
+            return Err(bad);
+        }
+        let lever = levers[0];
+        let support = Position::new(lever.at.x, lever.at.y - 1, lever.at.z);
+        if !boundary.blocks.iter().any(|b| {
+            b.at == (Anchor {
+                x: support.x,
+                y: support.y,
+                z: support.z,
+            }) && b.state.kind == BlockKind::Solid
+        }) || (is_rear && support != at.offset(facing))
+            || (!is_rear && !sides.into_iter().any(|f| support == at.offset(f)))
+        {
+            return Err(bad);
         }
     }
     Ok(())
@@ -1806,6 +1892,88 @@ mod tests {
     }
 
     #[test]
+    fn subtract_sources_require_distinct_owned_floor_boundaries_and_correct_roles() {
+        let fixture = make_fixture();
+        let mut candidate = fixture.candidate.clone();
+        let cmp = *candidate.placements.keys().next().unwrap();
+        let (mut placement, _) =
+            authoritative_placement(cmp, Primitive::Comparator, Anchor { x: 3, y: 1, z: 3 });
+        let cell = placement
+            .blocks
+            .iter_mut()
+            .find(|b| b.state.kind == BlockKind::Comparator)
+            .unwrap();
+        cell.state
+            .extra_properties
+            .insert("mode".into(), "subtract".into());
+        candidate.placements.insert(cmp, placement);
+        let req = super::super::topology::ComparatorSubtractRequirements {
+            comparator: cmp,
+            rear_input: fixture.external,
+            side_input: fixture.internal,
+            mode: "subtract",
+            low_strength: 0,
+            high_strength: 15,
+        };
+        for (id, port, at) in [
+            (req.rear_input, PortId(0), Anchor { x: 3, y: 2, z: 2 }),
+            (req.side_input, PortId(1), Anchor { x: 4, y: 2, z: 3 }),
+        ] {
+            let source = PhysicalEndpointId::PrimaryInput(port);
+            candidate.connections.get_mut(&id).unwrap().source = source;
+            let mut lever = state(BlockKind::Lever, Some(Facing::North));
+            lever.face = Some(crate::redstone::world::block::Face::Floor);
+            candidate.boundaries.get_mut(&source).unwrap().blocks = vec![
+                PlacedBlock { at, state: lever },
+                PlacedBlock {
+                    at: Anchor { y: at.y - 1, ..at },
+                    state: state(BlockKind::Solid, None),
+                },
+            ];
+        }
+        assert_eq!(
+            super::validate_comparator_subtract_sources(&req, &candidate),
+            Ok(())
+        );
+        for mutation in 0..5 {
+            let mut bad = candidate.clone();
+            let source = bad.connections[&req.side_input].source;
+            match mutation {
+                0 => {
+                    bad.connections.get_mut(&req.side_input).unwrap().source =
+                        bad.connections[&req.rear_input].source
+                }
+                1 => {
+                    bad.boundaries.get_mut(&source).unwrap().blocks.pop();
+                }
+                2 => {
+                    bad.boundaries.get_mut(&source).unwrap().blocks[0]
+                        .state
+                        .face = Some(crate::redstone::world::block::Face::Wall)
+                }
+                3 => {
+                    for b in &mut bad.boundaries.get_mut(&source).unwrap().blocks {
+                        b.at.x += 1;
+                    }
+                }
+                _ => {
+                    bad.placements
+                        .get_mut(&cmp)
+                        .unwrap()
+                        .blocks
+                        .iter_mut()
+                        .find(|b| b.state.kind == BlockKind::Comparator)
+                        .unwrap()
+                        .state
+                        .extra_properties
+                        .insert("mode".into(), "compare".into());
+                }
+            }
+            assert!(super::validate_comparator_subtract_sources(&req, &bad).is_err());
+        }
+    }
+
+    #[test]
     fn comparator_side_source_requires_declared_floor_lever_and_adjacent_owned_support() {
         let fixture = make_fixture();
         let mut candidate = fixture.candidate.clone();
@@ -1889,6 +2057,29 @@ mod tests {
                 mode: "subtract",
                 rear_strength: 15,
                 side_high_strength: 15,
+            });
+        assert_mismatch(
+            &candidate,
+            &fixture,
+            StructuralMismatchKind::ImplementationTopology,
+            StableStructuralId::Instance(instance),
+        );
+    }
+
+    #[test]
+    fn candidate_cannot_invent_subtract_requirements_with_an_unchanged_fingerprint() {
+        let fixture = make_fixture();
+        let mut candidate = fixture.candidate.clone();
+        let instance = candidate.instances.instances[0].id;
+        let topology = &mut candidate.instances.instances[0].expanded.topology;
+        topology.comparator_subtract =
+            Some(super::super::topology::ComparatorSubtractRequirements {
+                comparator: topology.primitives[0].id,
+                rear_input: topology.connections[0].id,
+                side_input: topology.connections[0].id,
+                mode: "subtract",
+                low_strength: 0,
+                high_strength: 15,
             });
         assert_mismatch(
             &candidate,

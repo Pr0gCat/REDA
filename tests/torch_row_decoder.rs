@@ -2395,6 +2395,10 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
     };
     for words in [
+        [0, 7, 0, 0], // Direct subtract cube: a AND NOT b with shared output fanout.
+        [0, 0, 7, 0], // Reverse the comparator rear/side input roles.
+        [2, 7, 2, 2], // Mixed-sign cube coexists with constant high output.
+        [1, 1, 7, 1], // Reversed cube and constants preserve ordered source ports.
         [1, 2, 1, 2], // One primary boundary feeds both polarities of a.
         [1, 1, 2, 2], // Same dual-polarity layout for b.
         [5, 6, 1, 2], // Both polarities of a coexist with negative b.

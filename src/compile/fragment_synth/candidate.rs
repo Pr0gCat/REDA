@@ -970,7 +970,8 @@ impl ExpandedPhysicalCandidate {
                             sink: branch.sink,
                         })?;
                 let terminal_kind_matches = match branch.terminal.kind {
-                    RouteTerminalKind::ComparatorSideSupport => {
+                    RouteTerminalKind::ComparatorSideSupport
+                    | RouteTerminalKind::ComparatorRearSupport => {
                         actual_terminal.0.kind == BlockKind::Solid
                     }
                     RouteTerminalKind::ComparatorRearSource => {

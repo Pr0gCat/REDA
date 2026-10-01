@@ -34,6 +34,7 @@ pub struct PlacedBlock {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RouteTerminalKind {
     ComparatorSideSupport,
+    ComparatorRearSupport,
     ComparatorRearSource,
     RepeaterIntoSupport,
     DirectedDustIntoSupport,
@@ -1912,6 +1913,7 @@ where
             );
             let terminal_state = match kind {
                 RouteTerminalKind::ComparatorSideSupport
+                | RouteTerminalKind::ComparatorRearSupport
                 | RouteTerminalKind::ComparatorRearSource => {
                     return Err(RouterFailure::Refused {
                         route: request.id,

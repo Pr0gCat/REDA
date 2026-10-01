@@ -36,6 +36,8 @@ struct CellLibraryEntryDescriptor {
     embedding_hints: Vec<EmbeddingHintDescriptor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     comparator_inverter: Option<ComparatorInverterDescriptor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    comparator_subtract: Option<ComparatorSubtractDescriptor>,
 }
 
 #[derive(Serialize)]
@@ -46,6 +48,16 @@ struct ComparatorInverterDescriptor {
     mode: &'static str,
     rear_strength: u8,
     side_high_strength: u8,
+}
+
+#[derive(Serialize)]
+struct ComparatorSubtractDescriptor {
+    comparator: String,
+    rear_input: usize,
+    side_input: usize,
+    mode: &'static str,
+    low_strength: u8,
+    high_strength: u8,
 }
 
 #[derive(Serialize)]
@@ -184,6 +196,19 @@ fn cell_library_descriptor(library: &Library) -> CellLibraryRevisionDescriptor {
                             mode: "subtract",
                             rear_strength: 15,
                             side_high_strength: 15,
+                        }),
+                    comparator_subtract: library
+                        .comparator_subtract_contract(crate::compile::topology::LibraryEntryId {
+                            kind,
+                            ordinal: ordinal as u16,
+                        })
+                        .map(|c| ComparatorSubtractDescriptor {
+                            comparator: template_node_name(c.comparator),
+                            rear_input: c.rear_input,
+                            side_input: c.side_input,
+                            mode: "subtract",
+                            low_strength: 0,
+                            high_strength: 15,
                         }),
                     nodes: entry
                         .template

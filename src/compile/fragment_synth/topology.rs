@@ -66,9 +66,21 @@ pub struct ComparatorInverterRequirements {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ComparatorSubtractRequirements {
+    pub comparator: PrimitiveId,
+    pub rear_input: ConnectionId,
+    pub side_input: ConnectionId,
+    pub mode: &'static str,
+    pub low_strength: u8,
+    pub high_strength: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ValidatedTopology {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparator_inverter: Option<ComparatorInverterRequirements>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparator_subtract: Option<ComparatorSubtractRequirements>,
     pub fingerprint: Fingerprint,
     pub primitives: Vec<PrimitiveSpec>,
     pub connections: Vec<ConnectionSpec>,
@@ -234,6 +246,33 @@ pub fn prove_topology_semantics(
             });
         }
     }
+    if let Some(req) = &topology.comparator_subtract {
+        let valid = topology.comparator_inverter.is_none()
+            && kind == GateKind::AndNot
+            && req.mode == "subtract"
+            && req.low_strength == 0
+            && req.high_strength == 15
+            && req.rear_input != req.side_input
+            && topology.primitives.len() == 1
+            && topology.primitives[0].id == req.comparator
+            && topology.primitives[0].primitive == Primitive::Comparator
+            && topology.output == OutputSpec::Primitive(req.comparator)
+            && topology.connections.len() == 2
+            && [(req.rear_input, 0), (req.side_input, 1)]
+                .iter()
+                .all(|&(id, input_index)| {
+                    topology.connections.iter().any(|c| {
+                        c.id == id
+                            && c.source == ConnectionSource::ExternalInput { input_index }
+                            && c.target == ConnectionTarget::Primitive(req.comparator)
+                    })
+                });
+        if !valid {
+            return Err(TopologySemanticsError::InvalidComparatorRequirements {
+                primitive: req.comparator,
+            });
+        }
+    }
     let mut values = BTreeMap::<PrimitiveId, BooleanMeaning>::new();
     while values.len() < topology.primitives.len() {
         let mut progressed = false;
@@ -280,23 +319,42 @@ pub fn prove_topology_semantics(
                     sources.into_iter().next().expect("one repeater input")
                 }
                 Primitive::Comparator => {
-                    let Some(req) = topology
-                        .comparator_inverter
-                        .as_ref()
-                        .filter(|r| r.comparator == specification.id)
-                    else {
-                        return Err(TopologySemanticsError::UnknownPrimitiveSemantics {
-                            primitive: specification.id,
-                        });
-                    };
-                    // Conditional on the selected electrical requirements. A
-                    // certified world must independently prove those boundaries.
-                    let side = topology
-                        .connections
-                        .iter()
-                        .find(|c| c.id == req.side_input)
-                        .unwrap();
-                    negate(source_meaning(side.source, &values).unwrap())
+                    if let Some(req) = &topology.comparator_subtract {
+                        let input = |id| {
+                            source_meaning(
+                                topology
+                                    .connections
+                                    .iter()
+                                    .find(|c| c.id == id)
+                                    .unwrap()
+                                    .source,
+                                &values,
+                            )
+                            .unwrap()
+                        };
+                        negate(disjoin(vec![
+                            negate(input(req.rear_input)),
+                            input(req.side_input),
+                        ]))
+                    } else {
+                        let Some(req) = topology
+                            .comparator_inverter
+                            .as_ref()
+                            .filter(|r| r.comparator == specification.id)
+                        else {
+                            return Err(TopologySemanticsError::UnknownPrimitiveSemantics {
+                                primitive: specification.id,
+                            });
+                        };
+                        // Conditional on the selected electrical requirements. A
+                        // certified world must independently prove those boundaries.
+                        let side = topology
+                            .connections
+                            .iter()
+                            .find(|c| c.id == req.side_input)
+                            .unwrap();
+                        negate(source_meaning(side.source, &values).unwrap())
+                    }
                 }
                 Primitive::Lever | Primitive::Lamp => {
                     return Err(TopologySemanticsError::UnknownPrimitiveSemantics {
@@ -340,6 +398,7 @@ pub fn prove_topology_semantics(
         GateKind::Nor(_) => negate(disjoin(inputs)),
         GateKind::Or(_) => disjoin(inputs),
         GateKind::Buf => inputs[0].clone(),
+        GateKind::AndNot => negate(disjoin(vec![negate(inputs[0].clone()), inputs[1].clone()])),
         _ => return Err(TopologySemanticsError::UnsupportedGateSemantics { kind }),
     };
     if output != expected {
@@ -352,6 +411,8 @@ pub fn prove_topology_semantics(
 struct FingerprintPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     comparator_inverter: &'a Option<ComparatorInverterRequirements>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    comparator_subtract: &'a Option<ComparatorSubtractRequirements>,
     primitives: &'a [PrimitiveSpec],
     connections: &'a [ConnectionSpec],
     output: &'a OutputSpec,
@@ -364,9 +425,11 @@ fn finish_topology(
     output: OutputSpec,
     embedding_hints: Vec<EmbeddingHint>,
     comparator_inverter: Option<ComparatorInverterRequirements>,
+    comparator_subtract: Option<ComparatorSubtractRequirements>,
 ) -> ValidatedTopology {
     let payload = FingerprintPayload {
         comparator_inverter: &comparator_inverter,
+        comparator_subtract: &comparator_subtract,
         primitives: &primitives,
         connections: &connections,
         output: &output,
@@ -375,6 +438,7 @@ fn finish_topology(
     let bytes = serde_json::to_vec(&payload).expect("validated topology must serialize");
     ValidatedTopology {
         comparator_inverter,
+        comparator_subtract,
         fingerprint: canonical_fingerprint(&bytes),
         primitives,
         connections,
@@ -539,6 +603,22 @@ fn instantiate_library_entry(
                 rear_strength: 15,
                 side_high_strength: 15,
             }),
+        library
+            .comparator_subtract_contract(entry_id)
+            .map(|c| ComparatorSubtractRequirements {
+                comparator: role_ids[&c.comparator],
+                rear_input: ConnectionId::External {
+                    instance,
+                    input_index: c.rear_input as u16,
+                },
+                side_input: ConnectionId::External {
+                    instance,
+                    input_index: c.side_input as u16,
+                },
+                mode: "subtract",
+                low_strength: 0,
+                high_strength: 15,
+            }),
     ))
 }
 
@@ -626,6 +706,7 @@ fn instantiate_merge(
             contributors,
         },
         Vec::new(),
+        None,
         None,
     ))
 }
@@ -758,6 +839,97 @@ mod tests {
 
     fn implementation(kind: GateKind, ordinal: u16) -> ImplementationKey {
         ImplementationKey::Library(LibraryEntryId { kind, ordinal })
+    }
+
+    #[test]
+    fn subtract_contract_binds_roles_revision_and_conditional_semantics() {
+        use crate::compile::topology::ComparatorSubtractContract;
+        let id = LibraryEntryId {
+            kind: GateKind::AndNot,
+            ordinal: 0,
+        };
+        let mut library = Library::new(BTreeMap::from([(
+            GateKind::AndNot,
+            vec![LibraryEntry {
+                name: "direct subtract",
+                template: Template {
+                    nodes: vec![(TemplateNode::Torch, Primitive::Comparator)],
+                    inputs: vec![TemplateNode::Torch, TemplateNode::Torch],
+                    internal_edges: vec![],
+                    output: Some(TemplateNode::Torch),
+                    embedding_hints: vec![],
+                },
+            }],
+        )]));
+        let contract = ComparatorSubtractContract {
+            comparator: TemplateNode::Torch,
+            rear_input: 0,
+            side_input: 1,
+        };
+        let before = crate::compile::revisions::cell_library_revision(&library);
+        for invalid in [
+            ComparatorSubtractContract {
+                rear_input: 1,
+                ..contract
+            },
+            ComparatorSubtractContract {
+                side_input: 0,
+                ..contract
+            },
+            ComparatorSubtractContract {
+                comparator: TemplateNode::SecondTorch,
+                ..contract
+            },
+        ] {
+            assert!(library.register_comparator_subtract(id, invalid).is_err());
+            assert_eq!(
+                crate::compile::revisions::cell_library_revision(&library),
+                before
+            );
+        }
+        let make = |library: &Library| {
+            instantiate(
+                library,
+                &gate(GateKind::AndNot, &["a", "b"]),
+                InstanceId(9),
+                &implementation(GateKind::AndNot, 0),
+            )
+            .unwrap()
+            .topology
+        };
+        let undeclared = make(&library);
+        assert!(super::prove_topology_semantics(&undeclared, GateKind::AndNot).is_err());
+        library.register_comparator_subtract(id, contract).unwrap();
+        assert_eq!(library.comparator_subtract_contract(id), Some(contract));
+        assert_ne!(
+            crate::compile::revisions::cell_library_revision(&library),
+            before
+        );
+        let topology = make(&library);
+        assert_ne!(topology.fingerprint, undeclared.fingerprint);
+        assert_eq!(
+            super::prove_topology_semantics(&topology, GateKind::AndNot),
+            Ok(())
+        );
+        for mutation in 0..6 {
+            let mut corrupt = topology.clone();
+            let req = corrupt.comparator_subtract.as_mut().unwrap();
+            match mutation {
+                0 => req.low_strength = 1,
+                1 => req.high_strength = 14,
+                2 => req.mode = "compare",
+                3 => req.side_input = req.rear_input,
+                4 => std::mem::swap(&mut req.side_input, &mut req.rear_input),
+                _ => {
+                    corrupt.connections[0].source =
+                        super::ConnectionSource::ExternalInput { input_index: 1 }
+                }
+            }
+            assert!(super::prove_topology_semantics(&corrupt, GateKind::AndNot).is_err());
+        }
+        assert!(super::prove_topology_semantics(&topology, GateKind::Nor(2)).is_err());
+        let mut ordinary = Library::default_library();
+        assert!(ordinary.register_comparator_subtract(id, contract).is_err());
     }
 
     #[test]

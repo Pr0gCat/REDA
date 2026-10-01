@@ -637,10 +637,19 @@ pub struct ComparatorInverterContract {
     pub side_input: usize,
 }
 
+/// Conditional Boolean subtraction requires independently certified 0/15 inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComparatorSubtractContract {
+    pub comparator: TemplateNode,
+    pub rear_input: usize,
+    pub side_input: usize,
+}
+
 pub struct Library {
     entries: BTreeMap<GateKind, Vec<LibraryEntry>>,
     stateful_entries: BTreeMap<GateKind, StatefulTopology>,
     comparator_inverters: BTreeMap<LibraryEntryId, ComparatorInverterContract>,
+    comparator_subtractors: BTreeMap<LibraryEntryId, ComparatorSubtractContract>,
 }
 
 impl Library {
@@ -653,6 +662,7 @@ impl Library {
             entries,
             stateful_entries: BTreeMap::new(),
             comparator_inverters: BTreeMap::new(),
+            comparator_subtractors: BTreeMap::new(),
         }
     }
 
@@ -685,6 +695,7 @@ impl Library {
             entries,
             stateful_entries,
             comparator_inverters: BTreeMap::new(),
+            comparator_subtractors: BTreeMap::new(),
         }
     }
 
@@ -730,6 +741,35 @@ impl Library {
         id: LibraryEntryId,
     ) -> Option<ComparatorInverterContract> {
         self.comparator_inverters.get(&id).copied()
+    }
+
+    pub fn register_comparator_subtract(
+        &mut self,
+        id: LibraryEntryId,
+        contract: ComparatorSubtractContract,
+    ) -> Result<(), &'static str> {
+        let t = &self.entry(id).ok_or("unknown library entry")?.template;
+        if id.kind != GateKind::AndNot
+            || contract.rear_input != 0
+            || contract.side_input != 1
+            || t.nodes.as_slice() != [(contract.comparator, Primitive::Comparator)]
+            || t.inputs.as_slice() != [contract.comparator, contract.comparator]
+            || !t.internal_edges.is_empty()
+            || t.output != Some(contract.comparator)
+        {
+            return Err(
+                "comparator subtraction topology does not match its electrical declaration",
+            );
+        }
+        self.comparator_subtractors.insert(id, contract);
+        Ok(())
+    }
+
+    pub fn comparator_subtract_contract(
+        &self,
+        id: LibraryEntryId,
+    ) -> Option<ComparatorSubtractContract> {
+        self.comparator_subtractors.get(&id).copied()
     }
 
     /// Every technique known for `kind`, in the order they were registered.

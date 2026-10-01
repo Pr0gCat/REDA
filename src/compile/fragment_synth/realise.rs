@@ -377,6 +377,17 @@ fn connection_target_owner_matches(
     };
     if let ConnectionTarget::Primitive(target_id) = target {
         for instance in &candidate.instances.instances {
+            if let Some(req) = &instance.expanded.topology.comparator_subtract {
+                if req.comparator == target_id {
+                    let matches = (connection == req.rear_input
+                        && branch.terminal.kind == RouteTerminalKind::ComparatorRearSupport)
+                        || (connection == req.side_input
+                            && branch.terminal.kind == RouteTerminalKind::ComparatorSideSupport);
+                    return matches
+                        && matches!(source, PhysicalEndpointId::PrimaryInput(_))
+                        && owner == TerminalCellOwner::Boundary(source);
+                }
+            }
             let Some(req) = &instance.expanded.topology.comparator_inverter else {
                 continue;
             };
@@ -458,6 +469,7 @@ fn target_endpoint(target: RouteTarget) -> PhysicalEndpointId {
 fn terminal_kind(kind: RouteTerminalKind) -> TerminalKind {
     match kind {
         RouteTerminalKind::ComparatorSideSupport => TerminalKind::ComparatorSideSupport,
+        RouteTerminalKind::ComparatorRearSupport => TerminalKind::ComparatorRearSupport,
         RouteTerminalKind::ComparatorRearSource => TerminalKind::ComparatorRearSource,
         RouteTerminalKind::RepeaterIntoSupport => TerminalKind::RepeaterIntoSupport,
         RouteTerminalKind::DirectedDustIntoSupport => TerminalKind::DirectedDustIntoSupport,

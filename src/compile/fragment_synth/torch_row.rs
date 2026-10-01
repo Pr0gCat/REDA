@@ -1063,7 +1063,19 @@ fn typed_world_candidate_with_library(
                 state: world.get(end.x, end.y, end.z).clone(),
                 kind: if direct_comparator.is_some() {
                     if matches!(source, PhysicalEndpointId::PrimaryInput(_)) {
-                        crate::compile::routing::RouteTerminalKind::ComparatorSideSupport
+                        let is_rear = candidate.instances.instances.iter().any(|instance| {
+                            instance
+                                .expanded
+                                .topology
+                                .comparator_subtract
+                                .as_ref()
+                                .is_some_and(|req| Some(req.rear_input) == connection)
+                        });
+                        if is_rear {
+                            crate::compile::routing::RouteTerminalKind::ComparatorRearSupport
+                        } else {
+                            crate::compile::routing::RouteTerminalKind::ComparatorSideSupport
+                        }
                     } else {
                         crate::compile::routing::RouteTerminalKind::ComparatorRearSource
                     }
