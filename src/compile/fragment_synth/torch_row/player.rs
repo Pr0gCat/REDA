@@ -57,18 +57,24 @@ fn positive_literal(bits: u8, mask: u8) -> bool {
 }
 
 fn source_x(rows: &[(usize, u8, u8, u8)]) -> i32 {
-    16.max(rows.iter().map(|r| row_x(r.0) + 4).max().unwrap_or(16))
+    // Direct sources lose one cell of reach relative to a restored output.
+    // Keep the single carrier close enough to power its farthest torch tap.
+    let margin = if needs_input_buffer(rows) { 4 } else { 3 };
+    16.max(rows.iter().map(|r| row_x(r.0) + margin).max().unwrap_or(16))
 }
 
 fn needs_input_buffer(rows: &[(usize, u8, u8, u8)]) -> bool {
-    // Retain timing isolation for torch controls and reconverging data outputs.
-    // Pure positive literals use noninverting repeaters throughout. Other
-    // unbuffered outputs each have one data torch, without reconvergence.
-    rows.iter()
-        .any(|r| !positive_literal(r.1, r.2) && r.1 & r.2 != 0)
-        || (0..3).any(|bit| {
-            let terms: Vec<_> = rows.iter().filter(|r| r.3 & (1 << bit) != 0).collect();
-            terms.len() > 1 && terms.iter().any(|r| !positive_literal(r.1, r.2))
+    // The wider layout uses two restored source arms. Keep their matched
+    // source stages. Complementary terms with different inversion depths also
+    // retain source isolation even when they feed separate data outputs.
+    rows.len() >= 5
+        || rows.iter().any(|a| {
+            rows.iter().any(|b| {
+                a.2 == b.2
+                    && a.2.count_ones() > 1
+                    && (a.1 ^ b.1) & a.2 == a.2
+                    && (a.1 & a.2).count_ones() != (b.1 & b.2).count_ones()
+            })
         })
 }
 
@@ -2553,25 +2559,73 @@ mod tests {
     }
 
     #[test]
-    fn input_buffers_protect_torch_and_reconverging_paths() {
-        for words in [[1, 1, 1, 0], [0, 0, 0, 1], [1, 1, 0, 1]] {
-            assert!(needs_input_buffer(&program_rows(words)));
-        }
+    fn single_carriers_and_restored_arms_preserve_internal_truth() {
         for words in [
-            [1, 1, 0, 0],
-            [1, 0, 0, 0],
-            [0, 0, 1, 1],
-            [0, 1, 0, 1],
+            [5, 2, 0, 0],
+            [1, 0, 0, 1],
+            [0, 4, 5, 3],
+            [5, 3, 3, 0],
+            [1, 6, 3, 5],
+            [1, 1, 1, 0],
+            [0, 0, 0, 1],
+            [1, 1, 0, 1],
             [0, 1, 1, 1],
         ] {
-            let rows = program_rows(words);
-            assert!(!needs_input_buffer(&rows));
-            assert!(rows
-                .iter()
-                .all(|r| source_x(&rows) - (row_x(r.0) + 2) <= 15));
-            let (netlist, _, candidate) = candidate(words);
-            assert!(!netlist.gates.iter().any(|g| g.output.starts_with("source")));
-            realise_and_verify_expanded(&candidate, &netlist, &library_for(words)).unwrap();
+            let (netlist, _, candidate) = matrix_candidate(words);
+            let world =
+                realise_and_verify_expanded(&candidate, &netlist, &typed_matrix_library()).unwrap();
+            let views = candidate.compatibility_views(&netlist).unwrap();
+            let mut sim = crate::redstone::simulator::Simulator::new(world.world().clone());
+            sim.run_until_stable(2000).unwrap();
+            for from in 0..4 {
+                for to in 0..4 {
+                    for address in [from, to] {
+                        for (bit, name) in netlist.inputs.iter().enumerate() {
+                            let &(x, y, z) = &views.input_positions[name];
+                            let mut lever = sim.world().get(x, y, z).clone();
+                            lever.lit = address & (1 << bit) != 0;
+                            sim.world_mut().set(x, y, z, lever);
+                        }
+                        sim.run_until_stable(2000).unwrap();
+                        let mut values: std::collections::HashMap<String, bool> = netlist
+                            .inputs
+                            .iter()
+                            .enumerate()
+                            .map(|(bit, name)| (name.clone(), address & (1 << bit) != 0))
+                            .collect();
+                        for index in netlist.combinational_order().unwrap() {
+                            let gate = &netlist.gates[index];
+                            let expected = gate.kind.evaluate(
+                                &gate
+                                    .inputs
+                                    .iter()
+                                    .map(|name| values[name])
+                                    .collect::<Vec<_>>(),
+                            );
+                            let &(x, y, z) = &views.gate_output_positions[&gate.output];
+                            let block = sim.world().get(x, y, z);
+                            let actual = if block.kind == BlockKind::RedstoneWire {
+                                block.power > 0
+                            } else {
+                                block.lit
+                            };
+                            assert_eq!(
+                                actual, expected,
+                                "internal {}: {words:?}, {from}->{to}, address={address}",
+                                gate.output
+                            );
+                            values.insert(gate.output.clone(), expected);
+                        }
+                        for (bit, name) in netlist.outputs.iter().enumerate() {
+                            let &(x, y, z) = &views.output_positions[name];
+                            assert_eq!(
+                                sim.world().get(x, y, z).lit,
+                                words[address] & (1 << bit) != 0
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
