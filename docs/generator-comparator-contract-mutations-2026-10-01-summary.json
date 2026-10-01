@@ -1,0 +1,23 @@
+{
+  "status": "physical_contract_sensitivity_verified_not_strict_certification",
+  "baseline_normal_arms_phase_records_exact": true,
+  "complete_replay_byte_identical": true,
+  "input_bits": [
+    0,
+    1
+  ],
+  "phases_per_world": 32,
+  "negative_worlds": 8,
+  "mutations": [
+    "compare mode instead of subtract",
+    "direct side lever instead of strongly powered support",
+    "missing constant rear torch",
+    "reversed comparator facing"
+  ],
+  "all_mutations_violate_inversion_truth": true,
+  "all_mutant_phases_executed": true,
+  "retained_history": true,
+  "simulator_changed": false,
+  "compiler_changed": false,
+  "next_required_work": "Bind mode, rear/side input identity and guaranteed signal strength to the selected implementation, then check the authoritative physical world and ownership. These simulations establish required conditions, not a verifier certificate."
+}

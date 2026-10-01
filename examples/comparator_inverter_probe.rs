@@ -36,14 +36,14 @@ fn set(w: &mut World, p: Position, k: BlockKind, f: Option<Facing>) {
     }
     w.set(p.x, p.y, p.z, b);
 }
-fn run(comparator: bool, input_bit: usize) -> serde_json::Value {
+fn run(comparator: bool, input_bit: usize, mutation: Option<&str>) -> serde_json::Value {
     let mut w = World::new(8, 4, 8);
     for x in 0..8 {
         for z in 0..8 {
             set(&mut w, Position::new(x, 0, z), BlockKind::Solid, None);
         }
     }
-    let input = Position::new(3, 2, 2);
+    let mut input = Position::new(3, 2, 2);
     set(&mut w, Position::new(3, 1, 2), BlockKind::Solid, None);
     set(&mut w, input, BlockKind::Lever, Some(Facing::North));
     let (driver, lamp) = if comparator {
@@ -91,6 +91,29 @@ fn run(comparator: bool, input_bit: usize) -> serde_json::Value {
         set(&mut w, Position::new(0, 1, 4), BlockKind::Lamp, None);
         (Position::new(2, 1, 4), Position::new(0, 1, 4))
     };
+    if let Some(mutation) = mutation {
+        assert!(comparator);
+        match mutation {
+            "compare_mode" => {
+                let mut b = w.get(3, 1, 3).clone();
+                b.extra_properties.insert("mode".into(), "compare".into());
+                w.set(3, 1, 3, b);
+            }
+            "direct_side_lever" => {
+                w.set(input.x, input.y, input.z, BlockState::air());
+                input = Position::new(3, 1, 2);
+                set(&mut w, input, BlockKind::Lever, Some(Facing::North));
+            }
+            "missing_rear" => w.set(4, 1, 3, BlockState::air()),
+            "reversed_facing" => {
+                let mut b = w.get(3, 1, 3).clone();
+                b.facing = Some(Facing::West);
+                w.set(3, 1, 3, b);
+            }
+            _ => panic!("unknown mutation"),
+        }
+    }
+    let mut correct = true;
     let mut sim = Simulator::new(w);
     sim.run_until_stable(2000).unwrap();
     let public_driver = if comparator {
@@ -117,22 +140,38 @@ fn run(comparator: bool, input_bit: usize) -> serde_json::Value {
                 let d = sim.world().get(driver.x, driver.y, driver.z);
                 let actual = if comparator { d.power > 0 } else { d.lit };
                 let lamp_value = sim.world().get(lamp.x, lamp.y, lamp.z).lit;
-                assert_eq!(
-                    actual, !high,
-                    "driver comparator={comparator}, bit={input_bit}, {from}->{to}, phase={phase}"
-                );
-                assert_eq!(lamp_value, !high);
+                correct &= actual == !high && lamp_value == !high;
                 phases.push(json!({"from":from,"to":to,"phase":phase,"ticks":ticks,"driver":actual,"lamp":lamp_value,"events":sim.observations().iter().map(|e|json!({"label":e.label,"tick":e.tick-start,"value":e.value})).collect::<Vec<_>>()}));
             }
         }
     }
-    json!({"comparator":comparator,"input_bit":input_bit,"correct":true,"phases":phases})
+    json!({"comparator":comparator,"input_bit":input_bit,"correct":correct,"mutation":mutation,"phases":phases})
 }
 fn main() {
     for bit in 0..2 {
+        let control = run(false, bit, None);
+        let candidate = run(true, bit, None);
+        assert_eq!(control["correct"], true);
+        assert_eq!(candidate["correct"], true);
+        let mutations: Vec<_> = [
+            "compare_mode",
+            "direct_side_lever",
+            "missing_rear",
+            "reversed_facing",
+        ]
+        .into_iter()
+        .map(|m| {
+            let result = run(true, bit, Some(m));
+            assert_eq!(
+                result["correct"], false,
+                "mutation {m} must violate inverter truth"
+            );
+            result
+        })
+        .collect();
         println!(
             "{}",
-            json!({"control":run(false,bit),"candidate":run(true,bit)})
+            json!({"control":control,"candidate":candidate,"mutations":mutations})
         );
     }
 }
