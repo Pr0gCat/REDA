@@ -2395,6 +2395,8 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
     };
     for words in [
+        [2, 3, 0, 1], // Positive a and negative b use separate short output domains.
+        [2, 0, 3, 1], // Positive b and negative a exchange cluster roles.
         [3, 2, 1, 0], // Independent negative a/b outputs plus constant low.
         [7, 6, 5, 4], // Independent negative a/b outputs plus constant high.
         [1, 6, 3, 5],

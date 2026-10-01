@@ -357,25 +357,38 @@ pub(super) fn candidate(
     build_candidate(words)
 }
 
+#[cfg(test)]
 fn independent_negative_inputs(words: [u8; 4]) -> Option<Vec<(usize, u8)>> {
+    independent_literal_inputs(words)
+        .filter(|clusters| clusters.iter().all(|c| !c.2))
+        .map(|clusters| {
+            clusters
+                .into_iter()
+                .map(|(bit, word, _)| (bit, word))
+                .collect()
+        })
+}
+fn independent_literal_inputs(words: [u8; 4]) -> Option<Vec<(usize, u8, bool)>> {
     let rows = program_rows(words);
     if rows.is_empty() {
         return None;
     }
     let mut assigned = 0;
+    let mut used_inputs = 0;
     let mut clusters = Vec::new();
     for (_, bits, mask, word) in rows {
-        if bits != 0 || mask.count_ones() != 1 || word & assigned != 0 {
+        if mask.count_ones() != 1 || word & assigned != 0 || used_inputs & mask != 0 {
             return None;
         }
         assigned |= word;
-        clusters.push((mask.trailing_zeros() as usize, word));
+        used_inputs |= mask;
+        clusters.push((mask.trailing_zeros() as usize, word, bits & mask != 0));
     }
     Some(clusters)
 }
 
 pub(super) fn library_for(words: [u8; 4]) -> crate::compile::topology::Library {
-    if independent_negative_inputs(words).is_some() {
+    if independent_literal_inputs(words).is_some() {
         comparator_library()
     } else {
         super::typed_matrix_library()
@@ -387,7 +400,7 @@ fn comparator_library() -> crate::compile::topology::Library {
         ComparatorInverterContract, Library, LibraryEntry, LibraryEntryId, Primitive, Template,
         TemplateNode,
     };
-    let default = Library::default_library();
+    let default = super::typed_matrix_library();
     let copy_entry = |kind| {
         let e = default.entry_at(kind, 0).unwrap();
         LibraryEntry {
@@ -422,6 +435,7 @@ fn comparator_library() -> crate::compile::topology::Library {
             ],
         ),
         (GateKind::Nor(0), vec![copy_entry(GateKind::Nor(0))]),
+        (GateKind::Buf, vec![copy_entry(GateKind::Buf)]),
     ]));
     library
         .register_comparator_inverter(
@@ -440,7 +454,7 @@ fn comparator_library() -> crate::compile::topology::Library {
 }
 fn shared_negative_candidate(
     words: [u8; 4],
-    clusters: &[(usize, u8)],
+    clusters: &[(usize, u8, bool)],
 ) -> (
     Netlist,
     World,
@@ -448,8 +462,8 @@ fn shared_negative_candidate(
 ) {
     let constant_offset = 8 * (clusters.len() as i32 - 1);
     let mut w = World::new(16 + constant_offset, 6, 12);
-    let mut inputs = [Position::new(6, 2, 10); 2];
-    for (index, &(bit, _)) in clusters.iter().enumerate() {
+    let mut inputs = [Position::new(14 + constant_offset, 2, 11); 2];
+    for (index, &(bit, _, _)) in clusters.iter().enumerate() {
         inputs[bit] = Position::new(3 + 8 * index as i32, 2, 2);
     }
     for p in inputs {
@@ -461,38 +475,64 @@ fn shared_negative_candidate(
     let mut outputs = Vec::new();
     let mut gates = Vec::new();
     let mut positions = BTreeMap::new();
-    for (index, &(bit, variable)) in clusters.iter().enumerate() {
+    for (index, &(bit, variable, positive)) in clusters.iter().enumerate() {
         let x = 3 + 8 * index as i32;
         let cmp = Position::new(x, 1, 3);
         put(&mut w, cmp.down(), BlockKind::Solid);
-        let mut c = BlockState::air();
-        c.kind = BlockKind::Comparator;
-        c.name = "minecraft:comparator".into();
-        c.facing = Some(Facing::East);
-        c.extra_properties.insert("mode".into(), "subtract".into());
-        w.set(x, 1, 3, c);
-        put(&mut w, Position::new(x + 2, 1, 3), BlockKind::Solid);
-        put(&mut w, Position::new(x + 1, 1, 3), BlockKind::WallTorch);
-        let mut t = w.get(x + 1, 1, 3).clone();
-        t.facing = Some(Facing::West);
-        w.set(x + 1, 1, 3, t);
-        let last = (0..3).filter(|b| variable & (1 << b) != 0).max().unwrap();
-        for z in 3..=3 + 3 * last {
-            wire(&mut w, Position::new(x - 1, 1, z));
+        if positive {
+            wire(&mut w, Position::new(x - 1, 2, 2));
+            wire(&mut w, Position::new(x - 1, 1, 3));
+            put(&mut w, cmp, BlockKind::Repeater);
+            let mut r = w.get(x, 1, 3).clone();
+            r.facing = Some(Facing::West);
+            w.set(x, 1, 3, r);
+            wire(&mut w, Position::new(x + 1, 1, 3));
+        } else {
+            let mut c = BlockState::air();
+            c.kind = BlockKind::Comparator;
+            c.name = "minecraft:comparator".into();
+            c.facing = Some(Facing::East);
+            c.extra_properties.insert("mode".into(), "subtract".into());
+            w.set(x, 1, 3, c);
+            put(&mut w, Position::new(x + 2, 1, 3), BlockKind::Solid);
+            put(&mut w, Position::new(x + 1, 1, 3), BlockKind::WallTorch);
+            let mut t = w.get(x + 1, 1, 3).clone();
+            t.facing = Some(Facing::West);
+            w.set(x + 1, 1, 3, t);
         }
-        let name = format!("shared_inverse{index}");
-        gates.push(Gate::nor(&name, &[["a", "b"][bit]]));
+        let last = (0..3).filter(|b| variable & (1 << b) != 0).max().unwrap();
+        let rail = if positive { x + 2 } else { x - 1 };
+        for z in 3..=3 + 3 * last {
+            wire(&mut w, Position::new(rail, 1, z));
+        }
+        let name = format!("shared_condition{index}");
+        gates.push(if positive {
+            Gate {
+                name: name.clone(),
+                output: name.clone(),
+                inputs: vec![["a", "b"][bit].into()],
+                kind: GateKind::Buf,
+            }
+        } else {
+            Gate::nor(&name, &[["a", "b"][bit]])
+        });
         positions.insert(name, cmp);
     }
     for output in 0..3 {
         let z = 3 + 3 * output;
         let (lamp, name) = if let Some(index) = clusters
             .iter()
-            .position(|(_, variable)| variable & (1 << output) != 0)
+            .position(|(_, variable, _)| variable & (1 << output) != 0)
         {
             let x = 3 + 8 * index as i32;
-            wire(&mut w, Position::new(x - 2, 1, z));
-            (Position::new(x - 3, 1, z), format!("shared_inverse{index}"))
+            let positive = clusters[index].2;
+            let spur = if positive { x + 3 } else { x - 2 };
+            let lamp_x = if positive { x + 4 } else { x - 3 };
+            wire(&mut w, Position::new(spur, 1, z));
+            (
+                Position::new(lamp_x, 1, z),
+                format!("shared_condition{index}"),
+            )
         } else {
             let hi = format!("constant_high{output}");
             let is_high = high & (1 << output) != 0;
@@ -558,7 +598,7 @@ fn build_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
-    if let Some(clusters) = independent_negative_inputs(words) {
+    if let Some(clusters) = independent_literal_inputs(words) {
         return shared_negative_candidate(words, &clusters);
     }
     let (netlist, positions) = player_logic(words);
@@ -863,6 +903,76 @@ mod tests {
         assert!(
             independent_negative_inputs([7, 7, 7, 0]).is_none(),
             "OR of independent negative literals needs reconvergence"
+        );
+    }
+
+    #[test]
+    fn independent_literals_restore_signal_before_private_output_fanout() {
+        let mut checked = 0;
+        for pattern in 0..216usize {
+            let words = std::array::from_fn(|address| {
+                (0..3u32).fold(0, |word, output| {
+                    let high = match (pattern / 6usize.pow(output)) % 6 {
+                        0 => false,
+                        1 => true,
+                        2 => address & 1 != 0,
+                        3 => address & 1 == 0,
+                        4 => address & 2 != 0,
+                        5 => address & 2 == 0,
+                        _ => unreachable!(),
+                    };
+                    word | (u8::from(high) << output)
+                })
+            });
+            let Some(clusters) = independent_literal_inputs(words) else {
+                continue;
+            };
+            let (source, _) = player_logic(words);
+            let result = super::super::compile_player_torch_row(&source, 1_000_000).unwrap();
+            let world = result.physical().world();
+            assert_eq!(
+                world.positions_of(BlockKind::Comparator).count(),
+                clusters.iter().filter(|c| !c.2).count()
+            );
+            assert_eq!(
+                world.positions_of(BlockKind::Repeater).count(),
+                clusters.iter().filter(|c| c.2).count()
+            );
+            assert_eq!(result.source_output_positions().len(), 3);
+            // Toggle both ports, including unused inputs, without clearing history.
+            let mut sim = crate::redstone::simulator::Simulator::new(world.clone());
+            sim.run_until_stable(2000).unwrap();
+            for from in 0..4 {
+                for to in 0..4 {
+                    for address in [from, to] {
+                        for (input, &(x, y, z)) in
+                            result.source_input_positions().iter().enumerate()
+                        {
+                            let mut state = sim.world().get(x, y, z).clone();
+                            state.lit = address & (1 << input) != 0;
+                            sim.world_mut().set(x, y, z, state);
+                        }
+                        sim.run_until_stable(2000).unwrap();
+                        for (output, &(x, y, z)) in
+                            result.source_output_positions().iter().enumerate()
+                        {
+                            assert_eq!(sim.world().get(x,y,z).lit, words[address] & (1<<output)!=0,
+                        "literal layout {words:?}, transition {from}->{to}, address {address}, output {output}");
+                        }
+                    }
+                }
+            }
+
+            checked += 1;
+        }
+        assert_eq!(checked, 148);
+        assert!(
+            independent_literal_inputs([1, 2, 1, 2]).is_none(),
+            "both polarities of one input retain the existing layout"
+        );
+        assert!(
+            independent_literal_inputs([0, 1, 1, 1]).is_none(),
+            "reconvergent literal outputs retain synchronization"
         );
     }
 
