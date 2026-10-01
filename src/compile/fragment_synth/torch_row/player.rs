@@ -357,18 +357,25 @@ pub(super) fn candidate(
     build_candidate(words)
 }
 
-fn shared_negative_input(words: [u8; 4]) -> Option<usize> {
+fn independent_negative_inputs(words: [u8; 4]) -> Option<Vec<(usize, u8)>> {
     let rows = program_rows(words);
-    match rows.as_slice() {
-        [(_, bits, mask, word)] if *bits == 0 && mask.count_ones() == 1 && *word != 0 => {
-            Some(mask.trailing_zeros() as usize)
-        }
-        _ => None,
+    if rows.is_empty() {
+        return None;
     }
+    let mut assigned = 0;
+    let mut clusters = Vec::new();
+    for (_, bits, mask, word) in rows {
+        if bits != 0 || mask.count_ones() != 1 || word & assigned != 0 {
+            return None;
+        }
+        assigned |= word;
+        clusters.push((mask.trailing_zeros() as usize, word));
+    }
+    Some(clusters)
 }
 
 pub(super) fn library_for(words: [u8; 4]) -> crate::compile::topology::Library {
-    if shared_negative_input(words).is_some() {
+    if independent_negative_inputs(words).is_some() {
         comparator_library()
     } else {
         super::typed_matrix_library()
@@ -433,52 +440,68 @@ fn comparator_library() -> crate::compile::topology::Library {
 }
 fn shared_negative_candidate(
     words: [u8; 4],
-    bit: usize,
+    clusters: &[(usize, u8)],
 ) -> (
     Netlist,
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
-    let mut w = World::new(16, 6, 12);
+    let constant_offset = 8 * (clusters.len() as i32 - 1);
+    let mut w = World::new(16 + constant_offset, 6, 12);
     let mut inputs = [Position::new(6, 2, 10); 2];
-    inputs[bit] = Position::new(3, 2, 2);
+    for (index, &(bit, _)) in clusters.iter().enumerate() {
+        inputs[bit] = Position::new(3 + 8 * index as i32, 2, 2);
+    }
     for p in inputs {
         put(&mut w, p.down(), BlockKind::Solid);
         put(&mut w, p, BlockKind::Lever);
     }
-    let cmp = Position::new(3, 1, 3);
-    put(&mut w, cmp.down(), BlockKind::Solid);
-    let mut c = BlockState::air();
-    c.kind = BlockKind::Comparator;
-    c.name = "minecraft:comparator".into();
-    c.facing = Some(Facing::East);
-    c.extra_properties.insert("mode".into(), "subtract".into());
-    w.set(cmp.x, cmp.y, cmp.z, c);
-    put(&mut w, Position::new(5, 1, 3), BlockKind::Solid);
-    put(&mut w, Position::new(4, 1, 3), BlockKind::WallTorch);
-    let mut t = w.get(4, 1, 3).clone();
-    t.facing = Some(Facing::West);
-    w.set(4, 1, 3, t);
     let high = words.into_iter().fold(7, |a, b| a & b);
-    let variable = program_rows(words)[0].3;
-    let last = (0..3).filter(|b| variable & (1 << b) != 0).max().unwrap();
-    for z in 3..=3 + 3 * last {
-        wire(&mut w, Position::new(2, 1, z));
-    }
     let mut lamps = Vec::new();
     let mut outputs = Vec::new();
-    let mut gates = vec![Gate::nor("shared_inverse", &[["a", "b"][bit]])];
-    let mut positions = BTreeMap::from([("shared_inverse".into(), cmp)]);
+    let mut gates = Vec::new();
+    let mut positions = BTreeMap::new();
+    for (index, &(bit, variable)) in clusters.iter().enumerate() {
+        let x = 3 + 8 * index as i32;
+        let cmp = Position::new(x, 1, 3);
+        put(&mut w, cmp.down(), BlockKind::Solid);
+        let mut c = BlockState::air();
+        c.kind = BlockKind::Comparator;
+        c.name = "minecraft:comparator".into();
+        c.facing = Some(Facing::East);
+        c.extra_properties.insert("mode".into(), "subtract".into());
+        w.set(x, 1, 3, c);
+        put(&mut w, Position::new(x + 2, 1, 3), BlockKind::Solid);
+        put(&mut w, Position::new(x + 1, 1, 3), BlockKind::WallTorch);
+        let mut t = w.get(x + 1, 1, 3).clone();
+        t.facing = Some(Facing::West);
+        w.set(x + 1, 1, 3, t);
+        let last = (0..3).filter(|b| variable & (1 << b) != 0).max().unwrap();
+        for z in 3..=3 + 3 * last {
+            wire(&mut w, Position::new(x - 1, 1, z));
+        }
+        let name = format!("shared_inverse{index}");
+        gates.push(Gate::nor(&name, &[["a", "b"][bit]]));
+        positions.insert(name, cmp);
+    }
     for output in 0..3 {
         let z = 3 + 3 * output;
-        let (lamp, name) = if variable & (1 << output) != 0 {
-            wire(&mut w, Position::new(1, 1, z));
-            (Position::new(0, 1, z), "shared_inverse".to_string())
+        let (lamp, name) = if let Some(index) = clusters
+            .iter()
+            .position(|(_, variable)| variable & (1 << output) != 0)
+        {
+            let x = 3 + 8 * index as i32;
+            wire(&mut w, Position::new(x - 2, 1, z));
+            (Position::new(x - 3, 1, z), format!("shared_inverse{index}"))
         } else {
             let hi = format!("constant_high{output}");
             let is_high = high & (1 << output) != 0;
-            let at = Position::new(12, if is_high { 2 } else { 4 }, z);
-            put(&mut w, Position::new(13, at.y, z), BlockKind::Solid);
+            let at = Position::new(12 + constant_offset, if is_high { 2 } else { 4 }, z);
+            put(
+                &mut w,
+                Position::new(13 + constant_offset, at.y, z),
+                BlockKind::Solid,
+            );
             put(&mut w, at, BlockKind::WallTorch);
             let mut t = w.get(at.x, at.y, at.z).clone();
             t.facing = Some(Facing::West);
@@ -488,20 +511,24 @@ fn shared_negative_candidate(
             let name = if is_high {
                 hi
             } else {
-                wire(&mut w, Position::new(12, 3, z));
-                put(&mut w, Position::new(11, 2, z), BlockKind::WallTorch);
-                let mut t = w.get(11, 2, z).clone();
+                wire(&mut w, Position::new(12 + constant_offset, 3, z));
+                put(
+                    &mut w,
+                    Position::new(11 + constant_offset, 2, z),
+                    BlockKind::WallTorch,
+                );
+                let mut t = w.get(11 + constant_offset, 2, z).clone();
                 t.facing = Some(Facing::West);
-                w.set(11, 2, z, t);
+                w.set(11 + constant_offset, 2, z, t);
                 let lo = format!("constant_low{output}");
                 gates.push(Gate::nor(&lo, &[&hi]));
-                positions.insert(lo.clone(), Position::new(11, 2, z));
+                positions.insert(lo.clone(), Position::new(11 + constant_offset, 2, z));
                 lo
             };
-            for x in 9..=if is_high { 12 } else { 11 } {
+            for x in 9 + constant_offset..=constant_offset + if is_high { 12 } else { 11 } {
                 wire(&mut w, Position::new(x, 1, z));
             }
-            (Position::new(8, 1, z), name)
+            (Position::new(8 + constant_offset, 1, z), name)
         };
         put(&mut w, lamp.down(), BlockKind::Solid);
         put(&mut w, lamp, BlockKind::Lamp);
@@ -531,8 +558,8 @@ fn build_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
-    if let Some(bit) = shared_negative_input(words) {
-        return shared_negative_candidate(words, bit);
+    if let Some(clusters) = independent_negative_inputs(words) {
+        return shared_negative_candidate(words, &clusters);
     }
     let (netlist, positions) = player_logic(words);
     let (world, inputs, _, lamps) = player_world(words);
@@ -761,7 +788,7 @@ mod tests {
             assert_eq!(result.source_output_positions().len(), 3);
         }
         for words in [[0, 7, 0, 7], [0, 0, 7, 7], [7, 7, 7, 7], [7, 0, 0, 0]] {
-            assert!(shared_negative_input(words).is_none());
+            assert!(independent_negative_inputs(words).is_none());
         }
     }
 
@@ -798,6 +825,45 @@ mod tests {
             }
         }
         assert_eq!(checked, 38);
+    }
+
+    #[test]
+    fn independent_negative_outputs_keep_separate_certified_domains() {
+        let mut checked = 0;
+        for pattern in 0..64 {
+            let words = std::array::from_fn(|address| {
+                (0..3).fold(0, |word, output| {
+                    let high = match (pattern >> (2 * output)) & 3 {
+                        0 => false,
+                        1 => true,
+                        2 => address & 1 == 0,
+                        3 => address & 2 == 0,
+                        _ => unreachable!(),
+                    };
+                    word | (u8::from(high) << output)
+                })
+            });
+            let Some(clusters) = independent_negative_inputs(words) else {
+                continue;
+            };
+            let (source, _) = player_logic(words);
+            let result = super::super::compile_player_torch_row(&source, 1_000_000).unwrap();
+            assert_eq!(
+                result
+                    .physical()
+                    .world()
+                    .positions_of(BlockKind::Comparator)
+                    .count(),
+                clusters.len()
+            );
+            assert_eq!(result.source_output_positions().len(), 3);
+            checked += 1;
+        }
+        assert_eq!(checked, 56);
+        assert!(
+            independent_negative_inputs([7, 7, 7, 0]).is_none(),
+            "OR of independent negative literals needs reconvergence"
+        );
     }
 
     #[test]
