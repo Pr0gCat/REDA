@@ -57,6 +57,8 @@ pub enum OutputSpec {
 /// Selected-library electrical requirements resolved to stable instance IDs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ComparatorInverterRequirements {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub second_side_input: Option<ConnectionId>,
     pub comparator: PrimitiveId,
     pub rear_constant: PrimitiveId,
     pub side_input: ConnectionId,
@@ -217,8 +219,17 @@ pub fn prove_topology_semantics(
     kind: GateKind,
 ) -> Result<(), TopologySemanticsError> {
     if let Some(req) = &topology.comparator_inverter {
-        let valid = kind == GateKind::Nor(1)
-            && req.mode == "subtract"
+        let valid = matches!(
+            (kind, req.second_side_input),
+            (GateKind::Nor(1), None) | (GateKind::Nor(2), Some(_))
+        ) && req.second_side_input.is_none_or(|id| {
+            id != req.side_input
+                && topology.connections.iter().any(|c| {
+                    c.id == id
+                        && c.target == ConnectionTarget::Primitive(req.comparator)
+                        && c.source == ConnectionSource::ExternalInput { input_index: 1 }
+                })
+        }) && req.mode == "subtract"
             && req.rear_strength == 15
             && req.side_high_strength == 15
             && req.comparator != req.rear_constant
@@ -232,7 +243,7 @@ pub fn prove_topology_semantics(
                 .iter()
                 .any(|p| p.id == req.rear_constant && p.primitive == Primitive::Torch)
             && topology.output == OutputSpec::Primitive(req.comparator)
-            && topology.connections.len() == 2
+            && topology.connections.len() == 2 + usize::from(req.second_side_input.is_some())
             && topology.connections.iter().any(|c| {
                 c.id == req.side_input
                     && c.target == ConnectionTarget::Primitive(req.comparator)
@@ -355,7 +366,12 @@ pub fn prove_topology_semantics(
                             .iter()
                             .find(|c| c.id == req.side_input)
                             .unwrap();
-                        negate(source_meaning(side.source, &values).unwrap())
+                        let mut sides = vec![source_meaning(side.source, &values).unwrap()];
+                        if let Some(id) = req.second_side_input {
+                            let second = topology.connections.iter().find(|c| c.id == id).unwrap();
+                            sides.push(source_meaning(second.source, &values).unwrap());
+                        }
+                        negate(disjoin(sides))
                     }
                 }
                 Primitive::Lever | Primitive::Lamp => {
@@ -595,6 +611,10 @@ fn instantiate_library_entry(
         library
             .comparator_inverter_contract(entry_id)
             .map(|c| ComparatorInverterRequirements {
+                second_side_input: c.second_side_input.map(|input| ConnectionId::External {
+                    instance,
+                    input_index: input as u16,
+                }),
                 comparator: role_ids[&c.comparator],
                 rear_constant: role_ids[&c.rear_constant],
                 side_input: ConnectionId::External {
@@ -963,6 +983,99 @@ mod tests {
     }
 
     #[test]
+    fn two_side_comparator_nor_binds_roles_and_proves_conditional_semantics() {
+        use crate::compile::topology::ComparatorInverterContract;
+        let id = LibraryEntryId {
+            kind: GateKind::Nor(2),
+            ordinal: 0,
+        };
+        let mut library = Library::new(BTreeMap::from([(
+            GateKind::Nor(2),
+            vec![LibraryEntry {
+                name: "two-side comparator NOR",
+                template: Template {
+                    nodes: vec![
+                        (TemplateNode::Torch, Primitive::Torch),
+                        (TemplateNode::SecondTorch, Primitive::Comparator),
+                    ],
+                    inputs: vec![TemplateNode::SecondTorch, TemplateNode::SecondTorch],
+                    internal_edges: vec![(TemplateNode::Torch, TemplateNode::SecondTorch)],
+                    output: Some(TemplateNode::SecondTorch),
+                    embedding_hints: vec![],
+                },
+            }],
+        )]));
+        let contract = ComparatorInverterContract {
+            comparator: TemplateNode::SecondTorch,
+            rear_constant: TemplateNode::Torch,
+            side_input: 0,
+            second_side_input: Some(1),
+        };
+        let before = crate::compile::revisions::cell_library_revision(&library);
+        for second in [None, Some(0), Some(2)] {
+            assert!(library
+                .register_comparator_inverter(
+                    id,
+                    ComparatorInverterContract {
+                        second_side_input: second,
+                        ..contract
+                    }
+                )
+                .is_err());
+            assert_eq!(
+                crate::compile::revisions::cell_library_revision(&library),
+                before
+            );
+        }
+        let make = |l: &Library| {
+            instantiate(
+                l,
+                &gate(GateKind::Nor(2), &["a", "b"]),
+                InstanceId(12),
+                &implementation(GateKind::Nor(2), 0),
+            )
+            .unwrap()
+            .topology
+        };
+        let undeclared = make(&library);
+        assert!(super::prove_topology_semantics(&undeclared, GateKind::Nor(2)).is_err());
+        library.register_comparator_inverter(id, contract).unwrap();
+        assert_ne!(
+            crate::compile::revisions::cell_library_revision(&library),
+            before
+        );
+        let topology = make(&library);
+        assert_ne!(topology.fingerprint, undeclared.fingerprint);
+        assert_eq!(
+            super::prove_topology_semantics(&topology, GateKind::Nor(2)),
+            Ok(())
+        );
+        assert!(serde_json::to_string(&topology)
+            .unwrap()
+            .contains("second_side_input"));
+        for mutation in 0..5 {
+            let mut bad = topology.clone();
+            let req = bad.comparator_inverter.as_mut().unwrap();
+            match mutation {
+                0 => req.second_side_input = None,
+                1 => req.second_side_input = Some(req.side_input),
+                2 => req.side_high_strength = 14,
+                3 => req.mode = "compare",
+                _ => {
+                    let id = req.second_side_input.unwrap();
+                    bad.connections
+                        .iter_mut()
+                        .find(|c| c.id == id)
+                        .unwrap()
+                        .source = super::ConnectionSource::ExternalInput { input_index: 0 };
+                }
+            }
+            assert!(super::prove_topology_semantics(&bad, GateKind::Nor(2)).is_err());
+        }
+        assert!(super::prove_topology_semantics(&topology, GateKind::Nor(1)).is_err());
+    }
+
+    #[test]
     fn contracted_comparator_proves_conditional_inversion_and_rejects_corrupt_requirements() {
         use crate::compile::topology::ComparatorInverterContract;
         let mut library = library_with(Template {
@@ -983,6 +1096,7 @@ mod tests {
             .register_comparator_inverter(
                 id,
                 ComparatorInverterContract {
+                    second_side_input: None,
                     comparator: TemplateNode::SecondTorch,
                     rear_constant: TemplateNode::Torch,
                     side_input: 0,

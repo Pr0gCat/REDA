@@ -42,6 +42,8 @@ struct CellLibraryEntryDescriptor {
 
 #[derive(Serialize)]
 struct ComparatorInverterDescriptor {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    second_side_input: Option<usize>,
     comparator: String,
     rear_constant: String,
     side_input: usize,
@@ -192,6 +194,7 @@ fn cell_library_descriptor(library: &Library) -> CellLibraryRevisionDescriptor {
                             ordinal: ordinal as u16,
                         })
                         .map(|c| ComparatorInverterDescriptor {
+                            second_side_input: c.second_side_input,
                             comparator: template_node_name(c.comparator),
                             rear_constant: template_node_name(c.rear_constant),
                             side_input: c.side_input,
@@ -378,6 +381,7 @@ mod tests {
         let mut library = Library::new(BTreeMap::from([(GateKind::Nor(1), vec![entry])]));
         let before = cell_library_revision(&library);
         let contract = ComparatorInverterContract {
+            second_side_input: None,
             comparator: TemplateNode::SecondTorch,
             rear_constant: TemplateNode::Torch,
             side_input: 0,

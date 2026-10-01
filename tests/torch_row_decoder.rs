@@ -2395,6 +2395,10 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
     };
     for words in [
+        [1, 0, 0, 0], // Two-side comparator NOR with one variable output.
+        [3, 0, 0, 0], // NOR condition shares its restored output across two ports.
+        [7, 2, 2, 2], // NOR coexists with a constant high middle output.
+        [7, 1, 1, 1], // Constant first port preserves ordered NOR source outputs.
         [0, 0, 0, 1], // Comparator AND with one selected variable output.
         [0, 0, 0, 3], // Comparator AND shares its condition across two outputs.
         [2, 2, 2, 7], // Comparator AND and constant high output.

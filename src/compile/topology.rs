@@ -632,6 +632,7 @@ pub struct LibraryEntry {
 /// realisation must prove the mode and 15-strength rear/side boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ComparatorInverterContract {
+    pub second_side_input: Option<usize>,
     pub comparator: TemplateNode,
     pub rear_constant: TemplateNode,
     pub side_input: usize,
@@ -717,8 +718,15 @@ impl Library {
     ) -> Result<(), &'static str> {
         let entry = self.entry(id).ok_or("unknown library entry")?;
         let t = &entry.template;
-        if id.kind != GateKind::Nor(1)
-            || t.nodes.len() != 2
+        let inputs = if contract.second_side_input == Some(1) {
+            vec![contract.comparator, contract.comparator]
+        } else {
+            vec![contract.comparator]
+        };
+        if !matches!(
+            (id.kind, contract.second_side_input),
+            (GateKind::Nor(1), None) | (GateKind::Nor(2), Some(1))
+        ) || t.nodes.len() != 2
             || !t
                 .nodes
                 .contains(&(contract.comparator, Primitive::Comparator))
@@ -727,7 +735,7 @@ impl Library {
                 .contains(&(contract.rear_constant, Primitive::Torch))
             || contract.comparator == contract.rear_constant
             || contract.side_input != 0
-            || t.inputs.as_slice() != [contract.comparator]
+            || t.inputs != inputs
             || t.internal_edges.as_slice() != [(contract.rear_constant, contract.comparator)]
             || t.output != Some(contract.comparator)
         {

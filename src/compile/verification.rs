@@ -202,7 +202,7 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::RouteContinuity,
-                semantic_version: 5,
+                semantic_version: 6,
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Connectivity,
@@ -210,7 +210,7 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Coupling,
-                semantic_version: 6,
+                semantic_version: 7,
             },
         ],
     }
@@ -769,7 +769,8 @@ fn comparator_interface_branch(
         {
             return false;
         }
-        if id == req.side_input && branch.terminal.kind == RouteTerminalKind::ComparatorSideSupport
+        if (id == req.side_input || req.second_side_input == Some(id))
+            && branch.terminal.kind == RouteTerminalKind::ComparatorSideSupport
         {
             let Some(binding) = candidate.connections.get(&id) else {
                 return false;
@@ -789,13 +790,14 @@ fn comparator_interface_branch(
             else {
                 return false;
             };
-            let input = Position::new(lever.at.x, lever.at.y, lever.at.z);
             return branch.terminal.at
                 == Anchor {
                     y: lever.at.y - 1,
                     ..lever.at
                 }
-                && comparator_cell_isolated(&emitted.world, at, input).is_ok();
+                && inverter_side_inputs(candidate, req).is_some_and(|inputs| {
+                    comparator_sides_isolated(&emitted.world, at, &inputs).is_ok()
+                });
         }
         if branch.terminal.kind == RouteTerminalKind::ComparatorRearSource
             && spec.source
@@ -1528,16 +1530,32 @@ fn verify_comparator_isolation(
             .find(|b| b.state.kind == BlockKind::Comparator)
             .unwrap();
         let at = Position::new(cell.at.x, cell.at.y, cell.at.z);
-        let source = candidate.connections[&req.side_input].source;
-        let lever = candidate.boundaries[&source]
-            .blocks
-            .iter()
-            .find(|b| b.state.kind == BlockKind::Lever)
-            .unwrap();
-        let input = Position::new(lever.at.x, lever.at.y, lever.at.z);
-        comparator_cell_isolated(&emitted.world, at, input).map_err(fail)?;
+        let inputs = inverter_side_inputs(candidate, req).ok_or_else(|| fail(at))?;
+        comparator_sides_isolated(&emitted.world, at, &inputs).map_err(fail)?;
     }
     Ok(())
+}
+
+fn inverter_side_inputs(
+    candidate: &ExpandedPhysicalCandidate,
+    req: &super::fragment_synth::topology::ComparatorInverterRequirements,
+) -> Option<Vec<Position>> {
+    std::iter::once(req.side_input)
+        .chain(req.second_side_input)
+        .map(|id| {
+            let source = candidate.connections.get(&id)?.source;
+            if !matches!(source, PhysicalEndpointId::PrimaryInput(_)) {
+                return None;
+            }
+            let lever = candidate
+                .boundaries
+                .get(&source)?
+                .blocks
+                .iter()
+                .find(|b| b.state.kind == BlockKind::Lever)?;
+            Some(Position::new(lever.at.x, lever.at.y, lever.at.z))
+        })
+        .collect()
 }
 
 fn subtract_cell_inputs(
@@ -1687,9 +1705,26 @@ fn comparator_subtract_drivers_isolated(
 
 /// Prove zero-state isolation using potential electrical outputs, independent
 /// of the current lever, torch and diode states.
+#[cfg(test)]
 fn comparator_cell_isolated(world: &World, at: Position, input: Position) -> Result<(), Position> {
+    comparator_sides_isolated(world, at, &[input])
+}
+
+fn comparator_sides_isolated(
+    world: &World,
+    at: Position,
+    inputs: &[Position],
+) -> Result<(), Position> {
     use crate::redstone::world::block::Face;
+    if inputs.is_empty() || inputs.len() > 2 {
+        return Err(at);
+    }
     let comparator = world.get(at.x, at.y, at.z);
+    if comparator.kind != BlockKind::Comparator
+        || comparator.extra_properties.get("mode").map(String::as_str) != Some("subtract")
+    {
+        return Err(at);
+    }
     let facing = comparator.facing.ok_or(at)?;
     let rear = at.offset(facing);
     let torch = world.get(rear.x, rear.y, rear.z);
@@ -1697,38 +1732,43 @@ fn comparator_cell_isolated(world: &World, at: Position, input: Position) -> Res
         return Err(rear);
     }
     let constant_support = rear.offset(torch.facing.ok_or(rear)?.opposite());
+    if world
+        .get(constant_support.x, constant_support.y, constant_support.z)
+        .kind
+        != BlockKind::Solid
+    {
+        return Err(constant_support);
+    }
+    reject_potential_block_drivers(world, constant_support, None, false)?;
     let sides = match facing {
         Facing::North | Facing::South => [Facing::East, Facing::West],
         Facing::East | Facing::West => [Facing::North, Facing::South],
         _ => return Err(at),
     };
-    let support = input.down();
-    let lever = world.get(input.x, input.y, input.z);
-    if lever.kind != BlockKind::Lever
-        || lever.face != Some(Face::Floor)
-        || world.get(support.x, support.y, support.z).kind != BlockKind::Solid
-        || !sides.into_iter().any(|f| at.offset(f) == support)
-    {
-        return Err(input);
-    }
-    for (target, allowed, strong_only) in [
-        (constant_support, None, false),
-        (support, Some(input), true),
-    ] {
-        if world.get(target.x, target.y, target.z).kind != BlockKind::Solid {
-            return Err(target);
+    let mut supports = BTreeSet::new();
+    for &input in inputs {
+        let lever = world.get(input.x, input.y, input.z);
+        let support = input.down();
+        if lever.kind != BlockKind::Lever
+            || lever.face != Some(Face::Floor)
+            || world.get(support.x, support.y, support.z).kind != BlockKind::Solid
+            || !sides.into_iter().any(|f| at.offset(f) == support)
+            || !supports.insert(support)
+        {
+            return Err(input);
         }
-        reject_potential_block_drivers(world, target, allowed, strong_only)?;
+        reject_potential_block_drivers(world, support, Some(input), true)?;
     }
-    let unused = sides
+    for unused in sides
         .into_iter()
         .map(|f| at.offset(f))
-        .find(|p| *p != support)
-        .unwrap();
-    match world.get(unused.x, unused.y, unused.z).kind {
-        BlockKind::Air => (),
-        BlockKind::Solid => reject_potential_block_drivers(world, unused, None, true)?,
-        _ => return Err(unused),
+        .filter(|p| !supports.contains(p))
+    {
+        match world.get(unused.x, unused.y, unused.z).kind {
+            BlockKind::Air => (),
+            BlockKind::Solid => reject_potential_block_drivers(world, unused, None, true)?,
+            _ => return Err(unused),
+        }
     }
     Ok(())
 }
@@ -2240,6 +2280,66 @@ mod tests {
     }
 
     #[test]
+    fn two_side_nor_isolation_rejects_aliases_missing_supports_and_foreign_drivers() {
+        use crate::redstone::{
+            simulator::position::Position,
+            world::{
+                block::{BlockKind, BlockState, Face, Facing},
+                storage::World,
+            },
+        };
+        let mut w = World::new(16, 4, 16);
+        let cmp = Position::new(8, 1, 6);
+        let inputs = [Position::new(8, 2, 5), Position::new(8, 2, 7)];
+        let mut solid = BlockState::air();
+        solid.kind = BlockKind::Solid;
+        for p in [Position::new(10, 1, 6), inputs[0].down(), inputs[1].down()] {
+            w.set(p.x, p.y, p.z, solid.clone());
+        }
+        let mut c = BlockState::air();
+        c.kind = BlockKind::Comparator;
+        c.facing = Some(Facing::East);
+        c.extra_properties.insert("mode".into(), "subtract".into());
+        w.set(cmp.x, cmp.y, cmp.z, c);
+        let mut t = BlockState::air();
+        t.kind = BlockKind::WallTorch;
+        t.facing = Some(Facing::West);
+        t.lit = true;
+        w.set(9, 1, 6, t);
+        let mut lever = BlockState::air();
+        lever.kind = BlockKind::Lever;
+        lever.face = Some(Face::Floor);
+        for p in inputs {
+            w.set(p.x, p.y, p.z, lever.clone());
+        }
+        let check = |world: &World| super::comparator_sides_isolated(world, cmp, &inputs);
+        assert_eq!(check(&w), Ok(()));
+        assert!(super::comparator_sides_isolated(&w, cmp, &[inputs[0], inputs[0]]).is_err());
+        for p in [Position::new(7, 1, 5), Position::new(7, 1, 7)] {
+            let mut bad = w.clone();
+            let mut r = BlockState::air();
+            r.kind = BlockKind::Repeater;
+            r.facing = Some(Facing::West);
+            bad.set(p.x, p.y, p.z, r);
+            assert_eq!(check(&bad), Err(p));
+        }
+        let mut bad = w.clone();
+        bad.set(10, 2, 6, lever.clone());
+        assert_eq!(check(&bad), Err(Position::new(10, 2, 6)));
+        for input in inputs {
+            let mut bad = w.clone();
+            let p = input.down();
+            bad.set(p.x, p.y, p.z, BlockState::air());
+            assert!(check(&bad).is_err());
+            let mut bad = w.clone();
+            let mut l = lever.clone();
+            l.face = Some(Face::Wall);
+            bad.set(input.x, input.y, input.z, l);
+            assert!(check(&bad).is_err());
+        }
+    }
+
+    #[test]
     fn comparator_isolation_rejects_potential_foreign_drivers_even_when_unpowered() {
         use crate::redstone::{
             simulator::position::Position,
@@ -2254,6 +2354,9 @@ mod tests {
             b.facing = facing;
             if kind == BlockKind::Lever {
                 b.face = Some(Face::Floor);
+            }
+            if kind == BlockKind::Comparator {
+                b.extra_properties.insert("mode".into(), "subtract".into());
             }
             world.set(at.x, at.y, at.z, b);
         }

@@ -604,6 +604,37 @@ fn validate_comparator_inverter_side_source(
 ) -> Result<(), StructuralMismatchKind> {
     use crate::redstone::world::block::{Face, Facing};
     let bad = StructuralMismatchKind::ComparatorElectricalContract;
+    if let Some(second) = requirements.second_side_input {
+        let first_source = candidate
+            .connections
+            .get(&requirements.side_input)
+            .ok_or(bad)?
+            .source;
+        let second_source = candidate.connections.get(&second).ok_or(bad)?.source;
+        if first_source == second_source {
+            return Err(bad);
+        }
+        let mut other = requirements.clone();
+        other.side_input = second;
+        other.second_side_input = None;
+        validate_comparator_inverter_side_source(&other, candidate)?;
+        // Ownership plus distinct endpoints excludes coincident support cells.
+        let support = |source| {
+            candidate
+                .boundaries
+                .get(&source)?
+                .blocks
+                .iter()
+                .find(|b| b.state.kind == BlockKind::Lever)
+                .map(|b| Anchor {
+                    y: b.at.y - 1,
+                    ..b.at
+                })
+        };
+        if support(first_source).is_none() || support(first_source) == support(second_source) {
+            return Err(bad);
+        }
+    }
     let binding = candidate
         .connections
         .get(&requirements.side_input)
@@ -1888,6 +1919,7 @@ mod tests {
         let (constant, _) =
             authoritative_placement(rear, Primitive::Torch, Anchor { x: 4, y: 1, z: 4 });
         let requirements = super::super::topology::ComparatorInverterRequirements {
+            second_side_input: None,
             comparator: cmp,
             rear_constant: rear,
             side_input: fixture.external,
@@ -2023,6 +2055,68 @@ mod tests {
     }
 
     #[test]
+    fn two_side_nor_requires_distinct_primary_sources_and_opposite_owned_supports() {
+        let fixture = make_fixture();
+        let mut candidate = fixture.candidate.clone();
+        let ids: Vec<_> = candidate.placements.keys().copied().collect();
+        let (placement, _) =
+            authoritative_placement(ids[0], Primitive::Comparator, Anchor { x: 3, y: 1, z: 3 });
+        candidate.placements.insert(ids[0], placement);
+        let req = super::super::topology::ComparatorInverterRequirements {
+            second_side_input: Some(fixture.internal),
+            comparator: ids[0],
+            rear_constant: ids[1],
+            side_input: fixture.external,
+            mode: "subtract",
+            rear_strength: 15,
+            side_high_strength: 15,
+        };
+        for (id, port, x) in [
+            (req.side_input, PortId(0), 4),
+            (req.second_side_input.unwrap(), PortId(1), 2),
+        ] {
+            let source = PhysicalEndpointId::PrimaryInput(port);
+            candidate.connections.get_mut(&id).unwrap().source = source;
+            let mut lever = state(BlockKind::Lever, Some(Facing::North));
+            lever.face = Some(crate::redstone::world::block::Face::Floor);
+            candidate.boundaries.get_mut(&source).unwrap().blocks = vec![
+                PlacedBlock {
+                    at: Anchor { x, y: 2, z: 3 },
+                    state: lever,
+                },
+                PlacedBlock {
+                    at: Anchor { x, y: 1, z: 3 },
+                    state: state(BlockKind::Solid, None),
+                },
+            ];
+        }
+        assert_eq!(
+            super::validate_comparator_inverter_side_source(&req, &candidate),
+            Ok(())
+        );
+        let second = req.second_side_input.unwrap();
+        for mutation in 0..3 {
+            let mut bad = candidate.clone();
+            let source = bad.connections[&second].source;
+            match mutation {
+                0 => {
+                    bad.connections.get_mut(&second).unwrap().source =
+                        bad.connections[&req.side_input].source
+                }
+                1 => {
+                    for b in &mut bad.boundaries.get_mut(&source).unwrap().blocks {
+                        b.at.x = 4;
+                    }
+                }
+                _ => {
+                    bad.boundaries.get_mut(&source).unwrap().blocks.pop();
+                }
+            }
+            assert!(super::validate_comparator_inverter_side_source(&req, &bad).is_err());
+        }
+    }
+
+    #[test]
     fn comparator_side_source_requires_declared_floor_lever_and_adjacent_owned_support() {
         let fixture = make_fixture();
         let mut candidate = fixture.candidate.clone();
@@ -2031,6 +2125,7 @@ mod tests {
             authoritative_placement(ids[0], Primitive::Comparator, Anchor { x: 3, y: 1, z: 3 });
         candidate.placements.insert(ids[0], comparator);
         let requirements = super::super::topology::ComparatorInverterRequirements {
+            second_side_input: None,
             comparator: ids[0],
             rear_constant: ids[1],
             side_input: fixture.external,
@@ -2100,6 +2195,7 @@ mod tests {
         let primitive = topology.primitives[0].id;
         topology.comparator_inverter =
             Some(super::super::topology::ComparatorInverterRequirements {
+                second_side_input: None,
                 comparator: primitive,
                 rear_constant: primitive,
                 side_input: topology.connections[0].id,

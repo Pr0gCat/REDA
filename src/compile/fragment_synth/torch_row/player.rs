@@ -477,6 +477,7 @@ fn subtract_library(composed: bool) -> crate::compile::topology::Library {
                     ordinal: 0,
                 },
                 crate::compile::topology::ComparatorInverterContract {
+                    second_side_input: None,
                     comparator: TemplateNode::SecondTorch,
                     rear_constant: TemplateNode::Torch,
                     side_input: 0,
@@ -496,8 +497,73 @@ fn positive_product(words: [u8; 4]) -> Option<u8> {
     (mask.count_ones() == 2 && bits & mask == mask).then_some(outputs)
 }
 
+fn negative_product(words: [u8; 4]) -> Option<u8> {
+    let rows = program_rows(words);
+    if rows.len() != 1 {
+        return None;
+    }
+    let (_, bits, mask, outputs) = rows[0];
+    (mask.count_ones() == 2 && bits & mask == 0).then_some(outputs)
+}
+
+fn nor_library() -> crate::compile::topology::Library {
+    use crate::compile::topology::{
+        ComparatorInverterContract, Library, LibraryEntry, LibraryEntryId, Template, TemplateNode,
+    };
+    let default = super::typed_matrix_library();
+    let copy = |kind| {
+        let e = default.entry_at(kind, 0).unwrap();
+        LibraryEntry {
+            name: e.name,
+            template: Template {
+                nodes: e.template.nodes.clone(),
+                inputs: e.template.inputs.clone(),
+                internal_edges: e.template.internal_edges.clone(),
+                output: e.template.output,
+                embedding_hints: e.template.embedding_hints.clone(),
+            },
+        }
+    };
+    let unary = comparator_library();
+    let e = unary.entry_at(GateKind::Nor(1), 0).unwrap();
+    let mut library = Library::new(BTreeMap::from([
+        (GateKind::Nor(0), vec![copy(GateKind::Nor(0))]),
+        (GateKind::Nor(1), vec![copy(GateKind::Nor(1))]),
+        (
+            GateKind::Nor(2),
+            vec![LibraryEntry {
+                name: "two-side comparator NOR",
+                template: Template {
+                    nodes: e.template.nodes.clone(),
+                    inputs: vec![TemplateNode::SecondTorch; 2],
+                    internal_edges: e.template.internal_edges.clone(),
+                    output: e.template.output,
+                    embedding_hints: vec![],
+                },
+            }],
+        ),
+    ]));
+    library
+        .register_comparator_inverter(
+            LibraryEntryId {
+                kind: GateKind::Nor(2),
+                ordinal: 0,
+            },
+            ComparatorInverterContract {
+                comparator: TemplateNode::SecondTorch,
+                rear_constant: TemplateNode::Torch,
+                side_input: 0,
+                second_side_input: Some(1),
+            },
+        )
+        .unwrap();
+    library
+}
+
 pub(super) fn library_for(words: [u8; 4]) -> crate::compile::topology::Library {
-    if positive_product(words).is_some() {
+    if negative_product(words).is_some() {
+        nor_library()
+    } else if positive_product(words).is_some() {
         subtract_library(true)
     } else if subtract_cube(words).is_some() {
         subtract_library(false)
@@ -557,6 +623,7 @@ fn comparator_library() -> crate::compile::topology::Library {
                 ordinal: 0,
             },
             ComparatorInverterContract {
+                second_side_input: None,
                 comparator: TemplateNode::SecondTorch,
                 rear_constant: TemplateNode::Torch,
                 side_input: 0,
@@ -755,23 +822,38 @@ fn shared_negative_candidate(
     )
 }
 
-fn subtract_candidate(
+enum ProductImplementation {
+    Subtract { positive: usize },
+    And,
+    Nor,
+}
+
+fn product_candidate(
     words: [u8; 4],
-    positive: usize,
     variable: u8,
-    composed: bool,
+    implementation: ProductImplementation,
 ) -> (
     Netlist,
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
+    let positive = match implementation {
+        ProductImplementation::Subtract { positive } => positive,
+        _ => 0,
+    };
+    let composed = matches!(implementation, ProductImplementation::And);
+    let nor = matches!(implementation, ProductImplementation::Nor);
     let mut w = World::new(32, 6, 16);
     let mut inputs = [if composed {
         Position::new(7, 2, 4)
     } else {
         Position::new(8, 2, 5)
     }; 2];
-    inputs[positive] = Position::new(9, 2, 6);
+    inputs[positive] = if nor {
+        Position::new(8, 2, 7)
+    } else {
+        Position::new(9, 2, 6)
+    };
     for p in inputs {
         put(&mut w, p.down(), BlockKind::Solid);
         put(&mut w, p, BlockKind::Lever);
@@ -797,6 +879,14 @@ fn subtract_candidate(
         inputs: vec![["a", "b"][positive].into(), ["a", "b"][1 - positive].into()],
     }];
     let mut positions = BTreeMap::from([(name.clone(), cmp)]);
+    if nor {
+        gates[0].kind = GateKind::Nor(2);
+        put(&mut w, Position::new(10, 1, 6), BlockKind::Solid);
+        put(&mut w, Position::new(9, 1, 6), BlockKind::WallTorch);
+        let mut t = w.get(9, 1, 6).clone();
+        t.facing = Some(Facing::West);
+        w.set(9, 1, 6, t);
+    }
     if composed {
         let inverter = "side_inverter".to_string();
         gates[0].inputs[1] = inverter.clone();
@@ -877,7 +967,11 @@ fn subtract_candidate(
         lamps,
         positions,
         true,
-        &subtract_library(composed),
+        &if nor {
+            nor_library()
+        } else {
+            subtract_library(composed)
+        },
     )
 }
 
@@ -888,15 +982,33 @@ fn build_candidate(
     World,
     super::super::candidate::ExpandedPhysicalCandidate,
 ) {
+    if let Some(variable) = negative_product(words) {
+        return product_candidate(words, variable, ProductImplementation::Nor);
+    }
     if let Some(variable) = positive_product(words) {
-        return subtract_candidate(words, 0, variable, true);
+        return product_candidate(words, variable, ProductImplementation::And);
     }
     if let Some((positive, variable)) = subtract_cube(words) {
-        return subtract_candidate(words, positive, variable, false);
+        return product_candidate(
+            words,
+            variable,
+            ProductImplementation::Subtract { positive },
+        );
     }
     if let Some(clusters) = disjoint_literal_inputs(words) {
         return shared_negative_candidate(words, &clusters);
     }
+    matrix_candidate(words)
+}
+
+// Keep generic routing fixtures independent of optional product selection.
+fn matrix_candidate(
+    words: [u8; 4],
+) -> (
+    Netlist,
+    World,
+    super::super::candidate::ExpandedPhysicalCandidate,
+) {
     let (netlist, positions) = player_logic(words);
     let (world, inputs, _, lamps) = player_world(words);
     typed_world_candidate(
@@ -1058,6 +1170,76 @@ mod tests {
         assert_eq!(checked, 19);
         for words in [[0, 7, 0, 0], [7, 0, 0, 0], [0, 7, 7, 0], [0, 1, 2, 0]] {
             assert!(positive_product(words).is_none());
+        }
+    }
+
+    #[test]
+    fn negative_product_certifies_constants_fanout_and_retained_history() {
+        let mut checked = 0;
+
+        for variable in 1..8u8 {
+            for high in 0..8u8 {
+                if high & variable != 0 {
+                    continue;
+                }
+                let words =
+                    std::array::from_fn(|address| high | if address == 0 { variable } else { 0 });
+                assert_eq!(negative_product(words), Some(variable));
+                let (source, _) = player_logic(words);
+                let result = super::super::compile_player_torch_row(&source, 1_000_000)
+                    .unwrap_or_else(|e| panic!("negative-product {words:?}: {e:?}"));
+                let replay = || {
+                    let mut sim = crate::redstone::simulator::Simulator::new(
+                        result.physical().world().clone(),
+                    );
+                    sim.run_until_stable(2000).unwrap();
+                    sim.attach_observer(
+                        result
+                            .source_output_positions()
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &(x, y, z))| (Position::new(x, y, z), format!("output{i}"))),
+                    );
+                    let mut records = Vec::new();
+                    for from in 0..4 {
+                        for to in 0..4 {
+                            for address in [from, to] {
+                                sim.reset_observer();
+                                let start = sim.current_tick();
+                                for (input, &(x, y, z)) in
+                                    result.source_input_positions().iter().enumerate()
+                                {
+                                    let mut lever = sim.world().get(x, y, z).clone();
+                                    lever.lit = address & (1 << input) != 0;
+                                    sim.world_mut().set(x, y, z, lever);
+                                }
+                                let ticks = sim.run_until_stable(2000).unwrap();
+                                for (output, &(x, y, z)) in
+                                    result.source_output_positions().iter().enumerate()
+                                {
+                                    assert_eq!(sim.world().get(x,y,z).lit, words[address] & (1 << output) != 0,
+                                    "negative-product {words:?} {from}->{to} address {address} output {output}");
+                                }
+                                records.push((
+                                    ticks,
+                                    sim.observations()
+                                        .iter()
+                                        .map(|e| (e.label.clone(), e.tick - start, e.value))
+                                        .collect::<Vec<_>>(),
+                                ));
+                            }
+                        }
+                    }
+                    records
+                };
+                assert_eq!(replay(), replay());
+                checked += 1;
+            }
+        }
+
+        assert_eq!(checked, 19);
+        for words in [[0, 7, 0, 0], [0, 0, 0, 7], [0, 7, 7, 0], [0, 1, 2, 0]] {
+            assert!(negative_product(words).is_none());
         }
     }
 
@@ -1559,7 +1741,7 @@ mod tests {
 
     #[test]
     fn supported_endpoint_contracts_fail_closed() {
-        let (netlist, _, candidate) = candidate([1, 0, 0, 0]);
+        let (netlist, _, candidate) = matrix_candidate([1, 0, 0, 0]);
         let certify = |c: &crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate| {
             realise_and_verify_expanded(c, &netlist, &typed_matrix_library())
         };
@@ -1632,7 +1814,7 @@ mod tests {
 
     #[test]
     fn junction_taps_require_exact_source_and_support_landing() {
-        let (netlist, _, candidate) = candidate([1, 0, 0, 0]);
+        let (netlist, _, candidate) = matrix_candidate([1, 0, 0, 0]);
         let certify = |c: &crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate| {
             realise_and_verify_expanded(c, &netlist, &typed_matrix_library())
         };

@@ -404,7 +404,7 @@ fn connection_target_owner_matches(
                 continue;
             }
             if branch.terminal.kind == RouteTerminalKind::ComparatorSideSupport
-                && connection == req.side_input
+                && (connection == req.side_input || req.second_side_input == Some(connection))
             {
                 return matches!(source, PhysicalEndpointId::PrimaryInput(_))
                     && owner == TerminalCellOwner::Boundary(source);
