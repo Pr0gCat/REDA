@@ -386,6 +386,89 @@ mod tests {
     use crate::compile::verification::ExpandedPhysicalError;
 
     #[test]
+    fn comparator_candidate_records_both_sources_before_strict_route_support() {
+        use crate::compile::topology::{
+            ComparatorInverterContract, Library, LibraryEntry, LibraryEntryId, Primitive, Template,
+            TemplateNode,
+        };
+        let mut library = Library::new(BTreeMap::from([(
+            GateKind::Nor(1),
+            vec![LibraryEntry {
+                name: "comparator inverter experiment",
+                template: Template {
+                    nodes: vec![
+                        (TemplateNode::Torch, Primitive::Torch),
+                        (TemplateNode::SecondTorch, Primitive::Comparator),
+                    ],
+                    internal_edges: vec![(TemplateNode::Torch, TemplateNode::SecondTorch)],
+                    inputs: vec![TemplateNode::SecondTorch],
+                    output: Some(TemplateNode::SecondTorch),
+                    embedding_hints: vec![],
+                },
+            }],
+        )]));
+        library
+            .register_comparator_inverter(
+                LibraryEntryId {
+                    kind: GateKind::Nor(1),
+                    ordinal: 0,
+                },
+                ComparatorInverterContract {
+                    comparator: TemplateNode::SecondTorch,
+                    rear_constant: TemplateNode::Torch,
+                    side_input: 0,
+                },
+            )
+            .unwrap();
+        let mut w = World::new(8, 4, 8);
+        let input = Position::new(3, 2, 2);
+        put(&mut w, input.down(), BlockKind::Solid);
+        put(&mut w, input, BlockKind::Lever);
+        let cmp = Position::new(3, 1, 3);
+        put(&mut w, cmp.down(), BlockKind::Solid);
+        let mut c = BlockState::air();
+        c.kind = BlockKind::Comparator;
+        c.name = "minecraft:comparator".into();
+        c.facing = Some(Facing::East);
+        c.extra_properties.insert("mode".into(), "subtract".into());
+        w.set(cmp.x, cmp.y, cmp.z, c);
+        put(&mut w, Position::new(5, 1, 3), BlockKind::Solid);
+        put(&mut w, Position::new(4, 1, 3), BlockKind::WallTorch);
+        let mut t = w.get(4, 1, 3).clone();
+        t.facing = Some(Facing::West);
+        w.set(4, 1, 3, t);
+        wire(&mut w, Position::new(2, 1, 3));
+        let lamp = Position::new(1, 1, 3);
+        put(&mut w, lamp.down(), BlockKind::Solid);
+        put(&mut w, lamp, BlockKind::Lamp);
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        let (netlist, _, candidate) = super::super::typed_world_candidate_with_library(
+            netlist,
+            w,
+            vec![input],
+            vec![lamp],
+            BTreeMap::from([("y".into(), cmp)]),
+            true,
+            &library,
+        );
+        assert_eq!(candidate.placements.len(), 2);
+        assert_eq!(candidate.connections.len(), 2);
+        let result = realise_and_verify_expanded(&candidate, &netlist, &library);
+        assert!(
+            result.is_err(),
+            "strict comparator route support is not implemented yet"
+        );
+        eprintln!(
+            "comparator candidate strict refusal: {:?}",
+            result.err().unwrap()
+        );
+    }
+
+    #[test]
     fn input_buffers_protect_torch_and_reconverging_paths() {
         for words in [[1, 1, 1, 0], [0, 0, 0, 1], [1, 1, 0, 1]] {
             assert!(needs_input_buffer(&program_rows(words)));

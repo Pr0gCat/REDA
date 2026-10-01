@@ -1,0 +1,37 @@
+{
+  "parent_commit": "8f6aded",
+  "status": "candidate_construction_recorded_not_certified",
+  "actual_candidate": {
+    "primary_inputs": 1,
+    "declared_outputs": 1,
+    "primitives": 2,
+    "external_side_connections": 1,
+    "internal_rear_connections": 1,
+    "comparator_position": [
+      3,
+      1,
+      3
+    ],
+    "primary_lever_position": [
+      3,
+      2,
+      2
+    ]
+  },
+  "first_refusal": {
+    "stage": "structure",
+    "kind": "ConnectionTopology",
+    "affected": "RouteId(0)",
+    "cause": "Side branch root is the comparator, two Manhattan cells from source observation; validate_shape rejects source_gap > 1. The actual source support must be the route root."
+  },
+  "changes": "Matrix adapter accepts an explicit library, places the comparator and contract rear torch separately, and records primitive internal connection sources. Default entry uses the original library.",
+  "existing_4096_family_replay": "All 4096 full control and candidate raw records exactly equal frozen 31c2a80 family.",
+  "remaining": "Use actual strong side support and rear torch cells as distinct electrical input terminals. Preserve all ownership/source/strength checks and pass the complete strict pipeline before simulation and generator selection.",
+  "collapsed_port_attempt": {
+    "result": "Rejected and reverted",
+    "refusal": "Adapter DuplicateTerminalCell at (3,1,3), route 0 ordinal 0 versus route 1 ordinal 0",
+    "cause": "Rear and side electrical interfaces collapsed onto one functional comparator cell. They must be represented by their distinct real source/support positions, not duplicate terminal ownership."
+  },
+  "existing_4096_replay_byte_identical": true,
+  "player_tests_passed": 5
+}

@@ -557,6 +557,26 @@ fn typed_world_candidate(
     positions: std::collections::BTreeMap<String, Position>,
     player: bool,
 ) -> (Netlist, World, super::candidate::ExpandedPhysicalCandidate) {
+    typed_world_candidate_with_library(
+        netlist,
+        world,
+        inputs,
+        lamps,
+        positions,
+        player,
+        &typed_matrix_library(),
+    )
+}
+
+fn typed_world_candidate_with_library(
+    netlist: Netlist,
+    world: World,
+    inputs: Vec<Position>,
+    lamps: Vec<Position>,
+    positions: std::collections::BTreeMap<String, Position>,
+    player: bool,
+    library: &crate::compile::topology::Library,
+) -> (Netlist, World, super::candidate::ExpandedPhysicalCandidate) {
     use crate::compile::fragment_synth::{
         candidate::*, identity::*, instance_graph::*, topology::*,
     };
@@ -570,7 +590,7 @@ fn typed_world_candidate(
         y: p.y,
         z: p.z,
     };
-    let graph = InstanceGraph::one_to_one(&netlist, &typed_matrix_library()).unwrap();
+    let graph = InstanceGraph::one_to_one(&netlist, library).unwrap();
     let mut candidate = ExpandedPhysicalCandidate::empty(graph, PortPlacements::default());
     let placed = |p: Position| PlacedBlock {
         at: anchor(p),
@@ -589,42 +609,65 @@ fn typed_world_candidate(
             state: world.get(p.x, p.y, p.z).clone(),
         };
         candidate.observations.insert(obs.site.id, obs.clone());
-        if let OutputSpec::Primitive(id) = instance.expanded.topology.output {
-            let state = world.get(p.x, p.y, p.z);
-            let is_repeater = state.kind == BlockKind::Repeater;
-            let support = if is_repeater {
-                p.down()
-            } else {
-                p.offset(state.facing.unwrap().opposite())
-            };
-            let facing = match state.facing.unwrap() {
-                Facing::North => CellFacing::NORTH,
-                Facing::South => CellFacing::SOUTH,
-                Facing::East => CellFacing::EAST,
-                Facing::West => CellFacing::WEST,
-                _ => unreachable!(),
-            };
-            let blocks = vec![placed(support), placed(p)];
-            for b in &blocks {
-                assert!(claimed.insert(b.at));
-            }
-            candidate.placements.insert(
-                id,
-                PrimitivePlacement {
-                    id,
-                    variant: facing.index() as u16,
-                    facing,
-                    anchor: anchor(if is_repeater { p } else { support }),
-                    delayed: is_repeater.then_some(DelayedComponent {
+        if let OutputSpec::Primitive(_) = instance.expanded.topology.output {
+            for specification in &instance.expanded.topology.primitives {
+                let id = specification.id;
+                let p = if instance
+                    .expanded
+                    .topology
+                    .comparator_inverter
+                    .as_ref()
+                    .is_some_and(|r| r.rear_constant == id)
+                {
+                    p.offset(world.get(p.x, p.y, p.z).facing.unwrap())
+                } else {
+                    p
+                };
+                let obs = VerifiedObservation {
+                    site: ObservationSite {
+                        id: ObservationId::PrimitiveOutput(id),
                         at: anchor(p),
-                        owner: DelayedOwner::Primitive(id),
-                    }),
-                    blocks,
-                },
-            );
-            let mut obs = obs;
-            obs.site.id = ObservationId::PrimitiveOutput(id);
-            candidate.observations.insert(obs.site.id, obs);
+                        logical_owner: Some(instance.id),
+                        display_label: None,
+                    },
+                    state: world.get(p.x, p.y, p.z).clone(),
+                };
+                let state = world.get(p.x, p.y, p.z);
+                let is_repeater = matches!(state.kind, BlockKind::Repeater | BlockKind::Comparator);
+                let support = if is_repeater {
+                    p.down()
+                } else {
+                    p.offset(state.facing.unwrap().opposite())
+                };
+                let facing = match state.facing.unwrap() {
+                    Facing::North => CellFacing::NORTH,
+                    Facing::South => CellFacing::SOUTH,
+                    Facing::East => CellFacing::EAST,
+                    Facing::West => CellFacing::WEST,
+                    _ => unreachable!(),
+                };
+                let blocks = vec![placed(support), placed(p)];
+                for b in &blocks {
+                    assert!(claimed.insert(b.at));
+                }
+                candidate.placements.insert(
+                    id,
+                    PrimitivePlacement {
+                        id,
+                        variant: facing.index() as u16,
+                        facing,
+                        anchor: anchor(if is_repeater { p } else { support }),
+                        delayed: is_repeater.then_some(DelayedComponent {
+                            at: anchor(p),
+                            owner: DelayedOwner::Primitive(id),
+                        }),
+                        blocks,
+                    },
+                );
+                let mut obs = obs;
+                obs.site.id = ObservationId::PrimitiveOutput(id);
+                candidate.observations.insert(obs.site.id, obs);
+            }
         } else {
             let mut obs = obs;
             obs.site.id = ObservationId::JunctionOutput(instance.id);
@@ -716,22 +759,24 @@ fn typed_world_candidate(
     let mut work = Vec::new();
     for instance in &candidate.instances.instances {
         for spec in &instance.expanded.topology.connections {
-            let ConnectionSource::ExternalInput { input_index } = spec.source else {
-                panic!("unexpected internal connection");
+            let source = match spec.source {
+                ConnectionSource::Primitive(id) => PhysicalEndpointId::PrimitiveOutput(id),
+                ConnectionSource::ExternalInput { input_index } => {
+                    let assignment = candidate
+                        .instances
+                        .assignments
+                        .iter()
+                        .find(|a| {
+                            a.sink
+                                == PhysicalSink::InstanceInput {
+                                    instance: instance.id,
+                                    input_index,
+                                }
+                        })
+                        .unwrap();
+                    endpoint(&assignment.driver)
+                }
             };
-            let assignment = candidate
-                .instances
-                .assignments
-                .iter()
-                .find(|a| {
-                    a.sink
-                        == PhysicalSink::InstanceInput {
-                            instance: instance.id,
-                            input_index,
-                        }
-                })
-                .unwrap();
-            let source = endpoint(&assignment.driver);
             let target = match spec.target {
                 ConnectionTarget::Primitive(p) => PhysicalEndpointId::PrimitiveOutput(p),
                 ConnectionTarget::Junction(j) => PhysicalEndpointId::Junction(j),
@@ -760,7 +805,22 @@ fn typed_world_candidate(
         let route = *route_ids.entry(source).or_insert(next);
         let at = candidate.observations[&observation(source)].site.at;
         let p = Position::new(at.x, at.y, at.z);
-        let root = if player && world.get(p.x, p.y, p.z).kind == BlockKind::Lever {
+        let direct_comparator = if connection.is_some() {
+            if let PhysicalEndpointId::PrimitiveOutput(id) = landing {
+                candidate.placements[&id]
+                    .blocks
+                    .iter()
+                    .find(|b| b.state.kind == BlockKind::Comparator)
+                    .map(|b| Position::new(b.at.x, b.at.y, b.at.z))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let root = if let Some(at) = direct_comparator {
+            at
+        } else if player && world.get(p.x, p.y, p.z).kind == BlockKind::Lever {
             let direct = if let PhysicalEndpointId::PrimitiveOutput(id) = landing {
                 candidate.placements[&id]
                     .blocks
@@ -802,7 +862,7 @@ fn typed_world_candidate(
                 let output = placement
                     .blocks
                     .iter()
-                    .find(|b| b.state.kind == BlockKind::Repeater);
+                    .find(|b| matches!(b.state.kind, BlockKind::Repeater | BlockKind::Comparator));
                 if let Some(output) = output {
                     Position::new(output.at.x, output.at.y, output.at.z)
                 } else {
