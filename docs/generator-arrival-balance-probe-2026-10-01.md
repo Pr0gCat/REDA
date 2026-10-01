@@ -82,3 +82,9 @@ source tools/env.sh and with RUST_MIN_STACK=33554432:
 The explicit-coordinate cut is a causal diagnostic, not the optimization rule.
 Restore the generator patch before accepting any shipping change. No complete
 repository suite, complete circuit family or Minecraft certification is claimed.
+
+A subsequent physical control shows that a forward ascent can receive a
+repeater through its solid floor even though the strict flat-path predicate
+returns false. That predicate alone does not certify every legacy staircase
+invalid. The sideways cut evidence above remains valid. See
+generator-forward-climb-refresh-2026-10-01.md for the distinction and fix.

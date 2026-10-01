@@ -3817,6 +3817,18 @@ fn realise_branch_cells(
     {
         bends.insert(0);
     }
+    // A boundary bend is not a viable refresh even in the legacy policy.
+    // A forward climb can be powered through the next wire's solid floor;
+    // a sideways climb cannot receive this repeater's forward output.
+    if cells.len() >= 2 {
+        let entered = horizontal_direction(source, cells[0]);
+        let next = Anchor { y: cells[0].y, ..cells[1] };
+        let forward = cells[1].y >= cells[0].y && cells[1].y <= cells[0].y + 1
+            && entered.is_some() && horizontal_direction(cells[0], next) == entered;
+        if !forward {
+            bends.insert(0);
+        }
+    }
     let mut previous = source;
     for (index, cell) in cells.iter().enumerate() {
         if cell.y != previous.y {
@@ -3867,7 +3879,14 @@ fn realise_branch_cells(
             // The cell before a step exits off the level, so under `LatestLegalCell`
             // it is always in `ineligible` and this never fires; the legacy
             // reserve keeps the forced pre-stair refresh it always had.
-            if !ineligible.contains(&before) {
+            let entered_from = if before == 0 { source } else { cells[before - 1] };
+            let entered = horizontal_direction(entered_from, cells[before]);
+            let forward_cell = Anchor { y: cells[before].y, ..*cell };
+            if !ineligible.contains(&before)
+                && cell.y == cells[before].y + 1
+                && entered.is_some()
+                && horizontal_direction(cells[before], forward_cell) == entered
+            {
                 is_repeater[before] = true;
             }
         }
@@ -4124,6 +4143,76 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prestair_refresh_preserves_forward_climb_and_sideways_signal() {
+        use crate::redstone::simulator::Simulator;
+        use crate::redstone::world::storage::World;
+        let source = Anchor { x: 1, y: 1, z: 1 };
+        for (path, lamp) in [
+            (
+                vec![
+                    Anchor { x: 2, y: 1, z: 1 },
+                    Anchor { x: 3, y: 2, z: 1 },
+                    Anchor { x: 4, y: 2, z: 1 },
+                ],
+                Anchor { x: 5, y: 2, z: 1 },
+            ),
+            (
+                vec![
+                    Anchor { x: 2, y: 1, z: 1 },
+                    Anchor { x: 2, y: 2, z: 2 },
+                    Anchor { x: 2, y: 2, z: 3 },
+                ],
+                Anchor { x: 2, y: 2, z: 4 },
+            ),
+        ] {
+            let laid = realise_branch_cells(
+                source,
+                15,
+                &path,
+                false,
+                ReservePolicy::TerminalStairs,
+                true,
+            );
+            assert!(laid.carries);
+            let mut world = World::new(8, 5, 8);
+            world.set(source.x, source.y - 1, source.z, stone());
+            let mut lever = crate::redstone::world::block::BlockState::air();
+            lever.kind = BlockKind::Lever;
+            lever.name = "minecraft:lever".into();
+            lever.face = Some(crate::redstone::world::block::Face::Floor);
+            lever.facing = Some(Facing::North);
+            world.set(source.x, source.y, source.z, lever);
+            for ((at, block), floor) in path.iter().zip(laid.blocks).zip(laid.floors) {
+                world.set(at.x, at.y - 1, at.z, floor);
+                world.set(at.x, at.y, at.z, block);
+            }
+            world.set(lamp.x, lamp.y - 1, lamp.z, stone());
+            let mut output = crate::redstone::world::block::BlockState::air();
+            output.kind = BlockKind::Lamp;
+            output.name = "minecraft:redstone_lamp".into();
+            world.set(lamp.x, lamp.y, lamp.z, output);
+            let mut sim = Simulator::new(world);
+            sim.run_until_stable(200).unwrap();
+            for from in [false, true] {
+                for to in [false, true] {
+                    for value in [from, to] {
+                        let mut input = sim.world().get(source.x, source.y, source.z).clone();
+                        input.lit = value;
+                        sim.world_mut().set(source.x, source.y, source.z, input);
+                        sim.run_until_stable(200).unwrap();
+                        assert_eq!(
+                            sim.world().get(lamp.x, lamp.y, lamp.z).lit,
+                            value,
+                            "path={path:?},from={from},to={to},value={value}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     use crate::compile::fragment_synth::identity::{
         ConnectionId, InstanceId, PhysicalEndpointId, PortId, RouteId, RoutedSinkId,
     };

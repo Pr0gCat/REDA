@@ -96,7 +96,7 @@ fn main() {
         }
         let internal_relay_steps: Vec<_> = route.branch_paths().iter().flat_map(|path|path.windows(3)).filter_map(|w| {
             let cell=circuit.world.get(w[1].x,w[1].y,w[1].z);
-            (cell.kind==BlockKind::Repeater).then(||json!({"previous":w[0],"at":w[1],"next":w[2],"legal":reda::compile::routing::route_step_is_legal(w[0],w[1],w[2],cell)}))
+            (cell.kind==BlockKind::Repeater).then(||json!({"previous":w[0],"at":w[1],"next":w[2],"strict_flat_path_legal":reda::compile::routing::route_step_is_legal(w[0],w[1],w[2],cell)}))
         }).collect();
         routes.push(json!({"owner":route.owner(),"terminals":format!("{:?}",route.terminals()),"paths":route.branch_paths(),"relays":relays,"internal_relay_steps":internal_relay_steps}));
     }

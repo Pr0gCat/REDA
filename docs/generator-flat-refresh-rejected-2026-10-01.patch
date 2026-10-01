@@ -1,0 +1,20 @@
+diff --git a/src/compile/routing.rs b/src/compile/routing.rs
+index 9c2179c..3ea2840 100644
+--- a/src/compile/routing.rs
++++ b/src/compile/routing.rs
+@@ -3702,12 +3702,9 @@ pub(crate) enum ReservePolicy {
+     LatestLegalCell,
+ }
+ 
+-fn reserve_policy(strict_local: bool, seed_rules: bool) -> ReservePolicy {
+-    if strict_local || seed_rules {
+-        ReservePolicy::LatestLegalCell
+-    } else {
+-        ReservePolicy::TerminalStairs
+-    }
++fn reserve_policy(_strict_local: bool, _seed_rules: bool) -> ReservePolicy {
++    // Every counted refresh must carry the recorded path along its axis.
++    ReservePolicy::LatestLegalCell
+ }
+ 
+ /// Whether a repeater at `cells[index]` satisfies `route_step_is_legal`'s
