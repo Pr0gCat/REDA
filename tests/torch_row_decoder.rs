@@ -2242,40 +2242,44 @@ fn physical_rewrite_preserves_ordered_boundaries_and_rejects_partial_proofs() {
 
 #[test]
 fn torch_row_recognition_uses_functions_and_refuses_invalid_or_unqualified_sources() {
-    use reda::compile::fragment_synth::torch_row::{compile_torch_row, TorchRowError};
-    let mut source = matrix_frontend_source([1, 6, 3, 5]);
-    let rename = |name: &str| format!("arbitrary_{name}");
-    for gate in &mut source.gates {
-        gate.name = rename(&gate.name);
-        gate.output = rename(&gate.output);
-        gate.inputs = gate.inputs.iter().map(|s| rename(s)).collect();
+    use reda::compile::fragment_synth::torch_row::{
+        compile_player_torch_row, compile_torch_row, TorchRowError,
+    };
+    for compile_torch_row in [compile_torch_row, compile_player_torch_row] {
+        let mut source = matrix_frontend_source([1, 6, 3, 5]);
+        let rename = |name: &str| format!("arbitrary_{name}");
+        for gate in &mut source.gates {
+            gate.name = rename(&gate.name);
+            gate.output = rename(&gate.output);
+            gate.inputs = gate.inputs.iter().map(|s| rename(s)).collect();
+        }
+        source.inputs = source.inputs.iter().map(|s| rename(s)).collect();
+        source.outputs = source.outputs.iter().map(|s| rename(s)).collect();
+        source.inputs.reverse();
+        source.outputs.reverse();
+        let result = compile_torch_row(&source, 1_000_000).unwrap();
+        assert_eq!(result.source(), &source);
+        assert_eq!(result.source_input_positions().len(), 2);
+        assert_eq!(result.source_output_positions().len(), 3);
+        let repeated = compile_torch_row(&source, 1_000_000).unwrap();
+        assert_eq!(
+            result.equivalence_certificate(),
+            repeated.equivalence_certificate()
+        );
+        assert!(compile_torch_row(&source, 0).is_err());
+        let mut omitted = source.clone();
+        omitted.outputs.pop();
+        assert!(matches!(
+            compile_torch_row(&omitted, 1_000_000),
+            Err(TorchRowError::UnsupportedBoundary)
+        ));
+        let mut invalid = source.clone();
+        invalid.gates[0].inputs.push("undriven".into());
+        assert!(compile_torch_row(&invalid, 1_000_000).is_err());
+        let mut stateful = source.clone();
+        stateful.gates[0].kind = reda::compile::topology::GateKind::DffPosedge;
+        assert!(compile_torch_row(&stateful, 1_000_000).is_err());
     }
-    source.inputs = source.inputs.iter().map(|s| rename(s)).collect();
-    source.outputs = source.outputs.iter().map(|s| rename(s)).collect();
-    source.inputs.reverse();
-    source.outputs.reverse();
-    let result = compile_torch_row(&source, 1_000_000).unwrap();
-    assert_eq!(result.source(), &source);
-    assert_eq!(result.source_input_positions().len(), 2);
-    assert_eq!(result.source_output_positions().len(), 3);
-    let repeated = compile_torch_row(&source, 1_000_000).unwrap();
-    assert_eq!(
-        result.equivalence_certificate(),
-        repeated.equivalence_certificate()
-    );
-    assert!(compile_torch_row(&source, 0).is_err());
-    let mut omitted = source.clone();
-    omitted.outputs.pop();
-    assert!(matches!(
-        compile_torch_row(&omitted, 1_000_000),
-        Err(TorchRowError::UnsupportedBoundary)
-    ));
-    let mut invalid = source.clone();
-    invalid.gates[0].inputs.push("undriven".into());
-    assert!(compile_torch_row(&invalid, 1_000_000).is_err());
-    let mut stateful = source.clone();
-    stateful.gates[0].kind = reda::compile::topology::GateKind::DffPosedge;
-    assert!(compile_torch_row(&stateful, 1_000_000).is_err());
 }
 
 #[test]
@@ -2345,20 +2349,32 @@ fn torch_row_entry_records_quality_against_current_shipping_layouts() {
     // one improved case cannot compensate for a different ROM regression.
     let frozen: serde_json::Value = serde_json::from_str(include_str!(
         "../docs/generator-torch-row-shipping-comparison-2026-09-30.json"
-    )).unwrap();
+    ))
+    .unwrap();
     for case in &cases {
-        let baseline = frozen["cases"].as_array().unwrap().iter()
-            .find(|row| row["words"] == case["words"]).unwrap();
+        let baseline = frozen["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["words"] == case["words"])
+            .unwrap();
         for metric in [
-            "driver_glitches", "driver_single_input_glitches",
-            "lamp_glitches", "lamp_single_input_glitches",
-            "total_driver_pulse_ticks", "total_settle_ticks",
-            "worst_driver_change_ticks", "worst_driver_pulse_ticks",
+            "driver_glitches",
+            "driver_single_input_glitches",
+            "lamp_glitches",
+            "lamp_single_input_glitches",
+            "total_driver_pulse_ticks",
+            "total_settle_ticks",
+            "worst_driver_change_ticks",
+            "worst_driver_pulse_ticks",
             "worst_settle_ticks",
         ] {
-            assert!(case["shipping"][metric].as_u64().unwrap()
-                <= baseline["shipping"][metric].as_u64().unwrap(),
-                "ROM {:?}: frozen shipping {metric} regression", case["words"]);
+            assert!(
+                case["shipping"][metric].as_u64().unwrap()
+                    <= baseline["shipping"][metric].as_u64().unwrap(),
+                "ROM {:?}: frozen shipping {metric} regression",
+                case["words"]
+            );
         }
     }
     let report = json!({"comparison_commit":"5d9d64c","measured_transitions_per_arm":96,"cases":cases,
@@ -2370,4 +2386,56 @@ fn torch_row_entry_records_quality_against_current_shipping_layouts() {
         serde_json::to_string_pretty(&report).unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+fn player_matrix_certifies_native_and_fresh_yosys_sources() {
+    use reda::compile::equivalence::prove_netlist_rewrite;
+    use reda::compile::fragment_synth::{
+        benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
+    };
+    for words in [
+        [1, 6, 3, 5],
+        [3, 6, 6, 1],
+        [0, 0, 0, 7],
+        [0; 4],
+        [7; 4],
+        [1; 4],
+    ] {
+        let native = matrix_frontend_source(words);
+        let text = matrix_frontend_text(words);
+        let (yosys, ports) = reda::frontend::synthesize_verilog(&text, "source_rom").unwrap();
+        let mut yosys = lower_optimised(&yosys).unwrap();
+        yosys.outputs = (0..3)
+            .map(|bit| ports[&format!("y{bit}")].clone())
+            .collect();
+        let a = compile_player_torch_row(&native, 1_000_000).unwrap();
+        let b = compile_player_torch_row(&yosys, 1_000_000).unwrap();
+        assert_eq!(a.implemented(), b.implemented());
+        assert_eq!(
+            canonical_world_fingerprint(a.physical().world()),
+            canonical_world_fingerprint(b.physical().world())
+        );
+        assert_eq!(
+            a.equivalence_certificate().candidate_fingerprint,
+            b.equivalence_certificate().candidate_fingerprint
+        );
+        assert_eq!(
+            a.rewrite_certificate().rewritten_netlist_hash(),
+            &a.equivalence_certificate().lowered_netlist_hash
+        );
+        assert_eq!(a.source_output_positions().len(), 3);
+        assert!(a.source_output_positions().windows(2).all(|p| p[0] != p[1]));
+    }
+    let intended =
+        compile_player_torch_row(&matrix_frontend_source([1, 6, 3, 5]), 1_000_000).unwrap();
+    let wrong = matrix_frontend_source([1, 6, 3, 4]);
+    assert!(prove_netlist_rewrite(
+        &wrong,
+        intended.implemented(),
+        &intended.implemented().inputs,
+        &intended.implemented().outputs,
+        1_000_000
+    )
+    .is_err());
 }

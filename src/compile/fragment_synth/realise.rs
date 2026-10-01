@@ -335,7 +335,7 @@ fn terminal_owner_matches(
 ) -> bool {
     use crate::compile::fragment_synth::candidate::DelayedOwner;
 
-    connection_target_owner_matches(candidate, route, branch.target, owner)
+    connection_target_owner_matches(candidate, route, source, branch, owner)
         && match branch.terminal.delayed_owner {
             Some(DelayedOwner::Route(expected)) => {
                 expected == route && owner == TerminalCellOwner::Route(route)
@@ -364,10 +364,11 @@ fn terminal_owner_matches(
 fn connection_target_owner_matches(
     candidate: &ExpandedPhysicalCandidate,
     route: RouteId,
-    target: RouteTarget,
+    source: PhysicalEndpointId,
+    branch: &crate::compile::fragment_synth::candidate::RealisedRouteBranch,
     owner: TerminalCellOwner,
 ) -> bool {
-    let RouteTarget::Connection(connection) = target else {
+    let RouteTarget::Connection(connection) = branch.target else {
         return true;
     };
     let Some(target) = topology_connection_target(candidate, connection) else {
@@ -383,6 +384,29 @@ fn connection_target_owner_matches(
         }
         (ConnectionTarget::Junction(expected), TerminalCellOwner::Junction(actual)) => {
             actual == expected
+        }
+        (ConnectionTarget::Primitive(expected), TerminalCellOwner::Junction(actual)) => {
+            // A distributed wired-OR carrier can itself be the dust above
+            // a downstream torch's support. Retain its junction ownership;
+            // require the exact logical source and physical support landing.
+            source == PhysicalEndpointId::Junction(actual)
+                && branch.terminal.kind
+                    == crate::compile::routing::RouteTerminalKind::DirectedDustIntoSupport
+                && branch.terminal.state.kind == BlockKind::RedstoneWire
+                && candidate.placements.get(&expected).is_some_and(|p| {
+                    p.blocks
+                        .iter()
+                        .any(|b| b.state.kind == BlockKind::WallTorch)
+                        && p.blocks
+                            .iter()
+                            .any(|b| b.at == p.anchor && b.state.kind == BlockKind::Solid)
+                        && branch.terminal.at
+                            == Anchor {
+                                x: p.anchor.x,
+                                y: p.anchor.y + 1,
+                                z: p.anchor.z,
+                            }
+                })
         }
         _ => false,
     }

@@ -115,6 +115,7 @@ fn main() {
             || a == "--player-restored"
             || a == "--certified-control"
             || a == "--player-driven"
+            || a == "--player-typed"
     }) {
         let args: Vec<_> = std::env::args().collect();
         let start = args.get(2).map(|s| s.parse::<u16>().unwrap()).unwrap_or(0);
@@ -448,10 +449,13 @@ fn matrix_probe_world(
     source_delay: u8,
 ) -> serde_json::Value {
     let certified_control = !player
-        && std::env::args()
-            .any(|a| ["--certified-control", "--player-driven"].contains(&a.as_str()));
+        && std::env::args().any(|a| {
+            ["--certified-control", "--player-driven", "--player-typed"].contains(&a.as_str())
+        });
     let build = || {
-        if player {
+        if player && std::env::args().any(|a| a == "--player-typed") {
+            certified_matrix_impl(words, true)
+        } else if player {
             player_matrix(words, pitch, prune, source_delay)
         } else if certified_control {
             certified_matrix(words)
@@ -463,6 +467,19 @@ fn matrix_probe_world(
     let fp = reda::compile::fragment_synth::benchmark::canonical_world_fingerprint;
     assert_eq!(fp(&w), fp(&build().0));
     let fingerprint = fp(&w);
+    let internal_truth = if player && std::env::args().any(|a| a == "--player-typed") {
+        let result = certified_result(words, true);
+        assert_eq!(fingerprint, fp(result.physical().world()));
+        Some((
+            result.implemented().clone(),
+            result
+                .implemented_observations()
+                .gate_output_positions
+                .clone(),
+        ))
+    } else {
+        None
+    };
     let mut internal_sites = Vec::new();
     if player && std::env::args().any(|a| a == "--internal") {
         let (sx, sy, sz) = w.size();
@@ -507,6 +524,33 @@ fn matrix_probe_world(
                     sim.world_mut().set(input.x, input.y, input.z, b);
                 }
                 let ticks = sim.run_until_stable(2000).unwrap();
+                if let Some((netlist, sites)) = &internal_truth {
+                    let mut values: std::collections::HashMap<String, bool> = netlist
+                        .inputs
+                        .iter()
+                        .enumerate()
+                        .map(|(bit, name)| (name.clone(), address & (1 << bit) != 0))
+                        .collect();
+                    for index in netlist.combinational_order().unwrap() {
+                        let gate = &netlist.gates[index];
+                        let expected = gate
+                            .kind
+                            .evaluate(&gate.inputs.iter().map(|n| values[n]).collect::<Vec<_>>());
+                        let &(x, y, z) = &sites[&gate.output];
+                        let block = sim.world().get(x, y, z);
+                        let actual = if block.kind == BlockKind::RedstoneWire {
+                            block.power > 0
+                        } else {
+                            block.lit
+                        };
+                        assert_eq!(
+                            actual, expected,
+                            "internal {}: words={words:?}, from={from}, to={to}, phase={phase}",
+                            gate.output
+                        );
+                        values.insert(gate.output.clone(), expected);
+                    }
+                }
                 let actual_driver = drivers.map(|p| {
                     let b = sim.world().get(p.x, p.y, p.z);
                     if b.kind == BlockKind::RedstoneWire {
@@ -552,10 +596,41 @@ fn matrix_probe_world(
             }
         }
     }
-    json!({"correct":true,"certified":certified_control,"fingerprint":fingerprint,"phases":phases})
+    json!({"correct":true,"certified":certified_control || (player && std::env::args().any(|a|a=="--player-typed")),"fingerprint":fingerprint,"phases":phases})
 }
 
 fn certified_matrix(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Position; 3]) {
+    certified_matrix_impl(words, false)
+}
+
+fn certified_matrix_impl(
+    words: [u8; 4],
+    player: bool,
+) -> (World, [Position; 2], [Position; 3], [Position; 3]) {
+    let result = certified_result(words, player);
+    let positions = |ps: &[(i32, i32, i32)]| {
+        ps.iter()
+            .map(|&(x, y, z)| Position::new(x, y, z))
+            .collect::<Vec<_>>()
+    };
+    (
+        result.physical().world().clone(),
+        positions(result.source_input_positions())
+            .try_into()
+            .unwrap(),
+        positions(result.source_output_driver_positions())
+            .try_into()
+            .unwrap(),
+        positions(result.source_output_positions())
+            .try_into()
+            .unwrap(),
+    )
+}
+
+fn certified_result(
+    words: [u8; 4],
+    player: bool,
+) -> reda::compile::fragment_synth::rewrite::CertifiedPhysicalRewrite {
     use reda::{
         compile::lowering::lower_optimised,
         frontend::{compile_systemverilog, CompileOptions, SourceInput},
@@ -582,23 +657,10 @@ fn certified_matrix(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Po
     source.outputs = (0..3)
         .map(|bit| ports[&format!("y{bit}")].clone())
         .collect();
-    let result =
-        reda::compile::fragment_synth::torch_row::compile_torch_row(&source, 1_000_000).unwrap();
-    let positions = |ps: &[(i32, i32, i32)]| {
-        ps.iter()
-            .map(|&(x, y, z)| Position::new(x, y, z))
-            .collect::<Vec<_>>()
-    };
-    (
-        result.physical().world().clone(),
-        positions(result.source_input_positions())
-            .try_into()
-            .unwrap(),
-        positions(result.source_output_driver_positions())
-            .try_into()
-            .unwrap(),
-        positions(result.source_output_positions())
-            .try_into()
-            .unwrap(),
-    )
+    if player {
+        reda::compile::fragment_synth::torch_row::compile_player_torch_row(&source, 1_000_000)
+    } else {
+        reda::compile::fragment_synth::torch_row::compile_torch_row(&source, 1_000_000)
+    }
+    .unwrap()
 }

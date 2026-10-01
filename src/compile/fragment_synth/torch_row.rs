@@ -10,6 +10,8 @@ use crate::redstone::world::{
     storage::World,
 };
 
+mod player;
+
 #[derive(Debug)]
 pub enum TorchRowError {
     UnsupportedBoundary,
@@ -23,6 +25,23 @@ pub enum TorchRowError {
 pub fn compile_torch_row(
     source: &Netlist,
     proof_work_limit: u64,
+) -> Result<CertifiedPhysicalRewrite, TorchRowError> {
+    compile_matrix(source, proof_work_limit, false)
+}
+
+/// Experimental player geometry; all existing equivalence and physical checks apply.
+/// This entry is never selected by the automatic compiler.
+pub fn compile_player_torch_row(
+    source: &Netlist,
+    proof_work_limit: u64,
+) -> Result<CertifiedPhysicalRewrite, TorchRowError> {
+    compile_matrix(source, proof_work_limit, true)
+}
+
+fn compile_matrix(
+    source: &Netlist,
+    proof_work_limit: u64,
+    player: bool,
 ) -> Result<CertifiedPhysicalRewrite, TorchRowError> {
     if source.inputs.len() != 2 || source.outputs.len() != 3 {
         return Err(TorchRowError::UnsupportedBoundary);
@@ -59,7 +78,11 @@ pub fn compile_torch_row(
                 word | (u8::from(values[name]) << bit)
             })
     });
-    let (implemented, _, candidate) = typed_matrix_candidate(words);
+    let (implemented, _, candidate) = if player {
+        player::candidate(words)
+    } else {
+        typed_matrix_candidate(words)
+    };
     realise_physical_rewrite(
         source,
         &implemented,
@@ -437,19 +460,6 @@ fn typed_matrix_candidate(
     World,
     crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate,
 ) {
-    use crate::compile::fragment_synth::{
-        candidate::*, identity::*, instance_graph::*, topology::*,
-    };
-    use crate::compile::{
-        geometry::{Anchor, CellFacing},
-        planner::PortPlacements,
-    };
-    use std::collections::{BTreeMap, BTreeSet, VecDeque};
-    let anchor = |p: Position| Anchor {
-        x: p.x,
-        y: p.y,
-        z: p.z,
-    };
     let (mut netlist, mut positions) = matrix_logic_binding(words);
     let (mut world, mut inputs, _, lamps) =
         matrix_four_words_with_aligned_refresh(words, true, true, true);
@@ -499,8 +509,6 @@ fn typed_matrix_candidate(
             world.set(p.x, p.y, p.z, BlockState::air());
         }
     }
-    let graph = InstanceGraph::one_to_one(&netlist, &typed_matrix_library()).unwrap();
-    let mut candidate = ExpandedPhysicalCandidate::empty(graph, PortPlacements::default());
     // A conductor above the inverter support makes the direct lever/support
     // contact an explicit route terminal; retain the original fixture as control.
     for p in &mut inputs {
@@ -538,6 +546,32 @@ fn typed_matrix_candidate(
             world.set(x - 1, 3, 1, BlockState::air());
         }
     }
+    typed_world_candidate(netlist, world, inputs, lamps, positions, false)
+}
+
+fn typed_world_candidate(
+    netlist: Netlist,
+    world: World,
+    inputs: Vec<Position>,
+    lamps: Vec<Position>,
+    positions: std::collections::BTreeMap<String, Position>,
+    player: bool,
+) -> (Netlist, World, super::candidate::ExpandedPhysicalCandidate) {
+    use crate::compile::fragment_synth::{
+        candidate::*, identity::*, instance_graph::*, topology::*,
+    };
+    use crate::compile::{
+        geometry::{Anchor, CellFacing},
+        planner::PortPlacements,
+    };
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
+    let anchor = |p: Position| Anchor {
+        x: p.x,
+        y: p.y,
+        z: p.z,
+    };
+    let graph = InstanceGraph::one_to_one(&netlist, &typed_matrix_library()).unwrap();
+    let mut candidate = ExpandedPhysicalCandidate::empty(graph, PortPlacements::default());
     let placed = |p: Position| PlacedBlock {
         at: anchor(p),
         state: world.get(p.x, p.y, p.z).clone(),
@@ -726,8 +760,18 @@ fn typed_matrix_candidate(
         let route = *route_ids.entry(source).or_insert(next);
         let at = candidate.observations[&observation(source)].site.at;
         let p = Position::new(at.x, at.y, at.z);
-        let root = if world.get(p.x, p.y, p.z).kind == BlockKind::Repeater {
-            p.offset(world.get(p.x, p.y, p.z).facing.unwrap().opposite())
+        let root = if player && world.get(p.x, p.y, p.z).kind == BlockKind::Lever {
+            [Facing::North, Facing::South, Facing::East, Facing::West]
+                .into_iter()
+                .map(|f| p.offset(f))
+                .find(|n| world.get(n.x, n.y, n.z).kind == BlockKind::Repeater)
+                .unwrap()
+        } else if world.get(p.x, p.y, p.z).kind == BlockKind::Repeater {
+            if player {
+                p
+            } else {
+                p.offset(world.get(p.x, p.y, p.z).facing.unwrap().opposite())
+            }
         } else if world.get(p.x, p.y, p.z).kind == BlockKind::RedstoneWire {
             p
         } else if world.get(p.x, p.y - 1, p.z).kind == BlockKind::RedstoneWire {
@@ -753,10 +797,21 @@ fn typed_matrix_candidate(
                     Position::new(support.x, support.y + 1, support.z)
                 }
             }
-            PhysicalEndpointId::Junction(_) => root,
+            PhysicalEndpointId::Junction(_) => {
+                if player && world.get(root.x, root.y, root.z).kind == BlockKind::Repeater {
+                    root.offset(world.get(root.x, root.y, root.z).facing.unwrap().opposite())
+                        .down()
+                } else {
+                    root
+                }
+            }
             PhysicalEndpointId::DeclaredOutput(_) => {
                 let at = candidate.observations[&observation(landing)].site.at;
-                Position::new(at.x, at.y, at.z - 1)
+                if player {
+                    Position::new(at.x - 1, at.y, at.z)
+                } else {
+                    Position::new(at.x, at.y, at.z - 1)
+                }
             }
             _ => unreachable!(),
         };
@@ -784,6 +839,24 @@ fn typed_matrix_candidate(
                 if nstate.kind == BlockKind::Repeater && nstate.facing == Some(direction.opposite())
                 {
                     next.push(n);
+                }
+                if player && state.kind == BlockKind::RedstoneWire {
+                    let floor = p.down();
+                    let r = floor.offset(direction);
+                    let rs = world.get(r.x, r.y, r.z);
+                    if world.get(floor.x, floor.y, floor.z).kind == BlockKind::Solid
+                        && rs.kind == BlockKind::Repeater
+                        && rs.facing == Some(direction.opposite())
+                    {
+                        next.push(r);
+                    }
+                }
+                if player
+                    && state.kind == BlockKind::Repeater
+                    && nstate.kind == BlockKind::Solid
+                    && world.get(n.x, n.y - 1, n.z).kind == BlockKind::RedstoneWire
+                {
+                    next.push(n.down());
                 }
                 for n in next {
                     if let std::collections::btree_map::Entry::Vacant(e) = parent.entry(n) {
@@ -828,6 +901,35 @@ fn typed_matrix_candidate(
             route,
             ordinal: tree.branches.len() as u16,
         };
+        if player && path.len() >= 2 {
+            let mut contracts = Vec::new();
+            if let PhysicalEndpointId::PrimitiveOutput(id) = source {
+                if world.get(root.x, root.y, root.z).kind == BlockKind::Repeater
+                    && path[1].y == root.y - 1
+                {
+                    let p =
+                        root.offset(world.get(root.x, root.y, root.z).facing.unwrap().opposite());
+                    contracts.push(RepeaterHandover {
+                        primitive: id,
+                        support: anchor(p),
+                        kind: RepeaterHandoverKind::StrongFloorOutput,
+                    });
+                }
+            }
+            if let Some(id) = target_repeater {
+                if path[path.len() - 2].y == end.y + 1 {
+                    let p = end.offset(world.get(end.x, end.y, end.z).facing.unwrap());
+                    contracts.push(RepeaterHandover {
+                        primitive: id,
+                        support: anchor(p),
+                        kind: RepeaterHandoverKind::WeakFloorInput,
+                    });
+                }
+            }
+            if !contracts.is_empty() {
+                candidate.repeater_handovers.insert(sink, contracts);
+            }
+        }
         tree.branches.push(RealisedRouteBranch {
             sink,
             target,
@@ -875,6 +977,64 @@ fn typed_matrix_candidate(
         assert!(claimed.insert(j.at));
         j.cells.push(placed(Position::new(j.at.x, j.at.y, j.at.z)));
     }
+    if player {
+        let landings: BTreeSet<_> = candidate
+            .connections
+            .values()
+            .filter_map(|b| {
+                candidate
+                    .junctions
+                    .values()
+                    .any(|j| j.contributors.contains(&b.landing))
+                    .then(|| {
+                        candidate.routes[&b.route]
+                            .branches
+                            .iter()
+                            .find(|r| r.sink == b.sink)
+                            .unwrap()
+                            .terminal
+                            .at
+                    })
+            })
+            .collect();
+        let mut regions = BTreeMap::new();
+        for (&id, j) in &candidate.junctions {
+            regions.insert(j.at, id);
+        }
+        let mut queue: VecDeque<_> = regions.keys().copied().collect();
+        while let Some(at) = queue.pop_front() {
+            let id = regions[&at];
+            for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+                for n in crate::redstone::simulator::connectivity::dust_connections(
+                    &world,
+                    Position::new(at.x, at.y, at.z),
+                    direction,
+                )
+                .iter()
+                {
+                    match regions.entry(anchor(n)) {
+                        std::collections::btree_map::Entry::Vacant(e) => {
+                            e.insert(id);
+                            queue.push_back(anchor(n));
+                        }
+                        std::collections::btree_map::Entry::Occupied(e) => {
+                            assert_eq!(*e.get(), id, "distinct junction regions must not join")
+                        }
+                    }
+                }
+            }
+        }
+        for (at, id) in regions {
+            if !landings.contains(&at) && claimed.insert(at) {
+                candidate
+                    .junctions
+                    .get_mut(&id)
+                    .unwrap()
+                    .cells
+                    .push(placed(Position::new(at.x, at.y, at.z)));
+            }
+        }
+    }
     // Assign real branch cells first; merge landings retain their route owner.
     for tree in candidate.routes.values_mut() {
         for at in tree.branches.iter().flat_map(|b| b.path.iter()).copied() {
@@ -885,66 +1045,141 @@ fn typed_matrix_candidate(
     }
     // This first adapter owns remaining connected wire cells by their actual
     // route/junction component, then owns the support below each conductor.
-    for flat in world.positions_of(BlockKind::RedstoneWire) {
-        let (x, y, z) = world.decode(flat);
-        let at = Anchor { x, y, z };
-        if claimed.contains(&at) {
-            continue;
+    if player {
+        #[derive(Clone, Copy)]
+        enum ConductorOwner {
+            Junction(InstanceId),
+            Route(RouteId),
         }
-        let j = candidate
-            .junctions
-            .iter()
-            .find(|(_, j)| {
-                (j.at.y == y && j.at.z == z && j.at.y == 3 && x <= 15)
-                    || (j.at.y == y
-                        && j.at.x == x
-                        && j.at.y == 1
-                        && (!candidate.placements.values().any(|p| {
-                            p.blocks.iter().any(|b| {
-                                b.state.kind == BlockKind::Repeater && b.at.x == x && b.at.y == 1
-                            })
-                        }) || (z < 15) == (j.at.z < 15)))
-            })
-            .map(|(&id, _)| id);
-        if let Some(j) = j {
-            candidate
+        let mut domains = BTreeMap::new();
+        for (&id, j) in &candidate.junctions {
+            domains.insert(j.at, ConductorOwner::Junction(id));
+        }
+        for (&id, tree) in &candidate.routes {
+            for b in &tree.cells {
+                if b.state.kind == BlockKind::RedstoneWire {
+                    domains.entry(b.at).or_insert(ConductorOwner::Route(id));
+                }
+            }
+        }
+        let mut queue: VecDeque<_> = domains.keys().copied().collect();
+        while let Some(at) = queue.pop_front() {
+            let p = Position::new(at.x, at.y, at.z);
+            for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+                for n in
+                    crate::redstone::simulator::connectivity::dust_connections(&world, p, direction)
+                        .iter()
+                {
+                    let owner = domains[&at];
+                    if let std::collections::btree_map::Entry::Vacant(e) = domains.entry(anchor(n))
+                    {
+                        e.insert(owner);
+                        queue.push_back(anchor(n));
+                    }
+                }
+            }
+        }
+        for flat in world.positions_of(BlockKind::RedstoneWire) {
+            let (x, y, z) = world.decode(flat);
+            let at = Anchor { x, y, z };
+            if !claimed.insert(at) {
+                continue;
+            }
+            match domains
+                .get(&at)
+                .expect("wire needs an actual connected owner")
+            {
+                ConductorOwner::Junction(id) => candidate
+                    .junctions
+                    .get_mut(id)
+                    .unwrap()
+                    .cells
+                    .push(placed(Position::new(x, y, z))),
+                ConductorOwner::Route(id) => candidate
+                    .routes
+                    .get_mut(id)
+                    .unwrap()
+                    .cells
+                    .push(placed(Position::new(x, y, z))),
+            }
+        }
+    } else {
+        for flat in world.positions_of(BlockKind::RedstoneWire) {
+            let (x, y, z) = world.decode(flat);
+            let at = Anchor { x, y, z };
+            if claimed.contains(&at) {
+                continue;
+            }
+            let j = candidate
                 .junctions
-                .get_mut(&j)
-                .unwrap()
-                .cells
-                .push(placed(Position::new(x, y, z)));
-            claimed.insert(at);
-        } else {
-            let route = candidate
-                .routes
                 .iter()
-                .filter(|(_, r)| {
-                    r.branches.iter().any(|b| {
-                        b.path
-                            .iter()
-                            .any(|a| a.y == y && if y == 3 { a.z == z } else { a.x == x })
+                .find(|(_, j)| {
+                    (j.at.y == y && j.at.z == z && j.at.y == 3 && x <= 15)
+                        || (j.at.y == y
+                            && j.at.x == x
+                            && j.at.y == 1
+                            && (!candidate.placements.values().any(|p| {
+                                p.blocks.iter().any(|b| {
+                                    b.state.kind == BlockKind::Repeater
+                                        && b.at.x == x
+                                        && b.at.y == 1
+                                })
+                            }) || (z < 15) == (j.at.z < 15)))
+                })
+                .map(|(&id, _)| id);
+            if let Some(j) = j {
+                candidate
+                    .junctions
+                    .get_mut(&j)
+                    .unwrap()
+                    .cells
+                    .push(placed(Position::new(x, y, z)));
+                claimed.insert(at);
+            } else {
+                let route = candidate
+                    .routes
+                    .iter()
+                    .filter(|(_, r)| {
+                        r.branches.iter().any(|b| {
+                            b.path
+                                .iter()
+                                .any(|a| a.y == y && if y == 3 { a.z == z } else { a.x == x })
+                        })
                     })
-                })
-                .min_by_key(|(_, r)| {
-                    !(y == 3
-                        && r.branches
-                            .iter()
-                            .any(|b| b.path.iter().any(|a| a.x == 16 && a.y == 3 && a.z == z)))
-                })
-                .map(|(&id, _)| id)
-                .expect("wire must have a route owner");
-            candidate
-                .routes
-                .get_mut(&route)
-                .unwrap()
-                .cells
-                .push(placed(Position::new(x, y, z)));
-            claimed.insert(at);
+                    .min_by_key(|(_, r)| {
+                        !(y == 3
+                            && r.branches
+                                .iter()
+                                .any(|b| b.path.iter().any(|a| a.x == 16 && a.y == 3 && a.z == z)))
+                    })
+                    .map(|(&id, _)| id)
+                    .expect("wire must have a route owner");
+                candidate
+                    .routes
+                    .get_mut(&route)
+                    .unwrap()
+                    .cells
+                    .push(placed(Position::new(x, y, z)));
+                claimed.insert(at);
+            }
         }
     }
     for j in candidate.junctions.values_mut() {
         if claimed.insert(j.at) {
             j.cells.push(placed(Position::new(j.at.x, j.at.y, j.at.z)));
+        }
+    }
+    for (&sink, contracts) in &candidate.repeater_handovers {
+        for contract in contracts {
+            if claimed.insert(contract.support) {
+                let p = contract.support;
+                candidate
+                    .routes
+                    .get_mut(&sink.route)
+                    .unwrap()
+                    .floors
+                    .push(placed(Position::new(p.x, p.y, p.z)));
+            }
         }
     }
     for tree in candidate.routes.values_mut() {

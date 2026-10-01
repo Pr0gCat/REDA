@@ -165,6 +165,21 @@ pub struct VerifiedObservation {
     pub state: BlockState,
 }
 
+/// Explicit electrical handover at a primitive repeater endpoint.
+/// The strict verifier checks the real support, orientation and endpoint identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum RepeaterHandoverKind {
+    WeakFloorInput,
+    StrongFloorOutput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RepeaterHandover {
+    pub primitive: PrimitiveId,
+    pub support: Anchor,
+    pub kind: RepeaterHandoverKind,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExpandedPhysicalCandidate {
     pub instances: InstanceGraph,
@@ -172,6 +187,7 @@ pub struct ExpandedPhysicalCandidate {
     pub boundaries: BTreeMap<PhysicalEndpointId, BoundaryPlacement>,
     pub connections: BTreeMap<ConnectionId, ConnectionBinding>,
     pub routes: BTreeMap<RouteId, RealisedRouteTree>,
+    pub repeater_handovers: BTreeMap<RoutedSinkId, Vec<RepeaterHandover>>,
     pub junctions: BTreeMap<crate::compile::fragment_synth::identity::InstanceId, RealisedJunction>,
     pub observations: BTreeMap<ObservationId, VerifiedObservation>,
     pub pins: PortPlacements,
@@ -352,6 +368,8 @@ struct CandidateFingerprintPayload<'a> {
     boundaries: Vec<BoundaryFingerprint<'a>>,
     connections: Vec<(&'a ConnectionId, &'a ConnectionBinding)>,
     routes: Vec<RouteFingerprint<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    repeater_handovers: Vec<(&'a RoutedSinkId, &'a Vec<RepeaterHandover>)>,
     junctions: Vec<JunctionFingerprint<'a>>,
     observations: Vec<(&'a ObservationId, &'a VerifiedObservation)>,
     pins: Vec<PinFingerprint<'a>>,
@@ -367,6 +385,7 @@ impl ExpandedPhysicalCandidate {
             boundaries: BTreeMap::new(),
             connections: BTreeMap::new(),
             routes: BTreeMap::new(),
+            repeater_handovers: BTreeMap::new(),
             junctions: BTreeMap::new(),
             observations: BTreeMap::new(),
             pins,
@@ -424,6 +443,7 @@ impl ExpandedPhysicalCandidate {
                     branches: &route.branches,
                 })
                 .collect(),
+            repeater_handovers: self.repeater_handovers.iter().collect(),
             junctions: self
                 .junctions
                 .iter()

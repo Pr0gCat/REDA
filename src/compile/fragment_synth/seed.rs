@@ -4083,6 +4083,7 @@ mod tests {
                     },
                 ),
             ]),
+            repeater_handovers: BTreeMap::new(),
             junctions: BTreeMap::new(),
             observations: BTreeMap::new(),
             pins: PortPlacements::default(),

@@ -202,7 +202,7 @@ pub(crate) fn expanded_strict_physical_verifier_revision_descriptor(
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::RouteContinuity,
-                semantic_version: 1,
+                semantic_version: 2,
             },
             PhysicalVerifierRuleRegistration {
                 id: PhysicalVerifierRuleId::Connectivity,
@@ -442,6 +442,8 @@ pub enum ExpandedPhysicalError {
         from: Anchor,
         to: Anchor,
     },
+    #[error("route {sink:?} has an invalid supported repeater handover")]
+    InvalidRepeaterHandover { sink: RoutedSinkId },
     #[error("junction {junction:?} claims a disconnected wire cell at {at:?}")]
     DisconnectedJunctionCell { junction: InstanceId, at: Anchor },
     #[error("routes {first:?} and {second:?} join through redstone dust at {at:?}")]
@@ -548,6 +550,7 @@ fn verify_expanded_legacy_compatibility(
     emitted: &EmittedWorld,
 ) -> Result<(), ExpandedPhysicalError> {
     verify_observations(candidate, emitted)?;
+    verify_repeater_handovers(candidate, emitted)?;
     verify_legacy_repeater_axes(candidate, emitted)?;
     verify_typed_connectivity(candidate, emitted)?;
     Ok(())
@@ -566,10 +569,126 @@ fn verify_observations(
     Ok(())
 }
 
+/// Supported diagonal steps must be declared at an actual logical primitive
+/// endpoint. This never authorizes a solid path cell or an interior relay turn.
+fn verify_repeater_handovers(
+    candidate: &ExpandedPhysicalCandidate,
+    emitted: &EmittedWorld,
+) -> Result<BTreeSet<(RoutedSinkId, Anchor, Anchor)>, ExpandedPhysicalError> {
+    use super::fragment_synth::candidate::RepeaterHandoverKind;
+    let mut approved = BTreeSet::new();
+    for (&sink, contracts) in &candidate.repeater_handovers {
+        let invalid = || ExpandedPhysicalError::InvalidRepeaterHandover { sink };
+        if contracts.is_empty() || contracts.len() > 2 {
+            return Err(invalid());
+        }
+        let route = candidate.routes.get(&sink.route).ok_or_else(invalid)?;
+        let branch = route
+            .branches
+            .iter()
+            .find(|b| b.sink == sink)
+            .ok_or_else(invalid)?;
+        if branch.path.len() < 2 {
+            return Err(invalid());
+        }
+        for contract in contracts {
+            let placement = candidate
+                .placements
+                .get(&contract.primitive)
+                .ok_or_else(invalid)?;
+            let relay = placement
+                .blocks
+                .iter()
+                .find(|b| b.state.kind == BlockKind::Repeater)
+                .ok_or_else(invalid)?;
+            let r = relay.at;
+            let state = emitted.world.get(r.x, r.y, r.z);
+            if state != &relay.state || state.kind != BlockKind::Repeater {
+                return Err(invalid());
+            }
+            let facing = state.facing.ok_or_else(invalid)?;
+            let rp = Position::new(r.x, r.y, r.z);
+            let (pair, support) = match contract.kind {
+                RepeaterHandoverKind::WeakFloorInput => {
+                    let Some(binding) = candidate.connections.values().find(|b| b.sink == sink)
+                    else {
+                        return Err(invalid());
+                    };
+                    let spec = candidate
+                        .instances
+                        .instances
+                        .iter()
+                        .flat_map(|i| i.expanded.topology.connections.iter())
+                        .find(|c| c.id == binding.id)
+                        .ok_or_else(invalid)?;
+                    if spec.target != ConnectionTarget::Primitive(contract.primitive) {
+                        return Err(invalid());
+                    }
+                    let support = rp.offset(facing);
+                    let dust = Anchor {
+                        x: support.x,
+                        y: support.y + 1,
+                        z: support.z,
+                    };
+                    if branch.terminal.delayed_owner
+                        != Some(super::routing::DelayedOwner::Primitive(contract.primitive))
+                    {
+                        return Err(invalid());
+                    }
+                    let pair = (dust, r);
+                    if branch.path[branch.path.len() - 2..] != [pair.0, pair.1] {
+                        return Err(invalid());
+                    }
+                    (pair, support)
+                }
+                RepeaterHandoverKind::StrongFloorOutput => {
+                    if route.source != PhysicalEndpointId::PrimitiveOutput(contract.primitive) {
+                        return Err(invalid());
+                    }
+                    let support = rp.offset(facing.opposite());
+                    let dust = Anchor {
+                        x: support.x,
+                        y: support.y - 1,
+                        z: support.z,
+                    };
+                    let pair = (r, dust);
+                    if branch.path[..2] != [pair.0, pair.1] {
+                        return Err(invalid());
+                    }
+                    (pair, support)
+                }
+            };
+            if contract.support
+                != (Anchor {
+                    x: support.x,
+                    y: support.y,
+                    z: support.z,
+                })
+                || emitted.world.get(support.x, support.y, support.z).kind != BlockKind::Solid
+                || emitted.world.get(pair.0.x, pair.0.y, pair.0.z).kind
+                    != match contract.kind {
+                        RepeaterHandoverKind::WeakFloorInput => BlockKind::RedstoneWire,
+                        RepeaterHandoverKind::StrongFloorOutput => BlockKind::Repeater,
+                    }
+                || emitted.world.get(pair.1.x, pair.1.y, pair.1.z).kind
+                    != match contract.kind {
+                        RepeaterHandoverKind::WeakFloorInput => BlockKind::Repeater,
+                        RepeaterHandoverKind::StrongFloorOutput => BlockKind::RedstoneWire,
+                    }
+                || !approved.insert((sink, pair.0, pair.1))
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(approved)
+}
+
 fn verify_route_continuity(
     candidate: &ExpandedPhysicalCandidate,
     emitted: &EmittedWorld,
 ) -> Result<(), ExpandedPhysicalError> {
+    let supported = verify_repeater_handovers(candidate, emitted)?;
     for route in candidate.routes.values() {
         for branch in &route.branches {
             for &at in &branch.path {
@@ -614,6 +733,7 @@ fn verify_route_continuity(
                 if index == 0
                     && from_state.kind == BlockKind::Repeater
                     && horizontal_direction(from, to) != from_state.facing.map(Facing::opposite)
+                    && !supported.contains(&(branch.sink, from, to))
                 {
                     return Err(ExpandedPhysicalError::DisconnectedRouteStep {
                         route: route.id,
@@ -625,6 +745,7 @@ fn verify_route_continuity(
                 if index + 2 == branch.path.len()
                     && to_state.kind == BlockKind::Repeater
                     && horizontal_direction(to, from) != to_state.facing
+                    && !supported.contains(&(branch.sink, from, to))
                 {
                     return Err(ExpandedPhysicalError::WrongRepeaterAxis {
                         sink: branch.sink,
@@ -813,7 +934,11 @@ fn verify_junction_closure(
             .iter()
             .filter(|block| block.state.kind == BlockKind::RedstoneWire)
             .map(|block| Position::new(block.at.x, block.at.y, block.at.z))
-            .chain(listed.values().map(|(_, at)| Position::new(at.x, at.y, at.z)))
+            .chain(
+                listed
+                    .values()
+                    .map(|(_, at)| Position::new(at.x, at.y, at.z)),
+            )
             .collect::<HashSet<_>>();
         let start = Position::new(junction.at.x, junction.at.y, junction.at.z);
         let mut reached = HashSet::from([start]);
@@ -1599,6 +1724,7 @@ mod tests {
             boundaries: Default::default(),
             connections: Default::default(),
             routes: [(route, tree)].into_iter().collect(),
+            repeater_handovers: Default::default(),
             junctions: Default::default(),
             observations: Default::default(),
             pins: PortPlacements::default(),
