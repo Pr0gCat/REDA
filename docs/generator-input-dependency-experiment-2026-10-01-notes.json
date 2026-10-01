@@ -1,0 +1,62 @@
+{
+  "parent_commit": "0ff1e68",
+  "status": "rejected_and_generation_restored",
+  "observation": {
+    "shipping_regressions": 818,
+    "regressed_metrics": {
+      "total_settle_ticks": 818,
+      "worst_settle_ticks": 234,
+      "lamp_last_change_ticks": 234,
+      "driver_last_change_ticks": 197
+    },
+    "example_words": [
+      6,
+      4,
+      2,
+      1
+    ],
+    "example_player_path": {
+      "source_buffer_tick": 2,
+      "mismatch_tick": 4,
+      "data_torch_tick": 6,
+      "lamp_off_tick": 10
+    },
+    "example_shipping_worst_ticks": 8
+  },
+  "root_cause": "A global input-buffer flag delays both primary inputs if any row needs torch timing isolation. Buffer necessity must be tracked through each input dependency.",
+  "hypothesis": "Retain a buffer for an input feeding a switching inversion-control torch or nonpositive reconvergent output term. Other inputs may drive their existing rails directly without changing the isolated paths.",
+  "control": "generator-player-mixed-comparator-experiment-2026-10-01-family.jsonl.gz",
+  "verification_required": "Full 4096 paired fixed controls, 12 independent metrics, retained history, setup metrics, 2744 unchanged caps, repeat and suitable regressions before adoption.",
+  "first_attempt": "Rejected: asymmetric input buffering in compound cubes produced 2 tick driver pulses and up to 5 tick lamp pulses, despite stable truth being correct.",
+  "example_failure": {
+    "words": [
+      0,
+      1,
+      0,
+      0
+    ],
+    "driver_glitches": 1,
+    "driver_pulse_ticks": 2,
+    "lamp_glitches": 1,
+    "lamp_pulse_ticks": 5
+  },
+  "first_attempt_quality": {
+    "cases": 4096,
+    "control_correct": 4096,
+    "candidate_correct": 4096,
+    "truth_recovered": 0,
+    "regressed_on_correct_controls": 976,
+    "improved_without_regression_on_correct_controls": 0,
+    "tied_on_correct_controls": 3120,
+    "all_fixed_controls_exact": true,
+    "quality_control_arm": "frozen_certified_candidate"
+  },
+  "synchronized_attempt": {
+    "records": 4096,
+    "byte_identical_to_control": true,
+    "sha256": "7b895a2001beeb6e014107decf1f4cd554c09171a98e8d9bfd1a67c7b221d401",
+    "decision": "No improvement; reverted along with the first attempt."
+  },
+  "unit_regression": "7 passed on first attempt, demonstrating stable certification tests alone do not rule out dynamic hazards.",
+  "next": "Use separate certified comparator clusters for independent negative single-literal outputs, retaining compound and reconvergent synchronization."
+}
