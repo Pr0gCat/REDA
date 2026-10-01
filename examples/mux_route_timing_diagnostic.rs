@@ -11,7 +11,8 @@ use serde_json::json;
 use std::collections::HashMap;
 fn main() {
     let argument = std::env::args().nth(1);
-    let and = argument.as_deref() == Some("and4-yosys");
+    let and_native = argument.as_deref() == Some("and4-native");
+    let and = and_native || argument.as_deref() == Some("and4-yosys");
     let xor = argument.as_deref() == Some("xor2");
     let names: &[&str] = if and {
         &["a", "b", "c", "d"]
@@ -21,19 +22,27 @@ fn main() {
         &["a", "b", "s"]
     };
     let states = 1usize << names.len();
-    let (source, ports) = if and {
+    let (source, ports) = if and && !and_native {
         synthesize_verilog(include_str!("../tests/fixtures/and4.sv"), "and4").unwrap()
     } else {
         let artifact = compile_systemverilog(
             &[SourceInput {
                 name: "probe.sv",
-                text: if xor {
+                text: if and_native {
+                    include_str!("../tests/fixtures/and4.sv")
+                } else if xor {
                     "module xor2(input logic a,b, output logic y); assign y=a^b; endmodule"
                 } else {
                     "module mux2(input logic a,b,s, output logic y); assign y=s?b:a; endmodule"
                 },
             }],
-            &CompileOptions::new(if xor { "xor2" } else { "mux2" }),
+            &CompileOptions::new(if and_native {
+                "and4"
+            } else if xor {
+                "xor2"
+            } else {
+                "mux2"
+            }),
         )
         .unwrap();
         let ports = artifact.output_map();
