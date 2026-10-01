@@ -2395,6 +2395,18 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
     };
     for words in [
+        [7, 5, 3, 0], // Balanced polarity sum, private literal outputs and constants.
+        [3, 1, 3, 0], // Balanced polarity sum, private literal outputs and constants.
+        [7, 7, 5, 4], // Balanced polarity sum, private literal outputs and constants.
+        [7, 1, 7, 0], // Balanced polarity sum, private literal outputs and constants.
+        [5, 7, 0, 3], // Balanced polarity sum, private literal outputs and constants.
+        [1, 3, 0, 3], // Balanced polarity sum, private literal outputs and constants.
+        [7, 7, 4, 5], // Balanced polarity sum, private literal outputs and constants.
+        [1, 7, 0, 7], // Balanced polarity sum, private literal outputs and constants.
+        [3, 0, 7, 5], // Balanced polarity sum, private literal outputs and constants.
+        [3, 0, 3, 1], // Balanced polarity sum, private literal outputs and constants.
+        [5, 4, 7, 7], // Balanced polarity sum, private literal outputs and constants.
+        [7, 0, 7, 1], // Balanced polarity sum, private literal outputs and constants.
         [0, 3, 5, 7], // Shared positive sum and isolated positive literals.
         [0, 5, 3, 7], // Reverse the positive literal output order.
         [0, 3, 1, 3], // Positive sum with a literal and constant low.
