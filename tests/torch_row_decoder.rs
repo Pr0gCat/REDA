@@ -2395,6 +2395,14 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         benchmark::canonical_world_fingerprint, torch_row::compile_player_torch_row,
     };
     for words in [
+        [6, 5, 2, 0], // Direct subtraction with both independent negative outputs.
+        [6, 2, 5, 0], // Reverse input roles and negative output order.
+        [6, 1, 6, 0], // Negative-a aliases beside a AND NOT b.
+        [6, 6, 1, 0], // Negative-b aliases beside b AND NOT a.
+        [2, 1, 2, 0], // Mixed subtraction and constant low.
+        [6, 6, 5, 4], // Reversed subtraction and constant high.
+        [4, 7, 0, 0], // Direct product aliases have independent terminals.
+        [4, 0, 7, 0], // Reversed product aliases preserve ordered ports.
         [2, 0, 2, 1], // Mixed product/negative-a with constant low.
         [6, 4, 6, 5], // Mixed product/negative-a with constant high.
         [2, 2, 0, 1], // Mixed product/negative-b with constant low.
