@@ -502,6 +502,57 @@ mod tests {
             replay(),
             "retained-history replay must be deterministic"
         );
+        // A shared inverter drives three ordered output occurrences through
+        // real passive dust arms, preserving a single primitive owner.
+        let mut fanout_world = World::new(8, 4, 12);
+        let original = certified.world();
+        for x in 0..8 {
+            for y in 0..4 {
+                for z in 0..8 {
+                    fanout_world.set(x, y, z, original.get(x, y, z).clone());
+                }
+            }
+        }
+        fanout_world.set(lamp.x, lamp.y, lamp.z, BlockState::air());
+        for z in 3..=9 {
+            wire(&mut fanout_world, Position::new(2, 1, z));
+        }
+        let fanout_lamps = [3, 6, 9].map(|z| Position::new(0, 1, z));
+        for p in fanout_lamps {
+            wire(&mut fanout_world, Position::new(1, 1, p.z));
+            put(&mut fanout_world, p.down(), BlockKind::Solid);
+            put(&mut fanout_world, p, BlockKind::Lamp);
+        }
+        let mut fanout_netlist = netlist.clone();
+        fanout_netlist.outputs = vec!["y".into(); 3];
+        let (fanout_netlist, _, fanout_candidate) =
+            super::super::typed_world_candidate_with_library(
+                fanout_netlist,
+                fanout_world,
+                vec![input],
+                fanout_lamps.to_vec(),
+                BTreeMap::from([("y".into(), cmp)]),
+                true,
+                &library,
+            );
+        let fanout = realise_and_verify_expanded(&fanout_candidate, &fanout_netlist, &library)
+            .expect("shared comparator fanout must certify");
+        let mut sim = crate::redstone::simulator::Simulator::new(fanout.into_world());
+        sim.run_until_stable(2000).unwrap();
+        for from in 0..4 {
+            for to in 0..4 {
+                for address in [from, to] {
+                    let high = address & 1 != 0;
+                    let mut lever = sim.world().get(input.x, input.y, input.z).clone();
+                    lever.lit = high;
+                    sim.world_mut().set(input.x, input.y, input.z, lever);
+                    sim.run_until_stable(2000).unwrap();
+                    for p in fanout_lamps {
+                        assert_eq!(sim.world().get(p.x, p.y, p.z).lit, !high);
+                    }
+                }
+            }
+        }
         for mutation in ["compare", "reversed", "missing_rear", "displaced_side"] {
             let mut invalid = candidate.clone();
             match mutation {

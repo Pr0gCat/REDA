@@ -1,0 +1,124 @@
+{
+  "parent_commit": "b4b85d3",
+  "status": "shared_fanout_certified_short_layout_study_not_generator_qualification",
+  "problem": "Determine whether comparator inverter timing benefit survives passive fanout to three outputs.",
+  "method": "32 consecutive setup and target phases with retained simulator history; both input bit assignments; four fanout lengths; exact repeated replay. No waveform caps changed.",
+  "initial_rejected_layout": "Lateral lamps without dust arms did not receive power. Raw failing results preserved. Added actual branch dust cells before repeating.",
+  "results": [
+    {
+      "bit": 0,
+      "distance": 4,
+      "control": {
+        "correct": true,
+        "worst_settle_ticks": 8,
+        "total_settle_ticks": 99
+      },
+      "candidate": {
+        "correct": true,
+        "worst_settle_ticks": 6,
+        "total_settle_ticks": 69
+      }
+    },
+    {
+      "bit": 0,
+      "distance": 8,
+      "control": {
+        "correct": true,
+        "worst_settle_ticks": 8,
+        "total_settle_ticks": 99
+      },
+      "candidate": {
+        "correct": true,
+        "worst_settle_ticks": 6,
+        "total_settle_ticks": 69
+      }
+    },
+    {
+      "bit": 0,
+      "distance": 12,
+      "control": {
+        "correct": true,
+        "worst_settle_ticks": 8,
+        "total_settle_ticks": 99
+      },
+      "candidate": {
+        "correct": false,
+        "worst_settle_ticks": 6,
+        "total_settle_ticks": 69
+      }
+    },
+    {
+      "bit": 0,
+      "distance": 16,
+      "control": {
+        "correct": false,
+        "worst_settle_ticks": 8,
+        "total_settle_ticks": 99
+      },
+      "candidate": {
+        "correct": false,
+        "worst_settle_ticks": 6,
+        "total_settle_ticks": 69
+      }
+    },
+    {
+      "bit": 1,
+      "distance": 4,
+      "control": {
+        "correct": true,
+        "worst_settle_ticks": 8,
+        "total_settle_ticks": 99
+      },
+      "candidate": {
+        "correct": true,
+        "worst_settle_ticks": 6,
+        "total_settle_ticks": 69
+      }
+    },
+    {
+      "bit": 1,
+      "distance": 8,
+      "control": {
+        "correct": true,
+        "worst_settle_ticks": 8,
+        "total_settle_ticks": 99
+      },
+      "candidate": {
+        "correct": true,
+        "worst_settle_ticks": 6,
+        "total_settle_ticks": 69
+      }
+    },
+    {
+      "bit": 1,
+      "distance": 12,
+      "control": {
+        "correct": true,
+        "worst_settle_ticks": 8,
+        "total_settle_ticks": 99
+      },
+      "candidate": {
+        "correct": false,
+        "worst_settle_ticks": 6,
+        "total_settle_ticks": 69
+      }
+    },
+    {
+      "bit": 1,
+      "distance": 16,
+      "control": {
+        "correct": false,
+        "worst_settle_ticks": 8,
+        "total_settle_ticks": 99
+      },
+      "candidate": {
+        "correct": false,
+        "worst_settle_ticks": 6,
+        "total_settle_ticks": 69
+      }
+    }
+  ],
+  "root_cause": "Comparator output needs two extra dust cells before the shared bus compared with the torch control. At distance 12 its last lamp spur exhausts the signal; faster settling of an incorrect output is not an improvement.",
+  "next": "Use directional signal-distance calculation to place shared comparator output and its fanout; verify full strict certification and all independent waveform metrics before generator adoption.",
+  "strict_fanout": "Three ordered output occurrences from one comparator primitive certify through the complete expanded pipeline; all 32 retained-history phases match inversion."
+}
