@@ -1,0 +1,5 @@
+# Comparator placement contract checks
+
+Parent: `021adf4`. The selected-library inverter requirements are now checked during structural placement validation. The comparator block must explicitly declare subtract mode and the declared constant primitive must own a wall torch at the comparator rear position determined by its actual facing. Required rear and side-high strengths remain 15. Missing mode, compare mode, missing rear placement, wrong facing and a weakened declared requirement are rejected with ComparatorElectricalContract.
+
+Validation: 12 structure-verifier tests and 4 player generator regressions pass. The placement helper positive fixture checks mode and rear adjacency only; it is not a complete electrical certificate. Side input source binding, actual 15-strength delivery and foreign injection into the side or constant support are still unproved. Comparator Boolean semantics remain rejected and the ROM generator is unchanged. These remaining physical checks must precede enabling the comparator route and the complete fixed-control ROM experiment.

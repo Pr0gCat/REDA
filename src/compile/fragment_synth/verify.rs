@@ -42,6 +42,7 @@ pub enum StructuralMismatchKind {
     PrimitiveFacing,
     PrimitiveVariant,
     PrimitiveFootprint,
+    ComparatorElectricalContract,
     ConnectionTopology,
     ExternalSink,
     JunctionContributor,
@@ -442,6 +443,49 @@ fn validate_primitive_placements(
                 affected: StableStructuralId::Primitive(id),
             },
         )?;
+    }
+    for instance in authority.instances.values() {
+        if let Some(requirements) = &instance.topology.comparator_inverter {
+            validate_comparator_inverter_placements(requirements, &candidate.placements).map_err(
+                |kind| CertificationError::StructuralMismatch {
+                    kind,
+                    affected: StableStructuralId::Primitive(requirements.comparator),
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_comparator_inverter_placements(
+    requirements: &super::topology::ComparatorInverterRequirements,
+    placements: &BTreeMap<PrimitiveId, PrimitivePlacement>,
+) -> Result<(), StructuralMismatchKind> {
+    let bad = StructuralMismatchKind::ComparatorElectricalContract;
+    if requirements.mode != "subtract"
+        || requirements.rear_strength != 15
+        || requirements.side_high_strength != 15
+    {
+        return Err(bad);
+    }
+    let comparator = placements.get(&requirements.comparator).ok_or(bad)?;
+    let cell = comparator
+        .blocks
+        .iter()
+        .find(|b| b.state.kind == BlockKind::Comparator)
+        .ok_or(bad)?;
+    if cell.state.extra_properties.get("mode").map(String::as_str) != Some(requirements.mode) {
+        return Err(bad);
+    }
+    let facing = cell.state.facing.ok_or(bad)?;
+    let rear = crate::redstone::simulator::position::Position::new(cell.at.x, cell.at.y, cell.at.z)
+        .offset(facing);
+    let constant = placements.get(&requirements.rear_constant).ok_or(bad)?;
+    if !constant.blocks.iter().any(|b| {
+        b.state.kind == BlockKind::WallTorch
+            && crate::redstone::simulator::position::Position::new(b.at.x, b.at.y, b.at.z) == rear
+    }) {
+        return Err(bad);
     }
     Ok(())
 }
@@ -1613,6 +1657,79 @@ mod tests {
             certify_expanded_structure(candidate, &fixture.netlist, &fixture.library),
             Err(CertificationError::StructuralMismatch { kind, affected })
         );
+    }
+
+    #[test]
+    fn comparator_placement_requires_subtract_mode_and_owned_adjacent_rear_torch() {
+        let fixture = make_fixture();
+        let ids: Vec<_> = fixture.candidate.placements.keys().copied().collect();
+        let cmp = ids[0];
+        let rear = ids[1];
+        let (mut comparator, _) =
+            authoritative_placement(cmp, Primitive::Comparator, Anchor { x: 3, y: 1, z: 3 });
+        comparator.facing = CellFacing::EAST;
+        comparator.variant = u16::from(CellFacing::EAST.index());
+        let cell = comparator
+            .blocks
+            .iter_mut()
+            .find(|b| b.state.kind == BlockKind::Comparator)
+            .unwrap();
+        cell.state.facing = Some(Facing::East);
+        cell.state
+            .extra_properties
+            .insert("mode".into(), "subtract".into());
+        let (constant, _) =
+            authoritative_placement(rear, Primitive::Torch, Anchor { x: 4, y: 1, z: 4 });
+        let requirements = super::super::topology::ComparatorInverterRequirements {
+            comparator: cmp,
+            rear_constant: rear,
+            side_input: fixture.external,
+            mode: "subtract",
+            rear_strength: 15,
+            side_high_strength: 15,
+        };
+        let placements = std::collections::BTreeMap::from([(cmp, comparator), (rear, constant)]);
+        assert_eq!(
+            super::validate_comparator_inverter_placements(&requirements, &placements),
+            Ok(())
+        );
+        for mode in [None, Some("compare")] {
+            let mut bad = placements.clone();
+            let cell = bad
+                .get_mut(&cmp)
+                .unwrap()
+                .blocks
+                .iter_mut()
+                .find(|b| b.state.kind == BlockKind::Comparator)
+                .unwrap();
+            cell.state.extra_properties.remove("mode");
+            if let Some(mode) = mode {
+                cell.state
+                    .extra_properties
+                    .insert("mode".into(), mode.into());
+            }
+            assert_eq!(
+                super::validate_comparator_inverter_placements(&requirements, &bad),
+                Err(StructuralMismatchKind::ComparatorElectricalContract)
+            );
+        }
+        let mut missing = placements.clone();
+        missing.remove(&rear);
+        assert!(super::validate_comparator_inverter_placements(&requirements, &missing).is_err());
+        let mut reversed = placements.clone();
+        reversed
+            .get_mut(&cmp)
+            .unwrap()
+            .blocks
+            .iter_mut()
+            .find(|b| b.state.kind == BlockKind::Comparator)
+            .unwrap()
+            .state
+            .facing = Some(Facing::West);
+        assert!(super::validate_comparator_inverter_placements(&requirements, &reversed).is_err());
+        let mut weaker = requirements.clone();
+        weaker.side_high_strength = 14;
+        assert!(super::validate_comparator_inverter_placements(&weaker, &placements).is_err());
     }
 
     #[test]
