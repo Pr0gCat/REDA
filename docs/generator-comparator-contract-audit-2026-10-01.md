@@ -1,0 +1,11 @@
+# Comparator inversion contract audit
+
+Parent: `2976da4`. The independent cell experiment passes retained-history physical truth and timing, but comparator inversion remains unsupported in the generator and in primitive-level Boolean equivalence.
+
+`PrimitiveSpec` currently declares identity, template role and primitive kind. `ConnectionSpec` declares source and target, with no comparator rear/side role. `prove_topology_semantics` collects unordered Boolean sources and explicitly rejects Comparator. This rejection must stay in place until the implementation proves both mode and analogue boundary conditions. Boolean high is not sufficient: subtraction of a weaker side signal from a 15-strength rear signal remains nonzero.
+
+`LocalBlock` declares kind, facing and face. `validate_primitive_placement` compares those fields against the authoritative physical variant; it does not check comparator mode. Candidate blocks can carry `extra_properties["mode"]`, and exact emission can preserve those properties, but matching candidate and emitted world does not prove that the selected implementation required subtraction. Mode must be specified by the selected implementation and covered by its fingerprint and structural validation.
+
+A proper inverter contract must bind rear and side roles explicitly, seal subtract mode, prove the rear source is constant high at the required strength and prove the side is strongly driven at a strength sufficient to suppress the rear signal. These conditions must remain true under retained-history switching and all allowed contributors. Weak support, reduced side strength, foreign injection, reversed facing, compare mode and a changed rear source must be rejected. Existing comparator primitive rejection cannot be replaced with unconditional Boolean NOT.
+
+Added a negative regression showing that replacing a NOR torch primitive with a Comparator does not acquire NOR semantics merely because it has one Boolean input. Production generator and simulator are unchanged. Next implementation work must introduce the selected implementation's electrical contract before admitting Comparator into the Boolean semantics proof; physical geometry alone is insufficient.

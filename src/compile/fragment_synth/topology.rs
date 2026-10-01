@@ -629,11 +629,20 @@ mod tests {
             outputs: vec!["m".into()],
             gates: vec![Gate::nor("a", &["x"]), Gate::nor("b", &["y"]), merge],
         };
-        assert_eq!(super::seed_merge_isolation_mask(&netlist, GateIndex(2)), Ok(InputMask::new(0)));
+        assert_eq!(
+            super::seed_merge_isolation_mask(&netlist, GateIndex(2)),
+            Ok(InputMask::new(0))
+        );
         netlist.outputs.push("a".into());
-        assert_eq!(super::seed_merge_isolation_mask(&netlist, GateIndex(2)), Ok(InputMask::new(0b01)));
+        assert_eq!(
+            super::seed_merge_isolation_mask(&netlist, GateIndex(2)),
+            Ok(InputMask::new(0b01))
+        );
         // The legacy decision is untouched.
-        assert_eq!(super::merge_isolation_mask(&netlist, GateIndex(2)), Ok(InputMask::new(0)));
+        assert_eq!(
+            super::merge_isolation_mask(&netlist, GateIndex(2)),
+            Ok(InputMask::new(0))
+        );
     }
 
     use crate::compile::fragment_synth::identity::{
@@ -658,6 +667,24 @@ mod tests {
 
     fn implementation(kind: GateKind, ordinal: u16) -> ImplementationKey {
         ImplementationKey::Library(LibraryEntryId { kind, ordinal })
+    }
+
+    #[test]
+    fn comparator_cannot_claim_inversion_from_boolean_inputs_alone() {
+        let library = Library::default_library();
+        let mut expanded = instantiate(
+            &library,
+            &gate(GateKind::Nor(1), &["a"]),
+            InstanceId(0),
+            &implementation(GateKind::Nor(1), 0),
+        )
+        .unwrap();
+        let primitive = expanded.topology.primitives[0].id;
+        expanded.topology.primitives[0].primitive = Primitive::Comparator;
+        assert_eq!(
+            super::prove_topology_semantics(&expanded.topology, GateKind::Nor(1)),
+            Err(super::TopologySemanticsError::UnknownPrimitiveSemantics { primitive }),
+        );
     }
 
     #[test]
