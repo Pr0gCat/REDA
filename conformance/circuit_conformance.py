@@ -213,7 +213,7 @@ import itertools
 import json
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from harness import GAME_TICK_S
@@ -240,13 +240,14 @@ class Block:
     lit: bool
     delay: int
     name: str
+    properties: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class Gate:
     """One netlist gate, straight off a `GATE` line.
 
-    `kind` is `"nor"` or `"merge"`. A merge is a **wired OR**, not a NOR --
+    `kind` is NOR, merge, Buf or AndNot. A merge is a **wired OR**, not a NOR --
     see mc_dump.rs's module docstring. It matters twice over, and neither
     place is optional:
 
@@ -269,6 +270,7 @@ class Gate:
     name: str
     inputs: list[str]
     kind: str
+    observation_kind: str | None = None
 
     @property
     def is_merge(self) -> bool:
@@ -284,6 +286,7 @@ class Dump:
     output_labels: dict[str, str]  # internal signal name -> human label, e.g. "g45" -> "a"
     gate_outputs: dict[str, tuple[int, int, int]]
     gates: list[Gate]  # in topological order
+    output_bindings: dict[str, str] = field(default_factory=dict)
 
     def output_display_name(self, internal_name: str) -> str:
         """Human label for an output signal if `mc_dump` supplied one via
@@ -307,6 +310,8 @@ def parse_dump(path: Path) -> Dump:
     output_labels: dict[str, str] = {}
     gate_outputs: dict[str, tuple[int, int, int]] = {}
     gates: list[Gate] = []
+    ports = []
+    observation_kinds = {}
 
     for line in path.read_text(encoding="utf-8").splitlines():
         parts = line.split()
@@ -329,6 +334,14 @@ def parse_dump(path: Path) -> Dump:
                     name=parts[9],
                 )
             )
+        elif tag == "BLOCKPROP":
+            pos = tuple(map(int, parts[1:4]))
+            block = next((b for b in reversed(blocks) if (b.x,b.y,b.z) == pos), None)
+            if block is None:
+                raise ValueError(f"property without block: {line!r}")
+            block.properties[parts[4]] = parts[5]
+        elif tag == "OUTPUTPORT":
+            ports.append((int(parts[1]), parts[2], parts[3], tuple(map(int, parts[4:7])), parts[7] if len(parts)>7 else None))
         elif tag == "INPUT":
             inputs[parts[1]] = (int(parts[2]), int(parts[3]), int(parts[4]))
         elif tag == "OUTPUT":
@@ -342,6 +355,8 @@ def parse_dump(path: Path) -> Dump:
             output_labels[parts[2]] = parts[1]
         elif tag == "GATEOUT":
             gate_outputs[parts[1]] = (int(parts[2]), int(parts[3]), int(parts[4]))
+            if len(parts) > 5:
+                observation_kinds[parts[1]] = parts[5]
         elif tag == "GATE":
             # "GATE output_name input1,input2,... kind". Inputs are "-" when
             # a gate has none, so that `kind` is always the same field; kind
@@ -352,27 +367,68 @@ def parse_dump(path: Path) -> Dump:
             raw_inputs = parts[2] if len(parts) > 2 else "-"
             ins = [] if raw_inputs == "-" else raw_inputs.split(",")
             kind = parts[3] if len(parts) > 3 else "nor"
-            if kind not in ("nor", "merge"):
+            if kind not in ("nor", "merge", "buf", "andnot"):
                 raise ValueError(f"unrecognised gate kind {kind!r}: {line!r}")
+            if (kind == "buf" and len(ins) != 1) or (kind == "andnot" and len(ins) != 2):
+                raise ValueError(f"wrong gate arity: {line!r}")
             gates.append(Gate(name, ins, kind))
         else:
             raise ValueError(f"unrecognised dump line tag {tag!r}: {line!r}")
 
     if size is None:
         raise ValueError("dump had no SIZE line")
-    return Dump(size, blocks, inputs, outputs, output_labels, gate_outputs, gates)
+    for gate in gates:
+        gate.observation_kind = observation_kinds.get(gate.name)
+        if gate.observation_kind is not None and gate.observation_kind not in ("Torch", "WallTorch", "Repeater", "Comparator", "RedstoneWire"):
+            raise ValueError(f"unsupported gate observation {gate.observation_kind!r}")
+    bindings = {}
+    if ports:
+        if sorted(p[0] for p in ports) != list(range(len(ports))):
+            raise ValueError("output ports must have distinct contiguous ordinals")
+        names = {gate.name for gate in gates}
+        if len(names) != len(gates) or names != set(gate_outputs) or names != set(observation_kinds):
+            raise ValueError("rewrite gate definitions and observations must agree")
+        by_position = {(b.x,b.y,b.z): b for b in blocks}
+        known = set(inputs)
+        for gate in gates:
+            if gate.name in known or not set(gate.inputs) <= known:
+                raise ValueError("rewrite gates must be unique and topologically driven")
+            known.add(gate.name)
+            block = by_position.get(gate_outputs[gate.name])
+            if block is None or block.kind != gate.observation_kind:
+                raise ValueError("rewrite gate observation differs from physical block")
+        source_outputs, source_labels = outputs, output_labels
+        outputs, output_labels = {}, {}
+        known = set(inputs) | {gate.name for gate in gates}
+        for ordinal, source, signal, pos, label in sorted(ports):
+            if source not in source_outputs or signal not in known:
+                raise ValueError(f"invalid output binding {source!r} -> {signal!r}")
+            key = f"output-port:{ordinal}:{source}"
+            outputs[key] = pos
+            bindings[key] = signal
+            output_labels[key] = label if label is not None else source_labels.get(source, source)
+    return Dump(size, blocks, inputs, outputs, output_labels, gate_outputs, gates, bindings)
 
 
-def evaluate_expected(gates: list[Gate], primary: dict[str, int]) -> dict[str, int]:
-    """Pure-boolean evaluation: a `nor` gate is the NOR of its inputs, a
-    `merge` gate the OR of them (see `Gate`). Gates are already in
+def evaluate_expected(gates: list[Gate], primary: dict[str, int], output_bindings: dict[str, str] | None = None) -> dict[str, int]:
+    """Evaluate actual NOR/merge/Buf/AndNot gates, then source output bindings.
+    Gates are already in
     topological order (mc_dump preserves Netlist::gates order), so a single
     forward pass is enough -- no fixpoint iteration needed, unlike the
     physical simulator."""
     values = dict(primary)
     for gate in gates:
-        high = any(values[i] for i in gate.inputs)
-        values[gate.name] = int(high) if gate.is_merge else int(not high)
+        operands = [values[i] for i in gate.inputs]
+        if gate.kind == "buf":
+            value = operands[0]
+        elif gate.kind == "andnot":
+            value = operands[0] and not operands[1]
+        else:
+            high = any(operands)
+            value = high if gate.is_merge else not high
+        values[gate.name] = int(value)
+    for output, signal in (output_bindings or {}).items():
+        values[output] = values[signal]
     return values
 
 
@@ -385,12 +441,17 @@ def block_state_string(b: Block) -> str:
         # See module docstring point 2: lit=true is the physically correct
         # value at the moment this is placed (no dust exists yet anywhere,
         # so nothing can be powering this torch's attachment block).
-        return f"{b.name}[facing={b.facing},lit=true]"
+        return f"{b.name}[facing={b.facing},lit=true]" if b.kind == "WallTorch" else f"{b.name}[lit=true]"
     if b.kind == "Repeater":
         # powered=false unconditionally, regardless of what compile() baked
         # in (always a placeholder there). See module docstring point 1:
         # placed before any dust exists, so this is also physically true.
         return f"{b.name}[facing={b.facing},delay={b.delay},locked=false,powered=false]"
+    if b.kind == "Comparator":
+        mode = b.properties.get("mode", "compare")
+        if mode not in ("compare", "subtract"):
+            raise ValueError(f"invalid comparator mode {mode!r}")
+        return f"{b.name}[facing={b.facing},mode={mode},powered=false]"
     if b.kind == "RedstoneWire":
         # Bare, no power/shape properties -- the server computes both from
         # context as soon as anything nearby changes. See probes.py's DUST
@@ -403,7 +464,7 @@ def lever_state_string(b: Block, on: bool) -> str:
     return f"{b.name}[face={b.face},facing={b.facing},powered={'true' if on else 'false'}]"
 
 
-CATEGORY_ORDER = ["Solid", "Lamp", "WallTorch", "Torch", "Repeater", "RedstoneWire"]
+CATEGORY_ORDER = ["Solid", "Lamp", "WallTorch", "Torch", "Repeater", "Comparator", "RedstoneWire"]
 
 
 def build_phase_commands(blocks: list[Block], origin: tuple[int, int, int]) -> list[str]:
@@ -711,14 +772,14 @@ def verify_positions_placed(
     return missing
 
 
-def read_torch(client: RconClient, pos: tuple[int, int, int]) -> int | None:
+def read_torch(client: RconClient, pos: tuple[int, int, int], block_id: str = "minecraft:redstone_wall_torch") -> int | None:
     x, y, z = pos
     if client.command(
-        f"execute if block {x} {y} {z} minecraft:redstone_wall_torch[lit=true]"
+        f"execute if block {x} {y} {z} {block_id}[lit=true]"
     ).strip().startswith("Test passed"):
         return 1
     if client.command(
-        f"execute if block {x} {y} {z} minecraft:redstone_wall_torch[lit=false]"
+        f"execute if block {x} {y} {z} {block_id}[lit=false]"
     ).strip().startswith("Test passed"):
         return 0
     return None
@@ -752,9 +813,17 @@ def read_merge_junction(client: RconClient, pos: tuple[int, int, int]) -> int | 
 
 
 def expected_block_at(gate: Gate) -> str:
-    """The block id that must physically be at `gate`'s GATEOUT position: a
-    wall torch for a NOR, plain dust for a merge's junction."""
-    return "minecraft:redstone_wire" if gate.is_merge else "minecraft:redstone_wall_torch"
+    """Use the actual observation component, with legacy NOR/merge defaults."""
+    component = gate.observation_kind or ("RedstoneWire" if gate.is_merge else "WallTorch")
+    return {"RedstoneWire": "minecraft:redstone_wire", "Torch": "minecraft:redstone_torch", "WallTorch": "minecraft:redstone_wall_torch", "Repeater": "minecraft:repeater", "Comparator": "minecraft:comparator"}[component]
+
+
+def read_powered_block(client: RconClient, pos: tuple[int,int,int], block_id: str) -> int | None:
+    x,y,z = pos
+    for value in (True, False):
+        if client.command(f"execute if block {x} {y} {z} {block_id}[powered={str(value).lower()}]").strip().startswith("Test passed"):
+            return int(value)
+    return None
 
 
 def read_state(
@@ -776,10 +845,13 @@ def read_state(
     for gate_name, gate_pos in dump.gate_outputs.items():
         pos = (ox + gate_pos[0], oy + gate_pos[1], oz + gate_pos[2])
         gate = kind_of.get(gate_name)
-        if gate is not None and gate.is_merge:
+        block_id = expected_block_at(gate) if gate else "minecraft:redstone_wall_torch"
+        if block_id == "minecraft:redstone_wire":
             gate_vals[gate_name] = read_merge_junction(client, pos)
+        elif block_id in ("minecraft:repeater", "minecraft:comparator"):
+            gate_vals[gate_name] = read_powered_block(client, pos, block_id)
         else:
-            gate_vals[gate_name] = read_torch(client, pos)
+            gate_vals[gate_name] = read_torch(client, pos, block_id)
     return lamp_vals, gate_vals
 
 
@@ -994,7 +1066,7 @@ def assert_quiescent(
     specific thing was ever the one hardcoded lamp position, which is now
     just one more dict to loop over."""
     ox, oy, oz = origin
-    expected = evaluate_expected(dump.gates, {name: 0 for name in sorted(dump.inputs)})
+    expected = evaluate_expected(dump.gates, {name: 0 for name in sorted(dump.inputs)}, dump.output_bindings)
 
     # 1. Placement landed? Pure block-identity check, independent of any
     # redstone state -- see block_id_present's docstring. Deliberately
@@ -1152,7 +1224,7 @@ def run(args: argparse.Namespace) -> int:
 
         for vector in vectors:
             primary = {name: bit for name, bit in zip(input_names, vector)}
-            expected = evaluate_expected(dump.gates, primary)
+            expected = evaluate_expected(dump.gates, primary, dump.output_bindings)
             expected_outputs = {name: expected[name] for name in output_names}
 
             changed = [name for name in input_names if bool(primary[name]) != current[name]]

@@ -33,31 +33,26 @@
 //!
 //!   SIZE   size_x size_y size_z
 //!   BLOCK  x y z kind facing face lit delay name
+//!   BLOCKPROP x y z property value
 //!   INPUT  name x y z
 //!   OUTPUT name x y z
 //!   OUTLABEL label internal_name
-//!   GATEOUT name x y z
+//!   OUTPUTPORT ordinal source_name implemented_signal x y z [label]
+//!   GATEOUT name x y z [component_kind]
 //!   GATE   output_name input1,input2,... kind
 //!
-//! `OUTPUT`'s `name` is always the netlist's own internal signal name (a
-//! `GATE` output name, so it is guaranteed to also key into every `GATE`
-//! line and the boolean evaluation the Python side does over them).
-//! `OUTLABEL` is a purely cosmetic side channel mapping that same internal
-//! name to the human label the circuit is documented with ("y", "sum",
-//! "a".."g") -- see `build_circuit.rs`'s identical `output_labels` field for
-//! why the two names differ at all. A dump consumer that ignores `OUTLABEL`
-//! entirely still gets a fully correct, just less legible, circuit.
+//! `INPUT` and `OUTPUT` retain source boundary names. For a certified rewrite,
+//! `OUTPUTPORT` preserves each source-ordered physical lamp and its actual signal,
+//! including aliases. `OUTLABEL` maps source names to cosmetic public labels.
 //!
-//! `GATE` lines are the netlist's own gates, in `Netlist::gates` order
-//! (already a valid topological order -- `NetlistBuilder` only ever appends
-//! a gate after every one of its inputs already exists). Together with
-//! `INPUT`, that is enough for the Python side to hand-evaluate the pure
-//! boolean function for any input vector and know what every gate's
-//! *should-be* value is -- not just the final output -- which is what lets
-//! a failing run localise itself to the first disagreeing gate instead of
-//! only reporting "the lamp was wrong".
+//! `GATE` and `GATEOUT` describe actual implemented gates, with collision-free
+//! internal labels. Implementation inputs use their proved source input names.
+//! Rewritten gates are emitted in checked topological order; legacy records
+//! retain their original order and spelling. The optional component kind lets
+//! consumers read comparator, repeater, torch or dust without inferring geometry
+//! from a logical gate kind. `BLOCKPROP` retains comparator mode.
 //!
-//! `kind` is `nor` or `merge`, and it is not decoration: a `merge` gate is a
+//! The conformance reader accepts `nor`, `merge`, `buf` and `andnot`; a `merge` gate is a
 //! **wired OR**, not a NOR, so a consumer that assumes every gate inverts
 //! computes the wrong expected value for that gate *and for everything
 //! downstream of it*. Every hand-written reference circuit is pure NOR and
@@ -68,14 +63,9 @@
 //! dust has non-zero power", not "a torch is lit". Both facts are the reason
 //! this field exists rather than being inferrable.
 //!
-//! Those two are the only kinds that ever appear here, and that is a
-//! property of *when* the netlist is dumped, not of what a netlist can
-//! hold. A `verilog:` circuit arrives at the gate level -- `$_AND_`,
-//! `$_NAND_`, `$_MUX_` -- and this binary runs `compile::lowering::lower`
-//! over it first, exactly as `compile` requires. The `GATE` lines below
-//! therefore describe the netlist that was really placed, gate for gate
-//! with the `GATEOUT` positions beside them; the gate-level netlist it came
-//! from is in `src/circuits/baked/`.
+//! Ordinary gate-level Verilog is lowered before placement. A selected physical
+//! rewrite can introduce its own certified Buf or comparator AndNot stages;
+//! the emitted records describe those stages, never removed source cells.
 //!
 //! `input1,input2,...` is `-` when a gate has no inputs at all, so that
 //! `kind` is always the same whitespace-separated field.
@@ -95,7 +85,7 @@ use std::path::Path;
 
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::lowering::{lower, lower_optimised};
-use reda::compile::{compile, Netlist};
+use reda::compile::{compile, CompiledCircuit, Netlist};
 use reda::redstone::world::block::{BlockKind, Face, Facing};
 use reda::redstone::world::storage::World;
 
@@ -304,9 +294,9 @@ fn kind_str(k: BlockKind) -> &'static str {
     }
 }
 
-fn dump_world(world: &World) {
+fn write_world(world: &World, output: &mut impl std::io::Write) -> std::io::Result<()> {
     let (size_x, size_y, size_z) = world.size();
-    println!("SIZE {size_x} {size_y} {size_z}");
+    writeln!(output, "SIZE {size_x} {size_y} {size_z}")?;
     for y in 0..size_y {
         for z in 0..size_z {
             for x in 0..size_x {
@@ -314,7 +304,8 @@ fn dump_world(world: &World) {
                 if state.kind == BlockKind::Air {
                     continue;
                 }
-                println!(
+                writeln!(
+                    output,
                     "BLOCK {x} {y} {z} {} {} {} {} {} {}",
                     kind_str(state.kind),
                     facing_str(state.facing),
@@ -322,10 +313,105 @@ fn dump_world(world: &World) {
                     state.lit,
                     state.delay,
                     state.name,
-                );
+                )?;
+                for (key, value) in &state.extra_properties {
+                    writeln!(output, "BLOCKPROP {x} {y} {z} {key} {value}")?;
+                }
             }
         }
     }
+    Ok(())
+}
+
+fn circuit_records(
+    source: &Netlist,
+    compiled: &CompiledCircuit,
+    labels: &[(String, String)],
+) -> Vec<String> {
+    compiled
+        .validate_rewrite_view(source)
+        .expect("dump must match its sealed rewrite");
+    let mut records = Vec::new();
+    for (name, (x, y, z)) in &compiled.input_positions {
+        records.push(format!("INPUT {name} {x} {y} {z}"));
+    }
+    for (name, (x, y, z)) in &compiled.output_positions {
+        records.push(format!("OUTPUT {name} {x} {y} {z}"));
+    }
+    for (label, name) in labels {
+        records.push(format!("OUTLABEL {label} {name}"));
+    }
+    let implementation = compiled.implementation_netlist(source);
+    let signal = |name: &str| {
+        if let Some(rewrite) = compiled.physical_rewrite() {
+            if let Some(ordinal) = rewrite
+                .rewrite_certificate()
+                .rewritten_inputs_in_source_order()
+                .iter()
+                .position(|binding| binding == name)
+            {
+                return source.inputs[ordinal].clone();
+            }
+        }
+        compiled.implementation_signal_label(name)
+    };
+    if let Some(rewrite) = compiled.physical_rewrite() {
+        let mut remaining_labels: Vec<_> = labels.iter().collect();
+        for (ordinal, ((name, binding), &(x, y, z))) in source
+            .outputs
+            .iter()
+            .zip(
+                rewrite
+                    .rewrite_certificate()
+                    .rewritten_outputs_in_source_order(),
+            )
+            .zip(rewrite.source_output_positions())
+            .enumerate()
+        {
+            let label = remaining_labels
+                .iter()
+                .position(|(_, internal)| internal == name)
+                .map(|index| remaining_labels.remove(index).0.as_str())
+                .unwrap_or(name);
+            records.push(format!(
+                "OUTPUTPORT {ordinal} {name} {} {x} {y} {z} {label}",
+                signal(binding)
+            ));
+        }
+    }
+    for (name, &(x, y, z)) in &compiled.gate_output_positions {
+        let component = if compiled.physical_rewrite().is_some() {
+            format!(" {}", kind_str(compiled.world.get(x, y, z).kind))
+        } else {
+            String::new()
+        };
+        records.push(format!("GATEOUT {} {x} {y} {z}{component}", signal(name)));
+    }
+    let order = if compiled.physical_rewrite().is_some() {
+        implementation
+            .combinational_order()
+            .expect("sealed rewrite is acyclic")
+    } else {
+        (0..implementation.gates.len()).collect()
+    };
+    for index in order {
+        let gate = &implementation.gates[index];
+        let inputs = if gate.inputs.is_empty() {
+            "-".into()
+        } else {
+            gate.inputs
+                .iter()
+                .map(|name| signal(name))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        records.push(format!(
+            "GATE {} {inputs} {}",
+            signal(&gate.output),
+            gate.kind.wire_name()
+        ));
+    }
+    records
 }
 
 fn main() {
@@ -381,30 +467,18 @@ fn main() {
         }
     };
 
-    dump_world(&compiled.world);
+    write_world(&compiled.world, &mut std::io::stdout().lock()).expect("dump world");
 
-    for (input_name, (x, y, z)) in &compiled.input_positions {
-        println!("INPUT {input_name} {x} {y} {z}");
-    }
-    for (output_name, (x, y, z)) in &compiled.output_positions {
-        println!("OUTPUT {output_name} {x} {y} {z}");
-    }
-    for (label, internal_name) in &output_labels {
-        println!("OUTLABEL {label} {internal_name}");
-    }
-    for (gate_name, (x, y, z)) in &compiled.gate_output_positions {
-        println!("GATEOUT {gate_name} {x} {y} {z}");
-    }
-    for gate in &netlist.gates {
-        let inputs = if gate.inputs.is_empty() {
-            "-".to_string()
-        } else {
-            gate.inputs.join(",")
-        };
-        println!("GATE {} {inputs} {}", gate.output, gate.kind.wire_name());
+    for record in circuit_records(&netlist, &compiled, &output_labels) {
+        println!("{record}");
     }
 
-    let merge_count = netlist.gates.iter().filter(|gate| gate.is_merge()).count();
+    let merge_count = compiled
+        .implementation_netlist(&netlist)
+        .gates
+        .iter()
+        .filter(|gate| gate.is_merge())
+        .count();
     eprintln!(
         "dumped circuit '{name}': {} inputs, {} outputs, {} gate outputs ({} of them wired-OR merges)",
         netlist.inputs.len(),
@@ -412,4 +486,197 @@ fn main() {
         compiled.gate_output_positions.len(),
         merge_count,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reda::compile::fragment_synth::torch_row::compile_player_torch_row;
+    use reda::compile::Gate;
+
+    #[test]
+    fn rewritten_dumps_keep_actual_gates_components_and_ordered_alias_ports() {
+        let cases = [
+            Netlist {
+                inputs: vec!["left".into(), "right".into()],
+                outputs: vec![
+                    "implemented:literal_a".into(),
+                    "implemented::literal_b".into(),
+                    "sum".into(),
+                ],
+                gates: vec![
+                    Gate::nor("removed_internal", &["left", "right"]),
+                    Gate::nor("implemented:literal_a", &["left"]),
+                    Gate::nor("implemented::literal_b", &["right"]),
+                    Gate::merge("sum", &["implemented:literal_a", "implemented::literal_b"]),
+                ],
+            },
+            Netlist {
+                inputs: vec!["left".into(), "right".into()],
+                outputs: vec!["left".into(), "left".into(), "right".into()],
+                gates: vec![],
+            },
+            Netlist {
+                inputs: vec!["left".into(), "right".into()],
+                outputs: vec!["negative".into(), "negative".into(), "negative".into()],
+                gates: vec![Gate::nor("negative", &["left"])],
+            },
+            Netlist {
+                inputs: vec!["left".into(), "right".into()],
+                outputs: vec![
+                    "product".into(),
+                    "negative_left".into(),
+                    "negative_right".into(),
+                ],
+                gates: vec![
+                    Gate::nor("negative_left", &["left"]),
+                    Gate::nor("negative_right", &["right"]),
+                    Gate {
+                        name: "product".into(),
+                        output: "product".into(),
+                        inputs: vec!["left".into(), "right".into()],
+                        kind: reda::compile::topology::GateKind::AndNot,
+                    },
+                ],
+            },
+            Netlist {
+                inputs: vec!["left".into(), "right".into()],
+                outputs: vec!["high".into(), "low".into(), "high".into()],
+                gates: vec![Gate::nor("high", &[]), Gate::nor("low", &["high"])],
+            },
+        ];
+        for (index, source) in cases.iter().enumerate() {
+            let compiled = CompiledCircuit::from_certified_rewrite(
+                compile_player_torch_row(source, 1_000_000).unwrap(),
+            );
+            let labels: Vec<_> = source
+                .outputs
+                .iter()
+                .enumerate()
+                .map(|(ordinal, name)| (format!("public{ordinal}"), name.clone()))
+                .collect();
+            let records = circuit_records(source, &compiled, &labels);
+            let gates: Vec<_> = records.iter().filter(|s| s.starts_with("GATE ")).collect();
+            assert_eq!(
+                gates.len(),
+                compiled.implementation_netlist(source).gates.len()
+            );
+            assert!(gates.iter().all(|s| !s.contains("removed_internal")));
+            assert_eq!(
+                records
+                    .iter()
+                    .filter(|s| s.starts_with("OUTPUTPORT "))
+                    .count(),
+                source.outputs.len()
+            );
+            let ports: Vec<_> = records
+                .iter()
+                .filter(|s| s.starts_with("OUTPUTPORT "))
+                .map(|s| s.split_whitespace().skip(4).take(3).collect::<Vec<_>>())
+                .collect();
+            assert_eq!(
+                ports
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len(),
+                source.outputs.len()
+            );
+            let mut bytes = Vec::new();
+            write_world(&compiled.world, &mut bytes).unwrap();
+            for record in records {
+                bytes.extend_from_slice(record.as_bytes());
+                bytes.push(b'\n');
+            }
+            if let Ok(directory) = std::env::var("REDA_DUMP_FIXTURE_DIR") {
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(
+                    Path::new(&directory).join(format!("rewrite-{index}.txt")),
+                    bytes,
+                )
+                .unwrap();
+            }
+        }
+    }
+    #[test]
+    fn dump_uses_proved_permuted_bindings() {
+        use reda::compile::fragment_synth::rewrite::realise_physical_rewrite;
+        use reda::compile::topology::{
+            GateKind, Library, LibraryEntry, Primitive, Template, TemplateNode,
+        };
+        use std::collections::BTreeMap;
+        let initial_source = Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["sum".into(), "a".into(), "b".into()],
+            gates: vec![Gate::merge("sum", &["a", "b"])],
+        };
+        let initial = compile_player_torch_row(&initial_source, 1_000_000).unwrap();
+        let source = Netlist {
+            inputs: vec!["rhs".into(), "lhs".into()],
+            outputs: vec!["right".into(), "sum".into(), "left".into()],
+            gates: vec![
+                Gate {
+                    name: "right".into(),
+                    output: "right".into(),
+                    kind: GateKind::Buf,
+                    inputs: vec!["rhs".into()],
+                },
+                Gate {
+                    name: "left".into(),
+                    output: "left".into(),
+                    kind: GateKind::Buf,
+                    inputs: vec!["lhs".into()],
+                },
+                Gate::merge("sum", &["right", "left"]),
+            ],
+        };
+        let library = Library::new(BTreeMap::from([(
+            GateKind::Buf,
+            vec![LibraryEntry {
+                name: "matrix-repeater-buffer",
+                template: Template {
+                    nodes: vec![(TemplateNode::Torch, Primitive::Repeater)],
+                    internal_edges: vec![],
+                    inputs: vec![TemplateNode::Torch],
+                    output: Some(TemplateNode::Torch),
+                    embedding_hints: vec![],
+                },
+            }],
+        )]));
+        let rewrite = realise_physical_rewrite(
+            &source,
+            initial.implemented(),
+            initial.implemented_candidate(),
+            &library,
+            &["b".into(), "a".into()],
+            &[
+                "positive_b".into(),
+                "shared_sum".into(),
+                "positive_a".into(),
+            ],
+            1_000_000,
+        )
+        .unwrap();
+        let compiled = CompiledCircuit::from_certified_rewrite(rewrite);
+        assert_eq!(
+            compiled.input_positions["rhs"],
+            initial.source_input_positions()[1]
+        );
+        let records = circuit_records(&source, &compiled, &[]);
+        assert!(records
+            .iter()
+            .any(|record| record.starts_with("GATE implemented:positive_b rhs buf")));
+        assert!(records
+            .iter()
+            .any(|record| record.starts_with("GATE implemented:positive_a lhs buf")));
+        let mut bytes = Vec::new();
+        write_world(&compiled.world, &mut bytes).unwrap();
+        for record in records {
+            bytes.extend_from_slice(record.as_bytes());
+            bytes.push(b'\n');
+        }
+        if let Ok(directory) = std::env::var("REDA_DUMP_FIXTURE_DIR") {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(Path::new(&directory).join("permuted.txt"), bytes).unwrap();
+        }
+    }
 }
