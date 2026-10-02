@@ -39,6 +39,11 @@ Legacy compatibility routing now preserves caller-owned refresh reserves;
 [validation and rejected experiments](docs/generator-legacy-refresh-policy-2026-10-02.md)
 record unchanged default waves and the remaining root failures.
 
+Native flat and hierarchical DFFs now retain independent scalar positive-edge
+clock domains. [State and event validation](docs/native-multiclock-2026-10-02.md)
+covers separate/simultaneous capture and hold; reset, negedge and general FSM
+support remain incomplete.
+
 ## The circuits
 
 Four hand-written reference circuits, built gate by gate, plus the same two

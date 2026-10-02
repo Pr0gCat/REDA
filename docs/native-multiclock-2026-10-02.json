@@ -1,0 +1,153 @@
+{
+  "observed_parent": "0e5ae42",
+  "goal_status": "active; all eight items remain incomplete",
+  "supported": "independent scalar top-level positive-edge clocks in flat and explicitly connected hierarchy; existing plain/enable forms",
+  "remaining_sequential": "reset, negedge, general feedback FSM/counter, derived/gated clocks and multiple event controls",
+  "trace": {
+    "reference": "native-multiclock-2026-10-02-trace.jsonl.gz",
+    "sha256": "2f0a1423026b003f1ae3ff3cad6b35ede4e86343c33f527957dda51bb9d8979c",
+    "runs": 3,
+    "complete_bytes_identical": true,
+    "cases": [
+      {
+        "name": "native-multiclock_dff",
+        "world_fingerprint": "8b703141a251652ef5879463f6759eca65dd30426f0ed81bf0927551c64ffda0",
+        "retained_phases": 240
+      },
+      {
+        "name": "yosys-multiclock_dff",
+        "world_fingerprint": "918e7992afb83bf30ff7fff206934107c76907fcacaa4f6f0c8fd3fd3f390398",
+        "retained_phases": 240
+      },
+      {
+        "name": "native-hierarchy_multiclock_dff",
+        "world_fingerprint": "8b703141a251652ef5879463f6759eca65dd30426f0ed81bf0927551c64ffda0",
+        "retained_phases": 240
+      },
+      {
+        "name": "yosys-hierarchy_multiclock_dff",
+        "world_fingerprint": "918e7992afb83bf30ff7fff206934107c76907fcacaa4f6f0c8fd3fd3f390398",
+        "retained_phases": 240
+      },
+      {
+        "name": "native-multiclock_shift",
+        "world_fingerprint": "5f45b3aa9d291b421218b02eb36fbd1d97293cef7d349b261d3ed8dd7c303b99",
+        "retained_phases": 240
+      },
+      {
+        "name": "yosys-multiclock_shift",
+        "world_fingerprint": "08f51a8ef49ba55bd9e264f92bc7eb119d7414de3303de14dd02fd12da761f17",
+        "retained_phases": 240
+      }
+    ],
+    "independent_audit": {
+      "cases": 6,
+      "retained_phases_per_case": 240,
+      "source_clock_pins_verified": true,
+      "public_events_replayed": true,
+      "independent_state_oracle": true
+    },
+    "corruption_rejections": [
+      "wrong clock pin",
+      "incorrect state",
+      "missing events",
+      "incorrect stimulus protocol"
+    ],
+    "crossdomain_old_state_sampling_verified": true
+  },
+  "validation": {
+    "release_regression_tests": 28,
+    "physical_trace_tests": 1,
+    "expanded_no_python_cli_tests": 1,
+    "wasm_library": "passed"
+  },
+  "root": {
+    "control": {
+      "passed": 1164,
+      "failed": 17,
+      "ignored": 71,
+      "exit": 101,
+      "failures": [
+        "compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded",
+        "compile::planner::tests::a_negotiation_that_has_not_converged_returns_an_error_and_not_a_plan",
+        "compile::planner::tests::a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate",
+        "compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone",
+        "compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped",
+        "compile::planner::tests::legacy_adapter_keeps_and4_and_fanout_routes_byte_exact",
+        "compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact",
+        "compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+        "compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded",
+        "compile::planner::tests::the_strength_verifier_follows_a_repeater_that_feeds_a_climb",
+        "compile::relax::build::tests::physical_really_has_a_primitive_with_no_variants",
+        "compile::resettle_differential::the_reported_stale_dust_case_settles_clean",
+        "compile::routing_stats::tests::compact_channel_repeater_counts_match_the_emitted_world",
+        "compile::strength_differential::tests::genuine_decay_is_still_refused",
+        "compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse",
+        "compile::tests::compile_falls_back_when_the_planner_cannot_route",
+        "compile::tests::which_path_compile_takes_on_each_of_the_six_condition_circuits"
+      ],
+      "sha256": "3db4dd28acababf7c97b7c5bca5a772c8d820d905f9cb47fa9297ea48ae233e1"
+    },
+    "candidate": {
+      "passed": 1164,
+      "failed": 17,
+      "ignored": 71,
+      "exit": 101,
+      "failures": [
+        "compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded",
+        "compile::planner::tests::a_negotiation_that_has_not_converged_returns_an_error_and_not_a_plan",
+        "compile::planner::tests::a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate",
+        "compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone",
+        "compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped",
+        "compile::planner::tests::legacy_adapter_keeps_and4_and_fanout_routes_byte_exact",
+        "compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact",
+        "compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+        "compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded",
+        "compile::planner::tests::the_strength_verifier_follows_a_repeater_that_feeds_a_climb",
+        "compile::relax::build::tests::physical_really_has_a_primitive_with_no_variants",
+        "compile::resettle_differential::the_reported_stale_dust_case_settles_clean",
+        "compile::routing_stats::tests::compact_channel_repeater_counts_match_the_emitted_world",
+        "compile::strength_differential::tests::genuine_decay_is_still_refused",
+        "compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse",
+        "compile::tests::compile_falls_back_when_the_planner_cannot_route",
+        "compile::tests::which_path_compile_takes_on_each_of_the_six_condition_circuits"
+      ],
+      "sha256": "fc1b51b2fb5add84a95b256fed77fc2e5419e81b977e5d510a2c4d85f0923982"
+    },
+    "new_failures": [],
+    "fixed_failures": []
+  },
+  "cli_without_python": {
+    "multiclock_dff-native": {
+      "exit": 0,
+      "stderr": "frontend: native\ndumped circuit 'verilog tests/fixtures/multiclock_dff.sv:multiclock_dff': 4 inputs, 2 outputs, 2 gate outputs (0 of them wired-OR merges)\n",
+      "stdout_sha256": "e08db7b0f37bcd4edac34d598b2f17f542998f713ff686ef00ac7abd34e7f322"
+    },
+    "multiclock_dff-auto": {
+      "exit": 0,
+      "stderr": "frontend: native\ndumped circuit 'verilog tests/fixtures/multiclock_dff.sv:multiclock_dff': 4 inputs, 2 outputs, 2 gate outputs (0 of them wired-OR merges)\n",
+      "stdout_sha256": "e08db7b0f37bcd4edac34d598b2f17f542998f713ff686ef00ac7abd34e7f322"
+    },
+    "hierarchy_multiclock_dff-native": {
+      "exit": 0,
+      "stderr": "frontend: native\ndumped circuit 'verilog tests/fixtures/hierarchy_multiclock_dff.sv:hierarchy_multiclock_dff': 4 inputs, 2 outputs, 2 gate outputs (0 of them wired-OR merges)\n",
+      "stdout_sha256": "e08db7b0f37bcd4edac34d598b2f17f542998f713ff686ef00ac7abd34e7f322"
+    },
+    "hierarchy_multiclock_dff-auto": {
+      "exit": 0,
+      "stderr": "frontend: native\ndumped circuit 'verilog tests/fixtures/hierarchy_multiclock_dff.sv:hierarchy_multiclock_dff': 4 inputs, 2 outputs, 2 gate outputs (0 of them wired-OR merges)\n",
+      "stdout_sha256": "e08db7b0f37bcd4edac34d598b2f17f542998f713ff686ef00ac7abd34e7f322"
+    },
+    "multiclock_shift-native": {
+      "exit": 0,
+      "stderr": "frontend: native\ndumped circuit 'verilog tests/fixtures/multiclock_shift.sv:multiclock_shift': 4 inputs, 2 outputs, 2 gate outputs (0 of them wired-OR merges)\n",
+      "stdout_sha256": "e380ac443579fc33ebde84a45c3566d60e91e965de3733c5c9a297c7ea56ba87"
+    },
+    "multiclock_shift-auto": {
+      "exit": 0,
+      "stderr": "frontend: native\ndumped circuit 'verilog tests/fixtures/multiclock_shift.sv:multiclock_shift': 4 inputs, 2 outputs, 2 gate outputs (0 of them wired-OR merges)\n",
+      "stdout_sha256": "e380ac443579fc33ebde84a45c3566d60e91e965de3733c5c9a297c7ea56ba87"
+    }
+  },
+  "real_game_conformance": "not performed"
+}

@@ -84,7 +84,7 @@ Yosys對照流程修復缺少flatten造成的module-cell讀取失敗；原有fla
 | 1 大型生成：未完成 | 合格刷新縮減已整合seven segment／16×7 ROM；完整共享decoder等仍缺 |
 | 2 大型品質：未完成 | 有效改善保持；更廣大型Mux/ROM通解仍缺 |
 | 3 通用候選：未完成 | 結構提案、決定性default budget有效；一般fragment API proposal loop仍缺 |
-| 4 循序：未完成 | 正緣／enable可跨階層；reset／多clock／negedge／FSM等仍缺 |
+| 4 循序：未完成 | 正緣／enable可跨階層及使用獨立純量clock；reset／negedge／FSM等仍缺 |
 | 5 原生HDL：未完成 | legacy、整數defaults／override與顯式階層可用；inout及其他已列語意仍缺 |
 | 6 無必要Yosys：未完成 | 新增階層及完整七段missing-Python成功；待上述所有支援完成 |
 | 7 真實Minecraft：未完成 | 仍無本目標合格server conformance，不能以本輪simulator代替 |
@@ -97,3 +97,9 @@ Yosys對照流程修復缺少flatten造成的module-cell讀取失敗；原有fla
 本輪乾淨HEAD的root為1161通過／20失敗／71忽略。呼叫端明確指定既有reserve修復ring控制，生產TerminalStairs與strict LatestLegalCell維持不變；4096及Native／fresh Yosys七段／16×7 ROM各三次完整bytes與凍結結果相同，DFF／階層9項與WASM通過。排除unary runway造成9項退步，已撤回並保留拒絕證據。
 
 world partition呼叫端改用既有equivalence模式，同時驗證獨立原始世界與實際認證圖；5項partition與6項錯圖／篡改視圖驗收通過。最新root為1164通過／17失敗／71忽略，無新增失敗，不能宣稱全專案通過。詳見[呼叫端契約與完整證據](world-partition-selected-graph-2026-10-02.md)。仍待處理coupling凍結記錄、歷史路由／供電／planner路徑等失敗；其餘七項缺口及真實遊戲驗證未完成，全部八項目標保持active。
+
+## 原生獨立多時鐘進展
+
+移除elaborator全域單clock限制，沿用每顆DFF已有的clock pin／alias、獨立邊緣狀態及實體Design H接線。flat、hierarchy與跨domain shift各Native／實際Yosys共6電路，每電路240階段持續history，driver／lamp、獨立state oracle與實際事件重播通過；三次完整trace bytes一致。28相關回歸、missing-Python新增CLI案例、WASM與auditor反例通過，最新root維持1164／17／71且無新增失敗。詳見[多時鐘來源及實體證據](native-multiclock-2026-10-02.md)。
+
+第4／5／6項有實際功能進展；reset、負緣、一般回授FSM／counter、衍生clock與多事件控制仍未完成。其餘大型生成、通用預算、inout、真實遊戲及全專案失敗仍須繼續。八項目標保持active。

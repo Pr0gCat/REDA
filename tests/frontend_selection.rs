@@ -150,6 +150,9 @@ fn legacy_comb_and_dff_cli_run_without_a_yosys_interpreter() {
         include_str!("fixtures/parameter_bits.sv").replace("module parameter_bits", "module m"),
         include_str!("fixtures/hierarchy_bits.sv").replace("module hierarchy_bits", "module m"),
         include_str!("fixtures/hierarchy_dff.sv").replace("module hierarchy_dff", "module m"),
+        include_str!("fixtures/multiclock_dff.sv").replace("module multiclock_dff", "module m"),
+        include_str!("fixtures/hierarchy_multiclock_dff.sv").replace("module hierarchy_multiclock_dff", "module m"),
+        include_str!("fixtures/multiclock_shift.sv").replace("module multiclock_shift", "module m"),
     ] {
         std::fs::write(&path, text).unwrap();
         for mode in ["native", "auto"] {

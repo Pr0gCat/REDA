@@ -206,19 +206,27 @@ fn invalid_hierarchy_connections_and_drivers_are_rejected() {
         let errors=compile_systemverilog(&[SourceInput{name:"recursive.sv",text}],&CompileOptions::new("m")).unwrap_err();
         assert!(errors.iter().any(|e|e.message.contains("recursive module")),"{errors:?}");
     }
+}
+
+#[test]
+fn independent_instance_clocks_bind_to_their_own_parent_ports() {
     let text="module r(input d,c,output reg q); always @(posedge c) q<=d; endmodule module m(input d,c1,c2,output q1,q2); r a(d,c1,q1), b(d,c2,q2); endmodule";
-    let errors = compile_systemverilog(
+    let artifact = compile_systemverilog(
         &[SourceInput {
             name: "clocks.sv",
             text,
         }],
         &CompileOptions::new("m"),
     )
-    .unwrap_err();
-    assert!(
-        errors.iter().any(|e| e.message.contains("multiple clocks")),
-        "{errors:?}"
-    );
+    .expect("separate instances retain independent scalar clocks");
+    let clocks = artifact
+        .netlist
+        .gates
+        .iter()
+        .filter(|gate| gate.kind == reda::compile::topology::GateKind::DffPosedge)
+        .map(|gate| gate.inputs[1].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(clocks, ["c1", "c2"].into_iter().collect());
 }
 
 #[test]

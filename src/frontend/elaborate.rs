@@ -205,7 +205,6 @@ impl Hierarchy<'_> {
             signals: Vec::new(),
             by_name: HashMap::new(),
             errors: Vec::new(),
-            ff_clock: None,
             parameters,
             instance,
         };
@@ -320,7 +319,6 @@ struct Elaborator {
     signals: Vec<SignalInfo>,
     by_name: HashMap<String, usize>,
     errors: Vec<Diagnostic>,
-    ff_clock: Option<usize>,
 }
 
 impl Elaborator {
@@ -583,7 +581,7 @@ impl Elaborator {
         let signal_offset = self.signals.len();
         let node_offset = self.nodes.len() as u32;
         // Clocks cross scopes only as direct aliases of scalar input ports.
-        // Keep the existing single-clock contract across the whole hierarchy.
+        // Each register retains its own clock alias across the hierarchy.
         let mut clocks = HashMap::new();
         for assignment in &child.assigns {
             if let Some(clock) = assignment.clock {
@@ -615,14 +613,6 @@ impl Elaborator {
                     );
                     return Vec::new();
                 }
-                if self
-                    .ff_clock
-                    .is_some_and(|previous| previous != parent_clock)
-                {
-                    self.unsupported(connection.span, "multiple clocks are not supported");
-                    return Vec::new();
-                }
-                self.ff_clock = Some(parent_clock);
                 clocks.insert(clock, parent_clock);
             }
         }
@@ -1112,17 +1102,6 @@ impl Elaborator {
                 ),
             );
             return None;
-        }
-        if let Some(previous) = self.ff_clock {
-            if previous != clock {
-                self.unsupported(
-                    always.clock.span,
-                    "unsupported: all `always_ff` blocks must use the same clock; multiple clocks are not supported",
-                );
-                return None;
-            }
-        } else {
-            self.ff_clock = Some(clock);
         }
 
         match always.body.as_slice() {
