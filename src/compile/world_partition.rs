@@ -618,11 +618,26 @@ mod tests {
     use crate::compile::topology::Library;
 
     fn check(label: &str, netlist: &Netlist) -> WorldPartition {
-        let compiled = compile(netlist).expect("reference circuits compile");
         let library = Library::default_library();
-        let graph = expand(netlist, &library)
+        let original_graph = expand(netlist, &library)
             .expect("reference circuits only use NOR gates of fan-in 1..=3");
-        let partition = partition_world(netlist, &graph, &compiled)
+        let original = crate::compile::compile_without_rewrite(netlist)
+            .expect("independent reference compilation");
+        check_world(label, netlist, &original_graph, &original);
+        let compiled = compile(netlist).expect("reference circuits compile");
+        let graph = compiled.physical_rewrite().map_or(original_graph, |rewrite| {
+            crate::compile::primitive_graph::from_certified_rewrite(rewrite)
+        });
+        check_world(label, netlist, &graph, &compiled)
+    }
+
+    fn check_world(
+        label: &str,
+        netlist: &Netlist,
+        graph: &PrimitiveGraph,
+        compiled: &CompiledCircuit,
+    ) -> WorldPartition {
+        let partition = partition_world(netlist, graph, compiled)
             .unwrap_or_else(|e| panic!("{label}: could not partition the world: {e}"));
 
         assert!(

@@ -171,3 +171,7 @@ cargo run --release --bin build_circuit -- verilog tests/fixtures/seven_segment.
 原生前端新增整數 `parameter`／`localparam` 預設值、相依常數運算與寬度／索引解析；驗證及限制見[整數參數支援](docs/native-integer-parameters-2026-10-02.md)。
 
 原生前端支援巢狀模組實例、具名／位置連接與整數參數覆寫；完整七段與既有 DFF 的實體驗證見[模組實例支援](docs/native-module-instances-2026-10-02.md)。
+
+Reference partition checks validate both original worlds and selected certified graphs.
+[Current root convergence evidence](docs/world-partition-selected-graph-2026-10-02.md)
+records 17 remaining failures; the full project is not yet green.

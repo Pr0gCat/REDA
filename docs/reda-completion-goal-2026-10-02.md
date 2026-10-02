@@ -91,3 +91,9 @@ Yosys對照流程修復缺少flatten造成的module-cell讀取失敗；原有fla
 | 8 全專案收斂：未完成 | 本輪相關驗收通過；既有root failures、全量品質／工具門檻仍待修復 |
 
 所有八項真正完成前保持active；保留使用者probe變更，沒有修改simulator／verifier或放寬測試。
+
+## 刷新相容性與實際 primitive graph 收斂
+
+本輪乾淨HEAD的root為1161通過／20失敗／71忽略。呼叫端明確指定既有reserve修復ring控制，生產TerminalStairs與strict LatestLegalCell維持不變；4096及Native／fresh Yosys七段／16×7 ROM各三次完整bytes與凍結結果相同，DFF／階層9項與WASM通過。排除unary runway造成9項退步，已撤回並保留拒絕證據。
+
+world partition呼叫端改用既有equivalence模式，同時驗證獨立原始世界與實際認證圖；5項partition與6項錯圖／篡改視圖驗收通過。最新root為1164通過／17失敗／71忽略，無新增失敗，不能宣稱全專案通過。詳見[呼叫端契約與完整證據](world-partition-selected-graph-2026-10-02.md)。仍待處理coupling凍結記錄、歷史路由／供電／planner路徑等失敗；其餘七項缺口及真實遊戲驗證未完成，全部八項目標保持active。
