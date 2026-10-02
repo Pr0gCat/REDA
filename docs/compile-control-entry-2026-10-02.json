@@ -1,0 +1,23 @@
+{
+  "status": "qualified_test_contract_repair",
+  "original_planner_kind_expectations_preserved": 6,
+  "router_refusal_and_trial_budget_preserved": true,
+  "public_fragment_rewrite_sealed_view_checked": true,
+  "tests_passed": 2,
+  "production_code_changed": false,
+  "full_root_rerun": false,
+  "artifacts": {
+    "docs/compile-control-entry-2026-10-02-before.log.gz": {
+      "sha256": "ddf87f7fdc23d5e3276e79c7a74e16bb2763dd5ee3a319f1311f248f87d2ae70",
+      "raw_sha256": "53cb61378b3f532d58c7cc544abd41d9074679dafc92d857ad37054d69e10947"
+    },
+    "docs/compile-control-entry-2026-10-02-six.log.gz": {
+      "sha256": "8eeed8888228cdfa097c4a187cbbe7c11147800d73f3486ec2df967d9dcf8178",
+      "raw_sha256": "c9c786110370f05171cbf0f432e6ea75b4606bc0a3a26a885add4536c40e6fcc"
+    },
+    "docs/compile-control-entry-2026-10-02-fallback.log.gz": {
+      "sha256": "61ed63aa4324001f7cee56068c9011e4465084020a97bd084e118e86ee0a4954",
+      "raw_sha256": "a1a38f3ab602e2961b796b041dd9e69a5106abbf222c78d4d978076af5db4de8"
+    }
+  }
+}

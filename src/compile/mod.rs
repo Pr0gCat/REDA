@@ -11088,8 +11088,9 @@ mod tests {
         ]
     }
 
-    /// Which of `compile`'s two paths each of the six condition circuits
-    /// takes, pinned.
+    /// Which of the independent planner/channel control's two paths each
+    /// of the six condition circuits takes, pinned. Public `compile` may
+    /// select a strictly qualified rewrite over this unchanged control.
     ///
     /// `tests/reference_circuits.rs` pins the same thing for the four
     /// hand-written circuits; this is here because the two Verilog ones need
@@ -11131,7 +11132,7 @@ mod tests {
                 name, expected_name,
                 "the two lists must stay in the same order"
             );
-            let compiled = compile(&netlist).unwrap_or_else(|error| {
+            let compiled = compile_without_rewrite(&netlist).unwrap_or_else(|error| {
                 panic!("{name} must compile by one path or the other: {error}")
             });
             assert_eq!(
@@ -11142,8 +11143,9 @@ mod tests {
         }
     }
 
-    /// A netlist the planner tries and cannot route still compiles, through
-    /// the emitter. This is the policy's fallback clause, on the smallest
+    /// A netlist the independent planner/channel control tries and cannot
+    /// route still compiles through its emitter. Public selection can then
+    /// qualify a rewrite. This is the control's fallback clause, on the smallest
     /// circuit in the tree that actually exercises it.
     ///
     /// **`segment_a` and not the projection-deadlock netlist**, which is where
@@ -11188,8 +11190,13 @@ mod tests {
             "the planner must fail in the router, not somewhere else: {refusal}"
         );
 
-        let compiled = compile(&netlist).expect("the emitter must pick this up");
+        let compiled = compile_without_rewrite(&netlist).expect("the emitter must pick this up");
         assert_eq!(compiled.planner_kind(), PlannerKind::Legacy);
+
+        let selected = compile(&netlist).expect("public selection must retain a qualified result");
+        assert_eq!(selected.planner_kind(), PlannerKind::FragmentSynth);
+        assert!(selected.physical_rewrite().is_some());
+        selected.validate_rewrite_view(&netlist).expect("public view matches its sealed rewrite");
     }
 
     /// The planner leaves a shared merge branch unisolated, `compile` refuses
