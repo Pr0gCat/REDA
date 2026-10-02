@@ -1,0 +1,30 @@
+{
+  "commit": "387a646",
+  "command": "RUST_MIN_STACK=134217728 cargo test --release",
+  "terminal_exit": 101,
+  "root_lib": {
+    "passed": 1165,
+    "failed": 15,
+    "ignored": 71,
+    "failures": [
+      "compile::planner::tests::a_negotiation_that_has_not_converged_returns_an_error_and_not_a_plan",
+      "compile::planner::tests::a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate",
+      "compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped",
+      "compile::planner::tests::lay_net_refuses_the_branch_that_closes_a_ring",
+      "compile::planner::tests::legacy_adapter_keeps_and4_and_fanout_routes_byte_exact",
+      "compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone",
+      "compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded",
+      "compile::relax::build::tests::physical_really_has_a_primitive_with_no_variants",
+      "compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact",
+      "compile::planner::tests::the_strength_verifier_follows_a_repeater_that_feeds_a_climb",
+      "compile::resettle_differential::the_reported_stale_dust_case_settles_clean",
+      "compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse",
+      "compile::strength_differential::tests::genuine_decay_is_still_refused",
+      "compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+      "compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded"
+    ]
+  },
+  "integration_tests": "not run because root lib failed; separate prior targeted results do not prove full suite",
+  "game_server": "repo target server files not found; actual live endpoint not yet established",
+  "first_large_cover_experiment": "original plus polarity 0 and 1 rejected by strict RouteContinuity; no default changes"
+}

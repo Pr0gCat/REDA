@@ -7983,7 +7983,12 @@ fn checked_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileErr
         let supported_stateful = gate.kind.is_sequential()
             && library.stateful_entry(gate.kind).is_some()
             && gate.kind.accepts_arity(gate.inputs.len());
-        let realisable = (gate.kind.is_realisable() && gate.kind.accepts_arity(gate.inputs.len()))
+        // A merge cell has three input faces. Wider Boolean merges must be
+        // lowered into a tree before either physical compiler sees them.
+        let fits_cell = !matches!(gate.kind, topology::GateKind::Or(n) if n > 3);
+        let realisable = (gate.kind.is_realisable()
+            && gate.kind.accepts_arity(gate.inputs.len())
+            && fits_cell)
             || supported_stateful;
         if !realisable {
             return Err(CompileError::NotRealisable {
