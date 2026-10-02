@@ -287,6 +287,35 @@ pub fn qualify_with_phases(
     Some(quality)
 }
 
+/// Generate a strictly certified draft with only flat interior refreshes.
+/// This does not select it by quality; callers must compare continuous source
+/// waveforms before promoting the candidate to a default policy.
+pub fn compile_flat_refresh_candidate(source: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    let raw = super::compile_without_rewrite(source)?;
+    let mut candidate = raw.physical_candidate().cloned().ok_or_else(|| {
+        CompileError::CandidateMetadataViolation {
+            item: "flat refresh candidate".into(),
+            reason: "a complete combinational manifest is required".into(),
+        }
+    })?;
+    super::fragment_synth::refresh::flatten_refreshes(&mut candidate);
+    let rewrite = realise_physical_rewrite_with_size(
+        source,
+        source,
+        &candidate,
+        &super::topology::Library::default_library(),
+        &source.inputs,
+        &source.outputs,
+        1_000_000,
+        Some(raw.world.size()),
+    )
+    .map_err(|error| CompileError::CandidateMetadataViolation {
+        item: "flat refresh candidate".into(),
+        reason: format!("{error:?}"),
+    })?;
+    Ok(CompiledCircuit::from_certified_rewrite(rewrite))
+}
+
 fn certify_backup(source: &Netlist, compiled: &CompiledCircuit) -> Option<CompiledCircuit> {
     let candidate = compiled.physical_candidate()?;
     let rewrite = realise_physical_rewrite_with_size(

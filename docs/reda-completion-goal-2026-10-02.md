@@ -34,3 +34,9 @@
 大型 cover 實驗使用輸入真值表及既有 consensus cover，跨輸出共享相同 cube，嘗試正向及混合輸出極性。原始 Native seven segment 與第一個兩候選皆在嚴格 RouteContinuity 拒絕：原始例為 RouteId(2)、sink ordinal 3，(76,1,67) → (76,2,66)。既有功能測試不能代替此認證；沒有將任何未認證候選整合預設，也沒有更改 verifier/simulator。下一步追 source endpoint 的 repeater／支撐交接，依認證允許的幾何生成，而不是修改認證接受條件。
 
 實驗另外暴露一般入口的錯誤：大於三個輸入的 Or 被 admitted 為 realisable，兩個 placer 失敗後 channel emitter 在 `place_merge_gate` assert panic。已在所有入口共同的 `checked_topological_order` 增加三面 cell 的硬體上限，返回既有 NotRealisable。此修復只是拒絕不合法單 cell，不宣稱已新增寬 OR 自動 lowering；ordinary `lower()` 目前仍把此類 Or 原樣保留，完整 HDL／lowering 支援需後續補上。回歸覆蓋 4、5、7 fan-in 的 default、independent、legacy 三入口。
+
+## 平直刷新實驗進展
+
+已提出依幾何／ownership 前移內部階梯刷新元件的通解，並提供 `compile_flat_refresh_candidate()`。Native／fresh Yosys 完整 seven segment 均嚴格認證、所有512階段內部與公開真值通過；完整階段與原始控制相同，三次完整生成相同。共享 cover mask 0/1 雖認證成功但品質退步，因此不採用。見 [平直刷新認證修復](generator-flat-refresh-certification-2026-10-02.md)。
+
+此步完成的是大型 candidate 認證的前置缺口，沒有宣告大型延遲／毛刺改善或預設整合完成；下一步建立適用更廣邊界的逐項 runtime qualification/selection，並改進 cover 的物理路徑時序。其餘七項狀態保持未完成，root baseline 15 failures 尚未收斂。

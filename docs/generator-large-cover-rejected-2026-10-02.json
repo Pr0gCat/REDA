@@ -1,0 +1,667 @@
+{
+  "accepted": false,
+  "default_changed": false,
+  "verifier_changed": false,
+  "cases": [
+    {
+      "polarity": null,
+      "source_inputs": [
+        "d3",
+        "d2",
+        "d1",
+        "d0"
+      ],
+      "source_outputs": [
+        "g10",
+        "g14",
+        "g16",
+        "g19",
+        "g22",
+        "g28",
+        "g31"
+      ],
+      "strict_rejection": "strict proof: Certification(Physical(DisconnectedRouteStep { route: RouteId(2), sink: RoutedSinkId { route: RouteId(2), ordinal: 3 }, from: Anchor { x: 76, y: 1, z: 67 }, to: Anchor { x: 76, y: 2, z: 66 } }))",
+      "dust_disconnections": [],
+      "illegal_steps": [
+        {
+          "at": {
+            "x": 76,
+            "y": 1,
+            "z": 67
+          },
+          "next": {
+            "x": 76,
+            "y": 2,
+            "z": 66
+          },
+          "previous": {
+            "x": 76,
+            "y": 1,
+            "z": 68
+          },
+          "route": 2,
+          "sink": {
+            "ordinal": 3,
+            "route": 2
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 76,
+            "y": 1,
+            "z": 67
+          },
+          "next": {
+            "x": 76,
+            "y": 2,
+            "z": 66
+          },
+          "previous": {
+            "x": 76,
+            "y": 1,
+            "z": 68
+          },
+          "route": 2,
+          "sink": {
+            "ordinal": 4,
+            "route": 2
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 76,
+            "y": 1,
+            "z": 67
+          },
+          "next": {
+            "x": 76,
+            "y": 2,
+            "z": 66
+          },
+          "previous": {
+            "x": 76,
+            "y": 1,
+            "z": 68
+          },
+          "route": 2,
+          "sink": {
+            "ordinal": 5,
+            "route": 2
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        }
+      ]
+    },
+    {
+      "polarity": 0,
+      "source_inputs": [
+        "d3",
+        "d2",
+        "d1",
+        "d0"
+      ],
+      "source_outputs": [
+        "g10",
+        "g14",
+        "g16",
+        "g19",
+        "g22",
+        "g28",
+        "g31"
+      ],
+      "strict_rejection": "strict proof: Certification(Physical(DisconnectedRouteStep { route: RouteId(3), sink: RoutedSinkId { route: RouteId(3), ordinal: 4 }, from: Anchor { x: 90, y: 1, z: 90 }, to: Anchor { x: 90, y: 2, z: 89 } }))",
+      "dust_disconnections": [],
+      "illegal_steps": [
+        {
+          "at": {
+            "x": 90,
+            "y": 1,
+            "z": 90
+          },
+          "next": {
+            "x": 90,
+            "y": 2,
+            "z": 89
+          },
+          "previous": {
+            "x": 90,
+            "y": 1,
+            "z": 91
+          },
+          "route": 3,
+          "sink": {
+            "ordinal": 4,
+            "route": 3
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 90,
+            "y": 1,
+            "z": 90
+          },
+          "next": {
+            "x": 90,
+            "y": 2,
+            "z": 89
+          },
+          "previous": {
+            "x": 90,
+            "y": 1,
+            "z": 91
+          },
+          "route": 3,
+          "sink": {
+            "ordinal": 5,
+            "route": 3
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 132,
+            "y": 1,
+            "z": 69
+          },
+          "next": {
+            "x": 132,
+            "y": 2,
+            "z": 68
+          },
+          "previous": {
+            "x": 132,
+            "y": 1,
+            "z": 70
+          },
+          "route": 12,
+          "sink": {
+            "ordinal": 0,
+            "route": 12
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 132,
+            "y": 1,
+            "z": 69
+          },
+          "next": {
+            "x": 132,
+            "y": 2,
+            "z": 68
+          },
+          "previous": {
+            "x": 132,
+            "y": 1,
+            "z": 70
+          },
+          "route": 12,
+          "sink": {
+            "ordinal": 1,
+            "route": 12
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 132,
+            "y": 1,
+            "z": 69
+          },
+          "next": {
+            "x": 132,
+            "y": 2,
+            "z": 68
+          },
+          "previous": {
+            "x": 132,
+            "y": 1,
+            "z": 70
+          },
+          "route": 12,
+          "sink": {
+            "ordinal": 2,
+            "route": 12
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 48,
+            "y": 1,
+            "z": 60
+          },
+          "next": {
+            "x": 48,
+            "y": 2,
+            "z": 59
+          },
+          "previous": {
+            "x": 48,
+            "y": 1,
+            "z": 61
+          },
+          "route": 13,
+          "sink": {
+            "ordinal": 0,
+            "route": 13
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 48,
+            "y": 1,
+            "z": 60
+          },
+          "next": {
+            "x": 48,
+            "y": 2,
+            "z": 59
+          },
+          "previous": {
+            "x": 48,
+            "y": 1,
+            "z": 61
+          },
+          "route": 13,
+          "sink": {
+            "ordinal": 1,
+            "route": 13
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 48,
+            "y": 1,
+            "z": 60
+          },
+          "next": {
+            "x": 48,
+            "y": 2,
+            "z": 59
+          },
+          "previous": {
+            "x": 48,
+            "y": 1,
+            "z": 61
+          },
+          "route": 13,
+          "sink": {
+            "ordinal": 2,
+            "route": 13
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 48,
+            "y": 1,
+            "z": 60
+          },
+          "next": {
+            "x": 48,
+            "y": 2,
+            "z": 59
+          },
+          "previous": {
+            "x": 48,
+            "y": 1,
+            "z": 61
+          },
+          "route": 13,
+          "sink": {
+            "ordinal": 3,
+            "route": 13
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 112,
+            "y": 1,
+            "z": 45
+          },
+          "next": {
+            "x": 112,
+            "y": 2,
+            "z": 44
+          },
+          "previous": {
+            "x": 112,
+            "y": 1,
+            "z": 46
+          },
+          "route": 32,
+          "sink": {
+            "ordinal": 0,
+            "route": 32
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        }
+      ]
+    },
+    {
+      "polarity": 1,
+      "source_inputs": [
+        "d3",
+        "d2",
+        "d1",
+        "d0"
+      ],
+      "source_outputs": [
+        "g10",
+        "g14",
+        "g16",
+        "g19",
+        "g22",
+        "g28",
+        "g31"
+      ],
+      "strict_rejection": "strict proof: Certification(Physical(DisconnectedRouteStep { route: RouteId(9), sink: RoutedSinkId { route: RouteId(9), ordinal: 0 }, from: Anchor { x: 112, y: 1, z: 98 }, to: Anchor { x: 112, y: 2, z: 97 } }))",
+      "dust_disconnections": [],
+      "illegal_steps": [
+        {
+          "at": {
+            "x": 112,
+            "y": 1,
+            "z": 98
+          },
+          "next": {
+            "x": 112,
+            "y": 2,
+            "z": 97
+          },
+          "previous": {
+            "x": 112,
+            "y": 1,
+            "z": 99
+          },
+          "route": 9,
+          "sink": {
+            "ordinal": 0,
+            "route": 9
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 112,
+            "y": 1,
+            "z": 98
+          },
+          "next": {
+            "x": 112,
+            "y": 2,
+            "z": 97
+          },
+          "previous": {
+            "x": 112,
+            "y": 1,
+            "z": 99
+          },
+          "route": 9,
+          "sink": {
+            "ordinal": 1,
+            "route": 9
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 104,
+            "y": 1,
+            "z": 80
+          },
+          "next": {
+            "x": 104,
+            "y": 2,
+            "z": 79
+          },
+          "previous": {
+            "x": 104,
+            "y": 1,
+            "z": 81
+          },
+          "route": 9,
+          "sink": {
+            "ordinal": 1,
+            "route": 9
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 62,
+            "y": 1,
+            "z": 77
+          },
+          "next": {
+            "x": 62,
+            "y": 2,
+            "z": 76
+          },
+          "previous": {
+            "x": 62,
+            "y": 1,
+            "z": 78
+          },
+          "route": 10,
+          "sink": {
+            "ordinal": 1,
+            "route": 10
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 48,
+            "y": 1,
+            "z": 80
+          },
+          "next": {
+            "x": 48,
+            "y": 2,
+            "z": 79
+          },
+          "previous": {
+            "x": 48,
+            "y": 1,
+            "z": 81
+          },
+          "route": 15,
+          "sink": {
+            "ordinal": 0,
+            "route": 15
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        }
+      ]
+    }
+  ]
+}
