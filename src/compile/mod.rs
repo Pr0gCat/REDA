@@ -8477,6 +8477,11 @@ pub(crate) fn gate_footprint(
             if state.kind != BlockKind::Solid {
                 conductors.push(anchor);
             }
+            if matches!(state.kind, BlockKind::Torch | BlockKind::WallTorch) {
+                let cap = translate(Position::new(x, y + 1, z));
+                cells.push(cap);
+                conductors.push(cap);
+            }
         }
         // The clock support carries C, and both empty sockets are reserved
         // electrical landings even though the router writes their blocks.

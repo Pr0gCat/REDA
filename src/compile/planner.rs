@@ -3531,6 +3531,32 @@ fn candidate_from_snapped(
     // with wire. Put that lever one cell farther out and face its pin inward.
     for (gate, definition) in netlist.gates.iter().enumerate() {
         if definition.kind != crate::compile::topology::GateKind::DffPosedge {
+            if !netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
+                continue;
+            }
+            // A lever immediately outside a straight entry must put its pin
+            // on that entry. Otherwise the router sees the lever itself next
+            // to its mandatory approach and cannot safely go around it.
+            for (input_index, signal) in definition.inputs.iter().enumerate() {
+                if placements.get(signal).is_some() {
+                    continue;
+                }
+                let Some(primary) = netlist.inputs.iter().position(|input| input == signal) else {
+                    continue;
+                };
+                let outward = geometry::input_directions(facings[gate])[input_index];
+                let home = step(step(step(anchors[gate], outward), outward), outward);
+                let node = netlist.gates.len() + primary;
+                if anchors[node] == home {
+                    facings[node] = match outward.opposite() {
+                        Facing::North => geometry::CellFacing::NORTH,
+                        Facing::South => geometry::CellFacing::SOUTH,
+                        Facing::East => geometry::CellFacing::EAST,
+                        Facing::West => geometry::CellFacing::WEST,
+                        _ => unreachable!("gate inputs are horizontal"),
+                    };
+                }
+            }
             continue;
         }
         for (input_index, signal) in definition.inputs.iter().enumerate() {
@@ -5376,7 +5402,11 @@ fn typed_legacy_request_parts(
     // again, for both pinned handovers and ordinary output lamps. A lamp
     // reads the same backfed trunk; omitting unpinned outputs falsely made
     // their isolation requirement weaker than a pinned output's.
-    // Internal nets keep the terminal their approach earns.
+    // Sequential graphs use ordinary terminals. Multi-input NOR supports
+    // need the same diode even for an
+    // internal net with one consumer: another input's strong power can drive
+    // its dust trunk backwards and corrupt an implemented intermediate value.
+    // A qualified all-dust runway has its separate weak-power contract.
     // `Repeater` and not `Exact`, because the *diode* is the requirement; which
     // repeater kind satisfies it stays the router's decision, the way it is for
     // every other automatically terminated sink.
@@ -5414,7 +5444,10 @@ fn typed_legacy_request_parts(
                     && !netlist.gates.iter().any(|g| g.kind.is_sequential())
                     && !consumers.iter().any(|c| matches!(c, NetConsumer::Terminal { .. })) {
                     TerminalRequirement::DirectedDustRunway
-                } else if feeds_observed_output {
+                } else if feeds_observed_output
+                    || (netlist.gates.iter().any(|gate| gate.kind.is_sequential())
+                        && matches!(netlist.gates[*gate].kind, crate::compile::topology::GateKind::Nor(n) if n > 1))
+                {
                     TerminalRequirement::Repeater
                 } else {
                     TerminalRequirement::Automatic

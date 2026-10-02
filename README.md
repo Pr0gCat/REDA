@@ -41,8 +41,11 @@ record unchanged default waves and the remaining root failures.
 
 Native flat and hierarchical DFFs now retain independent scalar positive-edge
 clock domains. [State and event validation](docs/native-multiclock-2026-10-02.md)
-covers separate/simultaneous capture and hold; reset, negedge and general FSM
-support remain incomplete.
+covers separate/simultaneous capture and hold. Native positive-edge state reads,
+ternary synchronous reset and small feedback counters/FSMs also pass
+[loaded-artifact and internal-cell validation](docs/native-feedback-2026-10-02.md).
+Reset statement forms, asynchronous reset, negedge and arithmetic counters
+remain incomplete.
 
 ## The circuits
 

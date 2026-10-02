@@ -474,6 +474,9 @@ fn cells_with_runways(body: &Body, weak: bool) -> Vec<Cell> {
         push((1, 0, -1), Vec::new());
         push((2, 0, 0), vec![clock.clone()]);
         push((2, 0, -1), Vec::new());
+        // The inverted-clock torch strongly powers its upper neighbour.
+        // A route floor there would carry clock power into overhead dust.
+        push((2, 1, -1), Vec::new());
         push((0, 0, 1), vec![d]);
         push((3, 0, 0), vec![clock]);
         // Keep source bodies off the two mandatory straight approaches. The
@@ -544,6 +547,15 @@ fn cells_with_runways(body: &Body, weak: bool) -> Vec<Cell> {
                     offset: (step.x, step.y, step.z),
                     carries: vec![signal.clone()],
                 });
+                if !weak {
+                    // Ordinary terminals also require a straight approach.
+                    // Reserve it during placement so facing sockets cannot
+                    // leave different nets competing for the same cell.
+                    cells.push(Cell {
+                        offset: (step.x * 2, step.y, step.z * 2),
+                        carries: vec![signal.clone()],
+                    });
+                }
                 if weak && matches!(body.what, BodyKind::Primitive { kind: Primitive::Torch, .. }) && body.inputs.len() > 1 {
                     // The relocated relay needs an approach and its own floor.
                     // Reserve geometry on each actual input face, not a

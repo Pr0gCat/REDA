@@ -1123,13 +1123,13 @@ impl Elaborator {
         }
     }
 
-    /// Lower the plain feed-forward form (`enable` is `None`) and the one
-    /// supported enable-style form (`if (en) q <= d;`) through the same
+    /// Lower plain and enable-style clocked assignments through the same
     /// path: both produce one [`ElabAssign`] whose `value` a positive-edge
     /// DFF captures every cycle. An incomplete assignment means hold, so the
     /// enable form's `value` becomes `en ? d : q` -- a synthetic
     /// [`SyntheticOrigin::HoldMux`] reading the target's own current value,
-    /// not a second write. That self-read is exactly the state feedback the
+    /// not a second write. Explicit next-state and condition self-reads use
+    /// that same register identity. This is the state feedback the
     /// DFF is meant to allow: [`super::logic::LogicGraph::reserve_dff`]
     /// gives the register its identity before blasting `d`, so the read
     /// resolves to the register itself instead of tripping the
@@ -1142,16 +1142,6 @@ impl Elaborator {
         enable: Option<&IfAssign>,
     ) -> Option<ElabAssign> {
         let (signal, lsb, width) = self.target(&assign.lhs)?;
-        if references_signal(&assign.rhs, &self.signals[signal].name) {
-            self.unsupported(
-                assign.rhs.span,
-                format!(
-                    "unsupported: feedback in `always_ff` is not supported; `{}` must be driven from a feed-forward value",
-                    self.signals[signal].name
-                ),
-            );
-            return None;
-        }
         let value = self.expr(&assign.rhs)?;
         if value.width != width {
             self.fail(
@@ -1167,16 +1157,6 @@ impl Elaborator {
         let value = match enable {
             None => value,
             Some(if_assign) => {
-                if references_signal(&if_assign.cond, &self.signals[signal].name) {
-                    self.unsupported(
-                        if_assign.cond.span,
-                        format!(
-                            "unsupported: feedback in `always_ff` is not supported; `{}` must not appear in its own enable condition",
-                            self.signals[signal].name
-                        ),
-                    );
-                    return None;
-                }
                 let condition = self.expr(&if_assign.cond)?;
                 let condition = self.reduce_to_truth(condition);
                 let elab = self.node(if_assign.id, ElabKind::Expr, width);
@@ -1561,26 +1541,6 @@ impl Elaborator {
         }
         let elab = value.elab;
         RtlExpr::new(RtlKind::ReduceOr(Box::new(value)), 1, elab)
-    }
-}
-
-fn references_signal(expr: &Expr, name: &str) -> bool {
-    match &expr.kind {
-        ExprKind::Ident(value) => value == name,
-        ExprKind::Literal { .. } => false,
-        ExprKind::Unary(_, operand) => references_signal(operand, name),
-        ExprKind::Binary(_, left, right) => {
-            references_signal(left, name) || references_signal(right, name)
-        }
-        ExprKind::Ternary(select, when_true, when_false) => {
-            references_signal(select, name)
-                || references_signal(when_true, name)
-                || references_signal(when_false, name)
-        }
-        ExprKind::BitSelect(base, _) | ExprKind::PartSelect(base, _, _) => {
-            references_signal(base, name)
-        }
-        ExprKind::Concat(parts) => parts.iter().any(|part| references_signal(part, name)),
     }
 }
 

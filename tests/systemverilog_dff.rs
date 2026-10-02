@@ -130,7 +130,10 @@ fn rejects_every_form_outside_the_feed_forward_slice() {
         "multiple clocks",
     );
     rejected(&DFF.replace("q <= d;", "q = d;"), "requires a nonblocking");
-    rejected(&DFF.replace("q <= d;", "q <= q;"), "feedback");
+    let hold = compile(&DFF.replace("q <= d;", "q <= q;"));
+    let gate = &hold.netlist.gates[0];
+    assert_eq!(gate.kind, GateKind::DffPosedge);
+    assert_eq!(gate.inputs[0], gate.output);
 }
 
 #[test]
@@ -268,16 +271,21 @@ fn rejects_every_enable_form_outside_the_slice() {
         &DFF_ENABLE.replace("if (en) q <= d;", "if (en) q <= d; else q <= d;"),
         "`else`",
     );
-    rejected_top(
-        "dff_enable",
-        &DFF_ENABLE.replace("q <= d;", "q <= q;"),
-        "feedback",
-    );
-    rejected_top(
-        "dff_enable",
-        &DFF_ENABLE.replace("if (en) q <= d;", "if (q) q <= d;"),
-        "feedback",
-    );
+    for text in [
+        DFF_ENABLE.replace("q <= d;", "q <= q;"),
+        DFF_ENABLE.replace("if (en) q <= d;", "if (q) q <= d;"),
+    ] {
+        let artifact = compile_top("dff_enable", &text);
+        let mut evaluator = Evaluator::new(&artifact.netlist).unwrap();
+        let q = &artifact.output_map()["q"];
+        for index in 0..128 {
+            assert!(
+                !evaluator
+                    .step(&enable_inputs(index % 3 == 0, index % 2 != 0, index % 5 < 2))
+                    .unwrap()[q]
+            );
+        }
+    }
 }
 
 #[test]

@@ -107,3 +107,11 @@ world partition呼叫端改用既有equivalence模式，同時驗證獨立原始
 ## 本機真實遊戲環境準備
 
 官方26.2 server.jar SHA-1與Linux Temurin25.0.4.1+1 runtime SHA-256校驗通過；Java版本及server bootstrap確認可執行。建立localhost／私人RCON設定，初始化正常產生eula=false並拒絕啟動。目前等待owner是否接受EULA的決定，尚無新server conformance結果。詳見[準備證據](minecraft-local-preparation-2026-10-02.json)。不能將此安裝或simulator／mocked RCON算作第7項完成；其他項目繼續獨立推進，全部目標保持active。
+
+## 回授與同步 next-state reset 進展
+
+原生正緣 assignment／enable 可讀自身 state；沿用既有先保留 DFF identity 的邏輯圖，不新增 state 模型。實體實驗定位並修復循序普通 terminal 的接近格缺失、入口旁 lever 方向、多輸入 NOR 強供電回灌，以及 DFF 反相時鐘火把上方未保留導體格。較強 placement exclusivity 與擴及組合圖的版本均拒絕並保留證據；最終組合圖既有弱供電契約與凍結結果保持。
+
+Native／actual Yosys 的兩位元 counter、三態 FSM、state-dependent enable 各256階段，三次完整bytes一致；loaded litematic 公開輸出、全部實作閘、五個隱藏DFF元件與lock檢查通過。Python 獨立literal state oracle重播全部事件，七類篡改拒絕。43項來源／frontend selection、既有DFF／multiclock／新feedback實體4項、三fixture無Python native/auto CLI與WASM通過。4096家族、Native／Yosys七段與16×7 ROM各完整重跑一次，所有凍結bytes保持。root仍1164通過／17失敗／71忽略，失敗名單相同，沒有宣稱全綠。
+
+詳見[回授與實驗證據](native-feedback-2026-10-02.md)。第4／6項有實際進展，但reset `if/else`／async、負緣、資料算術counter與更廣FSM仍缺；真實Minecraft仍待EULA接受。八項繼續未完成，總目標保持active。

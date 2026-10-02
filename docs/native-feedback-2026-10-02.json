@@ -1,0 +1,198 @@
+{
+  "observed_parent": "95c5ca5",
+  "goal_status": "active; all eight items incomplete",
+  "supported": [
+    "positive-edge next-state state reads",
+    "state-dependent enable",
+    "ternary synchronous reset priority",
+    "tested bitwise modulo-four counter and three-state FSM"
+  ],
+  "remaining_sequential": [
+    "negative edge",
+    "async reset",
+    "reset if/else statement forms",
+    "data arithmetic and broader counters/FSMs"
+  ],
+  "fixtures": {
+    "tests/fixtures/feedback_counter.sv": "a916c3730751d39626f890b7ed3f8ace6e8c6ad7db2c9055d94dcdbc6415b079",
+    "tests/fixtures/feedback_fsm.sv": "ef0b51b8dc9db277a73cb4bb718e4b8c555778af3619c095f7827ecc01e81ccd",
+    "tests/fixtures/feedback_state_enable.sv": "dfb1136f3abc916e2f7d6a687e9bebcb484018cd60f46e82262d8badf246e205"
+  },
+  "trace": {
+    "artifact": "docs/native-feedback-2026-10-02-trace.jsonl.gz",
+    "raw_sha256": "7ba4886c186ab94f890e314bbe76b7b5bfd0587980f50abb013da9c41eafb38e",
+    "runs": 3,
+    "all_bytes_identical": true,
+    "cases": 6,
+    "retained_phases_per_case": 256,
+    "case_summary": {
+      "native-feedback_counter": {
+        "gates": 19,
+        "events": 2281,
+        "worst_phase_ticks": 54
+      },
+      "yosys-feedback_counter": {
+        "gates": 15,
+        "events": 2027,
+        "worst_phase_ticks": 58
+      },
+      "native-feedback_fsm": {
+        "gates": 28,
+        "events": 2837,
+        "worst_phase_ticks": 62
+      },
+      "yosys-feedback_fsm": {
+        "gates": 18,
+        "events": 2298,
+        "worst_phase_ticks": 48
+      },
+      "native-feedback_state_enable": {
+        "gates": 8,
+        "events": 1026,
+        "worst_phase_ticks": 32
+      },
+      "yosys-feedback_state_enable": {
+        "gates": 5,
+        "events": 882,
+        "worst_phase_ticks": 28
+      }
+    }
+  },
+  "validation": {
+    "source_compiler": 25,
+    "source_dff": 12,
+    "frontend_selection": 6,
+    "missing_python_cli": {
+      "modes": [
+        "native",
+        "auto"
+      ],
+      "new_fixtures": 3,
+      "passed": true
+    },
+    "existing_dff_physical": 2,
+    "multiclock_physical": 1,
+    "feedback_physical": 1,
+    "independent_replay_and_seven_corruptions": "passed",
+    "wasm_library": "passed",
+    "logs": {
+      "root": {
+        "artifact": "docs/native-feedback-2026-10-02-root.log.gz",
+        "raw_sha256": "0cf680b540e3b457323b74c39f21da7b5c6164a4478f959d59704bdd6ca5dc69"
+      },
+      "source-cli": {
+        "artifact": "docs/native-feedback-2026-10-02-source-cli.log.gz",
+        "raw_sha256": "53535d2caaa9d68502d307147afd3e5444a31b5b7f7d9459ba23d7ef859158e2"
+      },
+      "missing-python": {
+        "artifact": "docs/native-feedback-2026-10-02-missing-python.log.gz",
+        "raw_sha256": "4378031a66f218e0639b70b7838a50c38f95da703bd8e1be8b58a2142a00e63e"
+      },
+      "physical": {
+        "artifact": "docs/native-feedback-2026-10-02-physical.log.gz",
+        "raw_sha256": "3ac44baee7701996bf6f659e904745255a8d1abca8ab5824de45118e7b51c3b9"
+      },
+      "wasm": {
+        "artifact": "docs/native-feedback-2026-10-02-wasm.log.gz",
+        "raw_sha256": "e79ea13a0e7481ea3625b1d44b2a70cdd32a7f089cc653c18a41dffd386ce10c"
+      },
+      "replay": {
+        "artifact": "docs/native-feedback-2026-10-02-replay.log.gz",
+        "raw_sha256": "7b91c5ee382843fda12f91671783c41ebf14e4816bd4db7bd64f0469a4995440"
+      }
+    }
+  },
+  "root": {
+    "command": "RUST_MIN_STACK=134217728 cargo test --release --lib",
+    "passed": 1164,
+    "failed": 17,
+    "ignored": 71,
+    "exit_code": 101,
+    "failed_tests": [
+      "compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded",
+      "compile::planner::tests::a_negotiation_that_has_not_converged_returns_an_error_and_not_a_plan",
+      "compile::planner::tests::a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate",
+      "compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone",
+      "compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped",
+      "compile::planner::tests::legacy_adapter_keeps_and4_and_fanout_routes_byte_exact",
+      "compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact",
+      "compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+      "compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded",
+      "compile::planner::tests::the_strength_verifier_follows_a_repeater_that_feeds_a_climb",
+      "compile::relax::build::tests::physical_really_has_a_primitive_with_no_variants",
+      "compile::resettle_differential::the_reported_stale_dust_case_settles_clean",
+      "compile::routing_stats::tests::compact_channel_repeater_counts_match_the_emitted_world",
+      "compile::strength_differential::tests::genuine_decay_is_still_refused",
+      "compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse",
+      "compile::tests::compile_falls_back_when_the_planner_cannot_route",
+      "compile::tests::which_path_compile_takes_on_each_of_the_six_condition_circuits"
+    ],
+    "same_failure_names_as_parent": true,
+    "parent_failure_reference": "docs/native-multiclock-2026-10-02.json#/root/candidate/failures"
+  },
+  "frozen_combinational_controls": {
+    "native-seven": {
+      "reference": "docs/generator-qualified-refresh-reduction-2026-10-02-native.jsonl.gz",
+      "raw_sha256": "58e3f73ba8adfab7c6a38bf939dc7706c7e9f4fa73b5ced93d4f46cde624edd4",
+      "full_frozen_bytes_preserved": true,
+      "runs": 1
+    },
+    "yosys-seven": {
+      "reference": "docs/generator-qualified-refresh-reduction-2026-10-02-yosys.jsonl.gz",
+      "raw_sha256": "885d15dd1b20db68d9bfed09f901d1089b7b19df434b2866e063a674978edf06",
+      "full_frozen_bytes_preserved": true,
+      "runs": 1
+    },
+    "rom": {
+      "reference": "docs/generator-qualified-refresh-reduction-2026-10-02-rom-default.jsonl.gz",
+      "raw_sha256": "7bc3f5e9eb62ad15ffc724a80c790450abf8dfac825159c351e4db0dcaba8cef",
+      "full_frozen_bytes_preserved": true,
+      "runs": 1
+    },
+    "family": {
+      "reference": "docs/generator-default-quality-selection-2026-10-02-family.jsonl.gz",
+      "cases": 4096,
+      "raw_sha256": "e91fb1bb40a166035c58d2202cbf726d400d873e24a974c789eee8cad0a68b20",
+      "full_frozen_bytes_preserved": true,
+      "runs": 1
+    }
+  },
+  "rejected_experiments": {
+    "physical-before": {
+      "artifact": "docs/native-feedback-2026-10-02-rejected-physical-before.log.gz",
+      "raw_sha256": "d46e29fd840f503d449c366a2cee3829502f384305ddd24342891f131b5f0b00"
+    },
+    "approach-reserve": {
+      "artifact": "docs/native-feedback-2026-10-02-rejected-approach-reserve.log.gz",
+      "raw_sha256": "68b8f986a9e4f99089cb1f1d98ff00e1f39eff3d1023770fe1182e60f45ceac3"
+    },
+    "fanout-isolation": {
+      "artifact": "docs/native-feedback-2026-10-02-rejected-fanout-isolation.log.gz",
+      "raw_sha256": "e05acf3377b67aa819469577af43d18176f183cd21b834e6282cff793ac54730"
+    },
+    "reset-unmap": {
+      "artifact": "docs/native-feedback-2026-10-02-rejected-reset-unmap.log.gz",
+      "raw_sha256": "6c29abef100efb2d1e3d8417e72924936b2db94acd0b2fedc4cf7aa07dc4fd24"
+    },
+    "clock-cap": {
+      "artifact": "docs/native-feedback-2026-10-02-rejected-clock-cap.log.gz",
+      "raw_sha256": "7a07c9ef242f5240497275992ba304c914214342dff8c9f41bfcaee56607c781"
+    },
+    "exclusive-access": {
+      "artifact": "docs/native-feedback-2026-10-02-rejected-exclusive-access.log.gz",
+      "raw_sha256": "cf51c3c5670dbded9c1f28ef3f3f625c811945d7fc0752ee991e99e5582a8de5"
+    },
+    "owned-access": {
+      "artifact": "docs/native-feedback-2026-10-02-rejected-owned-access.log.gz",
+      "raw_sha256": "285da5ba56230c8e7430f25b02450e4f66bfbffb6c05c6ad9f10b4c4f96e9a77"
+    },
+    "combinational-expansion": {
+      "artifact": "docs/native-feedback-2026-10-02-rejected-combinational-expansion.log.gz",
+      "raw_sha256": "f2849e2d90fd8c0a8279576164ea5fc78026cc6689e34cabdbb796063646c181",
+      "completed": false,
+      "exit_code": 130,
+      "reason": "New coupling-control failure observed; broader rule withdrawn; obsolete debug audit cancelled after the final release audit."
+    }
+  },
+  "real_game_conformance": "Not run; owner EULA acceptance pending; simulator evidence only"
+}

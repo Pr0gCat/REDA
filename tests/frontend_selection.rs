@@ -153,6 +153,9 @@ fn legacy_comb_and_dff_cli_run_without_a_yosys_interpreter() {
         include_str!("fixtures/multiclock_dff.sv").replace("module multiclock_dff", "module m"),
         include_str!("fixtures/hierarchy_multiclock_dff.sv").replace("module hierarchy_multiclock_dff", "module m"),
         include_str!("fixtures/multiclock_shift.sv").replace("module multiclock_shift", "module m"),
+        include_str!("fixtures/feedback_counter.sv").replace("module feedback_counter", "module m"),
+        include_str!("fixtures/feedback_fsm.sv").replace("module feedback_fsm", "module m"),
+        include_str!("fixtures/feedback_state_enable.sv").replace("module feedback_state_enable", "module m"),
     ] {
         std::fs::write(&path, text).unwrap();
         for mode in ["native", "auto"] {
