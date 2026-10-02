@@ -254,3 +254,43 @@ fn feedback_reset_counter_fsm_and_state_enable_match_loaded_physical_cells() {
         check(netlist, outputs, case, &format!("yosys-{top}"));
     }
 }
+
+#[test]
+fn statement_reset_and_nested_enable_match_loaded_physical_cells() {
+    for (top, text, case) in [
+        (
+            "reset_counter",
+            include_str!("fixtures/reset_counter.sv"),
+            Case::Counter,
+        ),
+        (
+            "hierarchy_reset_counter",
+            include_str!("fixtures/hierarchy_reset_counter.sv"),
+            Case::Counter,
+        ),
+        (
+            "reset_fsm",
+            include_str!("fixtures/reset_fsm.sv"),
+            Case::Fsm,
+        ),
+        (
+            "conditional_state_enable",
+            include_str!("fixtures/conditional_state_enable.sv"),
+            Case::StateEnable,
+        ),
+    ] {
+        let artifact = compile_systemverilog(
+            &[SourceInput { name: top, text }],
+            &CompileOptions::new(top),
+        )
+        .unwrap();
+        check(
+            artifact.netlist.clone(),
+            artifact.output_map(),
+            case,
+            &format!("native-{top}"),
+        );
+        let (netlist, outputs) = synthesize_verilog(text, top).unwrap();
+        check(netlist, outputs, case, &format!("yosys-{top}"));
+    }
+}

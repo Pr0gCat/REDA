@@ -5,12 +5,14 @@ import json
 from pathlib import Path
 
 
-def audit(records):
-    cases = {f'{frontend}-feedback_{case}' for frontend in ['native', 'yosys']
-             for case in ['counter', 'fsm', 'state_enable']}
-    assert len(records) == 6 and {r['case'] for r in records} == cases
+def audit(records, cases=None):
+    if cases is None:
+        cases = {f'{frontend}-feedback_{case}': case for frontend in ['native', 'yosys']
+                 for case in ['counter', 'fsm', 'state_enable']}
+    assert len(records) == len(cases) and {r['case'] for r in records} == set(cases)
     for record in records:
-        case = record['case'].split('feedback_')[1]
+        case = cases[record['case']]
+        assert case in {'counter', 'fsm', 'state_enable'}
         gates = {g['output']: g for g in record['gates']}
         outputs = record['outputs']
         names = ['q'] if case == 'state_enable' else ['q[0]', 'q[1]']
@@ -53,6 +55,7 @@ def audit(records):
             return values, channels, hidden
 
         q, clock = 0, False
+        covered = {0}
         _, observed, _ = implementation(q, 0, clock)
         assert record['power_on'] == observed
         for phase in record['phases']:
@@ -66,6 +69,7 @@ def audit(records):
                 elif control & 2:
                     q = (q + 1) % (4 if case == 'counter' else 3)
             clock = next_clock
+            covered.add(q)
             values, expected, hidden = implementation(q, control, clock)
             assert phase['expected'] == q
             assert phase['internal'] == values
@@ -87,7 +91,8 @@ def audit(records):
                 observed[label] = event['value']
                 last[label] = event['tick']
             assert observed == expected
-    return {'cases': 6, 'retained_phases_per_case': 256,
+        assert covered == (set(range(4)) if case == 'counter' else set(range(3)) if case == 'fsm' else {0, 1})
+    return {'cases': len(cases), 'retained_phases_per_case': 256,
             'literal_state_oracle': True, 'all_gate_and_hidden_cell_events_replayed': True}
 
 

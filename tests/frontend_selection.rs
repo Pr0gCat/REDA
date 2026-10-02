@@ -158,6 +158,10 @@ fn legacy_comb_and_dff_cli_run_without_a_yosys_interpreter() {
         include_str!("fixtures/feedback_state_enable.sv").replace("module feedback_state_enable", "module m"),
         include_str!("fixtures/negedge_dff.sv").replace("module negedge_dff", "module m"),
         include_str!("fixtures/negedge_counter.sv").replace("module negedge_counter", "module m"),
+        include_str!("fixtures/reset_counter.sv").replace("module reset_counter", "module m"),
+        include_str!("fixtures/hierarchy_reset_counter.sv").replace("module hierarchy_reset_counter", "module m"),
+        include_str!("fixtures/reset_fsm.sv").replace("module reset_fsm", "module m"),
+        include_str!("fixtures/conditional_state_enable.sv").replace("module conditional_state_enable", "module m"),
         include_str!("fixtures/mixed_edge_shift.sv").replace("module mixed_edge_shift", "module m"),
         include_str!("fixtures/hierarchy_negedge_dff.sv").replace("module hierarchy_negedge_dff", "module m"),
     ] {

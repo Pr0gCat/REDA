@@ -1,0 +1,213 @@
+{
+  "observed_parent": "f13fdfd",
+  "goal_status": "active; all eight items incomplete",
+  "fixtures": {
+    "tests/fixtures/reset_counter.sv": "3bd4bcb82f27ce4a3332e86d3f2a37dc01ed467f94da3fa55e74b8fa6bebb03c",
+    "tests/fixtures/hierarchy_reset_counter.sv": "72dc8b2c8bfc6d5ed481b419acccd834cdc28ce49a349d22cb98198c03ee41ea",
+    "tests/fixtures/reset_fsm.sv": "a14dac1e2bea140219df56167f64d85ae201a73e2e22b5bc96b2cd27a05eb830",
+    "tests/fixtures/conditional_state_enable.sv": "fc91a868c3e99c5907ebe55a67b40c97b97d9ce781d1c8c9a39a04b85659a2ec"
+  },
+  "trace": {
+    "artifact": "docs/native-statement-reset-2026-10-02-trace.jsonl.gz",
+    "raw_sha256": "f2178e3e0280a39144aec2533e5929cf734b7a26c3dafd3fb3ed645e447d3a73",
+    "runs": 3,
+    "all_bytes_identical": true,
+    "cases": 12,
+    "retained_phases_per_case": 256,
+    "all_records_equal_to_prior_controls_after_case_name_normalization": true,
+    "case_summary": {
+      "native-reset_counter": {
+        "gates": 19,
+        "worst_phase_ticks": 54,
+        "events": 2281
+      },
+      "yosys-reset_counter": {
+        "gates": 15,
+        "worst_phase_ticks": 58,
+        "events": 2027
+      },
+      "native-hierarchy_reset_counter": {
+        "gates": 19,
+        "worst_phase_ticks": 54,
+        "events": 2281
+      },
+      "yosys-hierarchy_reset_counter": {
+        "gates": 15,
+        "worst_phase_ticks": 58,
+        "events": 2027
+      },
+      "native-reset_fsm": {
+        "gates": 28,
+        "worst_phase_ticks": 62,
+        "events": 2837
+      },
+      "yosys-reset_fsm": {
+        "gates": 18,
+        "worst_phase_ticks": 48,
+        "events": 2298
+      },
+      "native-conditional_state_enable": {
+        "gates": 8,
+        "worst_phase_ticks": 32,
+        "events": 1026
+      },
+      "yosys-conditional_state_enable": {
+        "gates": 5,
+        "worst_phase_ticks": 28,
+        "events": 882
+      },
+      "native-negedge_reset_counter": {
+        "gates": 20,
+        "worst_phase_ticks": 62,
+        "events": 2456
+      },
+      "yosys-negedge_reset_counter": {
+        "gates": 16,
+        "worst_phase_ticks": 54,
+        "events": 2204
+      },
+      "native-negedge_hierarchy_reset_counter": {
+        "gates": 20,
+        "worst_phase_ticks": 62,
+        "events": 2456
+      },
+      "yosys-negedge_hierarchy_reset_counter": {
+        "gates": 16,
+        "worst_phase_ticks": 54,
+        "events": 2204
+      }
+    }
+  },
+  "validation": {
+    "source_cli_tests": 55,
+    "source_reset_tests": 4,
+    "old_physical_regression_tests": 5,
+    "new_physical_tests": 2,
+    "missing_python_cli": {
+      "modes": [
+        "native",
+        "auto"
+      ],
+      "new_fixtures": 4,
+      "passed": true
+    },
+    "wasm_library": "passed",
+    "independent_literal_replay_and_corruptions": "passed",
+    "logs": {
+      "source_cli": {
+        "artifact": "docs/native-statement-reset-2026-10-02-source_cli.log.gz",
+        "raw_sha256": "403097c695986420232a88af9ef151cc1ab3cab093e358f097693af77e26cee5"
+      },
+      "source_reset_final": {
+        "artifact": "docs/native-statement-reset-2026-10-02-source_reset_final.log.gz",
+        "raw_sha256": "613493bedff71ea761469efa09df6d1e9adaad553b362e5b3375c904495ecfbd"
+      },
+      "wasm": {
+        "artifact": "docs/native-statement-reset-2026-10-02-wasm.log.gz",
+        "raw_sha256": "c9c9c502948595db61a9f59e2e766f8d42b0d4ac67398384dbf177c336353c3c"
+      },
+      "root": {
+        "artifact": "docs/native-statement-reset-2026-10-02-root.log.gz",
+        "raw_sha256": "0ac88169bf5b5d1d121904fa7a56586c6a80e39a8f0887d18b7820bb1dfecb1c"
+      },
+      "initial_obsolete_else_rejection": {
+        "artifact": "docs/native-statement-reset-2026-10-02-initial_obsolete_else_rejection.log.gz",
+        "raw_sha256": "7a7d676d6d48b25af192915dc42dbb3fd08e51af97c7bb749ac4641cbcecdbed"
+      },
+      "first_positive_physical": {
+        "artifact": "docs/native-statement-reset-2026-10-02-first_positive_physical.log.gz",
+        "raw_sha256": "980c2972985b48b60f768b10230df9df4952dfa43110a90abb357859f146d045"
+      },
+      "replay_corruptions": {
+        "artifact": "docs/native-statement-reset-2026-10-02-replay_corruptions.log.gz",
+        "raw_sha256": "9b5f135c857a88ca034ccbac859e7e8e123b6fe9ad0f1123df271dd71dfa0fd5"
+      },
+      "feedback_regression": {
+        "artifact": "docs/native-statement-reset-2026-10-02-feedback_regression.log.gz",
+        "raw_sha256": "1287ea541c44acae45bf3293778d7a5e00c111946a7eb6e3581cc4b85667b50c"
+      },
+      "negedge_regression": {
+        "artifact": "docs/native-statement-reset-2026-10-02-negedge_regression.log.gz",
+        "raw_sha256": "da3ec3e578ac4732d20f31e4f02d2e208818a470734c1d36d9b546f0a96fec5d"
+      },
+      "dff_multiclock_regression": {
+        "artifact": "docs/native-statement-reset-2026-10-02-dff_multiclock_regression.log.gz",
+        "raw_sha256": "83c421a25392b706ef75cbf0f96578b301f20ab85b56d5ee9c672c52552779c2"
+      },
+      "positive_run_1": {
+        "artifact": "docs/native-statement-reset-2026-10-02-positive_run_1.log.gz",
+        "raw_sha256": "c5635907184db6be0cdcc4a874e8bf1006bb3259c95ed08dd8c9660ae68f9a65"
+      },
+      "positive_run_2": {
+        "artifact": "docs/native-statement-reset-2026-10-02-positive_run_2.log.gz",
+        "raw_sha256": "271431ea0a92c15a184c1dc1a640346ca9f16959e035d1aac79d10842f6f5a9a"
+      },
+      "positive_run_3": {
+        "artifact": "docs/native-statement-reset-2026-10-02-positive_run_3.log.gz",
+        "raw_sha256": "ed1c446d8b1e91534064299517756b81b5059481ab1eff5a6fa227b0740d6008"
+      },
+      "negative_run_1": {
+        "artifact": "docs/native-statement-reset-2026-10-02-negative_run_1.log.gz",
+        "raw_sha256": "3be72b35c0ffa2d09d1e018fc74a0870283dcb534a77c54e240736ed34162f8f"
+      },
+      "negative_run_2": {
+        "artifact": "docs/native-statement-reset-2026-10-02-negative_run_2.log.gz",
+        "raw_sha256": "c5b22955538a19f9fc2668dcf0af4967e341a57cd7d556ccbecdf428d3e4a466"
+      },
+      "negative_run_3": {
+        "artifact": "docs/native-statement-reset-2026-10-02-negative_run_3.log.gz",
+        "raw_sha256": "0e6764d8ae75afe93dc849f0e6fba5b905c523c594479dde2642cc3c4af7aec2"
+      }
+    },
+    "complete_world_tests": 1
+  },
+  "root": {
+    "passed": 1164,
+    "failed": 17,
+    "ignored": 71,
+    "same_failure_names_as_parent": true,
+    "failed_tests": [
+      "compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded",
+      "compile::planner::tests::a_negotiation_that_has_not_converged_returns_an_error_and_not_a_plan",
+      "compile::planner::tests::a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate",
+      "compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone",
+      "compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped",
+      "compile::planner::tests::legacy_adapter_keeps_and4_and_fanout_routes_byte_exact",
+      "compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact",
+      "compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+      "compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded",
+      "compile::planner::tests::the_strength_verifier_follows_a_repeater_that_feeds_a_climb",
+      "compile::relax::build::tests::physical_really_has_a_primitive_with_no_variants",
+      "compile::resettle_differential::the_reported_stale_dust_case_settles_clean",
+      "compile::routing_stats::tests::compact_channel_repeater_counts_match_the_emitted_world",
+      "compile::strength_differential::tests::genuine_decay_is_still_refused",
+      "compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse",
+      "compile::tests::compile_falls_back_when_the_planner_cannot_route",
+      "compile::tests::which_path_compile_takes_on_each_of_the_six_condition_circuits"
+    ]
+  },
+  "preserved_prior_raw_trace_sha256": {
+    "feedback": "7ba4886c186ab94f890e314bbe76b7b5bfd0587980f50abb013da9c41eafb38e",
+    "negedge": "3354d5989ed0a0ab2325ab5cc54415921f865ce491d731a4ac170166ad188f1c",
+    "multiclock": "2f0a1423026b003f1ae3ff3cad6b35ede4e86343c33f527957dda51bb9d8979c"
+  },
+  "simulator_or_verifier_rule_changes": false,
+  "priming_or_added_wait": false,
+  "real_minecraft_conformance": false,
+  "remaining_sequential": [
+    "async reset",
+    "multiple-write or multiple-target clocked blocks",
+    "data arithmetic and broader counters/FSMs"
+  ],
+  "world_determinism": {
+    "artifact": "docs/native-statement-reset-2026-10-02-worlds.jsonl.gz",
+    "raw_sha256": "79a40db7fdf0dbbbb5b18d9cc7b2dfef019f9f3d6ac768a4254867737abefe33",
+    "cases": 12,
+    "generations_per_case": 3,
+    "all_complete_worlds_identical": true,
+    "all_loaded_worlds_equal_to_emitted": true,
+    "includes_power_on_state": true,
+    "log": "docs/native-statement-reset-2026-10-02-worlds.log.gz",
+    "log_raw_sha256": "d3e716fabf058e04abb06bc1472ae8adec1346b51faf758dd4436760da4d694d"
+  }
+}

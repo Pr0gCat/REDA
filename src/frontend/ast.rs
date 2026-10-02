@@ -187,9 +187,7 @@ pub enum Stmt {
     BlockingAssign(BlockingAssign),
     NonblockingAssign(NonblockingAssign),
     Case(CaseStatement),
-    /// `if (cond) lhs <= rhs;`, `always_ff`'s one supported enable form.
-    /// There is deliberately no `else` field: version 1 rejects one instead
-    /// of representing it.
+    /// Clocked conditional assignment; each branch writes the same target.
     If(IfAssign),
 }
 
@@ -198,7 +196,8 @@ pub struct IfAssign {
     pub id: SourceNodeId,
     pub span: Span,
     pub cond: Expr,
-    pub assign: NonblockingAssign,
+    pub when_true: Box<Stmt>,
+    pub when_false: Option<Box<Stmt>>,
 }
 
 #[derive(Debug, Clone)]

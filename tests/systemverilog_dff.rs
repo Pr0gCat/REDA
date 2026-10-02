@@ -275,11 +275,16 @@ fn enable_form_compile_is_deterministic() {
 
 #[test]
 fn rejects_every_enable_form_outside_the_slice() {
-    rejected_top(
+    let unconditional = compile_top(
         "dff_enable",
         &DFF_ENABLE.replace("if (en) q <= d;", "if (en) q <= d; else q <= d;"),
-        "`else`",
     );
+    let mut evaluator = Evaluator::new(&unconditional.netlist).unwrap();
+    let q = &unconditional.output_map()["q"];
+    for d in [true, false, true] {
+        evaluator.step(&enable_inputs(d, false, false)).unwrap();
+        assert_eq!(evaluator.step(&enable_inputs(d, true, false)).unwrap()[q], d);
+    }
     for text in [
         DFF_ENABLE.replace("q <= d;", "q <= q;"),
         DFF_ENABLE.replace("if (en) q <= d;", "if (q) q <= d;"),

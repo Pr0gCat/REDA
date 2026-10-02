@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ast::{
     AlwaysComb, AlwaysFf, Assign, BinaryOp, CaseStatement, ClockEdge, ConstExpr, ConstKind, ConstOp, Expr,
-    ExprKind, IfAssign, Instance, Item, Module, NonblockingAssign, Parameter, PortDirection, Range,
+    ExprKind, Instance, Item, Module, Parameter, PortDirection, Range,
     SourceNodeId, SourceSet, Stmt, UnaryOp,
 };
 use super::debug::SyntheticOrigin;
@@ -1114,81 +1114,23 @@ impl Elaborator {
             return None;
         }
 
-        match always.body.as_slice() {
-            [Stmt::NonblockingAssign(assign)] => {
-                self.always_ff_assignment(always, assign, clock, None)
-            }
-            [Stmt::If(if_assign)] => {
-                self.always_ff_assignment(always, &if_assign.assign, clock, Some(if_assign))
-            }
-            _ => {
-                self.unsupported(
-                    always.span,
-                    "unsupported: `always_ff` must contain exactly one nonblocking assignment, \
-                     optionally guarded by one enable-style `if`; reset, `else`, and multiple \
-                     writes are not supported",
-                );
-                None
-            }
-        }
-    }
-
-    /// Lower plain and enable-style clocked assignments through the same
-    /// path: both produce one [`ElabAssign`] whose `value` a positive-edge
-    /// DFF captures every cycle. An incomplete assignment means hold, so the
-    /// enable form's `value` becomes `en ? d : q` -- a synthetic
-    /// [`SyntheticOrigin::HoldMux`] reading the target's own current value,
-    /// not a second write. Explicit next-state and condition self-reads use
-    /// that same register identity. This is the state feedback the
-    /// DFF is meant to allow: [`super::logic::LogicGraph::reserve_dff`]
-    /// gives the register its identity before blasting `d`, so the read
-    /// resolves to the register itself instead of tripping the
-    /// combinational-loop check that guards every other signal.
-    fn always_ff_assignment(
-        &mut self,
-        always: &AlwaysFf,
-        assign: &NonblockingAssign,
-        clock: usize,
-        enable: Option<&IfAssign>,
-    ) -> Option<ElabAssign> {
-        let (signal, lsb, width) = self.target(&assign.lhs)?;
-        let value = self.expr(&assign.rhs)?;
-        if value.width != width {
-            self.fail(
-                assign.span,
-                format!(
-                    "assignment width mismatch: the DFF target is {width} bit(s) and the value is {} bit(s); version 1 never extends or truncates",
-                    value.width
-                ),
+        let [statement] = always.body.as_slice() else {
+            self.unsupported(
+                always.span,
+                "unsupported: `always_ff` must contain exactly one assignment or conditional tree; multiple writes are not supported",
             );
             return None;
-        }
-
-        let value = match enable {
-            None => value,
-            Some(if_assign) => {
-                let condition = self.expr(&if_assign.cond)?;
-                let condition = self.reduce_to_truth(condition);
-                let elab = self.node(if_assign.id, ElabKind::Expr, width);
-                let hold = RtlExpr {
-                    kind: RtlKind::Signal { signal, lsb },
-                    width,
-                    elab,
-                    synthetic: Some(SyntheticOrigin::HoldMux),
-                };
-                RtlExpr {
-                    kind: RtlKind::Mux {
-                        select: Box::new(condition),
-                        when_true: Box::new(value),
-                        when_false: Box::new(hold),
-                    },
-                    width,
-                    elab,
-                    synthetic: Some(SyntheticOrigin::HoldMux),
-                }
-            }
         };
-
+        let mut first = statement;
+        while let Stmt::If(branch) = first {
+            first = &branch.when_true;
+        }
+        let Stmt::NonblockingAssign(assign) = first else {
+            unreachable!("the parser accepts only clocked assignment trees")
+        };
+        let target = self.target(&assign.lhs)?;
+        let value = self.clocked_value(statement, target)?;
+        let (signal, lsb, width) = target;
         let elab = self.node(always.id, ElabKind::Dff, width);
         Some(ElabAssign {
             elab,
@@ -1199,6 +1141,61 @@ impl Elaborator {
             value,
             clock: Some(Clock { signal: clock, edge: always.edge }),
         })
+    }
+
+    /// A conditional tree chooses one next-state value for one register
+    /// slice. Missing branches read that register's old value. The logic
+    /// graph reserves its DFF identity before resolving this feedback.
+    fn clocked_value(&mut self, statement: &Stmt, target: (usize, u32, u32)) -> Option<RtlExpr> {
+        let (signal, lsb, width) = target;
+        match statement {
+            Stmt::NonblockingAssign(assign) => {
+                if self.target(&assign.lhs)? != target {
+                    self.fail(
+                        assign.lhs.span,
+                        "all branches of a clocked conditional must write the same register slice",
+                    );
+                    return None;
+                }
+                let value = self.expr(&assign.rhs)?;
+                if value.width != width {
+                    self.fail(assign.span, format!(
+                        "assignment width mismatch: the DFF target is {width} bit(s) and the value is {} bit(s); version 1 never extends or truncates", value.width));
+                    return None;
+                }
+                Some(value)
+            }
+            Stmt::If(branch) => {
+                let condition = self.expr(&branch.cond)?;
+                let condition = self.reduce_to_truth(condition);
+                let when_true = self.clocked_value(&branch.when_true, target)?;
+                let elab = self.node(branch.id, ElabKind::Expr, width);
+                let when_false = match &branch.when_false {
+                    Some(statement) => self.clocked_value(statement, target)?,
+                    None => RtlExpr {
+                        kind: RtlKind::Signal { signal, lsb },
+                        width,
+                        elab,
+                        synthetic: Some(SyntheticOrigin::HoldMux),
+                    },
+                };
+                Some(RtlExpr {
+                    kind: RtlKind::Mux {
+                        select: Box::new(condition),
+                        when_true: Box::new(when_true),
+                        when_false: Box::new(when_false),
+                    },
+                    width,
+                    elab,
+                    synthetic: Some(if branch.when_false.is_some() {
+                        SyntheticOrigin::BranchJoin
+                    } else {
+                        SyntheticOrigin::HoldMux
+                    }),
+                })
+            }
+            _ => unreachable!("the parser accepts only clocked assignment trees"),
+        }
     }
 
     fn constant_index(&mut self, expr: &ConstExpr) -> Option<u64> {

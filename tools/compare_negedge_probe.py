@@ -5,12 +5,14 @@ import json
 from pathlib import Path
 
 
-def audit(records):
-    tops = ['negedge_dff', 'negedge_counter', 'mixed_edge_shift', 'hierarchy_negedge_dff']
-    assert len(records) == 8 and {r['case'] for r in records} == {
-        f'{frontend}-{top}' for frontend in ['native', 'yosys'] for top in tops}
+def audit(records, cases=None):
+    if cases is None:
+        tops = ['negedge_dff', 'negedge_counter', 'mixed_edge_shift', 'hierarchy_negedge_dff']
+        cases = {f'{frontend}-{top}': top for frontend in ['native', 'yosys'] for top in tops}
+    assert len(records) == len(cases) and {r['case'] for r in records} == set(cases)
     for record in records:
-        top = record['case'].split('-', 1)[1]
+        top = cases[record['case']]
+        assert top in {'negedge_dff', 'negedge_counter', 'mixed_edge_shift', 'hierarchy_negedge_dff'}
         counter, mixed = top == 'negedge_counter', top == 'mixed_edge_shift'
         names = ['q[0]', 'q[1]'] if counter or mixed else ['q']
         pins = ['reset', 'en'] if counter else ['d']
@@ -23,6 +25,7 @@ def audit(records):
             if mixed and bit == 0:
                 assert gate['inputs'][1] == 'clk'
             else:
+                assert gate['inputs'][1] in gates, 'missing clock inverter'
                 inverter = gates[gate['inputs'][1]]
                 assert inverter['kind'] == 'nor' and inverter['inputs'] == ['clk']
         controls = [1, 2, 2, 2, 2, 0, 3, 2] if counter else [0, 3, 2, 1, 0, 2, 3, 1]
@@ -101,7 +104,7 @@ def audit(records):
                 last[label] = event['tick']
             assert observed == expected
         assert covered == ({0, 1, 2, 3} if counter or mixed else {0, 1})
-    return {'cases': 8, 'retained_phases_per_case': 256, 'literal_edge_oracle': True,
+    return {'cases': len(cases), 'retained_phases_per_case': 256, 'literal_edge_oracle': True,
             'all_gate_and_hidden_cell_events_replayed': True, 'all_source_states_covered': True}
 
 

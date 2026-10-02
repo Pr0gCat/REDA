@@ -46,7 +46,11 @@ ternary synchronous reset and small feedback counters/FSMs also pass
 [loaded-artifact and internal-cell validation](docs/native-feedback-2026-10-02.md).
 Native and Yosys falling-edge DFFs, hierarchical clock aliases and mixed-edge
 registers pass [retained state and event validation](docs/native-negedge-2026-10-02.md).
-Reset statement forms, asynchronous reset and arithmetic counters remain incomplete.
+Native synchronous reset `if/else` and nested enable trees now use the same
+next-state circuits as their existing expression forms;
+[loaded-artifact state and event checks](docs/native-statement-reset-2026-10-02.md)
+cover both edge polarities and hierarchy. Asynchronous reset, multiple targets
+per clocked block and arithmetic counters remain incomplete.
 
 ## The circuits
 

@@ -738,37 +738,37 @@ impl<'n> Parser<'n> {
         Ok(NonblockingAssign { span, lhs, rhs })
     }
 
-    /// `if (cond) lhs <= rhs;`, with an optional `begin`/`end` around the
-    /// single nonblocking assignment. A nested `if`, `case`, or `else` is
-    /// rejected here with a span, rather than being accepted and rejected
-    /// later by elaboration.
+    /// A branch contains one assignment or nested conditional. Parsing the
+    /// branch recursively gives `else` its usual nearest-unmatched-if binding.
+    fn clocked_branch(&mut self) -> Result<Stmt, Diagnostic> {
+        if self.eat_keyword(Keyword::Begin) {
+            let statement = self.nonblocking_statement()?;
+            self.expect_keyword(Keyword::End)?;
+            Ok(statement)
+        } else {
+            self.nonblocking_statement()
+        }
+    }
+
     fn if_assign_statement(&mut self) -> Result<IfAssign, Diagnostic> {
         let start = self.expect_keyword(Keyword::If)?;
         self.expect_punct(Punct::LParen)?;
         let cond = self.expr(0)?;
         self.expect_punct(Punct::RParen)?;
-        let assign = if self.eat_keyword(Keyword::Begin) {
-            let assign = self.nonblocking_assign_statement()?;
-            self.expect_keyword(Keyword::End)?;
-            assign
+        let when_true = Box::new(self.clocked_branch()?);
+        let when_false = if self.eat_keyword(Keyword::Else) {
+            Some(Box::new(self.clocked_branch()?))
         } else {
-            self.nonblocking_assign_statement()?
+            None
         };
-        if self.is_keyword(Keyword::Else) {
-            let span = self.advance().span;
-            return Err(self.unsupported_at(
-                span,
-                "unsupported: `else` in `always_ff` is not supported; only one enable-style \
-                 `if (en) q <= d;` is supported",
-            ));
-        }
-        let span = start.join(assign.span);
+        let span = start.join(self.tokens[self.pos - 1].span);
         let id = self.node(SourceKind::If, span, None);
         Ok(IfAssign {
             id,
             span,
             cond,
-            assign,
+            when_true,
+            when_false,
         })
     }
 

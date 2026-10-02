@@ -286,3 +286,27 @@ fn falling_edges_and_mixed_edge_shift_match_loaded_physical_cells() {
         check(netlist, outputs, case, &format!("yosys-{top}"));
     }
 }
+
+#[test]
+fn statement_reset_on_falling_edges_matches_loaded_physical_cells() {
+    for (top, text, case) in [
+        ("reset_counter", include_str!("fixtures/reset_counter.sv"), Case::Counter),
+        ("hierarchy_reset_counter", include_str!("fixtures/hierarchy_reset_counter.sv"), Case::Counter),
+    ] {
+        let text = text.replace("posedge", "negedge");
+        let text = text.as_str();
+        let artifact = compile_systemverilog(
+            &[SourceInput { name: top, text }],
+            &CompileOptions::new(top),
+        )
+        .unwrap();
+        check(
+            artifact.netlist.clone(),
+            artifact.output_map(),
+            case,
+            &format!("native-negedge_{top}"),
+        );
+        let (netlist, outputs) = synthesize_verilog(text, top).unwrap();
+        check(netlist, outputs, case, &format!("yosys-negedge_{top}"));
+    }
+}
