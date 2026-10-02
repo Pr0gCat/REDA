@@ -2002,9 +2002,18 @@ fn self_obstructs(previous: &BTreeMap<Anchor, Anchor>, at: Anchor, next: Anchor)
 #[derive(Debug, Default, Clone)]
 pub struct Congestion {
     charged: BTreeMap<Anchor, u64>,
+    decay_failures: BTreeMap<String, BTreeMap<Anchor, u64>>,
 }
 
 impl Congestion {
+    fn charge_failure(&mut self, failure: &RoutingFailure) -> bool {
+        if failure.record_decay(&mut self.decay_failures) {
+            false
+        } else {
+            self.charge_cells(&failure.charge_outright)
+        }
+    }
+
     /// What using `cell` adds to a route's length, in cells.
     fn price(&self, cell: &Anchor) -> u64 {
         const PER_ROUND: u64 = 6;
@@ -4321,15 +4330,16 @@ fn route_every_net_charging(
         match route_in_order(candidate.clone(), netlist, &order, congestion) {
             Ok(routed) => return Ok(routed),
             Err(failure) => {
+                let charged_air = congestion.charge_failure(&failure);
                 let RoutingFailure {
                     blocked,
                     corridor,
                     reservation,
-                    charge_outright,
+                    charge_outright: _,
+                    is_decay: _,
                     error,
                 } = *failure;
                 last = Some(error);
-                let charged_air = congestion.charge_cells(&charge_outright);
 
                 // Two levers, and both are needed. Going first gets a net the
                 // corridor it wants when one exists; charging what stood in
@@ -4450,14 +4460,29 @@ struct RoutingFailure {
     /// What the round had claimed by the time it gave up -- who was in the
     /// way, in other words.
     reservation: Reservation,
-    /// Cells to charge outright, whoever owns them.
+    /// Failure geometry, independent of whether a caller prices it.
     ///
-    /// A route that decays to nothing was not blocked by anybody: it climbed,
-    /// and a climb has nowhere to put a refresh. Charging the corridor asks
-    /// other nets to move, which is no answer -- what has to become expensive
-    /// is the height this net chose, so the next round buys a flatter path.
+    /// A decay path can have no legal refresh cell without being obstructed
+    /// by another net. Both global and owner-only decay pricing regress an
+    /// accepted counter, so the qualified loops record it separately from
+    /// congestion. Ring-closure geometry retains its measured outright cost.
     charge_outright: Vec<Anchor>,
+    /// Electrical decay is diagnostic geometry, not measured contention.
+    is_decay: bool,
     error: PlannerError,
+}
+
+impl RoutingFailure {
+    fn record_decay(&self, records: &mut BTreeMap<String, BTreeMap<Anchor, u64>>) -> bool {
+        if !self.is_decay {
+            return false;
+        }
+        let cells = records.entry(self.blocked.clone()).or_default();
+        for cell in &self.charge_outright {
+            *cells.entry(*cell).or_insert(0) += 1;
+        }
+        true
+    }
 }
 
 /// Claim, for the net the netlist says drives it, the one cell every socket
@@ -4578,6 +4603,7 @@ fn net_source(candidate: &PlanCandidate, signal: &str) -> Result<Anchor, Box<Rou
                 corridor: (Anchor { x: 0, y: 0, z: 0 }, Anchor { x: 0, y: 0, z: 0 }),
                 reservation: Reservation::new(),
                 charge_outright: Vec::new(),
+                is_decay: false,
                 error: PlannerError::UnrealisableNode {
                     id: signal.to_string(),
                     reason: "no gate or primary input drives this signal".to_string(),
@@ -4948,6 +4974,7 @@ fn legacy_lay_net_reference(
                     corridor: (source, approach),
                     reservation: reservation.clone(),
                     charge_outright: Vec::new(),
+                    is_decay: false,
                     error,
                 }));
             }
@@ -4996,6 +5023,7 @@ fn legacy_lay_net_reference(
                 // Every cell this branch put above the gate plane. Nothing
                 // else is at fault: the climb is what left the refreshes
                 // nowhere to stand.
+                is_decay: true,
                 charge_outright: path
                     .iter()
                     .copied()
@@ -5179,6 +5207,7 @@ fn legacy_lay_net_reference(
                 corridor: (source, approach),
                 reservation: reservation.clone(),
                 charge_outright: charged,
+                is_decay: false,
                 error: PlannerError::PhysicalInvariant(
                     compile::CompileError::CandidateMetadataViolation {
                         item: signal.clone(),
@@ -5508,6 +5537,7 @@ impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
                     corridor: (source, approach),
                     reservation: self.reservation.borrow().clone(),
                     charge_outright,
+                    is_decay: matches!(error, TypedRouterFailure::SignalDecay { .. }),
                     error: planner_error,
                 }));
                 let category = error.category();
@@ -6121,6 +6151,10 @@ struct Negotiation {
     /// which is what makes a corridor that has been fought over repeatedly
     /// unattractive to everything that has an alternative.
     history: BTreeMap<Anchor, u64>,
+    /// Retain failed decay geometry separately from qualified congestion costs.
+    /// Both global and owner-only pricing regress the same accepted counter;
+    /// electrical failure is not evidence that placement needs more room.
+    decay_failures: BTreeMap<String, BTreeMap<Anchor, u64>>,
     /// The present term for the iteration now running.
     present: u64,
 }
@@ -6322,6 +6356,14 @@ impl Negotiation {
             }
         }
         out
+    }
+
+    fn charge_failure(&mut self, failure: &RoutingFailure) {
+        if failure.record_decay(&mut self.decay_failures) {
+            // Recorded for diagnosis; neither rejected pricing rule is active.
+        } else {
+            self.charge_history(failure.charge_outright.iter().copied());
+        }
     }
 
     fn charge_history(&mut self, cells: impl IntoIterator<Item = Anchor>) {
@@ -6555,13 +6597,11 @@ fn negotiate_charging(
                     laid.insert(signal.clone(), route);
                 }
                 Err(failure) => {
-                    // The strength budget is FORBIDDEN, not priced, so this is
-                    // not a contested cell and charging the neighbours would ask
-                    // the wrong nets to move. What has to become expensive is
-                    // the height this branch chose, which is the one thing the
-                    // rip-up loop already got right.
+                    // Keep electrical-failure diagnostics separate from the
+                    // contention costs that routing and placement are qualified
+                    // to use. Ring penalties retain their existing pricing.
                     every_net_laid = false;
-                    table.charge_history(failure.charge_outright.iter().copied());
+                    table.charge_failure(&failure);
                     if failure.error.to_string().contains("closes a ring") {
                         rings_refused += 1;
                     }
@@ -8863,15 +8903,16 @@ mod tests {
                 match route {
                     Ok(routed) => return Ok(routed),
                     Err(failure) => {
+                        let charged_air = congestion.charge_failure(&failure);
                         let RoutingFailure {
                             blocked,
                             corridor,
                             reservation,
-                            charge_outright,
+                            charge_outright: _,
+                            is_decay: _,
                             error,
                         } = *failure;
                         last = Some(error);
-                        let charged_air = congestion.charge_cells(&charge_outright);
                         let charged =
                             congestion.charge(&reservation, corridor.0, corridor.1, &blocked);
                         let mut promoted = vec![blocked.clone()];
@@ -16249,11 +16290,13 @@ mod tests {
                     break;
                 }
                 Err(failure) => {
+                    let charged_air = congestion.charge_failure(&failure);
                     let RoutingFailure {
                         blocked,
                         corridor,
                         reservation,
-                        charge_outright,
+                        charge_outright: _,
+                        is_decay: _,
                         error,
                     } = *failure;
                     // Where in the order the blocked net sits *is* how many nets
@@ -16275,7 +16318,6 @@ mod tests {
                         *harvest.refused.entry(cell).or_insert(0) += blame;
                     }
 
-                    let charged_air = congestion.charge_cells(&charge_outright);
                     let charged = congestion.charge(&reservation, corridor.0, corridor.1, &blocked);
                     let mut promoted: Vec<String> = vec![blocked.clone()];
                     promoted.extend(order.iter().filter(|name| **name != blocked).cloned());
@@ -17146,7 +17188,7 @@ mod tests {
                         laid.insert(signal.clone(), route);
                     }
                     Err(failure) => {
-                        table.charge_history(failure.charge_outright.iter().copied());
+                        table.charge_failure(&failure);
                         failures.push((signal.clone(), failure));
                     }
                 }
@@ -17288,7 +17330,7 @@ mod tests {
                         laid.insert(signal.clone(), route);
                     }
                     Err(failure) => {
-                        table.charge_history(failure.charge_outright.iter().copied());
+                        table.charge_failure(&failure);
                         // The repair: this net's order did not work against
                         // this world, so it tries its next one next time.
                         *chosen.entry(signal.clone()).or_insert(0) += 1;
@@ -17495,7 +17537,7 @@ mod tests {
                             laid.insert(signal.clone(), route);
                         }
                         Err(failure) => {
-                            table.charge_history(failure.charge_outright.iter().copied());
+                            table.charge_failure(&failure);
                             failures.push((signal.clone(), failure));
                         }
                     }
@@ -29838,4 +29880,36 @@ fn legacy_adapter_preserves_decay_failure_envelope_on_a_high_sink() {
     assert_eq!(typed.corridor, reference.corridor);
     assert_eq!(typed.charge_outright, reference.charge_outright);
     assert_eq!(typed.reservation.cells, reference.reservation.cells);
+    assert!(typed.is_decay && reference.is_decay);
+
+    // The actual failure remains available to diagnostic callers, while an
+    // unqualified electrical-failure heuristic cannot divert either net or
+    // distort the congestion heat used by placement.
+    let mut table = Negotiation::default();
+    table.charge_failure(&typed);
+    for cell in &typed.charge_outright {
+        assert_eq!(table.price(cell, "a"), 0);
+        assert_eq!(table.price(cell, "unrelated"), 0);
+    }
+    assert!(table.history.is_empty());
+    let recorded = &table.decay_failures["a"];
+    assert_eq!(recorded.len(), typed.charge_outright.len());
+    assert!(typed.charge_outright.iter().all(|cell| recorded.get(cell) == Some(&1)));
+
+    let mut congestion = Congestion::default();
+    assert!(!congestion.charge_failure(&typed));
+    assert!(congestion.charged.is_empty());
+    assert_eq!(congestion.decay_failures, table.decay_failures);
+
+    // The retained ring/general-failure price path must still charge exactly
+    // these cells; classification, rather than their coordinates, owns policy.
+    let mut non_decay = typed;
+    non_decay.is_decay = false;
+    assert!(congestion.charge_failure(&non_decay));
+    table.charge_failure(&non_decay);
+    for cell in &non_decay.charge_outright {
+        assert_eq!(congestion.price(cell), 6);
+        assert_eq!(table.price(cell, "a"), HISTORY_WEIGHT);
+        assert_eq!(table.price(cell, "unrelated"), HISTORY_WEIGHT);
+    }
 }

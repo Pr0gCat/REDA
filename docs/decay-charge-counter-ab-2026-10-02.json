@@ -1,0 +1,34 @@
+{
+  "status": "complete_regression_confirmed",
+  "session_id": 47926,
+  "log": "/tmp/reda-decay-charge-counter-ab.log",
+  "prior_zero_outright_decay_charge_accepted": true,
+  "prior_elapsed_seconds": 312.525,
+  "current_arm_terminal": true,
+  "only_ab_variable": "outright decay charge cells; corrected sink/corridor remains common to both arms",
+  "physical_verification_unchanged": true,
+  "no_counter_event_trace_qualification_claimed": true,
+  "source_netlist_sha256": "b8c9242146e6ac92aa9289c0e74c2a744fd261e68e66f50aa9d327c3b35d3bd2",
+  "source_fixture_sha256": "490dcecb1418220248a769df128ea91c712be59a79f189c9a38e41d7f7367821",
+  "partial_artifact": {
+    "path": "docs/decay-charge-counter-ab-2026-10-02-prior-partial.log.gz",
+    "sha256": "c4224f1c31b4b14449075120989f59ae1a99c809977e5181615d840aea7d9f93",
+    "raw_sha256": "8d8b77ffffebe5dce1bef714b78125370309d61f0359f5e72cf8e4ab5e3f286d"
+  },
+  "stage_probe": {
+    "session_id": 27835,
+    "log": "/tmp/reda-arithmetic-compile-stage.log",
+    "observed_stage": "compile_begin",
+    "frontend_elapsed_seconds": 0.022,
+    "power_on_reached": false
+  },
+  "current_outright_decay_charge_accepted": false,
+  "current_elapsed_seconds": 636.928,
+  "exit_code": 101,
+  "current_error": "no safe local route from (31, 1, 79) to (71, 1, 86)",
+  "artifact": {
+    "path": "docs/decay-charge-counter-ab-2026-10-02.log.gz",
+    "sha256": "60f736537f0f6ebafcc4b7a9edd28b6c6ce496aa3371949cdfe152e6969a1d4d",
+    "raw_sha256": "153d95a9351d76bd5f4d8e7acf8b5c9b436890677198ead105a0256b2032e4fe"
+  }
+}

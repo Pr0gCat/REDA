@@ -1,0 +1,33 @@
+{
+  "status": "failed_complete_lib_run",
+  "exit_code": 101,
+  "passed": 1172,
+  "failed": 13,
+  "ignored": 71,
+  "elapsed_seconds": 659.02,
+  "failure_names": [
+    "compile::planner::tests::a_negotiation_that_has_not_converged_returns_an_error_and_not_a_plan",
+    "compile::planner::tests::a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate",
+    "compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped",
+    "compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone",
+    "compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded",
+    "compile::relax::build::tests::physical_really_has_a_primitive_with_no_variants",
+    "compile::planner::tests::the_strength_verifier_follows_a_repeater_that_feeds_a_climb",
+    "compile::resettle_differential::the_reported_stale_dust_case_settles_clean",
+    "compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse",
+    "compile::strength_differential::tests::genuine_decay_is_still_refused",
+    "compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+    "compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded",
+    "compile::planner::arithmetic_counter_grown_plan_routes_and_verifies"
+  ],
+  "launch_commit": "8faaa73",
+  "separate_uncommitted_arithmetic_growth_clock_work_present": true,
+  "later_pinned_fixture_commit_not_in_run": "84b3d75",
+  "source_snapshot_not_frozen": true,
+  "integration_tests_not_run_by_lib_command": true,
+  "artifact": {
+    "path": "docs/root-route-contract-audit-2026-10-02.log.gz",
+    "sha256": "403c9ea3ff9056dc5eceb03f665afac1f16e2bac9072eaf56acde718a98f06e7",
+    "raw_sha256": "f362633774ec5281477e610672ffd8f464291da9950686096cd41a1f48600c85"
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "status": "rejected_regression_confirmed",
+  "hypothesis": "Decay is a failed route owner cost, not shared contention. Global pricing may unnecessarily divert unrelated nets. Scope decay costs to owner while retaining all geometry for placement.",
+  "preserved_controls": [
+    "original zero-decay-charge same-netlist arm",
+    "exact high-sink error/corridor/charge/reservation",
+    "historical whole-Route parity",
+    "physical verification and all existing thresholds"
+  ],
+  "source_sha256": {
+    "src/compile/planner.rs": "e723267fe030ab01854676e8fc5574b99d45589690185d63c5a6f8c029e13ae0",
+    "src/frontend/ast.rs": "a9ccc72d93508781e8f7c60cf100d5cc92234f2fd7b7605f476b5664af7bf991",
+    "src/frontend/elaborate.rs": "bdf18c8e01665f6a068160ce81d7f5fd5b243f69a061db9d041f5c5a160cc04e",
+    "src/frontend/logic.rs": "ad00c92b94b7d8c372ad9a13780232c4fbd46656eb2c8a22731f890718a07507",
+    "src/frontend/parser.rs": "880db969f46b435320c0be25d634ca11417668ad1cee8275ca9fca94550ad867",
+    "src/frontend/rtl.rs": "b2aed0f59c27507d9c22d84b586e69fe90fd3ce548558b24e6d03f73eb820133",
+    "tests/fixtures/arithmetic_counter_add.sv": "490dcecb1418220248a769df128ea91c712be59a79f189c9a38e41d7f7367821"
+  },
+  "prior_ab_manifest": "docs/decay-charge-counter-ab-2026-10-02.json",
+  "check_tests_exit_code": 0,
+  "first_release_compile": {
+    "exit_code": 101,
+    "failure": "rustc LLVM SCCPSolver SIGSEGV",
+    "stack_bytes": 134217728,
+    "log": "/tmp/reda-scoped-decay-envelope.log"
+  },
+  "retry": {
+    "session_id": 72186,
+    "stack_bytes": 268435456,
+    "shell_stack_kb": 262144,
+    "log": "/tmp/reda-scoped-decay-envelope-retry.log",
+    "exit_code": 0,
+    "build_seconds": 291
+  },
+  "no_qualification_or_completion_claim": true,
+  "targeted_results": {
+    "envelope_and_owner_cost": {
+      "passed": 1,
+      "failed": 0,
+      "seconds": 0.01
+    },
+    "whole_route_parity": {
+      "passed": 3,
+      "failed": 0,
+      "seconds": 0.35
+    },
+    "routing": {
+      "passed": 75,
+      "failed": 0,
+      "seconds": 0.39
+    },
+    "historical_negotiation_sequence": {
+      "passed": 0,
+      "failed": 1,
+      "seconds": 0.05,
+      "actual": [
+        8,
+        5,
+        5,
+        0
+      ],
+      "expected": [
+        8,
+        5,
+        6,
+        0
+      ],
+      "preexisting_root_failure": true,
+      "unchanged_assertion": true
+    }
+  },
+  "artifacts": {
+    "compile-crash": {
+      "path": "docs/scoped-decay-experiment-2026-10-02-compile-crash.log.gz",
+      "sha256": "f1795792e49309da6ff05eda27391257ee43e32aa79dbfcbc4d27c6082363323",
+      "raw_sha256": "030691744a06f8949fb492b2c276f5791da44d70b2bfb0297037d0b1aabc2c74"
+    },
+    "envelope": {
+      "path": "docs/scoped-decay-experiment-2026-10-02-envelope.log.gz",
+      "sha256": "6d3e6b92a571f5dc1ed52fd94a2a9fbffe2ab103d3fab3b273bbc705d2154c55",
+      "raw_sha256": "beec5c1c5294a5d6581c5318c5b13e1988f83bd019563f0fabb94ce6530c5119"
+    },
+    "route-parity": {
+      "path": "docs/scoped-decay-experiment-2026-10-02-route-parity.log.gz",
+      "sha256": "473900b01b94c850e8feff90ad88a6a00e063222ffa3033d6e0e0d2582480e0b",
+      "raw_sha256": "3e881bd1540ab06028e222398bb1b75c48af653b6818af0ead31b6ba8d45df1d"
+    },
+    "routing": {
+      "path": "docs/scoped-decay-experiment-2026-10-02-routing.log.gz",
+      "sha256": "1587ad57cc2daec97e3781e9d994939ab4860bc316198d48c8e2873aa47fd5d8",
+      "raw_sha256": "50514da73a4b17453532980b39650937a642027eb2d006208e8df996c861b27f"
+    },
+    "negotiation-control": {
+      "path": "docs/scoped-decay-experiment-2026-10-02-negotiation-control.log.gz",
+      "sha256": "f171d0fd32854d3e5365471525157fb4cdd426a71ba4d6b66095f8f2df92d3e4",
+      "raw_sha256": "4849d4f97be7727a31384e4bb226f24b040a5a13a3021a0260ca4a1929393ea7"
+    },
+    "counter-ab": {
+      "path": "docs/scoped-decay-experiment-2026-10-02-counter-ab.log.gz",
+      "sha256": "fd237ff63d040b625daa5e807b4b6dd4402f0833b7d9668cc0a0885b823b220a",
+      "raw_sha256": "f05b68527fa4e3cc17508f820c9da71983b63cecbf24710ef139b503c1ea3fb1"
+    },
+    "rejected-planner-source": {
+      "path": "docs/scoped-decay-experiment-2026-10-02-planner.rs.gz",
+      "sha256": "ca404f6f8795cc1c074a2dc29cfa93040e6d64656f15e424e076cf15a8a34024",
+      "raw_sha256": "e723267fe030ab01854676e8fc5574b99d45589690185d63c5a6f8c029e13ae0"
+    }
+  },
+  "counter_ab": {
+    "session_id": 32402,
+    "log": "/tmp/reda-scoped-decay-counter-ab.log",
+    "terminal": true,
+    "same_netlist_as_original_ab": true,
+    "netlist_debug_sha256": "141d549acbd94015ce5d374d43669098e26a5ed8b1d111c85dd627fb482bafcd",
+    "prior_accepted": true,
+    "prior_seconds": 320.018,
+    "prior_complete_routes_equal_original_ab": true,
+    "prior_routes_debug_sha256": "3158f1f194c1cf1900318bf05e84e3e43b2deaa073fe69b7d97fb3fe54d91e08",
+    "exit_code": 101,
+    "current_accepted": false,
+    "current_seconds": 771.553,
+    "current_error": "no safe local route from (44, 1, 106) to (73, 1, 115)",
+    "total_seconds": 1091.89
+  },
+  "release_binary_sha256": "59f1d9e9fae46d8545e59bd1b0ba3e749400a8ebdb1b2d60cec67c6cfbd75922",
+  "production_qualification": false
+}
