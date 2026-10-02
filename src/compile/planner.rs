@@ -5440,10 +5440,11 @@ impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
             Err(error) => {
                 let sink_id = match &error {
                     TypedRouterFailure::NoLocalRoute { sink, .. }
-                    | TypedRouterFailure::RingClosure { sink, .. } => Some(*sink),
-                    TypedRouterFailure::WrongRepeaterAxis { .. }
-                    | TypedRouterFailure::InvalidRequest { .. }
-                    | TypedRouterFailure::Refused { .. } => None,
+                    | TypedRouterFailure::RingClosure { sink, .. }
+                    | TypedRouterFailure::SignalDecay { sink, .. } => Some(*sink),
+                    TypedRouterFailure::InvalidRequest { sink, .. }
+                    | TypedRouterFailure::Refused { sink, .. } => *sink,
+                    TypedRouterFailure::WrongRepeaterAxis { .. } => None,
                     TypedRouterFailure::RouterLimitExceeded { .. } => unreachable!(),
                 };
                 let sink = sink_id
@@ -5467,6 +5468,13 @@ impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
                                 to: approach,
                             },
                         }
+                    }
+                    (TypedRouterFailure::SignalDecay { .. }, Some(id)) => {
+                        let label = legacy_sink_label(&self.consumers[usize::from(id.ordinal)], self.netlist);
+                        PlannerError::PhysicalInvariant(compile::CompileError::CandidateMetadataViolation {
+                            item: self.signal.to_string(),
+                            reason: format!("the route to {label} decays to nothing before it arrives, and no cell along it can hold a refresh"),
+                        })
                     }
                     (TypedRouterFailure::RingClosure { repeater, .. }, Some(id)) => {
                         let label = legacy_sink_label(
@@ -5492,6 +5500,7 @@ impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
                 };
                 let charge_outright = match &error {
                     TypedRouterFailure::RingClosure { charged, .. } => charged.clone(),
+                    TypedRouterFailure::SignalDecay { path, .. } => path.iter().copied().filter(|cell| cell.y > PLANNER_Y).collect(),
                     _ => Vec::new(),
                 };
                 *self.failure.borrow_mut() = Some(Box::new(RoutingFailure {
@@ -29733,4 +29742,29 @@ mod tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn legacy_adapter_preserves_decay_failure_envelope_on_a_high_sink() {
+    let netlist = Netlist { inputs: vec!["a".into()], outputs: vec!["q".into()], gates: vec![crate::compile::Gate::nor("q", &["a"])] };
+    let candidate = candidate_from_anchors_and_facings(&netlist, &PortPlacements::default(), vec![Anchor { x: 30, y: 20, z: 30 }, Anchor { x: 30, y: 1, z: 50 }], vec![geometry::CellFacing::NORTH; 2]);
+    let consumers = net_consumers(&netlist, &candidate).remove("a").unwrap();
+    let source = net_source(&candidate, "a").unwrap_or_else(|failure| panic!("source: {}", failure.error));
+    let mut reference_reservation = reserve_primitives(&candidate.primitive_nodes, candidate.lower_bound);
+    preclaim_socket_approaches(&mut reference_reservation, &candidate, &netlist);
+    let mut typed_reservation = reference_reservation.clone();
+    let congestion = Congestion::default();
+    let prices = Prices::RipUp(&congestion);
+    let reference = legacy_lay_net_reference("a", source, &consumers, &netlist, &candidate, &mut reference_reservation, &prices);
+    let typed = lay_net("a", source, &consumers, &netlist, &candidate, &mut typed_reservation, &prices);
+    let reference = match reference { Err(failure) => failure, Ok(_) => panic!("reference unexpectedly carries") };
+    let typed = match typed { Err(failure) => failure, Ok(_) => panic!("typed unexpectedly carries") };
+    eprintln!("DECAY_REFERENCE error={} corridor={:?} charge={:?}", reference.error, reference.corridor, reference.charge_outright);
+    eprintln!("DECAY_TYPED error={} corridor={:?} charge={:?}", typed.error, typed.corridor, typed.charge_outright);
+    assert!(!reference.charge_outright.is_empty());
+    assert_eq!(typed.error.to_string(), reference.error.to_string());
+    assert_eq!(typed.corridor, reference.corridor);
+    assert_eq!(typed.charge_outright, reference.charge_outright);
+    assert_eq!(typed.reservation.cells, reference.reservation.cells);
 }

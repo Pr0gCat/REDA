@@ -1,0 +1,30 @@
+{
+  "status": "qualified_failure_envelope_repair",
+  "control": "legacy_lay_net_reference",
+  "before_reference_charge_cells": 22,
+  "before_typed_charge_cells": 0,
+  "after_exact_error_corridor_charge_reservation": true,
+  "envelope_tests_passed": 1,
+  "routing_tests_passed": 69,
+  "route_parity_tests_passed": 3,
+  "physical_counter_improvement_proven": false,
+  "full_root_rerun": false,
+  "artifacts": {
+    "docs/routing-decay-envelope-2026-10-02-before.log.gz": {
+      "sha256": "26f7774254d23599ab92fe90704e1722a45ac5ff1274c7e5ac4b2eb33d322681",
+      "raw_sha256": "a2641bda6315cc63c660ce0d8a6a3c60fea2e55717462da307e18cfd4cdf0d81"
+    },
+    "docs/routing-decay-envelope-2026-10-02-after.log.gz": {
+      "sha256": "881dc787021afec013dc00359c784d7524ab56514118eabe004e0c75d9da525a",
+      "raw_sha256": "a63c71b0aa498169124c54bd9f0c2d78df3b4558cccd0460c03303994425a446"
+    },
+    "docs/routing-decay-envelope-2026-10-02-routing.log.gz": {
+      "sha256": "a6976c1ed5d624d5026fd046263cb2d38f5394c0e9a2080037092335bf67cb68",
+      "raw_sha256": "2e781f08969ee43e49b0eac1a5fa956885f542a77493aa2279bbacf13df9efb2"
+    },
+    "docs/routing-decay-envelope-2026-10-02-parity.log.gz": {
+      "sha256": "9acc9c67476cd316a984e4212fb6c0c8fb3c1cc3d8fe371040aef3571958b3f0",
+      "raw_sha256": "f91f370737400996db71f840808c1893765a98173f38f376b8bb3b11458ea52e"
+    }
+  }
+}

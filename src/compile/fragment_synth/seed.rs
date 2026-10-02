@@ -2908,7 +2908,8 @@ fn explicit_failure_sink(
     match failure {
         RouterFailure::RouterLimitExceeded { sink, .. }
         | RouterFailure::NoLocalRoute { sink, .. }
-        | RouterFailure::RingClosure { sink, .. } => Some(*sink),
+        | RouterFailure::RingClosure { sink, .. }
+        | RouterFailure::SignalDecay { sink, .. } => Some(*sink),
         RouterFailure::InvalidRequest { sink, .. } | RouterFailure::Refused { sink, .. } => *sink,
         RouterFailure::WrongRepeaterAxis { connection, .. } => sinks
             .as_slice()

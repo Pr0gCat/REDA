@@ -1099,6 +1099,14 @@ pub enum RouterFailure {
         repeater: Anchor,
         charged: Vec<Anchor>,
     },
+    /// The realised branch cannot deliver power. Keep its exact path so
+    /// the caller can price the failed geometry rather than unrelated nets.
+    SignalDecay {
+        route: RouteId,
+        source: PhysicalEndpointId,
+        sink: RoutedSinkId,
+        path: Vec<Anchor>,
+    },
     InvalidRequest {
         route: RouteId,
         source: PhysicalEndpointId,
@@ -1140,6 +1148,10 @@ impl std::fmt::Display for RouterFailure {
                 formatter,
                 "route {route:?} sink {sink:?} closes a ring through repeater {repeater:?}"
             ),
+            Self::SignalDecay { route, sink, .. } => write!(
+                formatter,
+                "route {route:?} sink {sink:?} decays before arriving"
+            ),
             Self::InvalidRequest { route, .. } => {
                 write!(
                     formatter,
@@ -1166,7 +1178,7 @@ impl RouterFailure {
             }
             Self::NoLocalRoute { .. } => RouterRefusalCategory::NoLocalRoute,
             Self::WrongRepeaterAxis { .. } => RouterRefusalCategory::WrongRepeaterAxis,
-            Self::RingClosure { .. } => RouterRefusalCategory::PhysicalInvariant,
+            Self::RingClosure { .. } | Self::SignalDecay { .. } => RouterRefusalCategory::PhysicalInvariant,
             Self::Refused { category, .. } => *category,
         }
     }
@@ -1835,11 +1847,11 @@ where
                         path.len(),
                     );
                 }
-                return Err(RouterFailure::Refused {
+                return Err(RouterFailure::SignalDecay {
                     route: request.id,
                     source: request.source.id,
-                    sink: Some(sink.id),
-                    category: RouterRefusalCategory::PhysicalInvariant,
+                    sink: sink.id,
+                    path,
                 });
             }
             if let Some(overlap) = seed_rules
