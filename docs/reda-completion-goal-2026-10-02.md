@@ -46,3 +46,7 @@
 `compile()` 現在對一至六個組合輸入、任意非空公開輸出邊界，嘗試平直刷新候選；嚴格認證、完整 retained-history 真值及 setup/target 共24項不退步才選用。Native／fresh Yosys 完整 seven segment 的實際預設結果與前輪認證候選完全一致。固定2/3家族仍保留原規則。詳見 [較大邊界預設整合](generator-default-flat-refresh-selection-2026-10-02.md)。
 
 這只推進第一項的預設認證整合，沒有把平直刷新當成完整共享解碼生成，也沒有大型延遲／毛刺改善。較大 ROM/Mux、可擴展通用組合／搜尋、循序／HDL、真實 Minecraft 與全專案收斂仍未完成。回歸另定位 reference size 舊快照失敗：and4原始／預設同為238，full_adder同為1017；沒有改寫其232／1065歷史期望，需後續追根因。路徑測試保留原始 Legacy decoder，另驗收預設 FragmentSynth 嚴格認證。
+
+## 大型內部波形及拒絕實驗
+
+新增 opt-in gate event trace，完整 retained-history 各閘事件由獨立 Python 重建狀態。觀察到原始／共享 cover 的早期條件暫態及後續傳播，並定位 cover builder 的多餘 OR/NOR、singleton merge、未使用常數閘。測試末級 NOR 融合與 output-cone pruning，全部來源等價、嚴格認證及512階段真值通過，三次全 bytes 一致；但最差與毛刺仍退步於44 ticks／85切換的固定原始控制，四個新 cover 全拒絕，未改預設。下一步需量測 landing operands 的物理到達時間後處理配平。見 [大型內部波形實驗](generator-cover-internal-timing-2026-10-02.md)。其餘驗收仍保持未完成。

@@ -11,7 +11,7 @@ use reda::redstone::{
     world::{block::BlockKind, storage::World},
 };
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[path = "../src/frontend/cover.rs"]
 mod cover;
 fn evaluate(n: &Netlist, address: usize) -> HashMap<String, bool> {
@@ -28,11 +28,17 @@ fn evaluate(n: &Netlist, address: usize) -> HashMap<String, bool> {
     }
     v
 }
-fn gate(n: &mut Netlist, mut operands: Vec<String>, nor: bool) -> String {
+fn gate(n: &mut Netlist, mut operands: Vec<String>, nor: bool, fuse: bool) -> String {
     while operands.len() > 3 {
         operands = operands
             .chunks(3)
-            .map(|chunk| gate(n, chunk.to_vec(), false))
+            .map(|chunk| {
+                if fuse && chunk.len() == 1 {
+                    chunk[0].clone()
+                } else {
+                    gate(n, chunk.to_vec(), false, fuse)
+                }
+            })
             .collect();
     }
     let mut name = format!("$cover_gate_{}", n.gates.len());
@@ -47,7 +53,7 @@ fn gate(n: &mut Netlist, mut operands: Vec<String>, nor: bool) -> String {
     });
     name
 }
-fn candidate(source: &Netlist, polarity: usize) -> Netlist {
+fn candidate(source: &Netlist, polarity: usize, fuse: bool) -> Netlist {
     let mut n = Netlist {
         inputs: source.inputs.clone(),
         outputs: vec![],
@@ -56,14 +62,15 @@ fn candidate(source: &Netlist, polarity: usize) -> Netlist {
     let negatives: Vec<_> = source
         .inputs
         .iter()
-        .map(|s| gate(&mut n, vec![s.clone()], true))
+        .map(|s| gate(&mut n, vec![s.clone()], true, fuse))
         .collect();
     let low = gate(
         &mut n,
         vec![source.inputs[0].clone(), negatives[0].clone()],
         true,
+        fuse,
     );
-    let high = gate(&mut n, vec![low.clone()], true);
+    let high = gate(&mut n, vec![low.clone()], true, fuse);
     let mut shared = BTreeMap::new();
     let states = 1 << source.inputs.len();
     let values: Vec<_> = (0..states).map(|a| evaluate(source, a)).collect();
@@ -91,11 +98,11 @@ fn candidate(source: &Netlist, polarity: usize) -> Netlist {
                             }
                         })
                         .collect();
-                    if mismatches.len() <= 3 {
-                        gate(&mut n, mismatches, true)
+                    if fuse || mismatches.len() <= 3 {
+                        gate(&mut n, mismatches, true, fuse)
                     } else {
-                        let joined = gate(&mut n, mismatches, false);
-                        gate(&mut n, vec![joined], true)
+                        let joined = gate(&mut n, mismatches, false, fuse);
+                        gate(&mut n, vec![joined], true, fuse)
                     }
                 })
                 .clone();
@@ -107,12 +114,12 @@ fn candidate(source: &Netlist, polarity: usize) -> Netlist {
             } else {
                 low.clone()
             }
-        } else if inverted && terms.len() <= 3 {
-            gate(&mut n, terms, true)
+        } else if inverted && (fuse || terms.len() <= 3) {
+            gate(&mut n, terms, true, fuse)
         } else {
-            let joined = gate(&mut n, terms, false);
+            let joined = gate(&mut n, terms, false, fuse);
             if inverted {
-                gate(&mut n, vec![joined], true)
+                gate(&mut n, vec![joined], true, fuse)
             } else {
                 joined
             }
@@ -129,7 +136,7 @@ fn signal(w: &World, p: (i32, i32, i32)) -> bool {
         b.lit
     }
 }
-fn measure(source: &Netlist, c: &reda::compile::CompiledCircuit) -> serde_json::Value {
+fn measure(source: &Netlist, c: &reda::compile::CompiledCircuit, trace: bool) -> serde_json::Value {
     let implementation = c.implementation_netlist(source);
     let states = 1usize << source.inputs.len();
     let drivers = c.physical_rewrite().map_or_else(
@@ -154,13 +161,22 @@ fn measure(source: &Netlist, c: &reda::compile::CompiledCircuit) -> serde_json::
     );
     let mut sim = Simulator::new(c.world.clone());
     sim.run_until_stable(2000).unwrap();
-    sim.attach_observer(
-        drivers
-            .iter()
-            .chain(&lamps)
-            .enumerate()
-            .map(|(i, &p)| (Position::new(p.0, p.1, p.2), i.to_string())),
-    );
+    let mut watched: Vec<_> = drivers
+        .iter()
+        .chain(&lamps)
+        .enumerate()
+        .map(|(i, &p)| (Position::new(p.0, p.1, p.2), i.to_string()))
+        .collect();
+    if trace {
+        watched.extend(implementation.gates.iter().map(|g| {
+            let p = c.gate_output_positions[&g.output];
+            (
+                Position::new(p.0, p.1, p.2),
+                format!("internal/{}", g.output),
+            )
+        }));
+    }
+    sim.attach_observer(watched);
     let mut phases = vec![];
     for from in 0..states {
         for to in 0..states {
@@ -199,7 +215,17 @@ fn measure(source: &Netlist, c: &reda::compile::CompiledCircuit) -> serde_json::
                         )
                     })
                     .collect();
-                phases.push(json!({"internal":measured_internal,"driver":drivers.iter().map(|&p|signal(sim.world(),p)).collect::<Vec<_>>(),"lamp":lamps.iter().map(|&p|signal(sim.world(),p)).collect::<Vec<_>>(),"from":from,"to":to,"phase":phase,"address":address,"ticks":sim.current_tick()-start,"expected":source.outputs.iter().map(|s|expected[s]).collect::<Vec<_>>(),"events":sim.observations().iter().map(|e|json!({"label":e.label,"tick":e.tick-start,"value":e.value})).collect::<Vec<_>>() }));
+                phases.push(json!({"internal":measured_internal,"driver":drivers.iter().map(|&p|signal(sim.world(),p)).collect::<Vec<_>>(),"lamp":lamps.iter().map(|&p|signal(sim.world(),p)).collect::<Vec<_>>(),"from":from,"to":to,"phase":phase,"address":address,"ticks":sim.current_tick()-start,"expected":source.outputs.iter().map(|s|expected[s]).collect::<Vec<_>>(),"events":sim.observations().iter().filter(|e|!e.label.starts_with("internal/")).map(|e|json!({"label":e.label,"tick":e.tick-start,"value":e.value})).collect::<Vec<_>>() }));
+                if trace {
+                    phases.last_mut().unwrap()["internal_events"] = json!(sim
+                        .observations()
+                        .iter()
+                        .filter_map(|e| e
+                            .label
+                            .strip_prefix("internal/")
+                            .map(|name| json!({"signal":name,"tick":e.tick-start,"value":e.value})))
+                        .collect::<Vec<_>>());
+                }
             }
         }
     }
@@ -222,7 +248,12 @@ fn measure(source: &Netlist, c: &reda::compile::CompiledCircuit) -> serde_json::
             .map(|g| json!({"output":g.output,"inputs":g.inputs,"kind":g.kind.wire_name()}))
             .collect::<Vec<_>>()
     };
-    json!({"source_gates":gates(source),"implemented_inputs":implementation.inputs,"implemented_gates":gates(implementation),"strict_certified":c.physical_rewrite().is_some(),"exact_world_fingerprint":exact,"phases":phases,"fingerprint":reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&c.world)})
+    let mut result = json!({"source_gates":gates(source),"implemented_inputs":implementation.inputs,"implemented_gates":gates(implementation),"strict_certified":c.physical_rewrite().is_some(),"exact_world_fingerprint":exact,"phases":phases,"fingerprint":reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&c.world)});
+    if trace {
+        result["gate_positions"] = json!(c.gate_output_positions);
+        result["implemented_outputs"] = json!(implementation.outputs);
+    }
+    result
 }
 
 fn main() {
@@ -252,24 +283,43 @@ fn main() {
     );
     let count = args.get(3).map_or(2, |s| s.parse::<usize>().unwrap());
     assert!(count <= 1 << source.outputs.len());
+    let trace = args.iter().any(|a| a == "--trace");
     for index in 0..=count {
         let polarity = if index == 0 { None } else { Some(index - 1) };
-        let implementation = polarity.map_or_else(|| source.clone(), |p| candidate(&source, p));
+        let mut implementation = polarity.map_or_else(
+            || source.clone(),
+            |p| candidate(&source, p, args.iter().any(|a| a == "--fused-reductions")),
+        );
+        if polarity.is_some() && args.iter().any(|a| a == "--prune-unused") {
+            let mut live: HashSet<_> = implementation.outputs.iter().cloned().collect();
+            for i in implementation
+                .combinational_order()
+                .unwrap()
+                .into_iter()
+                .rev()
+            {
+                let g = &implementation.gates[i];
+                if live.contains(&g.output) {
+                    live.extend(g.inputs.iter().cloned());
+                }
+            }
+            implementation.gates.retain(|g| live.contains(&g.output));
+        }
         let result = (|| -> Result<_, String> {
             let raw =
                 compile_without_rewrite(&implementation).map_err(|e| format!("compile: {e:?}"))?;
             if index == 0 && args.iter().any(|a| a == "--control") {
-                return Ok(measure(&source, &raw));
+                return Ok(measure(&source, &raw, trace));
             }
             if index == 0 && args.iter().any(|a| a == "--flat-refresh") {
                 let c = reda::compile::selection::compile_flat_refresh_candidate(&source)
                     .map_err(|e| format!("strict flat draft: {e:?}"))?;
-                return Ok(measure(&source, &c));
+                return Ok(measure(&source, &c, trace));
             }
             if index == 0 && args.iter().any(|a| a == "--default") {
                 let c = reda::compile::compile(&source)
                     .map_err(|e| format!("default compile: {e:?}"))?;
-                return Ok(measure(&source, &c));
+                return Ok(measure(&source, &c, trace));
             }
             let mut adapted = LegacyCandidateAdapter::adapt(&implementation, &raw)
                 .map_err(|e| format!("manifest: {e:?}"))?;
@@ -310,6 +360,7 @@ fn main() {
             Ok(measure(
                 &source,
                 &reda::compile::CompiledCircuit::from_certified_rewrite(rewrite),
+                trace,
             ))
         })();
         println!(

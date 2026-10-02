@@ -44,6 +44,7 @@ def compare(control_row, candidate_row):
                     values[g['output']]=not value if g['kind']=='nor' else value
                     pending.remove(g)
             return values
+        previous_internal=evaluate(record['implemented_gates'],record['implemented_inputs'],0)
         previous=record['phases'][0]['expected']
         width=len(previous)
         for p in record['phases']:
@@ -52,6 +53,17 @@ def compare(control_row, candidate_row):
             internal=evaluate(record['implemented_gates'],record['implemented_inputs'],p['address'])
             assert set(p['internal'])=={g['output'] for g in record['implemented_gates']}
             assert all(value==internal[s] for s,value in p['internal'].items())
+            if 'internal_events' in p:
+                measured={s:previous_internal[s] for s in p['internal']}
+                last_tick={s:0 for s in measured}
+                for event in p['internal_events']:
+                    name=event['signal']
+                    assert name in measured
+                    assert 0<=last_tick[name]<=event['tick']<=p['ticks']
+                    assert event['value']!=measured[name]
+                    measured[name]=event['value'];last_tick[name]=event['tick']
+                assert measured==p['internal'], 'internal events do not explain the retained state'
+            previous_internal=internal
             assert p['driver']==p['lamp']==p['expected']
             assert all(0<=int(e['label'])<2*width for e in p['events'])
 
