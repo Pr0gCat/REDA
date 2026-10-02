@@ -684,6 +684,11 @@ impl Builder<'_> {
                 self.graph.note_origin(node, origin);
                 node
             }
+            RtlKind::Slice(value, lsb) => {
+                let node = self.blast_bit(value, lsb + bit);
+                self.graph.note_origin(node, origin);
+                node
+            }
             RtlKind::Const(bits) => {
                 let value = bits.get(bit as usize).copied().unwrap_or(false);
                 self.graph.constant(value, origin)

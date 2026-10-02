@@ -254,7 +254,10 @@ impl Elaborator {
         let mut assigns = Vec::new();
         for item in &module.items {
             let elaborated = match item {
-                Item::Assign(assign) => self.assign(assign),
+                Item::Assign(assign) => {
+                    assigns.extend(self.assignments(assign));
+                    continue;
+                }
                 Item::AlwaysComb(always) => self.always_comb(always),
                 Item::AlwaysFf(always) => self.always_ff(always),
                 Item::Declaration(_) => None,
@@ -327,6 +330,57 @@ impl Elaborator {
         }
     }
 
+    fn assignment_targets(&mut self, expr: &Expr) -> Option<Vec<(usize, u32, u32)>> {
+        if let ExprKind::Concat(parts) = &expr.kind {
+            let mut targets = Vec::new();
+            for part in parts {
+                targets.extend(self.assignment_targets(part)?);
+            }
+            Some(targets)
+        } else {
+            Some(vec![self.target(expr)?])
+        }
+    }
+
+    fn assignments(&mut self, assign: &Assign) -> Vec<ElabAssign> {
+        if !matches!(assign.lhs.kind, ExprKind::Concat(_)) {
+            return self.assign(assign).into_iter().collect();
+        }
+        let Some(targets) = self.assignment_targets(&assign.lhs) else {
+            return Vec::new();
+        };
+        let Some(value) = self.expr(&assign.rhs) else {
+            return Vec::new();
+        };
+        let width = targets.iter().try_fold(0u32, |sum, t| sum.checked_add(t.2));
+        if width != Some(value.width) {
+            self.fail(assign.span, "assignment width mismatch: concatenated targets must exactly match the value width");
+            return Vec::new();
+        }
+        let mut offset = value.width;
+        targets
+            .into_iter()
+            .map(|(signal, lsb, width)| {
+                offset -= width;
+                let elab = self.node(assign.id, ElabKind::Assign, width);
+                ElabAssign {
+                    elab,
+                    span: assign.span,
+                    signal,
+                    lsb,
+                    width,
+                    clock: None,
+                    value: RtlExpr {
+                        kind: RtlKind::Slice(Box::new(value.clone()), offset),
+                        width,
+                        elab,
+                        synthetic: Some(SyntheticOrigin::Passthrough),
+                    },
+                }
+            })
+            .collect()
+    }
+
     fn assign(&mut self, assign: &Assign) -> Option<ElabAssign> {
         let (signal, lsb, width) = self.target(&assign.lhs)?;
         let value = self.expr(&assign.rhs)?;
@@ -353,13 +407,28 @@ impl Elaborator {
         })
     }
 
-    /// Lower the deliberately narrow Milestone 2 procedural form into the
-    /// same single-assignment RTL used by continuous assignments.
+    /// Lower a complete blocking assignment or case into continuous RTL.
     fn always_comb(&mut self, always: &AlwaysComb) -> Option<ElabAssign> {
+        if let [Stmt::BlockingAssign(assign)] = always.body.as_slice() {
+            let (signal, _, _) = self.target(&assign.lhs)?;
+            let name = self.signals[signal].name.clone();
+            if let Some(span) = referenced_signal_span(&assign.rhs, &name) {
+                self.unsupported(span, format!(
+                    "unsupported: read-before-write in combinational block; `{name}` would infer storage",
+                ));
+                return None;
+            }
+            return self.assign(&Assign {
+                id: assign.id,
+                span: assign.span,
+                lhs: assign.lhs.clone(),
+                rhs: assign.rhs.clone(),
+            });
+        }
         let [Stmt::Case(case)] = always.body.as_slice() else {
             self.fail(
                 always.span,
-                "`always_comb` must contain exactly one `case` statement in this milestone",
+                "combinational block must contain exactly one blocking assignment or `case` statement",
             );
             return None;
         };

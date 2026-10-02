@@ -60,3 +60,9 @@
 首次取得完整 Native seven segment 的實際預設改善：總穩定時間8823→8671、輸出毛刺切換85→83、錯值脈衝1425→1385；較大61-gate 16×7 ROM亦改善15745→15731、157→153、4531→4467。setup/target全部28項不退步，512階段內部與公开真值通過，ROM另核對獨立字表。每組大電路三次bytes相同，4096小家族三次保持原成果。依穩定順序逐一提案、認證、完整qualification、接受後組合；default預算256，無名稱或座標白名單。199單次提案中192雖嚴格認證但內部真值失敗，均拒絕，證明不能省略runtime驗證。詳見[有效刷新縮減](generator-qualified-refresh-reduction-2026-10-02.md)。
 
 推進第1/2/3項但未全部完成：一般API budget、共享decoder、更多ROM/Mux與更大輸入規模仍需處理，其餘循序／HDL／無Yosys／真實Minecraft／全專案收斂繼續保持未完成。
+
+## Legacy HDL 原生支援與路由根因
+
+原生支援 `reg`、wildcard legacy `always`、現有正緣／enable clocked forms，以及連續賦值的串接／巢狀／slice targets。標準 `seven_segment.v` 現在可在 native/auto 且 Python 不存在時完成實體生成；三次完整512階段波形與已封存有效優化結果完全相同，未退步。25項compiler、12項DFF來源語意、24項frontend unit、2項DFF實體、6項CLI selection通過，WASM library檢查通過。詳見[原生legacy HDL](native-legacy-hdl-2026-10-02.md)。第5/6項有實際進展但尚未完成，parameter／instance／inout與更廣循序範圍仍待實作。
+
+第8項另重現路由根因：typed request 的arrival balancing runway使一般／unary末端與frozen reference不同，ring charge及pinned fixture前置幾何因此失配。原始期待、simulator與verifier均保留，已封存[路由證據](reda-completion-routing-audit-2026-10-02.json)。需分開legacy compatibility與經完整qualification的balancing候選後再驗收，不以更新快照宣告修好。八項總目標繼續active。

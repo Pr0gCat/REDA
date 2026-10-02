@@ -277,7 +277,8 @@ impl<'n> Parser<'n> {
                 Some(NetType::Logic)
             }
             TokenKind::Keyword(Keyword::Reg) => {
-                return Err(self.unsupported_here("`logic`: legacy `reg` is not supported"));
+                self.advance();
+                Some(NetType::Logic)
             }
             _ => None,
         })
@@ -312,7 +313,9 @@ impl<'n> Parser<'n> {
                 items.push(Item::Assign(Assign { id, span, lhs, rhs }));
                 Ok(())
             }
-            TokenKind::Keyword(Keyword::Wire) | TokenKind::Keyword(Keyword::Logic) => {
+            TokenKind::Keyword(Keyword::Wire)
+            | TokenKind::Keyword(Keyword::Logic)
+            | TokenKind::Keyword(Keyword::Reg) => {
                 let start = self.peek().span;
                 self.net_type()?.expect("checked above");
                 let range = self.range()?;
@@ -333,28 +336,29 @@ impl<'n> Parser<'n> {
                 self.expect_punct(Punct::Semicolon)?;
                 Ok(())
             }
-            TokenKind::Keyword(Keyword::Reg) => {
-                Err(self.unsupported_here("`logic`: legacy `reg` is not supported"))
-            }
-            TokenKind::Keyword(Keyword::Always) => Err(self.unsupported_here(
-                "`always_comb` or `always_ff`: legacy `always` is not supported",
-            )),
-            TokenKind::Keyword(Keyword::AlwaysComb) => {
-                let start = self.advance().span;
-                self.expect_keyword(Keyword::Begin)?;
-                let mut body = Vec::new();
-                while !self.is_keyword(Keyword::End) {
-                    if self.at_eof() {
-                        return Err(self.error_here("`end`"));
-                    }
-                    body.push(self.statement()?);
+            TokenKind::Keyword(Keyword::Always) => {
+                let wildcard = matches!(self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                    Some(TokenKind::Punct(Punct::Star)))
+                    || (matches!(self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                        Some(TokenKind::Punct(Punct::LParen)))
+                        && matches!(self.tokens.get(self.pos + 3).map(|t| &t.kind),
+                            Some(TokenKind::Punct(Punct::Star))));
+                if wildcard {
+                    self.always_comb(items, true)
+                } else if matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Punct(Punct::At)))
+                    && matches!(self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                        Some(TokenKind::Punct(Punct::LParen)))
+                    && matches!(self.tokens.get(self.pos + 3).map(|t| &t.kind),
+                        Some(TokenKind::Keyword(Keyword::Posedge | Keyword::Negedge))) {
+                    self.always_ff(items)
+                } else {
+                    Err(self.unsupported_here(
+                        "legacy `always` requires wildcard sensitivity or a parenthesized clock edge",
+                    ))
                 }
-                let end = self.expect_keyword(Keyword::End)?;
-                let span = start.join(end);
-                let id = self.node(SourceKind::AlwaysComb, span, None);
-                items.push(Item::AlwaysComb(AlwaysComb { id, span, body }));
-                Ok(())
             }
+            TokenKind::Keyword(Keyword::AlwaysComb) => self.always_comb(items, false),
             TokenKind::Keyword(Keyword::AlwaysFf) => {
                 self.always_ff(items)
             }
@@ -372,8 +376,53 @@ impl<'n> Parser<'n> {
         }
     }
 
+    fn always_comb(&mut self, items: &mut Vec<Item>, legacy: bool) -> Result<(), Diagnostic> {
+        let start = self.advance().span;
+        if legacy {
+            self.expect_punct(Punct::At)?;
+            if !self.eat_punct(Punct::Star) {
+                self.expect_punct(Punct::LParen)?;
+                self.expect_punct(Punct::Star)?;
+                self.expect_punct(Punct::RParen)?;
+            }
+        }
+        let mut body = Vec::new();
+        let block = if legacy {
+            self.eat_keyword(Keyword::Begin)
+        } else {
+            self.expect_keyword(Keyword::Begin)?;
+            true
+        };
+        let end = if block {
+            while !self.is_keyword(Keyword::End) {
+                if self.at_eof() {
+                    return Err(self.error_here("`end`"));
+                }
+                body.push(self.statement()?);
+            }
+            self.expect_keyword(Keyword::End)?
+        } else {
+            let statement = self.statement()?;
+            let end = match &statement {
+                Stmt::BlockingAssign(a) => a.span,
+                Stmt::Case(c) => c.span,
+                _ => unreachable!("statement only parses blocking assignments and case"),
+            };
+            body.push(statement);
+            end
+        };
+        let span = start.join(end);
+        let id = self.node(SourceKind::AlwaysComb, span, None);
+        items.push(Item::AlwaysComb(AlwaysComb { id, span, body }));
+        Ok(())
+    }
+
     fn always_ff(&mut self, items: &mut Vec<Item>) -> Result<(), Diagnostic> {
-        let start = self.expect_keyword(Keyword::AlwaysFf)?;
+        let start = if self.is_keyword(Keyword::AlwaysFf) {
+            self.advance().span
+        } else {
+            self.expect_keyword(Keyword::Always)?
+        };
         self.expect_punct(Punct::At)?;
         self.expect_punct(Punct::LParen)?;
         if self.is_keyword(Keyword::Negedge) {
@@ -503,10 +552,16 @@ impl<'n> Parser<'n> {
 
     fn statement(&mut self) -> Result<Stmt, Diagnostic> {
         match self.peek().kind {
+            TokenKind::Keyword(Keyword::If) => Err(self.unsupported_here(
+                "conditional combinational statements are not supported; use `case` or a ternary expression",
+            )),
             TokenKind::Keyword(Keyword::Case) => Ok(Stmt::Case(self.case_statement()?)),
             TokenKind::Ident(_) => {
                 let start = self.peek().span;
                 let lhs = self.expr(0)?;
+                if self.is_punct(Punct::LessEqual) {
+                    return Err(self.unsupported_here("combinational blocks require blocking assignments"));
+                }
                 self.expect_punct(Punct::Assign)?;
                 let rhs = self.expr(0)?;
                 let end = self.expect_punct(Punct::Semicolon)?;

@@ -85,3 +85,19 @@ fn native_and_yosys_dffs_match_physical_state_from_power_on() {
         check_trace(netlist, outputs, &format!("yosys-{top}"));
     }
 }
+
+#[test]
+fn legacy_always_and_reg_reach_physical_state_from_power_on() {
+    use reda::frontend::{synthesize_selected, FrontendMode};
+    for mode in [FrontendMode::Native, FrontendMode::Auto] {
+        for (top, text) in [
+            ("dff_example", include_str!("fixtures/dff.v")),
+            ("enabled", "module enabled(input d, clk, en, output reg q); always @(posedge clk) begin if (en) q <= d; end endmodule"),
+        ] {
+            let result = synthesize_selected(SourceInput { name: "legacy.v", text }, top, mode).unwrap();
+            assert_eq!(result.frontend, FrontendMode::Native);
+            assert!(result.fallback_reason.is_none());
+            check_trace(result.netlist, result.outputs, &format!("legacy-{top}-{mode:?}"));
+        }
+    }
+}

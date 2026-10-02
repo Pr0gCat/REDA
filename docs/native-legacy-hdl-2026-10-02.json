@@ -1,0 +1,111 @@
+{
+  "source": "tests/fixtures/seven_segment.v",
+  "top": "bcd_seven_segment",
+  "frontend": "native",
+  "runs": 3,
+  "sha256": "58e3f73ba8adfab7c6a38bf939dc7706c7e9f4fa73b5ced93d4f46cde624edd4",
+  "bytes_identical_artifact": "generator-qualified-refresh-reduction-2026-10-02-native.jsonl.gz",
+  "independent_retained_audit": {
+    "polarity": null,
+    "certified": true,
+    "control_certified": false,
+    "setup": {
+      "control": {
+        "worst_settle_ticks": 44,
+        "total_settle_ticks": 8786,
+        "driver_glitches": 269,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 40,
+        "driver_glitch_transitions": 105,
+        "lamp_glitches": 184,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 44,
+        "lamp_glitch_transitions": 85,
+        "driver_total_pulse_ticks": 1520,
+        "driver_worst_pulse_ticks": 20,
+        "lamp_total_pulse_ticks": 1425,
+        "lamp_worst_pulse_ticks": 23
+      },
+      "candidate": {
+        "worst_settle_ticks": 44,
+        "total_settle_ticks": 8636,
+        "driver_glitches": 262,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 40,
+        "driver_glitch_transitions": 102,
+        "lamp_glitches": 181,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 44,
+        "lamp_glitch_transitions": 83,
+        "driver_total_pulse_ticks": 1450,
+        "driver_worst_pulse_ticks": 20,
+        "lamp_total_pulse_ticks": 1385,
+        "lamp_worst_pulse_ticks": 23
+      },
+      "regressed": [],
+      "improved": [
+        "driver_glitch_transitions",
+        "driver_glitches",
+        "driver_total_pulse_ticks",
+        "lamp_glitch_transitions",
+        "lamp_glitches",
+        "lamp_total_pulse_ticks",
+        "total_settle_ticks"
+      ]
+    },
+    "target": {
+      "control": {
+        "worst_settle_ticks": 44,
+        "total_settle_ticks": 8823,
+        "driver_glitches": 269,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 40,
+        "driver_glitch_transitions": 105,
+        "lamp_glitches": 184,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 44,
+        "lamp_glitch_transitions": 85,
+        "driver_total_pulse_ticks": 1520,
+        "driver_worst_pulse_ticks": 20,
+        "lamp_total_pulse_ticks": 1425,
+        "lamp_worst_pulse_ticks": 23
+      },
+      "candidate": {
+        "worst_settle_ticks": 44,
+        "total_settle_ticks": 8671,
+        "driver_glitches": 262,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 40,
+        "driver_glitch_transitions": 102,
+        "lamp_glitches": 181,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 44,
+        "lamp_glitch_transitions": 83,
+        "driver_total_pulse_ticks": 1450,
+        "driver_worst_pulse_ticks": 20,
+        "lamp_total_pulse_ticks": 1385,
+        "lamp_worst_pulse_ticks": 23
+      },
+      "regressed": [],
+      "improved": [
+        "driver_glitch_transitions",
+        "driver_glitches",
+        "driver_total_pulse_ticks",
+        "lamp_glitch_transitions",
+        "lamp_glitches",
+        "lamp_total_pulse_ticks",
+        "total_settle_ticks"
+      ]
+    },
+    "accepted": true
+  },
+  "no_yosys_cli": "native and auto tested with REDA_PYTHON=/definitely/missing/python for legacy combinational, DFF and full decoder",
+  "validation": {
+    "native_compiler": 25,
+    "dff_source": 12,
+    "frontend_unit": 24,
+    "physical_dff": 2,
+    "selection_cli": 6,
+    "wasm32_library": "passed"
+  }
+}

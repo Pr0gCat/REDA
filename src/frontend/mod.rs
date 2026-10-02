@@ -55,11 +55,10 @@
 //! [`Netlist`] -- plus a [`DebugDatabase`] sidecar recording where every
 //! gate came from.
 //!
-//! The two frontends coexist on purpose. Yosys remains the production path
-//! while the generator is changing; this one is proven against it, fixture by
-//! fixture, and takes over only at the cutover the plan describes
-//! (`docs/native-wasm-verilog-compiler-plan.md`). Nothing in this module
-//! changes [`synthesize_verilog`] or any of its callers.
+//! Production HDL selection uses the native compiler first. Explicitly
+//! unsupported constructs can fall back to Yosys in auto mode; native mode
+//! never falls back, and syntax or semantic errors stay errors. Yosys can
+//! also be requested as an independent oracle. See [`synthesize_selected`].
 
 use std::collections::HashMap;
 use std::fmt;

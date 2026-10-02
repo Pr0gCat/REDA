@@ -1,0 +1,87 @@
+{
+  "observed_commit": "9096de4",
+  "status": "unresolved; no thresholds or verifier rules changed",
+  "root_cause_evidence": {
+    "selected_terminal_policy": "typed_legacy_request_parts unconditionally applies DirectedDustRunway to arrival_balance_gates; legacy_lay_net_reference selects ordinary automatic endpoints",
+    "unary_eligibility": "equal_depth is true for one input, so single-input NOR sinks can receive the balancing runway even though their inputs cannot be skewed",
+    "ring_fixture": {
+      "typed_charged": [
+        [
+          13,
+          2,
+          1
+        ],
+        [
+          12,
+          2,
+          1
+        ],
+        [
+          11,
+          2,
+          1
+        ]
+      ],
+      "frozen_charged": [
+        [
+          20,
+          2,
+          1
+        ],
+        [
+          19,
+          2,
+          1
+        ],
+        [
+          18,
+          2,
+          1
+        ],
+        [
+          17,
+          2,
+          1
+        ],
+        [
+          16,
+          2,
+          1
+        ],
+        [
+          15,
+          2,
+          1
+        ],
+        [
+          14,
+          2,
+          1
+        ],
+        [
+          13,
+          2,
+          1
+        ],
+        [
+          12,
+          2,
+          1
+        ]
+      ],
+      "both_refuse_ring": true
+    },
+    "pinned_fixture": "expected g1 repeater into shared support is no longer present; fails fixture-premise assertion before its truth vectors",
+    "stone_characterization": {
+      "current_clashes": 1,
+      "historical_expected": 3,
+      "current_site": [
+        58,
+        1,
+        98
+      ],
+      "route": "g11"
+    }
+  },
+  "next_action": "Separate legacy routing compatibility from explicitly qualified balancing candidates; compare full retained metrics and frozen accepted worlds before changing shipping generation. Do not pin updated defect counts or loosen byte-exact tests."
+}

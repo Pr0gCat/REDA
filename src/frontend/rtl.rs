@@ -41,6 +41,8 @@ pub enum RtlKind {
     /// Concatenation, **LSB-first**: `parts[0]` supplies the low bits.
     /// The parser's source order is the reverse of this.
     Concat(Vec<RtlExpr>),
+    /// Assignment decomposition selects a validated range of a value.
+    Slice(Box<RtlExpr>, u32),
     Not(Box<RtlExpr>),
     Binary(RtlBinaryOp, Box<RtlExpr>, Box<RtlExpr>),
     /// OR-reduce to one bit -- what `!a`, `a && b`, `a || b`, and a ternary

@@ -279,3 +279,47 @@ fn rejects_every_enable_form_outside_the_slice() {
         "feedback",
     );
 }
+
+#[test]
+fn legacy_clocked_blocks_follow_an_independent_state_machine() {
+    for body in [
+        "q <= d;",
+        "begin q <= d; end",
+        "if (en) q <= d;",
+        "begin if (en) q <= d; end",
+    ] {
+        let enabled = body.contains("if");
+        let text = format!(
+            "module dff(input d, clk, en, output reg q); always @(posedge clk) {body} endmodule"
+        );
+        let artifact = compile(&text);
+        let mut evaluator = Evaluator::new(&artifact.netlist).unwrap();
+        let q = artifact.output_map()["q"].clone();
+        let (mut expected, mut previous_clock) = (false, false);
+        assert!(
+            !evaluator
+                .evaluate(&enable_inputs(false, false, false))
+                .unwrap()[&q]
+        );
+        for (data, clock, enable) in [
+            (true, false, true),
+            (true, true, true),
+            (false, true, false),
+            (false, false, false),
+            (false, true, false),
+            (false, false, true),
+            (false, true, true),
+            (true, true, true),
+        ] {
+            if clock && !previous_clock && (!enabled || enable) {
+                expected = data;
+            }
+            previous_clock = clock;
+            assert_eq!(
+                evaluator.step(&enable_inputs(data, clock, enable)).unwrap()[&q],
+                expected,
+                "{body}"
+            );
+        }
+    }
+}

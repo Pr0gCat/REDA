@@ -30,14 +30,20 @@ fn native_auto_and_forced_yosys_compile_same_function() {
 
 #[test]
 fn explicit_unsupported_falls_back_but_native_rejects() {
-    let source = SourceInput {
-        name: "legacy.v",
-        text: "module m(input a, output reg y); always @* y = a; endmodule",
-    };
-    assert!(synthesize_selected(source.clone(), "m", FrontendMode::Native).is_err());
-    let result = synthesize_selected(source, "m", FrontendMode::Auto).unwrap();
-    assert_eq!(result.frontend, FrontendMode::Yosys);
-    assert!(result.fallback_reason.unwrap().contains("legacy.v:1:"));
+    for text in [
+        "module m #(parameter W=1)(input a, output y); assign y = a; endmodule",
+        "module m(input a, b, output reg y); always @(a or b) y = a & b; endmodule",
+        "module m(input a, output reg y); always @* y <= a; endmodule",
+    ] {
+        let source = SourceInput {
+            name: "legacy.v",
+            text,
+        };
+        assert!(synthesize_selected(source.clone(), "m", FrontendMode::Native).is_err());
+        let result = synthesize_selected(source, "m", FrontendMode::Auto).unwrap();
+        assert_eq!(result.frontend, FrontendMode::Yosys);
+        assert!(result.fallback_reason.unwrap().contains("legacy.v:1:"));
+    }
 }
 
 #[test]
@@ -110,8 +116,14 @@ fn build_circuit_verification_failure_does_not_retry_frontend() {
 
 #[test]
 fn cli_exercises_real_yosys_fallback_and_forced_mode() {
+    let path = std::env::temp_dir().join(format!("reda-fallback-{}.v", std::process::id()));
+    std::fs::write(
+        &path,
+        "module m #(parameter W=1)(input a, output y); assign y = a; endmodule",
+    )
+    .unwrap();
     for args in [
-        vec!["verilog:seven_segment", "--frontend", "auto"],
+        vec!["verilog", path.to_str().unwrap(), "m", "--frontend", "auto"],
         vec!["verilog:and4", "--frontend", "yosys"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_mc_dump"))
@@ -121,9 +133,33 @@ fn cli_exercises_real_yosys_fallback_and_forced_mode() {
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "{error}");
         assert!(error.contains("frontend: yosys"), "{error}");
-        assert_eq!(
-            error.contains("fallback reason:"),
-            args[0] == "verilog:seven_segment"
-        );
+        assert_eq!(error.contains("fallback reason:"), args[0] == "verilog");
     }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn legacy_comb_and_dff_cli_run_without_a_yosys_interpreter() {
+    let path = std::env::temp_dir().join(format!("reda-legacy-{}.v", std::process::id()));
+    for text in [
+        "module m(input a, b, output reg y); always @* y = a & b; endmodule".to_string(),
+        "module m(input d, clk, output reg q); always @(posedge clk) q <= d; endmodule".to_string(),
+        include_str!("fixtures/seven_segment.v").replace("module bcd_seven_segment", "module m"),
+    ] {
+        std::fs::write(&path, text).unwrap();
+        for mode in ["native", "auto"] {
+            let result = Command::new(env!("CARGO_BIN_EXE_mc_dump"))
+                .args(["verilog", path.to_str().unwrap(), "m", "--frontend", mode])
+                .env("REDA_PYTHON", "/definitely/missing/python")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(String::from_utf8_lossy(&result.stderr).contains("frontend: native"));
+        }
+    }
+    std::fs::remove_file(path).unwrap();
 }

@@ -615,9 +615,9 @@ fn the_rejection_matrix_has_stable_messages_and_spans() {
         ),
         (
             "module m(input logic a, output logic y);\n  reg z;\n  assign y = a;\nendmodule\n",
-            "reg",
+            "reg z",
             0,
-            "legacy `reg` is not supported",
+            "`z` has no driver",
         ),
         (
             "module m(input logic a, output logic y);\n  assign y = a;\n  assign y = ~a;\nendmodule\n",
@@ -860,5 +860,123 @@ fn a_vector_port_is_one_netlist_signal_per_bit() {
         let expected = high & low;
         assert_eq!(outputs["y[0]"], expected & 1 == 1, "row {row:04b}");
         assert_eq!(outputs["y[1]"], expected & 2 == 2, "row {row:04b}");
+    }
+}
+
+#[test]
+fn legacy_reg_declarations_and_wildcard_blocks_have_independent_truth() {
+    for body in [
+        "always @* y = a & b;",
+        "always @(*) y = a & b;",
+        "always @* begin y = a & b; end",
+        "always @(*) begin y = a & b; end",
+    ] {
+        let text = format!("module m(input a, b, output reg y); reg unused; always @* unused = b; {body} endmodule");
+        let artifact = compile(&text, "m");
+        let again = compile(&text, "m");
+        assert_eq!(artifact.netlist, again.netlist);
+        assert_eq!(artifact.debug.to_json(), again.debug.to_json());
+        let evaluator = Evaluator::new(&artifact.netlist).unwrap();
+        for mask in 0..4 {
+            let inputs = [("a".into(), mask & 1 != 0), ("b".into(), mask & 2 != 0)]
+                .into_iter()
+                .collect();
+            assert_eq!(
+                evaluator.evaluate(&inputs).unwrap()[&artifact.output_map()["y"]],
+                mask == 3
+            );
+        }
+    }
+    // The same legacy declaration now works when it has a driver.
+    // The original undriven source remains in the negative matrix.
+    let artifact = compile(
+        "module m(input logic a, output logic y); reg z; always @* z = a; assign y = z; endmodule",
+        "m",
+    );
+    for value in [false, true] {
+        assert_eq!(
+            Evaluator::new(&artifact.netlist)
+                .unwrap()
+                .evaluate(&[("a".into(), value)].into_iter().collect())
+                .unwrap()[&artifact.output_map()["y"]],
+            value
+        );
+    }
+}
+
+#[test]
+fn legacy_decoder_keeps_all_outputs_and_literal_truth() {
+    let text = include_str!("fixtures/seven_segment_legacy.v");
+    let artifact = compile(text, "seven_segment");
+    let modern = compile(include_str!("fixtures/seven_segment.sv"), "seven_segment");
+    assert_eq!(artifact.netlist, modern.netlist);
+    assert_eq!(artifact.output_map(), modern.output_map());
+    let concatenated = compile(
+        include_str!("fixtures/seven_segment.v"),
+        "bcd_seven_segment",
+    );
+    assert_eq!(concatenated.netlist, modern.netlist);
+    assert_eq!(concatenated.output_map(), modern.output_map());
+    assert!(concatenated.debug.matches(&concatenated.netlist));
+    let evaluator = Evaluator::new(&artifact.netlist).unwrap();
+    for address in 0..16 {
+        let inputs = (0..4)
+            .map(|bit| (format!("d{bit}"), address & (1 << bit) != 0))
+            .collect();
+        let values = evaluator.evaluate(&inputs).unwrap();
+        for (bit, name) in ["a", "b", "c", "d", "e", "f", "g"].iter().enumerate() {
+            assert_eq!(
+                values[&artifact.output_map()[*name]],
+                address < 10 && reda::circuits::seven_segment::TRUTH_TABLE[address][bit] != 0
+            );
+        }
+    }
+}
+
+#[test]
+fn concatenated_targets_preserve_order_slices_and_driver_validation() {
+    let artifact = compile("module m(input [3:0] a, output [1:0] hi, lo); assign {hi, {lo[1], lo[0]}} = a ^ 4'b1010; endmodule", "m");
+    let evaluator = Evaluator::new(&artifact.netlist).unwrap();
+    for address in 0..16 {
+        let inputs = (0..4)
+            .map(|bit| (format!("a[{bit}]"), address & (1 << bit) != 0))
+            .collect();
+        let values = evaluator.evaluate(&inputs).unwrap();
+        for bit in 0..4 {
+            let name = format!("{}[{}]", if bit < 2 { "lo" } else { "hi" }, bit % 2);
+            assert_eq!(
+                values[&artifact.output_map()[&name]],
+                (address ^ 10) & (1 << bit) != 0
+            );
+        }
+    }
+    for (text, expected) in [
+        (
+            "module m(input [1:0] a, output y); assign {y,y} = a; endmodule",
+            "driven by more than one",
+        ),
+        (
+            "module m(input a, output y); assign {a,y} = 2'b00; endmodule",
+            "cannot be assigned",
+        ),
+        (
+            "module m(input [2:0] a, output y,z); assign {y,z} = a; endmodule",
+            "width mismatch",
+        ),
+        (
+            "module m(input [1:0] a, output y,z); assign {y,z[1]} = a; endmodule",
+            "out of range",
+        ),
+        (
+            "module m(input a, output reg y); always @* y = y | a; endmodule",
+            "read-before-write",
+        ),
+    ] {
+        assert!(
+            errors(text, "m")
+                .iter()
+                .any(|d| d.message.contains(expected)),
+            "{text}: {expected}"
+        );
     }
 }
