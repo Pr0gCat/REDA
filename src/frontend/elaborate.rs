@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::ast::{
-    AlwaysComb, AlwaysFf, Assign, BinaryOp, CaseStatement, ConstExpr, ConstKind, ConstOp, Expr,
+    AlwaysComb, AlwaysFf, Assign, BinaryOp, CaseStatement, ClockEdge, ConstExpr, ConstKind, ConstOp, Expr,
     ExprKind, IfAssign, Instance, Item, Module, NonblockingAssign, Parameter, PortDirection, Range,
     SourceNodeId, SourceSet, Stmt, UnaryOp,
 };
@@ -89,9 +89,15 @@ pub struct ElabAssign {
     pub lsb: u32,
     pub width: u32,
     pub value: RtlExpr,
-    /// `Some(signal)` for a positive-edge DFF, otherwise a combinational
+    /// `Some(clock)` for a DFF, otherwise a combinational
     /// assignment. The clock signal is always a scalar top-level input.
-    pub clock: Option<usize>,
+    pub clock: Option<Clock>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Clock {
+    pub signal: usize,
+    pub edge: ClockEdge,
 }
 
 /// The elaborated top module.
@@ -585,6 +591,7 @@ impl Elaborator {
         let mut clocks = HashMap::new();
         for assignment in &child.assigns {
             if let Some(clock) = assignment.clock {
+                let clock = clock.signal;
                 if clocks.contains_key(&clock) {
                     continue;
                 }
@@ -626,7 +633,10 @@ impl Elaborator {
         for assignment in &mut child.assigns {
             assignment.elab.0 += node_offset;
             assignment.signal += signal_offset;
-            assignment.clock = assignment.clock.map(|clock| clocks[&clock]);
+            assignment.clock = assignment.clock.map(|clock| Clock {
+                signal: clocks[&clock.signal],
+                ..clock
+            });
             relocate(&mut assignment.value, signal_offset, node_offset);
         }
         let mut assigns = child.assigns;
@@ -1187,7 +1197,7 @@ impl Elaborator {
             lsb,
             width,
             value,
-            clock: Some(clock),
+            clock: Some(Clock { signal: clock, edge: always.edge }),
         })
     }
 

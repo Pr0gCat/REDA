@@ -98,21 +98,38 @@ impl Evaluator {
             .map(|(index, _)| index)
             .collect();
         let count = registers.len();
-        Ok(Evaluator {
+        let mut evaluator = Evaluator {
             netlist: netlist.clone(),
             order,
             registers,
             q: vec![false; count],
             previous_clock: vec![false; count],
-        })
+        };
+        evaluator.initialize_clocks();
+        Ok(evaluator)
     }
 
-    /// Reset every register to zero and forget every clock level.
+    /// Reset registers to zero and restore clock levels for zero primary inputs.
     pub fn reset(&mut self) {
         self.q.iter_mut().for_each(|value| *value = false);
-        self.previous_clock
-            .iter_mut()
-            .for_each(|value| *value = false);
+        self.initialize_clocks();
+    }
+
+    fn initialize_clocks(&mut self) {
+        let inputs = self
+            .netlist
+            .inputs
+            .iter()
+            .map(|name| (name.clone(), false))
+            .collect();
+        let values = self
+            .settle(&inputs)
+            .expect("a validated netlist settles from zero state");
+        self.previous_clock = self
+            .registers
+            .iter()
+            .map(|&index| values[&self.netlist.gates[index].inputs[1]])
+            .collect();
     }
 
     /// The current value of each register's `Q`, in netlist gate order.

@@ -34,12 +34,12 @@ use super::FrontendError;
 
 /// Yosys's own input pin names for each simple cell type this frontend
 /// accepts, in declaration order (see Yosys's `techlibs/common/simcells.v`).
-/// Most cells write `Y`; the positive-edge DFF is stateful and writes `Q`.
+/// Most cells write `Y`; both DFF polarities are stateful and write `Q`.
 ///
 /// This is a JSON-reading fact -- which key names to look up in a cell's
 /// `connections` object -- not a redstone one, so it lives here rather than
 /// in `topology`, which has no reason to know Yosys's pin names. The two
-/// tables are held to covering the same set of cell types by
+/// tables cover the same types after negative-edge clock normalization by
 /// `every_known_cell_type_has_pin_names`.
 ///
 /// Note `$_MUX_`/`$_NMUX_`: their third pin is `S`, not `C`, and the order
@@ -62,6 +62,7 @@ const CELL_PINS: &[(&str, &[&str])] = &[
     ("$_MUX_", &["A", "B", "S"]),
     ("$_NMUX_", &["A", "B", "S"]),
     ("$_DFF_P_", &["D", "C"]),
+    ("$_DFF_N_", &["D", "C"]),
 ];
 
 fn pins_for(cell_type: &str) -> Option<&'static [&'static str]> {
@@ -72,11 +73,11 @@ fn pins_for(cell_type: &str) -> Option<&'static [&'static str]> {
 }
 
 /// Yosys calls the output of its combinational simple cells `Y`, but a
-/// positive-edge DFF exposes its state output as `Q`. Keep this JSON fact at
+/// DFF exposes its state output as `Q`. Keep this JSON fact at
 /// the parser boundary rather than teaching the topology library about pins.
 fn output_pin_for(cell_type: &str) -> &'static str {
     match cell_type {
-        "$_DFF_P_" => "Q",
+        "$_DFF_P_" | "$_DFF_N_" => "Q",
         _ => "Y",
     }
 }
@@ -280,8 +281,8 @@ impl<'a> Context<'a> {
 
     /// Look `cell`'s type up in `topology::gate_kind_for_yosys_cell` and
     /// build one netlist gate of whichever `GateKind` it names -- the
-    /// boundary this reader crosses instead of matching a cell's type string
-    /// and separately knowing what to build for it. How that kind becomes
+    /// boundary this reader crosses. Negative-edge DFFs normalize to that
+    /// existing state kind plus an explicit clock inverter. How that kind becomes
     /// redstone is `compile::topology`'s decision, applied later by
     /// `compile::lowering`; nothing is realised here.
     ///
@@ -293,7 +294,11 @@ impl<'a> Context<'a> {
         cell: &CellInfo<'a>,
         reserved: Option<String>,
     ) -> Result<String, FrontendError> {
-        let Some(kind) = topology::gate_kind_for_yosys_cell(cell.cell_type) else {
+        // Normalize the negative-edge JSON cell into the existing positive-
+        // edge state cell with an explicit clock inverter at this boundary.
+        let negative_clock = cell.cell_type == "$_DFF_N_";
+        let normalized_type = if negative_clock { "$_DFF_P_" } else { cell.cell_type };
+        let Some(kind) = topology::gate_kind_for_yosys_cell(normalized_type) else {
             let known: Vec<&str> = topology::known_yosys_cell_types()
                 .map(|(name, _)| name)
                 .collect();
@@ -362,6 +367,9 @@ impl<'a> Context<'a> {
                             cell.name, cell.cell_type
                         ))
                     })?);
+                }
+                if negative_clock {
+                    inputs[1] = self.builder.not(&inputs[1]);
                 }
                 if let Some(name) = reserved {
                     Ok(self.builder.cell_named(&name, kind, &inputs))
@@ -517,7 +525,7 @@ pub(super) fn netlist_from_json(
     let mut registers: Vec<_> = ctx
         .driver_of
         .iter()
-        .filter(|(_, cell)| cell.cell_type == "$_DFF_P_")
+        .filter(|(_, cell)| matches!(cell.cell_type, "$_DFF_P_" | "$_DFF_N_"))
         .map(|(&id, _)| id)
         .collect();
     registers.sort_unstable();
@@ -627,7 +635,7 @@ mod tests {
 
     /// Both tables that key off a Yosys cell type -- `topology`'s
     /// type-to-kind map and this module's type-to-pin-names map -- have to
-    /// cover exactly the same set, or a cell would resolve to a `GateKind`
+    /// cover the same set after clock normalization, or a cell would resolve to a `GateKind`
     /// and then have no pins to read (or the reverse).
     #[test]
     fn every_known_cell_type_has_pin_names_and_vice_versa() {
@@ -650,9 +658,16 @@ mod tests {
                 assert_eq!(pins.len(), kind.arity(), "{cell_type}");
             }
         }
-        for &(cell_type, _) in CELL_PINS {
+        for &(cell_type, pins) in CELL_PINS {
+            let normalized = if cell_type == "$_DFF_N_" {
+                assert_eq!(pins, pins_for("$_DFF_P_").unwrap());
+                assert_eq!(output_pin_for(cell_type), "Q");
+                "$_DFF_P_"
+            } else {
+                cell_type
+            };
             assert!(
-                topology::gate_kind_for_yosys_cell(cell_type).is_some(),
+                topology::gate_kind_for_yosys_cell(normalized).is_some(),
                 "{cell_type} has pin names but no GateKind"
             );
         }

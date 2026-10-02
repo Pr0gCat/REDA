@@ -121,10 +121,19 @@ fn nonblocking_assign_source_node_keeps_its_statement_span() {
 
 #[test]
 fn rejects_every_form_outside_the_feed_forward_slice() {
-    rejected(
-        &DFF.replace("posedge", "negedge"),
-        "only supports `posedge`",
-    );
+    let negative = compile(&DFF.replace("posedge", "negedge"));
+    let q = negative.output_map()["q"].clone();
+    let mut evaluator = Evaluator::new(&negative.netlist).unwrap();
+    let mut state = false;
+    let mut previous = false;
+    for (data, clock) in [(true, false), (true, true), (false, true), (false, false),
+                           (true, false), (true, true), (true, false)] {
+        if previous && !clock { state = data; }
+        previous = clock;
+        assert_eq!(evaluator.step(&inputs(data, clock)).unwrap()[&q], state);
+    }
+    evaluator.reset();
+    assert!(!evaluator.step(&inputs(true, false)).unwrap()[&q]);
     rejected(
         &DFF.replace("posedge clk", "posedge clk or posedge reset"),
         "multiple clocks",

@@ -172,7 +172,14 @@ pub struct AlwaysFf {
     pub id: SourceNodeId,
     pub span: Span,
     pub clock: Expr,
+    pub edge: ClockEdge,
     pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockEdge {
+    Posedge,
+    Negedge,
 }
 
 #[derive(Debug, Clone)]

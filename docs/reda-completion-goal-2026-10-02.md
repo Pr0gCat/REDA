@@ -115,3 +115,7 @@ world partition呼叫端改用既有equivalence模式，同時驗證獨立原始
 Native／actual Yosys 的兩位元 counter、三態 FSM、state-dependent enable 各256階段，三次完整bytes一致；loaded litematic 公開輸出、全部實作閘、五個隱藏DFF元件與lock檢查通過。Python 獨立literal state oracle重播全部事件，七類篡改拒絕。43項來源／frontend selection、既有DFF／multiclock／新feedback實體4項、三fixture無Python native/auto CLI與WASM通過。4096家族、Native／Yosys七段與16×7 ROM各完整重跑一次，所有凍結bytes保持。root仍1164通過／17失敗／71忽略，失敗名單相同，沒有宣稱全綠。
 
 詳見[回授與實驗證據](native-feedback-2026-10-02.md)。第4／6項有實際進展，但reset `if/else`／async、負緣、資料算術counter與更廣FSM仍缺；真實Minecraft仍待EULA接受。八項繼續未完成，總目標保持active。
+
+## Falling-edge progress
+
+Native typed clock polarity now survives hierarchy aliasing; Native and Yosys normalize falling-edge cells to the existing positive-edge cell plus an explicit clock inverter. Coherent clock power-on and geometry-owned primary-source placement fix startup capture and mixed-edge fanout collisions without changing simulator or verifier rules. Eight loaded-artifact cases retain 256 phases each; three runs are byte-identical, with every source state, implemented gate, public lamp, hidden role and storage lock independently replayed. Existing positive feedback and multiclock traces remain byte-identical. See [evidence and limitations](native-negedge-2026-10-02.md). Reset statement forms, async reset, data arithmetic and broader FSMs remain incomplete. All eight items and the overall goal remain active.

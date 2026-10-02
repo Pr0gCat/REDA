@@ -6898,7 +6898,7 @@ fn verify_torch_merge(
 /// conductor outside `own_cells` is still never walked from, and a repeater
 /// still only fires when its own declared input cell was itself reached with a
 /// non-zero strength. `strength_differential` measures all three.
-fn net_signal_strength(
+pub(crate) fn net_signal_strength(
     world: &World,
     own_cells: &HashSet<Position>,
     sources: &[(Position, &BlockState)],

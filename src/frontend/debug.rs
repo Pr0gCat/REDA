@@ -51,6 +51,7 @@ pub struct GateRef {
 /// unrelated source span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyntheticOrigin {
+    ClockInversion,
     HoldMux,
     BranchJoin,
     CaseFold,

@@ -1,0 +1,165 @@
+{
+  "observed_parent": "de1e7ec",
+  "goal_status": "active; all eight items incomplete",
+  "fixtures": {
+    "tests/fixtures/negedge_dff.sv": "4302f6c14211c18fa15f79aa3f866a4f99b5aaf94c46793c384f6199cb668edc",
+    "tests/fixtures/negedge_counter.sv": "d0f14897f7df36ab761b305ac590da6fbfc125d143d9e7a937540e6b40347d13",
+    "tests/fixtures/mixed_edge_shift.sv": "0cf54c49d864dbd79359efe2b201d5d4db685f65b5cda0260cd13ae066bb82d9",
+    "tests/fixtures/hierarchy_negedge_dff.sv": "ca54ba6be5b77dc54800cd06501e276c9e23349d5575993fed8df5f1b206a414"
+  },
+  "trace": {
+    "artifact": "docs/native-negedge-2026-10-02-trace.jsonl.gz",
+    "raw_sha256": "3354d5989ed0a0ab2325ab5cc54415921f865ce491d731a4ac170166ad188f1c",
+    "runs": 3,
+    "all_bytes_identical": true,
+    "cases": 8,
+    "retained_phases_per_case": 256,
+    "case_summary": {
+      "native-negedge_dff": {
+        "gates": 2,
+        "worst_phase_ticks": 28,
+        "events": 734
+      },
+      "yosys-negedge_dff": {
+        "gates": 2,
+        "worst_phase_ticks": 28,
+        "events": 734
+      },
+      "native-negedge_counter": {
+        "gates": 20,
+        "worst_phase_ticks": 62,
+        "events": 2456
+      },
+      "yosys-negedge_counter": {
+        "gates": 16,
+        "worst_phase_ticks": 54,
+        "events": 2204
+      },
+      "native-mixed_edge_shift": {
+        "gates": 3,
+        "worst_phase_ticks": 28,
+        "events": 1313
+      },
+      "yosys-mixed_edge_shift": {
+        "gates": 3,
+        "worst_phase_ticks": 28,
+        "events": 1313
+      },
+      "native-hierarchy_negedge_dff": {
+        "gates": 2,
+        "worst_phase_ticks": 28,
+        "events": 734
+      },
+      "yosys-hierarchy_negedge_dff": {
+        "gates": 2,
+        "worst_phase_ticks": 28,
+        "events": 734
+      }
+    }
+  },
+  "validation": {
+    "source_cli_tests": 51,
+    "json_boundary_tests": 8,
+    "positive_physical_tests": 4,
+    "negative_physical_tests": 1,
+    "wasm_library": "passed",
+    "independent_literal_replay_and_corruptions": "passed",
+    "logs": {
+      "source_cli": {
+        "artifact": "docs/native-negedge-2026-10-02-source_cli.log.gz",
+        "raw_sha256": "2d6c683109aac086d5d44cafe8c49072aba5bfe6f20e029a5e05bca7e2cfb0d4"
+      },
+      "wasm": {
+        "artifact": "docs/native-negedge-2026-10-02-wasm.log.gz",
+        "raw_sha256": "8bbac3fb80414aa26d6b4c2f14b2f39bdc7465cfd321df3084413fc10e681c2a"
+      },
+      "physical_run_1": {
+        "artifact": "docs/native-negedge-2026-10-02-physical_run_1.log.gz",
+        "raw_sha256": "3a44a1240a87cc17c9cdfb91c05cdc2734a9e4f536b65ee8971f57b51d06da3e"
+      },
+      "physical_run_2": {
+        "artifact": "docs/native-negedge-2026-10-02-physical_run_2.log.gz",
+        "raw_sha256": "0a44c124c27c9d39e2956065a51fb09e4d6950c07663e79c03a71ecad2a5a38d"
+      },
+      "physical_run_3": {
+        "artifact": "docs/native-negedge-2026-10-02-physical_run_3.log.gz",
+        "raw_sha256": "5bc74437761eb7b53f6b228036e1f1847c84a40886170ce10d99be2b2e647075"
+      },
+      "positive_regression": {
+        "artifact": "docs/native-negedge-2026-10-02-positive_regression.log.gz",
+        "raw_sha256": "b5040c136daddbcfc9cb7f8762f54285854f55cfa21d14270d70ebbad9e27704"
+      },
+      "json_boundary": {
+        "artifact": "docs/native-negedge-2026-10-02-json_boundary.log.gz",
+        "raw_sha256": "2e8b65320ace59b038ced64fa74d135942e295f7669bffd96643d372b7e6baee"
+      },
+      "replay": {
+        "artifact": "docs/native-negedge-2026-10-02-replay.log.gz",
+        "raw_sha256": "7208a3679245ead8ae1daf8ac60a5aa8c5844d57c30f3b419327576a0a1ea264"
+      },
+      "first_physical_failure": {
+        "artifact": "docs/native-negedge-2026-10-02-first_physical_failure.log.gz",
+        "raw_sha256": "08cec58b9ed1761b2ddffdf89540fe5543d20a0614fb6a444a4b378469427701"
+      },
+      "clock_initialization_failure": {
+        "artifact": "docs/native-negedge-2026-10-02-clock_initialization_failure.log.gz",
+        "raw_sha256": "817f1fa740ecc9e737dda2cc578a4affef243ddcdcb1014cb6d6fa1f8a4a9ba5"
+      },
+      "source_home_failure": {
+        "artifact": "docs/native-negedge-2026-10-02-source_home_failure.log.gz",
+        "raw_sha256": "34565b7f7b565994dbbd4f8f5aee65b86d0f9291fc4cc9b2c133f02e526e1ca6"
+      },
+      "alternate_home_failure": {
+        "artifact": "docs/native-negedge-2026-10-02-alternate_home_failure.log.gz",
+        "raw_sha256": "148500331c2d497433a9c9c4ea71c9e71151389a7d37e4c7240904ee15f6e148"
+      },
+      "native_rejection": {
+        "artifact": "docs/native-negedge-2026-10-02-native_rejection.log.gz",
+        "raw_sha256": "9340c1a2434ef6b7768a50d6e3228429cea4c64d9c30be1e606df11f79ed66ab"
+      },
+      "yosys_rejection": {
+        "artifact": "docs/native-negedge-2026-10-02-yosys_rejection.log.gz",
+        "raw_sha256": "f8558f28aef279b4e2d01d8a5c9c638002961b2445d20e4063431d99aec972d9"
+      }
+    }
+  },
+  "preserved_positive_trace_raw_sha256": {
+    "feedback": "7ba4886c186ab94f890e314bbe76b7b5bfd0587980f50abb013da9c41eafb38e",
+    "multiclock": "2f0a1423026b003f1ae3ff3cad6b35ede4e86343c33f527957dda51bb9d8979c"
+  },
+  "simulator_or_verifier_rule_changes": false,
+  "priming_or_added_wait": false,
+  "real_minecraft_conformance": false,
+  "remaining_sequential": [
+    "reset if/else statement forms",
+    "async reset",
+    "data arithmetic and broader counters/FSMs"
+  ],
+  "root": {
+    "passed": 1164,
+    "failed": 17,
+    "ignored": 71,
+    "same_failure_names_as_parent": true,
+    "failed_tests": [
+      "compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded",
+      "compile::planner::tests::a_negotiation_that_has_not_converged_returns_an_error_and_not_a_plan",
+      "compile::planner::tests::a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate",
+      "compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone",
+      "compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped",
+      "compile::planner::tests::legacy_adapter_keeps_and4_and_fanout_routes_byte_exact",
+      "compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact",
+      "compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+      "compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded",
+      "compile::planner::tests::the_strength_verifier_follows_a_repeater_that_feeds_a_climb",
+      "compile::relax::build::tests::physical_really_has_a_primitive_with_no_variants",
+      "compile::resettle_differential::the_reported_stale_dust_case_settles_clean",
+      "compile::routing_stats::tests::compact_channel_repeater_counts_match_the_emitted_world",
+      "compile::strength_differential::tests::genuine_decay_is_still_refused",
+      "compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse",
+      "compile::tests::compile_falls_back_when_the_planner_cannot_route",
+      "compile::tests::which_path_compile_takes_on_each_of_the_six_condition_circuits"
+    ],
+    "artifact": "docs/native-negedge-2026-10-02-root.log.gz",
+    "raw_sha256": "581886c79102eb240ff7fa24ae2b55043eea529a2120af9d51163d62e79c231b"
+  }
+}

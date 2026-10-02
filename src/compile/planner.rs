@@ -678,7 +678,138 @@ pub fn emit_candidate(
     refuse_cells_outside_the_world(candidate, size)?;
     let mut realised = emit_primitives(candidate, netlist, size)?;
     emit_routes(&mut realised.world, candidate)?;
+    initialize_clock_power(candidate, netlist, &mut realised)?;
     Ok(realised)
+}
+
+/// Emit the declared zero-state clock levels, not a startup clock edge.
+/// Ordinary input clocks start low and keep their existing emitted bytes.
+/// An inverted input clock starts high: its route and Design H controls must
+/// already agree, or data-path startup transients can overwrite Q=0.
+fn initialize_clock_power(
+    candidate: &PlanCandidate,
+    netlist: &Netlist,
+    realised: &mut RealisedCandidate,
+) -> Result<(), PlannerError> {
+    if !netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
+        return Ok(());
+    }
+    let evaluator = crate::frontend::evaluate::Evaluator::new(netlist).map_err(|error| {
+        PlannerError::UnrealisableNode {
+            id: "clock power-on".into(),
+            reason: error.to_string(),
+        }
+    })?;
+    let inputs = netlist
+        .inputs
+        .iter()
+        .map(|name| (name.clone(), false))
+        .collect();
+    let values = evaluator
+        .settle(&inputs)
+        .map_err(|error| PlannerError::UnrealisableNode {
+            id: "clock power-on".into(),
+            reason: error.to_string(),
+        })?;
+    let high: Vec<_> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .filter(|(_, gate)| gate.kind.is_sequential() && values[&gate.inputs[1]])
+        .map(|(index, _)| index)
+        .collect();
+    if high.is_empty() {
+        return Ok(());
+    }
+    let drivers: BTreeMap<_, _> = netlist
+        .gates
+        .iter()
+        .map(|gate| (gate.output.as_str(), gate))
+        .collect();
+    let mut pending: Vec<_> = high
+        .iter()
+        .map(|&index| netlist.gates[index].inputs[1].as_str())
+        .collect();
+    let mut cone = BTreeSet::new();
+    while let Some(signal) = pending.pop() {
+        if !cone.insert(signal) {
+            continue;
+        }
+        if let Some(gate) = drivers.get(signal) {
+            if !gate.kind.is_sequential() {
+                pending.extend(gate.inputs.iter().map(String::as_str));
+            }
+        }
+    }
+    let mut cells = std::collections::HashSet::new();
+    for route in &candidate.routes {
+        if cone.contains(route.id.as_str()) {
+            cells.extend(
+                route
+                    .anchors
+                    .iter()
+                    .map(|at| Position::new(at.x, at.y, at.z)),
+            );
+        }
+    }
+    let mut sources = Vec::new();
+    for signal in &cone {
+        let Some(gate) = drivers.get(signal) else {
+            continue;
+        };
+        let position = realised.ports.gate_output_positions[*signal];
+        let at = Position::new(position.0, position.1, position.2);
+        let mut state = realised.world.get(at.x, at.y, at.z).clone();
+        if matches!(
+            state.kind,
+            crate::redstone::world::block::BlockKind::Torch
+                | crate::redstone::world::block::BlockKind::WallTorch
+        ) {
+            state.lit = values[*signal];
+            realised.world.set(at.x, at.y, at.z, state.clone());
+            if state.lit {
+                sources.push((at, state));
+            }
+        }
+        if gate.is_merge() {
+            cells.insert(at);
+        }
+        let node = candidate
+            .primitive_nodes
+            .iter()
+            .find(|node| node.id == format!("gate:{signal}"))
+            .expect("a driven clock has a body");
+        if let Some(pin) = node.output_pin {
+            cells.insert(Position::new(pin.x, pin.y, pin.z));
+        }
+    }
+    let source_refs: Vec<_> = sources.iter().map(|(at, state)| (*at, state)).collect();
+    let strength = compile::net_signal_strength(&realised.world, &cells, &source_refs);
+    for at in cells {
+        let mut state = realised.world.get(at.x, at.y, at.z).clone();
+        match state.kind {
+            crate::redstone::world::block::BlockKind::RedstoneWire => {
+                state.power = strength.get(&at).copied().unwrap_or(0);
+            }
+            crate::redstone::world::block::BlockKind::Repeater => {
+                state.lit = strength.get(&at).is_some_and(|power| *power != 0);
+            }
+            _ => continue,
+        }
+        realised.world.set(at.x, at.y, at.z, state);
+    }
+    for index in high {
+        let anchor = candidate.anchors[index];
+        let facing = candidate.facing_of(index);
+        for (offset, lit) in [((1, 0, 0), true), ((1, 0, -1), false), ((2, 0, -1), false)] {
+            let (x, y, z) = geometry::rotate(offset, facing);
+            let at = Position::new(anchor.x + x, anchor.y + y, anchor.z + z);
+            let mut state = realised.world.get(at.x, at.y, at.z).clone();
+            state.lit = lit;
+            realised.world.set(at.x, at.y, at.z, state);
+        }
+    }
+    Ok(())
 }
 
 /// Refuse, by name, a candidate whose blocks would fall outside the world.
@@ -3526,6 +3657,35 @@ fn candidate_from_snapped(
         }
     }
 
+    let mut gate_cells = BTreeSet::new();
+    let mut blocked_homes = BTreeSet::new();
+    let mut blocked_pins = BTreeSet::new();
+    let mut approaches = Vec::new();
+    if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
+        let geometry = candidate_from_anchors_and_facings(
+            netlist,
+            placements,
+            anchors.clone(),
+            facings.clone(),
+        );
+        gate_cells.extend(
+            geometry
+                .primitive_nodes
+                .iter()
+                .take(netlist.gates.len())
+                .flat_map(|node| node.footprint.iter().copied()),
+        );
+        for (gate, definition) in netlist.gates.iter().enumerate() {
+            for input in 0..definition.inputs.len() {
+                if let Some((support, socket, approach)) = geometry.input_connection_at(gate, input)
+                {
+                    blocked_homes.extend([support, socket, approach]);
+                    blocked_pins.extend([support, socket]);
+                    approaches.push((approach, definition.inputs[input].as_str()));
+                }
+            }
+        }
+    }
     // A primary input feeding Design H can sit on the macro's mandatory
     // approach cell after relaxation. Routing would then replace its lever
     // with wire. Put that lever one cell farther out and face its pin inward.
@@ -3573,25 +3733,57 @@ fn candidate_from_snapped(
             };
             let (x, y, z) = geometry::rotate(local_home, facings[gate]);
             let node = netlist.gates.len() + primary;
-            anchors[node] = Anchor {
+            let preferred = Anchor {
                 x: anchors[gate].x + x,
                 y: anchors[gate].y + y,
                 z: anchors[gate].z + z,
             };
-            facings[node] = match geometry::turn(
+            let preferred_facing = geometry::turn(
                 if input_index == 0 {
                     Facing::North
                 } else {
                     Facing::West
                 },
                 facings[gate],
-            ) {
+            );
+            let pin = step(preferred, preferred_facing);
+            // Preserve the approach pin, but try each physical lever side if
+            // its usual home would occupy another shared-clock sink's entry.
+            if blocked_pins.contains(&pin) {
+                continue;
+            }
+            let homes = std::iter::once(preferred).chain(
+                [Facing::North, Facing::East, Facing::South, Facing::West]
+                    .into_iter()
+                    .map(|side| step(pin, side)),
+            );
+            let facing_for = |home| match facing_between(home, pin) {
                 Facing::North => geometry::CellFacing::NORTH,
                 Facing::South => geometry::CellFacing::SOUTH,
                 Facing::East => geometry::CellFacing::EAST,
                 Facing::West => geometry::CellFacing::WEST,
-                Facing::Up | Facing::Down => unreachable!("Design H is horizontal"),
+                _ => unreachable!("lever pins are horizontal"),
             };
+            let Some(home) = homes
+                .filter(|home| !blocked_homes.contains(home))
+                .find(|home| {
+                    let (footprint, _) = compile::lever_footprint(*home, facing_for(*home));
+                    footprint.iter().all(|cell| !gate_cells.contains(cell))
+                        && approaches.iter().all(|(entry, driver)| {
+                            *driver == signal
+                                || footprint.iter().all(|cell| {
+                                    (cell.x - entry.x).abs()
+                                        + (cell.y - entry.y).abs()
+                                        + (cell.z - entry.z).abs()
+                                        > 1
+                                })
+                        })
+                })
+            else {
+                continue;
+            };
+            anchors[node] = home;
+            facings[node] = facing_for(home);
         }
     }
 

@@ -644,7 +644,14 @@ impl Builder<'_> {
             // already resolve to the DFF rather than trip the
             // self-dependency check below, which exists for every other
             // (combinational) signal.
-            let clock_node = self.resolve(clock, 0);
+            let mut clock_node = self.resolve(clock.signal, 0);
+            if clock.edge == super::ast::ClockEdge::Negedge {
+                clock_node = self.graph.not(clock_node, LogicOrigin {
+                    elab: assignment.elab,
+                    bit: 0,
+                    synthetic: Some(SyntheticOrigin::ClockInversion),
+                });
+            }
             let dff = self.graph.reserve_dff(
                 clock_node,
                 assignment.elab.0,

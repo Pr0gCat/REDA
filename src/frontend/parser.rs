@@ -10,7 +10,7 @@
 //! and nothing else.
 
 use super::ast::{
-    AlwaysComb, AlwaysFf, Assign, BinaryOp, BlockingAssign, CaseItem, CaseStatement, Connection,
+    AlwaysComb, AlwaysFf, Assign, BinaryOp, BlockingAssign, CaseItem, CaseStatement, ClockEdge, Connection,
     ConstExpr, ConstKind, ConstOp, Expr, ExprKind, Ident, IfAssign, Instance, Item, Module,
     NetDecl, NetType, NonblockingAssign, Parameter, PortDecl, PortDirection, Range, SourceKind,
     SourceNode, SourceNodeId, SourceSet, Stmt, UnaryOp,
@@ -648,14 +648,12 @@ impl<'n> Parser<'n> {
         };
         self.expect_punct(Punct::At)?;
         self.expect_punct(Punct::LParen)?;
-        if self.is_keyword(Keyword::Negedge) {
-            let span = self.advance().span;
-            return Err(self.unsupported_at(
-                span,
-                "unsupported: `always_ff` only supports `posedge`; negative-edge clocks are not supported",
-            ));
-        }
-        self.expect_keyword(Keyword::Posedge)?;
+        let edge = if self.eat_keyword(Keyword::Negedge) {
+            ClockEdge::Negedge
+        } else {
+            self.expect_keyword(Keyword::Posedge)?;
+            ClockEdge::Posedge
+        };
         let clock = self.expr(0)?;
         if self.is_keyword(Keyword::Or) {
             let span = self.advance().span;
@@ -691,6 +689,7 @@ impl<'n> Parser<'n> {
             id,
             span,
             clock,
+            edge,
             body,
         }));
         Ok(())
