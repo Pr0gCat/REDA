@@ -1,0 +1,36 @@
+{
+  "status": "qualified_route_policy_repair",
+  "first_divergent_signal": "b",
+  "typed_vertical_step_cost": 3,
+  "reference_toward_goal_vertical_step_cost": 1,
+  "terminal_contract_is_first_divergence": false,
+  "original_route_equality_preserved": true,
+  "diagnostic_instrumentation_removed": true,
+  "artifacts": {
+    "docs/legacy-parity-2026-10-02-failure-envelopes.log.gz": {
+      "sha256": "dbaf29aad79fb5d56dd01b17771574e4c02c34434793afdf8eec915940cd1a05",
+      "raw_sha256": "7e953635331ea7e362250d9e4e529f8bb8ae06678ebefe4fb0da1f1a405505db"
+    },
+    "docs/legacy-parity-2026-10-02-first-net-divergence.log.gz": {
+      "sha256": "ce8ba6c5cb80f8f68923ba0b9449b3b8263be8c814d12d9a6ab07df413eae24d",
+      "raw_sha256": "38d3a6f7eb1cc0d39ce5bc7c61915ea5625f083b0e5b6b066b44284279217d43"
+    },
+    "docs/legacy-parity-2026-10-02-owned-search-cost.log.gz": {
+      "sha256": "e7adfa99c735def74c0ba23a88155d3e6ee20a16a917e2b17f6f982440c98058",
+      "raw_sha256": "7cb909e8abff77e6c40d0f4e148c4819c19f0897c56bcd691408a8faeff4a037"
+    },
+    "docs/legacy-parity-2026-10-02-owned-search-terminals.log.gz": {
+      "sha256": "3df04dbf1fb073f6716a1070b5acf98cfdd5506383b5e32e836e30cac8ec8203",
+      "raw_sha256": "5bea32f877403cc3387dda34d3d7dffbf2a416f30c99cbaa2548d0a3638ddd60"
+    },
+    "docs/legacy-parity-2026-10-02-routing-suite.log.gz": {
+      "sha256": "0ed93914fc0bf6fcf0e421388b9acccee1a81b775c43d379f436b769514ec073",
+      "raw_sha256": "413173ef8ca88268388fd277efb141fcc1f0da8dfafb9e303a8a22a1280db4f6"
+    }
+  },
+  "route_parity_tests_passed": 3,
+  "routing_tests_passed": 69,
+  "full_root_rerun": false,
+  "production_distance_policy_changed": false,
+  "simulator_or_verifier_changed": false
+}

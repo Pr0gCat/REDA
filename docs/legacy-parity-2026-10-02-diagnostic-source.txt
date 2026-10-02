@@ -1,0 +1,18 @@
+            if std::env::var_os("REDA_TRACE_PARITY_FAILURES").is_some() {
+                let mut reference_reservation = reservation.clone();
+                let mut typed_reservation = reservation.clone();
+                let reference = legacy_lay_net_reference(signal, source, &consumers, netlist, &candidate, &mut reference_reservation, &prices);
+                let typed = lay_net(signal, source, &consumers, netlist, &candidate, &mut typed_reservation, &prices);
+                match (&reference, &typed) {
+                    (Ok(reference), Ok(typed)) => {
+                        assert_eq!(typed, reference, "first route divergence for {signal}");
+                        assert_eq!(typed_reservation.cells, reference_reservation.cells, "first reservation divergence for {signal}");
+                    }
+                    (Err(reference), Err(typed)) => {
+                        assert_eq!(typed.corridor, reference.corridor, "first failure corridor divergence for {signal}");
+                        assert_eq!(typed.charge_outright, reference.charge_outright, "first charge divergence for {signal}");
+                        assert_eq!(typed.reservation.cells, reference.reservation.cells, "first failed reservation divergence for {signal}");
+                    }
+                    _ => panic!("first outcome divergence for {signal}: reference={} typed={}", reference.is_ok(), typed.is_ok()),
+                }
+            }

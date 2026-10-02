@@ -12,6 +12,19 @@ use crate::compile::geometry::Anchor;
 use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 
+/// Which A* a router's branches are laid by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchModel {
+    /// Legacy distance-only expansion.
+    DistanceOnly,
+    /// Historical compatibility control discounts vertical steps toward the goal.
+    DistanceWithGoalHeightDiscount,
+    /// Carried strength is part of arrival dominance; electrically dead
+    /// paths are pruned during expansion. The bounded growth portfolio
+    /// uses this after its original distance-only arm fails.
+    StrengthAware,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DelayedOwner {
     Primitive(PrimitiveId),
@@ -1243,6 +1256,7 @@ impl PhysicalRouter for DurablePhysicalRouter {
             guidance,
             ForcedTerminalRunways::default(),
             &[],
+            SearchModel::DistanceOnly,
         )
     }
 
@@ -1262,6 +1276,7 @@ impl PhysicalRouter for DurablePhysicalRouter {
             None,
             runways,
             &[],
+            SearchModel::DistanceOnly,
         )
     }
 
@@ -1282,6 +1297,7 @@ impl PhysicalRouter for DurablePhysicalRouter {
             guidance,
             runways,
             &[],
+            SearchModel::DistanceOnly,
         )
     }
 
@@ -1302,6 +1318,7 @@ impl PhysicalRouter for DurablePhysicalRouter {
             None,
             runways,
             planned,
+            SearchModel::DistanceOnly,
         )
     }
 }
@@ -1450,6 +1467,7 @@ pub(crate) fn route_with_policy<Price, Claim>(
     request: RouteRequest<'_>,
     join_policy: RoutingJoinPolicy,
     reserve: ReservePolicy,
+    search: SearchModel,
     price: Price,
     claim: Claim,
 ) -> Result<RealisedRouteTree, RouterFailure>
@@ -1468,6 +1486,7 @@ where
         None,
         ForcedTerminalRunways::default(),
         &[],
+        search,
     )
 }
 
@@ -1495,6 +1514,7 @@ where
         None,
         ForcedTerminalRunways::default(),
         &[],
+        SearchModel::DistanceOnly,
     )
 }
 
@@ -1523,6 +1543,7 @@ where
         None,
         ForcedTerminalRunways::default(),
         &[],
+        SearchModel::DistanceOnly,
     )
 }
 
@@ -1538,6 +1559,7 @@ fn route_with_local_policy<Price, Claim>(
     guidance: Option<RouteGuidance>,
     runways: ForcedTerminalRunways,
     planned: &[PlannedBranch],
+    search: SearchModel,
 ) -> Result<RealisedRouteTree, RouterFailure>
 where
     Price: FnMut(&Anchor) -> u64,
@@ -1556,6 +1578,7 @@ where
         guidance,
         runways,
         planned,
+        search,
     )
 }
 
@@ -1572,6 +1595,7 @@ fn route_ordered_attempt<Price, Claim>(
     guidance: Option<RouteGuidance>,
     runways: ForcedTerminalRunways,
     planned: &[PlannedBranch],
+    search: SearchModel,
 ) -> Result<RealisedRouteTree, RouterFailure>
 where
     Price: FnMut(&Anchor) -> u64,
@@ -1665,6 +1689,7 @@ where
                         )
                     })
                     .as_ref(),
+                search,
             )?
             .ok_or(RouterFailure::NoLocalRoute {
                 route: request.id,
@@ -2896,6 +2921,7 @@ fn search_path<Price>(
     source_runway: &ForcedChain,
     sink_runway: &ForcedChain,
     planned_next: Option<&(BTreeMap<Anchor, Anchor>, bool)>,
+    search: SearchModel,
 ) -> Result<Option<Vec<Anchor>>, RouterFailure>
 where
     Price: FnMut(&Anchor) -> u64,
@@ -2977,6 +3003,53 @@ where
             y: max.y.max(cell.y),
             z: max.z.max(cell.z),
         };
+    }
+    if search == SearchModel::StrengthAware {
+        // Only the legacy planner adapter selects this mode; strict/seed
+        // fragment routing retains its existing geometry-aware kernel.
+        debug_assert!(!strict_local && !seed_rules && guidance.is_none() && planned_next.is_none());
+        return strength_aware_astar_with_work(
+            start,
+            goal,
+            laid,
+            request.source.terminal.source_strength().unwrap(),
+            |parents, at, next| {
+                let mut chain = vec![at];
+                let mut cursor = at;
+                while let Some(&previous) = parents.get(&cursor) {
+                    chain.push(previous);
+                    cursor = previous;
+                }
+                !self_obstructs_typed(parents, at, next, false)
+                    && !own_join.blocks(next, at, start, goal, reservations, &chain)
+                    && !(forbidden.contains(&next) && next != start && next != goal)
+                    && next.x >= min.x
+                    && next.x <= max.x
+                    && next.y >= min.y
+                    && next.y <= max.y
+                    && next.z >= min.z
+                    && next.z <= max.z
+                    && anchor_is_free_for_typed(
+                        request.id,
+                        next,
+                        start,
+                        goal,
+                        sink.anchor,
+                        reservations,
+                    )
+                    && !staircase_clearance_typed(at, next).into_iter().any(|cell| {
+                        staircase_cell_is_blocked(request.id, at, next, cell, reservations, false)
+                    })
+            },
+            price,
+            |queued| {
+                if queued {
+                    work.queue(request, sink.id)
+                } else {
+                    work.expand(request, sink.id)
+                }
+            },
+        );
     }
     let roots = if seed_rules {
         available_tree_roots(start, laid, forbidden)
@@ -3198,7 +3271,10 @@ where
             }
             // Legacy extraction charges every vertical edge the staircase
             // premium; strict/seed routes retain the toward-goal discount.
-            let step_cost = search_step_cost(strict_local, seed_rules, state.at.y, next.y, goal.y);
+            let step_cost = search_step_cost(
+                strict_local || search == SearchModel::DistanceWithGoalHeightDiscount,
+                seed_rules, state.at.y, next.y, goal.y,
+            );
             let next_travelled = state
                 .travelled
                 .saturating_add(step_cost)
@@ -4056,12 +4132,32 @@ pub(crate) fn strength_aware_astar<Allowed, Price>(
     goal: Anchor,
     trunk: &BTreeMap<Anchor, BlockState>,
     source_strength: u8,
-    mut allowed: Allowed,
-    mut price: Price,
+    allowed: Allowed,
+    price: Price,
 ) -> Option<Vec<Anchor>>
 where
     Allowed: FnMut(&BTreeMap<Anchor, Anchor>, Anchor, Anchor) -> bool,
     Price: FnMut(&Anchor) -> u64,
+{
+    strength_aware_astar_with_work(start, goal, trunk, source_strength, allowed, price, |_| {
+        Ok::<(), std::convert::Infallible>(())
+    })
+    .unwrap()
+}
+
+pub(crate) fn strength_aware_astar_with_work<Allowed, Price, Work, E>(
+    start: Anchor,
+    goal: Anchor,
+    trunk: &BTreeMap<Anchor, BlockState>,
+    source_strength: u8,
+    mut allowed: Allowed,
+    mut price: Price,
+    mut work: Work,
+) -> Result<Option<Vec<Anchor>>, E>
+where
+    Allowed: FnMut(&BTreeMap<Anchor, Anchor>, Anchor, Anchor) -> bool,
+    Price: FnMut(&Anchor) -> u64,
+    Work: FnMut(bool) -> Result<(), E>,
 {
     let start_state = StrengthSearchState {
         estimate: manhattan(start, goal),
@@ -4070,6 +4166,7 @@ where
         entered: 4,
         carried: source_strength,
     };
+    work(true)?;
     let mut frontier = BTreeSet::from([start_state]);
     let mut visited: BTreeMap<(Anchor, u8), Vec<(u64, u8)>> = BTreeMap::new();
     visited.insert((start, 4), vec![(0, start_state.carried)]);
@@ -4086,7 +4183,7 @@ where
                 walk = up;
             }
             path.reverse();
-            return Some(path);
+            return Ok(Some(path));
         }
         let chain: BTreeMap<Anchor, Anchor> = {
             let mut chain = BTreeMap::new();
@@ -4097,6 +4194,7 @@ where
             }
             chain
         };
+        work(false)?;
         for next in neighbours(state.anchor) {
             if next == start || chain.contains_key(&next) || !allowed(&chain, state.anchor, next) {
                 continue;
@@ -4165,6 +4263,7 @@ where
                 (next, entered, carried, next_travelled),
                 (state.anchor, state.entered, state.carried, state.travelled),
             );
+            work(true)?;
             frontier.insert(StrengthSearchState {
                 estimate: next_travelled.saturating_add(manhattan(next, goal)),
                 travelled: next_travelled,
@@ -4174,7 +4273,7 @@ where
             });
         }
     }
-    None
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -6138,6 +6237,58 @@ mod tests {
         assert_eq!(ordered.as_slice(), &[second, first]);
     }
 
+    #[test]
+    fn legacy_search_selection_reaches_strength_kernel_and_keeps_work_limits() {
+        let route = RouteId(8);
+        let sinks = NonEmptyRouteSinks::new(vec![sink(route, 0, at(4, 1, 0))]).unwrap();
+        let reservations = PhysicalReservations::new();
+        let run = |search, strength, max_queue_entries| {
+            let mut source = endpoint(route);
+            source.terminal = TerminalContract::Source {
+                signal_strength: strength,
+            };
+            route_with_policy(
+                RouteRequest {
+                    id: route,
+                    source,
+                    sinks: &sinks,
+                    reservations: &reservations,
+                    limits: RouterLimits {
+                        max_node_expansions: 10_000,
+                        max_queue_entries,
+                    },
+                },
+                RoutingJoinPolicy::Off,
+                ReservePolicy::TerminalStairs,
+                search,
+                |_| 0,
+                |_, _, _| {},
+            )
+        };
+        // One weak unit cannot traverse even one dust cell. Distance search
+        // tries that impossible step; strength search prunes it before queueing.
+        assert!(matches!(
+            run(SearchModel::DistanceOnly, 1, 1),
+            Err(RouterFailure::RouterLimitExceeded {
+                kind: RouterLimitKind::QueueEntries,
+                ..
+            })
+        ));
+        assert!(matches!(
+            run(SearchModel::StrengthAware, 1, 1),
+            Err(RouterFailure::NoLocalRoute { .. })
+        ));
+        for search in [SearchModel::DistanceOnly, SearchModel::StrengthAware] {
+            assert!(run(search, 15, 10_000).is_ok());
+            assert!(matches!(
+                run(search, 15, 0),
+                Err(RouterFailure::RouterLimitExceeded {
+                    kind: RouterLimitKind::QueueEntries,
+                    ..
+                })
+            ));
+        }
+    }
     #[test]
     fn zero_limits_fail_deterministically_before_any_unbounded_fallback() {
         let route = RouteId(8);

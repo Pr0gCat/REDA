@@ -2068,18 +2068,7 @@ enum Prices<'a> {
     },
 }
 
-/// Which A* a router's branches are laid by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SearchModel {
-    /// [`deterministic_astar`]: the shipping search, blind to strength.
-    DistanceOnly,
-    /// [`strength_aware_astar`]: carried strength in the state, decay pruned
-    /// at generation. Not on any shipping path until measured strictly
-    /// better -- the criterion-4 gauntlet; until then only the measurement
-    /// harnesses construct it, which is what the allow admits.
-    #[cfg_attr(not(test), allow(dead_code))]
-    StrengthAware,
-}
+pub(crate) use crate::compile::routing::SearchModel;
 
 impl Prices<'_> {
     fn price(&self, cell: &Anchor) -> u64 {
@@ -2102,7 +2091,6 @@ impl Prices<'_> {
     }
 
     /// Which searcher lays this router's branches.
-    #[cfg(test)]
     fn search(&self) -> SearchModel {
         match self {
             Prices::RipUp(_) => SearchModel::DistanceOnly,
@@ -4904,7 +4892,7 @@ fn legacy_lay_net_reference(
         let mut aimed_at = approaches[0];
         for &approach in &approaches {
             let attempt = match prices.search() {
-                SearchModel::DistanceOnly => deterministic_astar(
+                SearchModel::DistanceOnly | SearchModel::DistanceWithGoalHeightDiscount => deterministic_astar(
                     source,
                     approach,
                     socket,
@@ -5223,7 +5211,7 @@ fn lay_net(
     reservation: &mut Reservation,
     prices: &Prices,
 ) -> Result<Route, Box<RoutingFailure>> {
-    lay_net_with_reserve(
+    lay_net_with_policy(
         signal,
         source,
         consumers,
@@ -5232,11 +5220,15 @@ fn lay_net(
         reservation,
         prices,
         crate::compile::routing::ReservePolicy::TotalStairs,
+        match prices.search() {
+            SearchModel::DistanceOnly => SearchModel::DistanceWithGoalHeightDiscount,
+            search => search,
+        },
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn lay_net_with_reserve(
+fn lay_net_with_policy(
     signal: &str,
     source: Anchor,
     consumers: &[NetConsumer],
@@ -5245,10 +5237,28 @@ fn lay_net_with_reserve(
     reservation: &mut Reservation,
     prices: &Prices,
     reserve: crate::compile::routing::ReservePolicy,
+    search: SearchModel,
 ) -> Result<Route, Box<RoutingFailure>> {
     let route_id = RouteId(0);
     let (typed_source, typed_sinks) =
         typed_legacy_request_parts(route_id, signal, source, consumers, netlist, candidate);
+    let typed_sinks = if search == SearchModel::DistanceWithGoalHeightDiscount {
+        // The frozen compatibility caller predates qualified arrival runways
+        // and observed-output isolation. Preserve its automatic terminal
+        // choice, including refreshes demanded by the branch strength budget.
+        // Ordinary generation keeps the request builder's qualified contracts.
+        let sinks = typed_sinks.as_slice().iter().cloned().zip(consumers).map(|(mut sink, consumer)| {
+            if matches!(consumer, NetConsumer::Gate { gate, .. } if !netlist.gates[*gate].is_merge()) {
+                if let TerminalContract::Sink { requirement, .. } = &mut sink.terminal {
+                    *requirement = TerminalRequirement::Automatic;
+                }
+            }
+            sink
+        }).collect();
+        NonEmptyRouteSinks::new(sinks).expect("historical terminal policy preserves every sink")
+    } else {
+        typed_sinks
+    };
     let typed_reservations = typed_reservations(reservation, route_id, signal);
     // The caller owns its refresh policy; the adapter preserves it rather
     // than replacing compatibility or ordinary generation with a global default.
@@ -5259,6 +5269,7 @@ fn lay_net_with_reserve(
         reservation,
         prices,
         reserve,
+        search,
     );
     match adapter.route(RouteRequest {
         id: route_id,
@@ -5290,6 +5301,7 @@ struct LegacyPlannerRouterAdapter<'a> {
     reservation: RefCell<&'a mut Reservation>,
     prices: &'a Prices<'a>,
     reserve: crate::compile::routing::ReservePolicy,
+    search: SearchModel,
     failure: RefCell<Option<Box<RoutingFailure>>>,
 }
 
@@ -5301,6 +5313,7 @@ impl<'a> LegacyPlannerRouterAdapter<'a> {
         reservation: &'a mut Reservation,
         prices: &'a Prices<'a>,
         reserve: crate::compile::routing::ReservePolicy,
+        search: SearchModel,
     ) -> Self {
         Self {
             signal,
@@ -5309,6 +5322,7 @@ impl<'a> LegacyPlannerRouterAdapter<'a> {
             reservation: RefCell::new(reservation),
             prices,
             reserve,
+            search,
             failure: RefCell::new(None),
         }
     }
@@ -5384,6 +5398,7 @@ impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
             request,
             join_policy,
             self.reserve,
+            self.search,
             |at| self.prices.price(at),
             |at, owner, kind| {
                 let (owner, occupancy) = match (owner, kind) {
@@ -5914,6 +5929,7 @@ fn route_in_order(
             &mut reservation,
             &prices,
             crate::compile::routing::ReservePolicy::TerminalStairs,
+            prices.search(),
         );
         match adapter.route(RouteRequest {
             id: route_id,
@@ -6512,7 +6528,7 @@ fn negotiate_charging(
                     own_join,
                     search,
                 };
-                lay_net_with_reserve(
+                lay_net_with_policy(
                     signal,
                     source,
                     &consumers,
@@ -6521,6 +6537,7 @@ fn negotiate_charging(
                     &mut reservation,
                     &prices,
                     crate::compile::routing::ReservePolicy::TerminalStairs,
+                    prices.search(),
                 )
             };
             match outcome {
@@ -7886,6 +7903,7 @@ mod tests {
             &mut reservation,
             &prices,
             crate::compile::routing::ReservePolicy::TotalStairs,
+            prices.search(),
         );
 
         let failure = adapter
@@ -8717,11 +8735,12 @@ mod tests {
         candidate_from_snapped(netlist, &placements, &snapped)
     }
 
-    fn route_in_order_with_reference(
+    fn route_in_order_with_control(
         mut candidate: PlanCandidate,
         netlist: &Netlist,
         order: &[String],
         congestion: &Congestion,
+        lay: fn(&str, Anchor, &[NetConsumer], &Netlist, &PlanCandidate, &mut Reservation, &Prices) -> Result<Route, Box<RoutingFailure>>,
     ) -> Result<PlanCandidate, Box<RoutingFailure>> {
         let mut reservation = reserve_primitives(&candidate.primitive_nodes, candidate.lower_bound);
         let sinks = net_consumers(netlist, &candidate);
@@ -8735,7 +8754,7 @@ mod tests {
                 .cloned()
                 .expect("the order is built from these sinks");
             let source = net_source(&candidate, signal)?;
-            routes.push(legacy_lay_net_reference(
+            routes.push(lay(
                 signal,
                 source,
                 &consumers,
@@ -8759,14 +8778,17 @@ mod tests {
         for (name, netlist) in [("and4", build_and4_netlist().0), ("fanout", fanout)] {
             let candidate = freshly_placed(&netlist);
             let order: Vec<_> = net_consumers(&netlist, &candidate).into_keys().collect();
-            let expected = route_in_order_with_reference(
+            let expected = route_in_order_with_control(
                 candidate.clone(),
                 &netlist,
                 &order,
                 &Congestion::default(),
+                legacy_lay_net_reference,
             )
             .unwrap_or_else(|failure| panic!("{name} reference routes: {}", failure.error));
-            let actual = route_in_order(candidate, &netlist, &order, &Congestion::default())
+            // The frozen control owns total-stair reserves. Ordinary generated
+            // routing deliberately uses terminal-stair reserves instead.
+            let actual = route_in_order_with_control(candidate, &netlist, &order, &Congestion::default(), lay_net)
                 .unwrap_or_else(|failure| panic!("{name} typed adapter routes: {}", failure.error));
 
             assert_eq!(actual.routes, expected.routes, "{name} exact route parity");
@@ -8818,13 +8840,18 @@ mod tests {
         fn route_every_net_with_reference(
             candidate: PlanCandidate,
             netlist: &Netlist,
+            typed: bool,
         ) -> Result<PlanCandidate, PlannerError> {
             let mut order: Vec<String> = net_consumers(netlist, &candidate).into_keys().collect();
             let mut congestion = Congestion::default();
             let mut last = None;
             for _ in 0..RIP_UP_ROUNDS {
-                match route_in_order_with_reference(candidate.clone(), netlist, &order, &congestion)
-                {
+                let route = if typed {
+                    route_in_order_with_control(candidate.clone(), netlist, &order, &congestion, lay_net)
+                } else {
+                    route_in_order_with_control(candidate.clone(), netlist, &order, &congestion, legacy_lay_net_reference)
+                };
+                match route {
                     Ok(routed) => return Ok(routed),
                     Err(failure) => {
                         let RoutingFailure {
@@ -8851,9 +8878,9 @@ mod tests {
             Err(last.expect("a failed reference round records why"))
         }
 
-        let expected = route_every_net_with_reference(candidate.clone(), &netlist)
+        let expected = route_every_net_with_reference(candidate.clone(), &netlist, false)
             .unwrap_or_else(|error| panic!("reference routes: {error}"));
-        let actual = route_every_net(candidate, &netlist, RIP_UP_ROUNDS)
+        let actual = route_every_net_with_reference(candidate, &netlist, true)
             .unwrap_or_else(|error| panic!("typed adapter routes: {error}"));
 
         for (expected, actual) in expected.routes.iter().zip(&actual.routes) {
