@@ -1,0 +1,41 @@
+{
+  "status": "official environment prepared; EULA owner approval pending; no real-game conformance yet",
+  "installation": {
+    "mojang": {
+      "version": "26.2",
+      "metadata_url": "https://piston-meta.mojang.com/v1/packages/c7868781b30aaf24be0dac894c94a34e5d6df10d/26.2.json",
+      "java": {
+        "component": "java-runtime-epsilon",
+        "majorVersion": 25
+      },
+      "server": {
+        "sha1": "823e2250d24b3ddac457a60c92a6a941943fcd6a",
+        "size": 60894273,
+        "url": "https://piston-data.mojang.com/v1/objects/823e2250d24b3ddac457a60c92a6a941943fcd6a/server.jar"
+      }
+    },
+    "runtime": {
+      "release": "jdk-25.0.4.1+1",
+      "download": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4.1%2B1/OpenJDK25U-jre_x64_linux_hotspot_25.0.4.1_1.tar.gz",
+      "sha256": "1731a34baadec5479258ea0202e4d5d865d2efeee60cb0c7d7eb056fe96ca219"
+    },
+    "eula": "not accepted"
+  },
+  "java_version": "openjdk version \"25.0.4.1\" 2026-08-18 LTS\nOpenJDK Runtime Environment Temurin-25.0.4.1+1 (build 25.0.4.1+1-LTS)\nOpenJDK 64-Bit Server VM Temurin-25.0.4.1+1 (build 25.0.4.1+1-LTS, mixed mode, sharing)\n",
+  "public_config": {
+    "server-ip": "127.0.0.1",
+    "server-port": "25565",
+    "enable-rcon": "true",
+    "rcon.port": "25575",
+    "gamemode": "creative",
+    "view-distance": "4",
+    "simulation-distance": "4",
+    "max-players": "2",
+    "level-type": "minecraft:flat"
+  },
+  "private_rcon_credential": "generated and stored only in gitignored mode-0600 server.properties; never included in artifacts",
+  "initialization_exit": 0,
+  "initialization_verified": "EULA refusal; no server started",
+  "eula": false,
+  "goal_status": "active; all eight incomplete"
+}

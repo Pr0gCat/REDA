@@ -1,9 +1,22 @@
 # Minecraft 26.2 server for redstone conformance testing
 
+**Current Linux checkout, 2026-10-02:** the official 26.2 jar and Linux x64
+Temurin25.0.4.1+1 runtime have been installed and independently checksum-verified.
+The launcher uses `runtime25/bin/java`; it binds the game/RCON host to localhost,
+with a private RCON credential in the gitignored mode-0600 properties file.
+Initialization generated `eula=false` and refused to start, as expected. Owner
+EULA approval remains pending. No new real-game conformance result is claimed.
+[Exact current preparation evidence](minecraft-local-preparation-2026-10-02.json)
+records the official metadata, hashes and nonsecret configuration. The historical
+Windows setup and accepted-EULA state below describe the original environment,
+not this newly created Linux checkout.
+
 REDA's ground-truth target is **Minecraft Java 26.2**, not 1.20.1.  The
-current vanilla server lives in `minecraft-server-26.2/`, runs on its bundled
-JDK 25, and is the server every current fidelity or conformance result must
-name. Its live `version` command reports data version **4903**.
+target lives in `minecraft-server-26.2/` and requires Java25. The current
+Linux launcher uses a minimal JRE25; the original Windows launcher bundled
+JDK25. Every fidelity or conformance result must name this target. The
+recorded original server's `version` command reported data version **4903**;
+the new Linux server has not started past the EULA check.
 
 The older `minecraft-server/` tree below is retained only as a historical
 1.20.1 comparison environment. It must not be used to certify a current REDA
@@ -196,7 +209,7 @@ above) -- 26.2 added a few new keys on first run (`management-server-*`,
 generated defaults since none of them matter to a redstone conformance
 harness.
 
-**Current local state:** `minecraft-server-26.2/server/eula.txt` is
+**Recorded original environment:** `minecraft-server-26.2/server/eula.txt` was
 `eula=true`, accepted by the user after reading Mojang's EULA. The target
 server has started successfully; when it is running, its RCON listener is on
 localhost. The server directory is gitignored, so a fresh checkout still
@@ -245,3 +258,25 @@ it cannot certify a circuit containing repeaters or comparators after it has
 been built with `/setblock`.  Dynamic whole-circuit certification needs a real
 26.2 client action (paste/build, then physically click the input levers); RCON
 may still read the resulting lamps and block states.
+
+## Reproducing the current Linux runtime
+
+Resolve the official Mojang metadata and Adoptium release recorded in
+`minecraft-local-preparation-2026-10-02.json`. Download the server jar and
+Linux x64 JRE archive from those URLs and verify the recorded SHA-1 and
+SHA-256 before extracting or executing them. The JRE archive is extracted
+with its single enclosing directory removed into `runtime25/`; the jar goes
+into `server/server.jar`. No system-wide Java installation is required.
+
+The current `run-server.sh` resolves its own directory, changes into
+`server/`, and executes:
+
+```bash
+../runtime25/bin/java -Xms256M -Xmx1G -jar server.jar nogui
+```
+
+The nonsecret configuration and exact metadata/hashes are in the audit.
+Generate a fresh private RCON credential for each new checkout and keep it
+only in the gitignored `server.properties` with mode0600. Keep
+`server-ip=127.0.0.1`. Initialization creates `eula=false`; owner acceptance
+is a separate action and is never inferred from installing the binaries.

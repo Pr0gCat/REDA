@@ -103,3 +103,7 @@ world partition呼叫端改用既有equivalence模式，同時驗證獨立原始
 移除elaborator全域單clock限制，沿用每顆DFF已有的clock pin／alias、獨立邊緣狀態及實體Design H接線。flat、hierarchy與跨domain shift各Native／實際Yosys共6電路，每電路240階段持續history，driver／lamp、獨立state oracle與實際事件重播通過；三次完整trace bytes一致。28相關回歸、missing-Python新增CLI案例、WASM與auditor反例通過，最新root維持1164／17／71且無新增失敗。詳見[多時鐘來源及實體證據](native-multiclock-2026-10-02.md)。
 
 第4／5／6項有實際功能進展；reset、負緣、一般回授FSM／counter、衍生clock與多事件控制仍未完成。其餘大型生成、通用預算、inout、真實遊戲及全專案失敗仍須繼續。八項目標保持active。
+
+## 本機真實遊戲環境準備
+
+官方26.2 server.jar SHA-1與Linux Temurin25.0.4.1+1 runtime SHA-256校驗通過；Java版本及server bootstrap確認可執行。建立localhost／私人RCON設定，初始化正常產生eula=false並拒絕啟動。目前等待owner是否接受EULA的決定，尚無新server conformance結果。詳見[準備證據](minecraft-local-preparation-2026-10-02.json)。不能將此安裝或simulator／mocked RCON算作第7項完成；其他項目繼續獨立推進，全部目標保持active。
