@@ -1,0 +1,184 @@
+{
+  "native": {
+    "sha256": "b282ee2537b717fcc00ac499aa977366d6bdead5bcfee4946f6618fbbadbf19f",
+    "repeats_identical": 3,
+    "phases": 512,
+    "audit": {
+      "polarity": null,
+      "certified": false,
+      "control_certified": false,
+      "setup": {
+        "control": {
+          "worst_settle_ticks": 12,
+          "total_settle_ticks": 1559,
+          "driver_glitches": 0,
+          "driver_single_input_glitches": 0,
+          "driver_last_change_ticks": 8,
+          "driver_glitch_transitions": 0,
+          "lamp_glitches": 0,
+          "lamp_single_input_glitches": 0,
+          "lamp_last_change_ticks": 12,
+          "lamp_glitch_transitions": 0
+        },
+        "candidate": {
+          "worst_settle_ticks": 12,
+          "total_settle_ticks": 1559,
+          "driver_glitches": 0,
+          "driver_single_input_glitches": 0,
+          "driver_last_change_ticks": 8,
+          "driver_glitch_transitions": 0,
+          "lamp_glitches": 0,
+          "lamp_single_input_glitches": 0,
+          "lamp_last_change_ticks": 12,
+          "lamp_glitch_transitions": 0
+        },
+        "regressed": [],
+        "improved": []
+      },
+      "target": {
+        "control": {
+          "worst_settle_ticks": 12,
+          "total_settle_ticks": 1567,
+          "driver_glitches": 0,
+          "driver_single_input_glitches": 0,
+          "driver_last_change_ticks": 8,
+          "driver_glitch_transitions": 0,
+          "lamp_glitches": 0,
+          "lamp_single_input_glitches": 0,
+          "lamp_last_change_ticks": 12,
+          "lamp_glitch_transitions": 0
+        },
+        "candidate": {
+          "worst_settle_ticks": 12,
+          "total_settle_ticks": 1567,
+          "driver_glitches": 0,
+          "driver_single_input_glitches": 0,
+          "driver_last_change_ticks": 8,
+          "driver_glitch_transitions": 0,
+          "lamp_glitches": 0,
+          "lamp_single_input_glitches": 0,
+          "lamp_last_change_ticks": 12,
+          "lamp_glitch_transitions": 0
+        },
+        "regressed": [],
+        "improved": []
+      },
+      "accepted": false
+    },
+    "setup": {
+      "worst_settle_ticks": 12,
+      "total_settle_ticks": 1559,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 8,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 12,
+      "lamp_glitch_transitions": 0
+    },
+    "target": {
+      "worst_settle_ticks": 12,
+      "total_settle_ticks": 1567,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 8,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 12,
+      "lamp_glitch_transitions": 0
+    }
+  },
+  "yosys": {
+    "sha256": "43a858f77d5f99d30da122d4e8d1c18eb9ed33d1cc3569f5f84cde6dcd5df6d0",
+    "repeats_identical": 3,
+    "phases": 512,
+    "audit": {
+      "polarity": null,
+      "certified": false,
+      "control_certified": false,
+      "setup": {
+        "control": {
+          "worst_settle_ticks": 12,
+          "total_settle_ticks": 1559,
+          "driver_glitches": 0,
+          "driver_single_input_glitches": 0,
+          "driver_last_change_ticks": 8,
+          "driver_glitch_transitions": 0,
+          "lamp_glitches": 0,
+          "lamp_single_input_glitches": 0,
+          "lamp_last_change_ticks": 12,
+          "lamp_glitch_transitions": 0
+        },
+        "candidate": {
+          "worst_settle_ticks": 12,
+          "total_settle_ticks": 1559,
+          "driver_glitches": 0,
+          "driver_single_input_glitches": 0,
+          "driver_last_change_ticks": 8,
+          "driver_glitch_transitions": 0,
+          "lamp_glitches": 0,
+          "lamp_single_input_glitches": 0,
+          "lamp_last_change_ticks": 12,
+          "lamp_glitch_transitions": 0
+        },
+        "regressed": [],
+        "improved": []
+      },
+      "target": {
+        "control": {
+          "worst_settle_ticks": 12,
+          "total_settle_ticks": 1567,
+          "driver_glitches": 0,
+          "driver_single_input_glitches": 0,
+          "driver_last_change_ticks": 8,
+          "driver_glitch_transitions": 0,
+          "lamp_glitches": 0,
+          "lamp_single_input_glitches": 0,
+          "lamp_last_change_ticks": 12,
+          "lamp_glitch_transitions": 0
+        },
+        "candidate": {
+          "worst_settle_ticks": 12,
+          "total_settle_ticks": 1567,
+          "driver_glitches": 0,
+          "driver_single_input_glitches": 0,
+          "driver_last_change_ticks": 8,
+          "driver_glitch_transitions": 0,
+          "lamp_glitches": 0,
+          "lamp_single_input_glitches": 0,
+          "lamp_last_change_ticks": 12,
+          "lamp_glitch_transitions": 0
+        },
+        "regressed": [],
+        "improved": []
+      },
+      "accepted": false
+    },
+    "setup": {
+      "worst_settle_ticks": 12,
+      "total_settle_ticks": 1559,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 8,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 12,
+      "lamp_glitch_transitions": 0
+    },
+    "target": {
+      "worst_settle_ticks": 12,
+      "total_settle_ticks": 1567,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 8,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 12,
+      "lamp_glitch_transitions": 0
+    }
+  }
+}

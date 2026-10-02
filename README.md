@@ -164,3 +164,5 @@ cargo run --release --bin build_circuit -- verilog tests/fixtures/seven_segment.
 ```
 
 舊的 `synthesize_verilog` API 與烘焙流程仍固定使用 Yosys，供獨立基準比較。此 CLI 模式不代表已完成正式生產切換的所有驗收。
+
+原生前端新增整數 `parameter`／`localparam` 預設值、相依常數運算與寬度／索引解析；驗證及限制見[整數參數支援](docs/native-integer-parameters-2026-10-02.md)。

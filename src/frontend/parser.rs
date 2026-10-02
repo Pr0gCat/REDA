@@ -10,9 +10,10 @@
 //! and nothing else.
 
 use super::ast::{
-    AlwaysComb, AlwaysFf, Assign, BinaryOp, BlockingAssign, CaseItem, CaseStatement, Expr,
-    ExprKind, Ident, IfAssign, Item, Module, NetDecl, NetType, NonblockingAssign, PortDecl,
-    PortDirection, Range, SourceKind, SourceNode, SourceNodeId, SourceSet, Stmt, UnaryOp,
+    AlwaysComb, AlwaysFf, Assign, BinaryOp, BlockingAssign, CaseItem, CaseStatement, ConstExpr,
+    ConstKind, ConstOp, Expr, ExprKind, Ident, IfAssign, Item, Module, NetDecl, NetType,
+    NonblockingAssign, Parameter, PortDecl, PortDirection, Range, SourceKind, SourceNode,
+    SourceNodeId, SourceSet, Stmt, UnaryOp,
 };
 
 use super::lexer::{self, Keyword, Number, Punct, Token, TokenKind};
@@ -177,8 +178,13 @@ impl<'n> Parser<'n> {
         let start = self.expect_keyword(Keyword::Module)?;
         let name = self.expect_ident()?;
 
-        if self.is_punct(Punct::Hash) {
-            return Err(self.unsupported_here("`(` or `;`: parameter ports are not supported"));
+        let mut parameters = Vec::new();
+        if self.eat_punct(Punct::Hash) {
+            self.expect_punct(Punct::LParen)?;
+            if !self.is_punct(Punct::RParen) {
+                self.parameters(&mut parameters)?;
+            }
+            self.expect_punct(Punct::RParen)?;
         }
 
         let mut ports = Vec::new();
@@ -187,7 +193,7 @@ impl<'n> Parser<'n> {
                 let mut previous: Option<(PortDirection, Option<NetType>, Option<Range>)> = None;
                 loop {
                     let port = self.port(previous.as_ref())?;
-                    previous = Some((port.direction, port.net_type, port.range));
+                    previous = Some((port.direction, port.net_type, port.range.clone()));
                     ports.push(port);
                     if !self.eat_punct(Punct::Comma) {
                         break;
@@ -203,7 +209,12 @@ impl<'n> Parser<'n> {
             if self.at_eof() {
                 return Err(self.error_here("`endmodule`"));
             }
-            self.item(&mut items)?;
+            if self.is_keyword(Keyword::Parameter) || self.is_keyword(Keyword::Localparam) {
+                self.parameters(&mut parameters)?;
+                self.expect_punct(Punct::Semicolon)?;
+            } else {
+                self.item(&mut items)?;
+            }
         }
         let end = self.expect_keyword(Keyword::Endmodule)?;
         let span = start.join(end);
@@ -212,6 +223,7 @@ impl<'n> Parser<'n> {
             id,
             span,
             name,
+            parameters,
             ports,
             items,
         })
@@ -248,7 +260,7 @@ impl<'n> Parser<'n> {
             None => match previous {
                 // `input a, b`: a bare identifier inherits the previous
                 // port's direction, type, and range.
-                Some(&(direction, net_type, range)) => (direction, net_type, range),
+                Some((direction, net_type, range)) => (*direction, *net_type, range.clone()),
                 None => return Err(self.error_here("`input` or `output`")),
             },
         };
@@ -280,8 +292,135 @@ impl<'n> Parser<'n> {
                 self.advance();
                 Some(NetType::Logic)
             }
+            TokenKind::Keyword(Keyword::Int | Keyword::Integer) => {
+                return Err(self.unsupported_here(
+                    "integer signals are not supported; declare explicit packed logic widths",
+                ));
+            }
             _ => None,
         })
+    }
+
+    fn parameters(&mut self, parameters: &mut Vec<Parameter>) -> Result<(), Diagnostic> {
+        loop {
+            let start = self.peek().span;
+            if self.is_keyword(Keyword::Parameter) || self.is_keyword(Keyword::Localparam) {
+                self.advance();
+            } else if parameters.is_empty() {
+                return Err(self.error_here("`parameter` or `localparam`"));
+            }
+            if matches!(
+                self.peek().kind,
+                TokenKind::Keyword(Keyword::Int | Keyword::Integer)
+            ) {
+                self.advance();
+            }
+            if matches!(
+                self.peek().kind,
+                TokenKind::Keyword(Keyword::Logic | Keyword::Wire | Keyword::Reg)
+            ) || self.is_punct(Punct::LBracket)
+            {
+                return Err(self.unsupported_here("only signed integer parameters are supported"));
+            }
+            if matches!(&self.peek().kind, TokenKind::Ident(t) if matches!(t.as_str(), "signed" | "unsigned" | "bit" | "byte" | "shortint" | "longint" | "time" | "real" | "shortreal" | "string" | "type"))
+            {
+                return Err(self
+                    .unsupported_here("this parameter type is outside the native integer subset"));
+            }
+            let name = self.expect_ident()?;
+            self.expect_punct(Punct::Assign)?;
+            let value = self.const_expr(0)?;
+            let span = start.join(value.span);
+            let id = self.node(SourceKind::Parameter, span, Some(name.name.clone()));
+            parameters.push(Parameter { id, name, value });
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn const_expr(&mut self, minimum: u8) -> Result<ConstExpr, Diagnostic> {
+        let start = self.peek().span;
+        let mut left = match &self.peek().kind {
+            TokenKind::Number(Number::Unsized(_)) => {
+                let (value, span) = self.expect_unsized_number()?;
+                ConstExpr {
+                    kind: ConstKind::Integer(value),
+                    span,
+                }
+            }
+            TokenKind::Number(Number::Sized { .. }) => {
+                return Err(self.unsupported_here("sized parameter values are not supported"));
+            }
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                self.advance();
+                if self.is_punct(Punct::LParen) {
+                    return Err(self.unsupported_here("constant function calls are not supported"));
+                }
+                ConstExpr {
+                    kind: ConstKind::Name(name),
+                    span: start,
+                }
+            }
+            TokenKind::Punct(Punct::Minus) => {
+                self.advance();
+                let operand = self.const_expr(3)?;
+                ConstExpr {
+                    span: start.join(operand.span),
+                    kind: ConstKind::Neg(Box::new(operand)),
+                }
+            }
+            TokenKind::Punct(Punct::Plus) => {
+                self.advance();
+                self.const_expr(3)?
+            }
+            TokenKind::Punct(Punct::LParen) => {
+                self.advance();
+                let mut value = self.const_expr(0)?;
+                value.span = start.join(self.expect_punct(Punct::RParen)?);
+                value
+            }
+            TokenKind::Punct(Punct::LBrace | Punct::Tilde | Punct::Bang) => {
+                return Err(self.unsupported_here(
+                    "this constant expression is outside the native integer subset",
+                ))
+            }
+            _ => return Err(self.error_here("an integer constant expression")),
+        };
+        loop {
+            let (op, precedence) = match self.peek().kind {
+                TokenKind::Punct(Punct::Plus) => (ConstOp::Add, 1),
+                TokenKind::Punct(Punct::Minus) => (ConstOp::Sub, 1),
+                TokenKind::Punct(Punct::Star) => (ConstOp::Mul, 2),
+                TokenKind::Punct(
+                    Punct::Amp
+                    | Punct::Pipe
+                    | Punct::Caret
+                    | Punct::AndAnd
+                    | Punct::OrOr
+                    | Punct::EqualEqual
+                    | Punct::BangEqual
+                    | Punct::Question,
+                ) => {
+                    return Err(self.unsupported_here(
+                        "this constant operator is outside the native integer subset",
+                    ))
+                }
+                _ => break,
+            };
+            if precedence < minimum {
+                break;
+            }
+            self.advance();
+            let right = self.const_expr(precedence + 1)?;
+            left = ConstExpr {
+                span: left.span.join(right.span),
+                kind: ConstKind::Binary(op, Box::new(left), Box::new(right)),
+            };
+        }
+        Ok(left)
     }
 
     fn range(&mut self) -> Result<Option<Range>, Diagnostic> {
@@ -289,9 +428,9 @@ impl<'n> Parser<'n> {
             return Ok(None);
         }
         let start = self.advance().span;
-        let (msb, _) = self.expect_unsized_number()?;
+        let msb = self.const_expr(0)?;
         self.expect_punct(Punct::Colon)?;
-        let (lsb, _) = self.expect_unsized_number()?;
+        let lsb = self.const_expr(0)?;
         let end = self.expect_punct(Punct::RBracket)?;
         Ok(Some(Range {
             msb,
@@ -302,6 +441,7 @@ impl<'n> Parser<'n> {
 
     fn item(&mut self, items: &mut Vec<Item>) -> Result<(), Diagnostic> {
         match self.peek().kind {
+            TokenKind::Keyword(Keyword::Int | Keyword::Integer) => Err(self.unsupported_here("integer signals are not supported; declare explicit packed logic widths")),
             TokenKind::Keyword(Keyword::Assign) => {
                 let start = self.advance().span;
                 let lhs = self.expr(0)?;
@@ -326,7 +466,7 @@ impl<'n> Parser<'n> {
                     items.push(Item::Declaration(NetDecl {
                         id,
                         span,
-                        range,
+                        range: range.clone(),
                         name,
                     }));
                     if !self.eat_punct(Punct::Comma) {
@@ -361,9 +501,6 @@ impl<'n> Parser<'n> {
             TokenKind::Keyword(Keyword::AlwaysComb) => self.always_comb(items, false),
             TokenKind::Keyword(Keyword::AlwaysFf) => {
                 self.always_ff(items)
-            }
-            TokenKind::Keyword(Keyword::Parameter) | TokenKind::Keyword(Keyword::Localparam) => {
-                Err(self.unsupported_here("a module item: parameters are not supported"))
             }
             TokenKind::Keyword(Keyword::Input) | TokenKind::Keyword(Keyword::Output) => Err(self
                 .unsupported_here(
@@ -635,6 +772,7 @@ impl<'n> Parser<'n> {
                 TokenKind::Punct(Punct::EqualEqual) => (Some(BinaryOp::Equal), BP_EQUALITY),
                 TokenKind::Punct(Punct::BangEqual) => (Some(BinaryOp::NotEqual), BP_EQUALITY),
                 TokenKind::Punct(Punct::Question) => (None, BP_TERNARY),
+                TokenKind::Punct(Punct::Plus | Punct::Minus | Punct::Star) => return Err(self.unsupported_here("data arithmetic is not supported; integer arithmetic is available in constant expressions")),
                 _ => break,
             };
             if bp < min_bp {
@@ -702,9 +840,9 @@ impl<'n> Parser<'n> {
         let mut expr = self.primary()?;
         while self.is_punct(Punct::LBracket) {
             self.advance();
-            let (first, _) = self.expect_unsized_number()?;
+            let first = self.const_expr(0)?;
             if self.eat_punct(Punct::Colon) {
-                let (second, _) = self.expect_unsized_number()?;
+                let second = self.const_expr(0)?;
                 let end = self.expect_punct(Punct::RBracket)?;
                 let span = expr.span.join(end);
                 let id = self.node(SourceKind::PartSelect, span, None);
@@ -991,7 +1129,9 @@ mod tests {
         let set = parse_one("module m(input logic [1:0] a, b, output y); endmodule").unwrap();
         let ports = &set.modules[0].ports;
         assert_eq!(ports[1].direction, PortDirection::Input);
-        assert_eq!(ports[1].range.map(|r| (r.msb, r.lsb)), Some((1, 0)));
+        let range = ports[1].range.as_ref().unwrap();
+        assert_eq!(range.msb.kind, ConstKind::Integer(1));
+        assert_eq!(range.lsb.kind, ConstKind::Integer(0));
         assert_eq!(ports[2].direction, PortDirection::Output);
         assert_eq!(ports[2].range, None);
     }

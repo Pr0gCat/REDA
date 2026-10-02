@@ -332,7 +332,8 @@ fn measure(
         let manifest = if let Some(rewrite) = c.physical_rewrite() {
             rewrite.implemented_candidate()
         } else {
-            adapted = LegacyCandidateAdapter::adapt(implementation, c).unwrap();
+            adapted = LegacyCandidateAdapter::adapt(implementation, c)
+                .map_err(|e| format!("landing manifest unavailable: {e:?}"))?;
             &adapted.candidate
         };
         for route in manifest.routes.values() {

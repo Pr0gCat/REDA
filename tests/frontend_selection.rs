@@ -31,7 +31,9 @@ fn native_auto_and_forced_yosys_compile_same_function() {
 #[test]
 fn explicit_unsupported_falls_back_but_native_rejects() {
     for text in [
-        "module m #(parameter W=1)(input a, output y); assign y = a; endmodule",
+        "module m #(parameter logic [0:0] W=1'b1)(input a, output y); assign y = a; endmodule",
+        "module m #(parameter int unsigned W=1)(input a,output y); assign y=a; endmodule",
+        "module m #(parameter W=(1==1)?1:2)(input a,output y); assign y=a; endmodule",
         "module m(input a, b, output reg y); always @(a or b) y = a & b; endmodule",
         "module m(input a, output reg y); always @* y <= a; endmodule",
     ] {
@@ -119,7 +121,7 @@ fn cli_exercises_real_yosys_fallback_and_forced_mode() {
     let path = std::env::temp_dir().join(format!("reda-fallback-{}.v", std::process::id()));
     std::fs::write(
         &path,
-        "module m #(parameter W=1)(input a, output y); assign y = a; endmodule",
+        "module m #(parameter logic [0:0] W=1'b1)(input a, output y); assign y = a; endmodule",
     )
     .unwrap();
     for args in [
@@ -145,6 +147,7 @@ fn legacy_comb_and_dff_cli_run_without_a_yosys_interpreter() {
         "module m(input a, b, output reg y); always @* y = a & b; endmodule".to_string(),
         "module m(input d, clk, output reg q); always @(posedge clk) q <= d; endmodule".to_string(),
         include_str!("fixtures/seven_segment.v").replace("module bcd_seven_segment", "module m"),
+        include_str!("fixtures/parameter_bits.sv").replace("module parameter_bits", "module m"),
     ] {
         std::fs::write(&path, text).unwrap();
         for mode in ["native", "auto"] {

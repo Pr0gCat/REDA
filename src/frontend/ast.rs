@@ -20,6 +20,7 @@ pub enum SourceKind {
     Module,
     Port,
     Declaration,
+    Parameter,
     Assign,
     Identifier,
     Literal,
@@ -69,10 +70,34 @@ pub enum NetType {
 }
 
 /// A packed range `[msb:lsb]` as written. Elaboration insists on `[N-1:0]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConstKind {
+    Integer(u64),
+    Name(String),
+    Neg(Box<ConstExpr>),
+    Binary(ConstOp, Box<ConstExpr>, Box<ConstExpr>),
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstOp {
+    Add,
+    Sub,
+    Mul,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstExpr {
+    pub kind: ConstKind,
+    pub span: Span,
+}
+#[derive(Debug, Clone)]
+pub struct Parameter {
+    pub id: SourceNodeId,
+    pub name: Ident,
+    pub value: ConstExpr,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Range {
-    pub msb: u64,
-    pub lsb: u64,
+    pub msb: ConstExpr,
+    pub lsb: ConstExpr,
     pub span: Span,
 }
 
@@ -87,6 +112,7 @@ pub struct Module {
     pub id: SourceNodeId,
     pub span: Span,
     pub name: Ident,
+    pub parameters: Vec<Parameter>,
     pub ports: Vec<PortDecl>,
     pub items: Vec<Item>,
 }
@@ -250,7 +276,7 @@ pub enum ExprKind {
     Unary(UnaryOp, Box<Expr>),
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
-    BitSelect(Box<Expr>, u64),
-    PartSelect(Box<Expr>, u64, u64),
+    BitSelect(Box<Expr>, ConstExpr),
+    PartSelect(Box<Expr>, ConstExpr, ConstExpr),
     Concat(Vec<Expr>),
 }

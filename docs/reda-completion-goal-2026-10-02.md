@@ -66,3 +66,9 @@
 原生支援 `reg`、wildcard legacy `always`、現有正緣／enable clocked forms，以及連續賦值的串接／巢狀／slice targets。標準 `seven_segment.v` 現在可在 native/auto 且 Python 不存在時完成實體生成；三次完整512階段波形與已封存有效優化結果完全相同，未退步。25項compiler、12項DFF來源語意、24項frontend unit、2項DFF實體、6項CLI selection通過，WASM library檢查通過。詳見[原生legacy HDL](native-legacy-hdl-2026-10-02.md)。第5/6項有實際進展但尚未完成，parameter／instance／inout與更廣循序範圍仍待實作。
 
 第8項另重現路由根因：typed request 的arrival balancing runway使一般／unary末端與frozen reference不同，ring charge及pinned fixture前置幾何因此失配。原始期待、simulator與verifier均保留，已封存[路由證據](reda-completion-routing-audit-2026-10-02.json)。需分開legacy compatibility與經完整qualification的balancing候選後再驗收，不以更新快照宣告修好。八項總目標繼續active。
+
+## 原生整數參數進展
+
+原生解析 header/body parameter及localparam defaults、int/integer與未指定型別的decimal常數、相依／前向參照及加減乘、寬度／讀寫索引。70項相關測試與WASM通過；無Python的native/auto CLI成功生成parameter fixture。Native／fresh Yosys各512階段全部內部／公開真值與事件重播通過，三次完整bytes各自相同；setup/target品質相同，最差12 ticks且零輸出毛刺。詳見[整數參數支援與限制](native-integer-parameters-2026-10-02.md)。
+
+此fixture為未sealed的Unified3d世界，沒有宣稱strict認證或新優化；缺少landing manifest時實驗工具明確回報錯誤而不panic。第5/6項繼續推進但仍未完成：packed/sized参数、其他constant operators、instance／override／inout與更廣循序仍待補。八項目標保持active，root failures、通用budget與真實Minecraft仍待處理。

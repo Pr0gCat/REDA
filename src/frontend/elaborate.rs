@@ -25,8 +25,9 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::ast::{
-    AlwaysComb, AlwaysFf, Assign, BinaryOp, CaseStatement, Expr, ExprKind, IfAssign, Item, Module,
-    NonblockingAssign, PortDirection, Range, SourceNodeId, SourceSet, Stmt, UnaryOp,
+    AlwaysComb, AlwaysFf, Assign, BinaryOp, CaseStatement, ConstExpr, ConstKind, ConstOp, Expr,
+    ExprKind, IfAssign, Item, Module, NonblockingAssign, Parameter, PortDirection, Range,
+    SourceNodeId, SourceSet, Stmt, UnaryOp,
 };
 use super::debug::SyntheticOrigin;
 use super::rtl::{RtlBinaryOp, RtlExpr, RtlKind};
@@ -168,6 +169,7 @@ pub fn elaborate(set: &SourceSet, top: &str) -> Result<Design, Vec<Diagnostic>> 
         by_name: HashMap::new(),
         errors: Vec::new(),
         ff_clock: None,
+        parameters: HashMap::new(),
     };
     let design = elaborator.module(module);
     if elaborator.errors.is_empty() {
@@ -179,7 +181,57 @@ pub fn elaborate(set: &SourceSet, top: &str) -> Result<Design, Vec<Diagnostic>> 
     }
 }
 
+fn constant_value(
+    expr: &ConstExpr,
+    definitions: &HashMap<String, &Parameter>,
+    values: &mut HashMap<String, i32>,
+    active: &mut HashSet<String>,
+) -> Result<i32, Diagnostic> {
+    let value = match &expr.kind {
+        ConstKind::Integer(value) => i32::try_from(*value).ok(),
+        ConstKind::Name(name) => {
+            if let Some(value) = values.get(name) {
+                return Ok(*value);
+            }
+            if !active.insert(name.clone()) {
+                return Err(error(
+                    expr.span,
+                    format!("cyclic parameter dependency at `{name}`"),
+                ));
+            }
+            let result = match definitions.get(name) {
+                Some(parameter) => constant_value(&parameter.value, definitions, values, active),
+                None => Err(error(expr.span, format!("unknown parameter `{name}`"))),
+            };
+            active.remove(name);
+            if let Ok(value) = result {
+                values.insert(name.clone(), value);
+            }
+            return result;
+        }
+        ConstKind::Neg(value) => constant_value(value, definitions, values, active)?.checked_neg(),
+        ConstKind::Binary(op, left, right) => {
+            let left = constant_value(left, definitions, values, active)?;
+            let right = constant_value(right, definitions, values, active)?;
+            match op {
+                ConstOp::Add => left.checked_add(right),
+                ConstOp::Sub => left.checked_sub(right),
+                ConstOp::Mul => left.checked_mul(right),
+            }
+        }
+    };
+    value.ok_or_else(|| {
+        let mut diagnostic = error(
+            expr.span,
+            "constant expression exceeds the native signed 32-bit integer subset",
+        );
+        diagnostic.kind = super::DiagnosticKind::Unsupported;
+        diagnostic
+    })
+}
+
 struct Elaborator {
+    parameters: HashMap<String, i32>,
     nodes: Vec<ElabNode>,
     signals: Vec<SignalInfo>,
     by_name: HashMap<String, usize>,
@@ -213,6 +265,45 @@ impl Elaborator {
         // The module's own node comes first, so elaborated IDs run in the
         // same order as the syntax they came from.
         let _module = self.node(module.id, ElabKind::Module, 0);
+        let mut definitions = HashMap::new();
+        for parameter in &module.parameters {
+            if definitions
+                .insert(parameter.name.name.clone(), parameter)
+                .is_some()
+            {
+                self.fail(
+                    parameter.name.span,
+                    format!(
+                        "parameter `{}` is declared more than once",
+                        parameter.name.name
+                    ),
+                );
+            }
+        }
+        for parameter in &module.parameters {
+            match constant_value(
+                &parameter.value,
+                &definitions,
+                &mut self.parameters,
+                &mut HashSet::new(),
+            ) {
+                Ok(value) => {
+                    self.parameters.insert(parameter.name.name.clone(), value);
+                }
+                Err(diagnostic) => self.errors.push(diagnostic),
+            }
+            self.node(parameter.id, ElabKind::Expr, 32);
+        }
+
+        // Constant failures prevent meaningful width checking; preserve the
+        // original error classification instead of inventing unknown-name errors.
+        if !self.errors.is_empty() {
+            return Design {
+                nodes: std::mem::take(&mut self.nodes),
+                signals: Vec::new(),
+                assigns: Vec::new(),
+            };
+        }
 
         // Pass one: collect every declaration and signature before
         // resolving any body, so an assignment may refer to a net declared
@@ -290,6 +381,13 @@ impl Elaborator {
     }
 
     fn declare(&mut self, signal: SignalInfo) {
+        if self.parameters.contains_key(&signal.name) {
+            self.fail(
+                signal.span,
+                format!("`{}` is already declared as a parameter", signal.name),
+            );
+            return;
+        }
         if let Some(&previous) = self.by_name.get(&signal.name) {
             let first = self.signals[previous].span;
             self.fail(
@@ -308,17 +406,33 @@ impl Elaborator {
     /// The declared width of `[N-1:0]`, or 1 when there is no range.
     fn width_of(&mut self, range: Option<&Range>, name: &str, span: Span) -> u32 {
         let Some(range) = range else { return 1 };
-        if range.lsb != 0 || range.msb < range.lsb {
-            self.fail(
-                range.span,
-                format!(
-                    "`{name}` must be declared as `[N-1:0]`; version 1 supports only descending \
-                     ranges based at zero"
-                ),
-            );
+        let mut resolve = |expr| {
+            constant_value(
+                expr,
+                &HashMap::new(),
+                &mut self.parameters,
+                &mut HashSet::new(),
+            )
+        };
+        let msb = match resolve(&range.msb) {
+            Ok(value) => value,
+            Err(error) => {
+                self.errors.push(error);
+                return 1;
+            }
+        };
+        let lsb = match resolve(&range.lsb) {
+            Ok(value) => value,
+            Err(error) => {
+                self.errors.push(error);
+                return 1;
+            }
+        };
+        if lsb != 0 || msb < lsb {
+            self.fail(range.span, format!("`{name}` must be declared as `[N-1:0]`; version 1 supports only descending ranges based at zero"));
             return 1;
         }
-        match u32::try_from(range.msb + 1) {
+        match u32::try_from(i64::from(msb) + 1) {
             Ok(width) if width <= 4096 => width,
             _ => {
                 self.fail(
@@ -792,8 +906,33 @@ impl Elaborator {
         })
     }
 
+    fn constant_index(&mut self, expr: &ConstExpr) -> Option<u64> {
+        match constant_value(
+            expr,
+            &HashMap::new(),
+            &mut self.parameters,
+            &mut HashSet::new(),
+        ) {
+            Ok(value) if value >= 0 => Some(value as u64),
+            Ok(_) => {
+                self.fail(expr.span, "negative selection index is out of range");
+                None
+            }
+            Err(error) => {
+                self.errors.push(error);
+                None
+            }
+        }
+    }
+
     /// Resolve an assignment target to `(signal, lsb, width)`.
     fn target(&mut self, expr: &Expr) -> Option<(usize, u32, u32)> {
+        if let ExprKind::Ident(name) = &expr.kind {
+            if self.parameters.contains_key(name) {
+                self.fail(expr.span, format!("parameter `{name}` cannot be assigned"));
+                return None;
+            }
+        }
         let (base, lsb, width) = match &expr.kind {
             ExprKind::Ident(name) => {
                 let index = self.lookup(name, expr.span)?;
@@ -808,7 +947,8 @@ impl Elaborator {
                     return None;
                 };
                 let signal = self.lookup(name, base.span)?;
-                let bit = self.check_index(signal, *index, expr.span)?;
+                let index = self.constant_index(index)?;
+                let bit = self.check_index(signal, index, expr.span)?;
                 (signal, bit, 1)
             }
             ExprKind::PartSelect(base, msb, lsb) => {
@@ -820,7 +960,9 @@ impl Elaborator {
                     return None;
                 };
                 let signal = self.lookup(name, base.span)?;
-                let (lsb, width) = self.check_range(signal, *msb, *lsb, expr.span)?;
+                let msb = self.constant_index(msb)?;
+                let lsb = self.constant_index(lsb)?;
+                let (lsb, width) = self.check_range(signal, msb, lsb, expr.span)?;
                 (signal, lsb, width)
             }
             _ => {
@@ -896,6 +1038,13 @@ impl Elaborator {
     fn expr(&mut self, expr: &Expr) -> Option<RtlExpr> {
         match &expr.kind {
             ExprKind::Ident(name) => {
+                if let Some(value) = self.parameters.get(name).copied() {
+                    let elab = self.node(expr.id, ElabKind::Expr, 32);
+                    let bits = (0..32)
+                        .map(|bit| (value as u32) & (1 << bit) != 0)
+                        .collect();
+                    return Some(RtlExpr::new(RtlKind::Const(bits), 32, elab));
+                }
                 let signal = self.lookup(name, expr.span)?;
                 let width = self.signals[signal].width;
                 let elab = self.node(expr.id, ElabKind::Expr, width);
@@ -914,8 +1063,21 @@ impl Elaborator {
                     self.fail(expr.span, "only a signal can be bit-selected in version 1");
                     return None;
                 };
+                let index = self.constant_index(index)?;
+                if let Some(value) = self.parameters.get(name).copied() {
+                    if index >= 32 {
+                        self.fail(expr.span, "parameter selection is out of range");
+                        return None;
+                    }
+                    let elab = self.node(expr.id, ElabKind::Expr, 1);
+                    return Some(RtlExpr::new(
+                        RtlKind::Const(vec![(value as u32) & (1 << index) != 0]),
+                        1,
+                        elab,
+                    ));
+                }
                 let signal = self.lookup(name, base.span)?;
-                let bit = self.check_index(signal, *index, expr.span)?;
+                let bit = self.check_index(signal, index, expr.span)?;
                 let elab = self.node(expr.id, ElabKind::Expr, 1);
                 Some(RtlExpr::new(RtlKind::Signal { signal, lsb: bit }, 1, elab))
             }
@@ -924,8 +1086,22 @@ impl Elaborator {
                     self.fail(expr.span, "only a signal can be part-selected in version 1");
                     return None;
                 };
+                let msb = self.constant_index(msb)?;
+                let lsb = self.constant_index(lsb)?;
+                if let Some(value) = self.parameters.get(name).copied() {
+                    if msb < lsb || msb >= 32 {
+                        self.fail(expr.span, "parameter selection is out of range");
+                        return None;
+                    }
+                    let width = (msb - lsb + 1) as u32;
+                    let elab = self.node(expr.id, ElabKind::Expr, width);
+                    let bits = (lsb..=msb)
+                        .map(|bit| (value as u32) & (1 << bit) != 0)
+                        .collect();
+                    return Some(RtlExpr::new(RtlKind::Const(bits), width, elab));
+                }
                 let signal = self.lookup(name, base.span)?;
-                let (lsb, width) = self.check_range(signal, *msb, *lsb, expr.span)?;
+                let (lsb, width) = self.check_range(signal, msb, lsb, expr.span)?;
                 let elab = self.node(expr.id, ElabKind::Expr, width);
                 Some(RtlExpr::new(RtlKind::Signal { signal, lsb }, width, elab))
             }
