@@ -73,6 +73,7 @@ fn native_and_yosys_dffs_match_physical_state_from_power_on() {
     for (top, text) in [
         ("dff", include_str!("fixtures/dff.sv")),
         ("dff_enable", include_str!("fixtures/dff_enable.sv")),
+        ("hierarchy_dff", include_str!("fixtures/hierarchy_dff.sv")),
     ] {
         let artifact = compile_systemverilog(
             &[SourceInput { name: top, text }],

@@ -148,6 +148,8 @@ fn legacy_comb_and_dff_cli_run_without_a_yosys_interpreter() {
         "module m(input d, clk, output reg q); always @(posedge clk) q <= d; endmodule".to_string(),
         include_str!("fixtures/seven_segment.v").replace("module bcd_seven_segment", "module m"),
         include_str!("fixtures/parameter_bits.sv").replace("module parameter_bits", "module m"),
+        include_str!("fixtures/hierarchy_bits.sv").replace("module hierarchy_bits", "module m"),
+        include_str!("fixtures/hierarchy_dff.sv").replace("module hierarchy_dff", "module m"),
     ] {
         std::fs::write(&path, text).unwrap();
         for mode in ["native", "auto"] {

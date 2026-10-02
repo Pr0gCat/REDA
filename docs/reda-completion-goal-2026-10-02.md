@@ -72,3 +72,22 @@
 原生解析 header/body parameter及localparam defaults、int/integer與未指定型別的decimal常數、相依／前向參照及加減乘、寬度／讀寫索引。70項相關測試與WASM通過；無Python的native/auto CLI成功生成parameter fixture。Native／fresh Yosys各512階段全部內部／公開真值與事件重播通過，三次完整bytes各自相同；setup/target品質相同，最差12 ticks且零輸出毛刺。詳見[整數參數支援與限制](native-integer-parameters-2026-10-02.md)。
 
 此fixture為未sealed的Unified3d世界，沒有宣稱strict認證或新優化；缺少landing manifest時實驗工具明確回報錯誤而不panic。第5/6項繼續推進但仍未完成：packed/sized参数、其他constant operators、instance／override／inout與更廣循序仍待補。八項目標保持active，root failures、通用budget與真實Minecraft仍待處理。
+
+## 原生模組實例與覆寫進展
+
+新增獨立實例作用域、具名／位置連接、巢狀／跨檔與多實例宣告、整數參數覆寫及local defaults。完整階層seven segment的512階段含landing events與既有合格Native預設逐byte相同，三次重跑一致；8671總ticks／83輸出毛刺／1385pulse保持。巢狀enable DFF通過來源狀態oracle與原有實體power-on/edge/hold驗證，未增加等待階段。debug binding保存qualified names以區別實例。
+
+Yosys對照流程修復缺少flatten造成的module-cell讀取失敗；原有flat Yosys基準仍逐byte相同。階層Yosys為不同合成結果，最差74／總13975，沒有將此聲稱為優化；兩個前端的階層七段真值及完整事件／landing重播通過。79項相關測試及WASM驗收；無Python的native/auto可生成完整階層七段。詳見[階層支援與證據](native-module-instances-2026-10-02.md)。
+
+| 八項目前狀態 | 已有證據／仍缺驗收 |
+|---|---|
+| 1 大型生成：未完成 | 合格刷新縮減已整合seven segment／16×7 ROM；完整共享decoder等仍缺 |
+| 2 大型品質：未完成 | 有效改善保持；更廣大型Mux/ROM通解仍缺 |
+| 3 通用候選：未完成 | 結構提案、決定性default budget有效；一般fragment API proposal loop仍缺 |
+| 4 循序：未完成 | 正緣／enable可跨階層；reset／多clock／negedge／FSM等仍缺 |
+| 5 原生HDL：未完成 | legacy、整數defaults／override與顯式階層可用；inout及其他已列語意仍缺 |
+| 6 無必要Yosys：未完成 | 新增階層及完整七段missing-Python成功；待上述所有支援完成 |
+| 7 真實Minecraft：未完成 | 仍無本目標合格server conformance，不能以本輪simulator代替 |
+| 8 全專案收斂：未完成 | 本輪相關驗收通過；既有root failures、全量品質／工具門檻仍待修復 |
+
+所有八項真正完成前保持active；保留使用者probe變更，沒有修改simulator／verifier或放寬測試。

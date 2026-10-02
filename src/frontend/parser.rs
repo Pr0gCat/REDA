@@ -10,10 +10,10 @@
 //! and nothing else.
 
 use super::ast::{
-    AlwaysComb, AlwaysFf, Assign, BinaryOp, BlockingAssign, CaseItem, CaseStatement, ConstExpr,
-    ConstKind, ConstOp, Expr, ExprKind, Ident, IfAssign, Item, Module, NetDecl, NetType,
-    NonblockingAssign, Parameter, PortDecl, PortDirection, Range, SourceKind, SourceNode,
-    SourceNodeId, SourceSet, Stmt, UnaryOp,
+    AlwaysComb, AlwaysFf, Assign, BinaryOp, BlockingAssign, CaseItem, CaseStatement, Connection,
+    ConstExpr, ConstKind, ConstOp, Expr, ExprKind, Ident, IfAssign, Instance, Item, Module,
+    NetDecl, NetType, NonblockingAssign, Parameter, PortDecl, PortDirection, Range, SourceKind,
+    SourceNode, SourceNodeId, SourceSet, Stmt, UnaryOp,
 };
 
 use super::lexer::{self, Keyword, Number, Punct, Token, TokenKind};
@@ -302,9 +302,11 @@ impl<'n> Parser<'n> {
     }
 
     fn parameters(&mut self, parameters: &mut Vec<Parameter>) -> Result<(), Diagnostic> {
+        let mut local = false;
         loop {
             let start = self.peek().span;
             if self.is_keyword(Keyword::Parameter) || self.is_keyword(Keyword::Localparam) {
+                local = self.is_keyword(Keyword::Localparam);
                 self.advance();
             } else if parameters.is_empty() {
                 return Err(self.error_here("`parameter` or `localparam`"));
@@ -332,7 +334,12 @@ impl<'n> Parser<'n> {
             let value = self.const_expr(0)?;
             let span = start.join(value.span);
             let id = self.node(SourceKind::Parameter, span, Some(name.name.clone()));
-            parameters.push(Parameter { id, name, value });
+            parameters.push(Parameter {
+                local,
+                id,
+                name,
+                value,
+            });
             if !self.eat_punct(Punct::Comma) {
                 break;
             }
@@ -506,11 +513,90 @@ impl<'n> Parser<'n> {
                 .unsupported_here(
                     "a module item: non-ANSI port declarations are not supported; declare ports in the module header",
                 )),
-            TokenKind::Ident(_) if matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Ident(_))) => Err(self.unsupported_here(
-                "a module item: module instances are not supported",
-            )),
+            TokenKind::Ident(_) => self.instances(items),
             _ => Err(self.error_here("a module item")),
         }
+    }
+
+    fn connections<T>(
+        &mut self,
+        parse: impl Fn(&mut Self) -> Result<T, Diagnostic>,
+    ) -> Result<Vec<Connection<T>>, Diagnostic> {
+        self.expect_punct(Punct::LParen)?;
+        let mut connections = Vec::new();
+        let named = self.is_punct(Punct::Dot);
+        while !self.is_punct(Punct::RParen) {
+            if self.is_punct(Punct::Dot) != named {
+                return Err(self.error_here("consistently named or positional connections"));
+            }
+            let name = if named {
+                self.advance();
+                if self.is_punct(Punct::Star) {
+                    return Err(
+                        self.unsupported_here("wildcard instance connections are not supported")
+                    );
+                }
+                let name = self.expect_ident()?;
+                if !self.is_punct(Punct::LParen) {
+                    return Err(self.unsupported_here(
+                        "implicit named instance connections are not supported",
+                    ));
+                }
+                self.expect_punct(Punct::LParen)?;
+                Some(name)
+            } else {
+                None
+            };
+            if self.is_punct(Punct::RParen) || self.is_punct(Punct::Comma) {
+                return Err(self.unsupported_here(
+                    "open instance connections are outside the native two-state subset",
+                ));
+            }
+            let value = parse(self)?;
+            if named {
+                self.expect_punct(Punct::RParen)?;
+            }
+            connections.push(Connection { name, value });
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+            if self.is_punct(Punct::RParen) {
+                return Err(self.error_here("a connection after `,`"));
+            }
+        }
+        self.expect_punct(Punct::RParen)?;
+        Ok(connections)
+    }
+
+    fn instances(&mut self, items: &mut Vec<Item>) -> Result<(), Diagnostic> {
+        let module = self.expect_ident()?;
+        let parameters = if self.eat_punct(Punct::Hash) {
+            self.connections(|parser| parser.const_expr(0))?
+        } else {
+            Vec::new()
+        };
+        loop {
+            let name = self.expect_ident()?;
+            if self.is_punct(Punct::LBracket) {
+                return Err(self.unsupported_here("instance arrays are not supported"));
+            }
+            let ports = self.connections(|parser| parser.expr(0))?;
+            let span = module.span.join(self.tokens[self.pos - 1].span);
+            let id = self.node(SourceKind::Instance, span, Some(name.name.clone()));
+            items.push(Item::Instance(Instance {
+                id,
+                span,
+                module: module.clone(),
+                name,
+                parameters: parameters.clone(),
+                ports,
+            }));
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.expect_punct(Punct::Semicolon)?;
+        Ok(())
     }
 
     fn always_comb(&mut self, items: &mut Vec<Item>, legacy: bool) -> Result<(), Diagnostic> {

@@ -21,6 +21,7 @@ pub enum SourceKind {
     Port,
     Declaration,
     Parameter,
+    Instance,
     Assign,
     Identifier,
     Literal,
@@ -90,6 +91,7 @@ pub struct ConstExpr {
 }
 #[derive(Debug, Clone)]
 pub struct Parameter {
+    pub local: bool,
     pub id: SourceNodeId,
     pub name: Ident,
     pub value: ConstExpr,
@@ -129,6 +131,7 @@ pub struct PortDecl {
 
 #[derive(Debug, Clone)]
 pub enum Item {
+    Instance(Instance),
     /// `wire`/`logic` declaration of one internal net.
     Declaration(NetDecl),
     /// `assign lhs = rhs;`
@@ -138,6 +141,23 @@ pub enum Item {
     /// `always_ff @(posedge clock)` with the deliberately narrow sequential
     /// body supported by the compiler.
     AlwaysFf(AlwaysFf),
+}
+
+/// A connection is either positional or explicitly named; mixing is invalid.
+#[derive(Debug, Clone)]
+pub struct Connection<T> {
+    pub name: Option<Ident>,
+    pub value: T,
+}
+
+#[derive(Debug, Clone)]
+pub struct Instance {
+    pub id: SourceNodeId,
+    pub span: Span,
+    pub module: Ident,
+    pub name: Ident,
+    pub parameters: Vec<Connection<ConstExpr>>,
+    pub ports: Vec<Connection<Expr>>,
 }
 
 #[derive(Debug, Clone)]

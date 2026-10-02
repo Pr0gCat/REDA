@@ -24,7 +24,7 @@ use super::ast::PortDirection;
 use super::debug::{
     BitBinding, DebugNode, GateRef, Realisation, SignalBinding, TransformReason, Transformation,
 };
-use super::elaborate::{bit_name, Design};
+use super::elaborate::{bit_name, Design, ROOT_INSTANCE};
 use super::logic::{Blasted, LogicGraph, LogicNode, LogicNodeId};
 use super::{Diagnostic, PortBinding};
 
@@ -220,6 +220,8 @@ pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnosti
         .iter()
         .enumerate()
         .map(|(index, signal)| SignalBinding {
+            name: (design.nodes[signal.elab.0 as usize].instance != ROOT_INSTANCE)
+                .then(|| signal.name.clone()),
             elab: signal.elab,
             bits: (0..signal.width)
                 .map(|bit| {

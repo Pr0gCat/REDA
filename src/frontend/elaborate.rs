@@ -8,11 +8,9 @@
 //! debug database a layer between "the syntax that was written" and "the
 //! bits that were built".
 //!
-//! Version 1 has one instance -- the top module -- but it still names it
-//! [`ROOT_INSTANCE`] explicitly rather than pretending instance paths do not
-//! exist. When hierarchy arrives, an elaborated identity becomes source node
-//! plus instance path, and parameter values live on that path; nothing here
-//! assumes the one-to-one relationship that would have to be unpicked.
+//! Hierarchy elaborates independent parameter/name scopes and links typed
+//! ports before bit blasting. Repeated module syntax retains distinct instance
+//! IDs, while qualified signal names identify the concrete instance paths.
 //!
 //! Width checking is a strict bottom-up pass implementing exactly the
 //! unsigned table in the plan. It deliberately rejects legal SystemVerilog
@@ -26,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ast::{
     AlwaysComb, AlwaysFf, Assign, BinaryOp, CaseStatement, ConstExpr, ConstKind, ConstOp, Expr,
-    ExprKind, IfAssign, Item, Module, NonblockingAssign, Parameter, PortDirection, Range,
+    ExprKind, IfAssign, Instance, Item, Module, NonblockingAssign, Parameter, PortDirection, Range,
     SourceNodeId, SourceSet, Stmt, UnaryOp,
 };
 use super::debug::SyntheticOrigin;
@@ -38,11 +36,11 @@ use super::{Diagnostic, Severity};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ElabNodeId(pub u32);
 
-/// Identity of one instance path. Version 1 elaborates only the root.
+/// Identity of one concrete instance path, assigned in source traversal order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct InstancePathId(pub u32);
 
-/// The only instance path version 1 builds: the selected top module.
+/// The selected top module is always instance zero.
 pub const ROOT_INSTANCE: InstancePathId = InstancePathId(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -163,21 +161,106 @@ pub fn elaborate(set: &SourceSet, top: &str) -> Result<Design, Vec<Diagnostic>> 
         )]);
     }
 
-    let mut elaborator = Elaborator {
-        nodes: Vec::new(),
-        signals: Vec::new(),
-        by_name: HashMap::new(),
-        errors: Vec::new(),
-        ff_clock: None,
-        parameters: HashMap::new(),
-    };
-    let design = elaborator.module(module);
-    if elaborator.errors.is_empty() {
-        Ok(design)
-    } else {
-        let mut errors = elaborator.errors;
-        errors.sort_by_key(|diagnostic| (diagnostic.span.file, diagnostic.span.start));
-        Err(errors)
+    Hierarchy {
+        set,
+        active: Vec::new(),
+        next_instance: ROOT_INSTANCE.0,
+    }
+    .build(module, HashMap::new())
+}
+
+/// Elaborate each scope independently, then link its typed RTL into its parent.
+/// Instance IDs follow source order, so repeated definitions retain distinct origins.
+struct Hierarchy<'a> {
+    set: &'a SourceSet,
+    active: Vec<String>,
+    next_instance: u32,
+}
+
+impl Hierarchy<'_> {
+    fn build(
+        &mut self,
+        module: &Module,
+        parameters: HashMap<String, i32>,
+    ) -> Result<Design, Vec<Diagnostic>> {
+        if self.active.contains(&module.name.name) {
+            return Err(vec![error(
+                module.name.span,
+                format!("recursive module instantiation of `{}`", module.name.name),
+            )]);
+        }
+        if self.active.len() >= 128 {
+            let mut diagnostic = error(
+                module.name.span,
+                "native module hierarchy exceeds 128 levels",
+            );
+            diagnostic.kind = super::DiagnosticKind::Unsupported;
+            return Err(vec![diagnostic]);
+        }
+        let instance = InstancePathId(self.next_instance);
+        self.next_instance += 1;
+        self.active.push(module.name.name.clone());
+        let mut elaborator = Elaborator {
+            nodes: Vec::new(),
+            signals: Vec::new(),
+            by_name: HashMap::new(),
+            errors: Vec::new(),
+            ff_clock: None,
+            parameters,
+            instance,
+        };
+        let design = elaborator.module(module, self);
+        self.active.pop();
+        if elaborator.errors.is_empty() {
+            Ok(design)
+        } else {
+            elaborator
+                .errors
+                .sort_by_key(|d| (d.span.file, d.span.start));
+            Err(elaborator.errors)
+        }
+    }
+}
+
+/// Preserve all expression provenance while relocating a child scope's arenas.
+fn relocate(expr: &mut RtlExpr, signals: usize, nodes: u32) {
+    expr.elab.0 += nodes;
+    match &mut expr.kind {
+        RtlKind::Signal { signal, .. } => *signal += signals,
+        RtlKind::Const(_) => {}
+        RtlKind::Concat(parts) => {
+            for part in parts {
+                relocate(part, signals, nodes);
+            }
+        }
+        RtlKind::Slice(value, _) | RtlKind::Not(value) | RtlKind::ReduceOr(value) => {
+            relocate(value, signals, nodes)
+        }
+        RtlKind::Binary(_, left, right) | RtlKind::Equal(left, right) => {
+            relocate(left, signals, nodes);
+            relocate(right, signals, nodes);
+        }
+        RtlKind::Mux {
+            select,
+            when_true,
+            when_false,
+        } => {
+            relocate(select, signals, nodes);
+            relocate(when_true, signals, nodes);
+            relocate(when_false, signals, nodes);
+        }
+        RtlKind::Table {
+            selector,
+            arms,
+            default,
+        } => {
+            relocate(selector, signals, nodes);
+            relocate(default, signals, nodes);
+            for (_, condition, value) in arms {
+                relocate(condition, signals, nodes);
+                relocate(value, signals, nodes);
+            }
+        }
     }
 }
 
@@ -231,6 +314,7 @@ fn constant_value(
 }
 
 struct Elaborator {
+    instance: InstancePathId,
     parameters: HashMap<String, i32>,
     nodes: Vec<ElabNode>,
     signals: Vec<SignalInfo>,
@@ -246,7 +330,7 @@ impl Elaborator {
             source,
             kind,
             width,
-            instance: ROOT_INSTANCE,
+            instance: self.instance,
         });
         id
     }
@@ -261,7 +345,7 @@ impl Elaborator {
         self.errors.push(diagnostic);
     }
 
-    fn module(&mut self, module: &Module) -> Design {
+    fn module(&mut self, module: &Module, hierarchy: &mut Hierarchy<'_>) -> Design {
         // The module's own node comes first, so elaborated IDs run in the
         // same order as the syntax they came from.
         let _module = self.node(module.id, ElabKind::Module, 0);
@@ -282,7 +366,10 @@ impl Elaborator {
         }
         for parameter in &module.parameters {
             match constant_value(
-                &parameter.value,
+                &ConstExpr {
+                    kind: ConstKind::Name(parameter.name.name.clone()),
+                    span: parameter.name.span,
+                },
                 &definitions,
                 &mut self.parameters,
                 &mut HashSet::new(),
@@ -341,7 +428,23 @@ impl Elaborator {
             }
         }
 
-        // Pass two: resolve bodies.
+        // Instance names share their scope's declaration namespace.
+        let mut instances = HashSet::new();
+        for item in &module.items {
+            if let Item::Instance(instance) = item {
+                if !instances.insert(instance.name.name.clone())
+                    || self.by_name.contains_key(&instance.name.name)
+                    || self.parameters.contains_key(&instance.name.name)
+                {
+                    self.fail(
+                        instance.name.span,
+                        format!("duplicate declaration `{}`", instance.name.name),
+                    );
+                }
+            }
+        }
+
+        // Pass two: resolve bodies and recursively link instance ports.
         let mut assigns = Vec::new();
         for item in &module.items {
             let elaborated = match item {
@@ -352,6 +455,10 @@ impl Elaborator {
                 Item::AlwaysComb(always) => self.always_comb(always),
                 Item::AlwaysFf(always) => self.always_ff(always),
                 Item::Declaration(_) => None,
+                Item::Instance(instance) => {
+                    assigns.extend(self.instance(instance, hierarchy));
+                    None
+                }
             };
             if let Some(elaborated) = elaborated {
                 assigns.push(elaborated);
@@ -378,6 +485,225 @@ impl Elaborator {
             signals: std::mem::take(&mut self.signals),
             assigns,
         }
+    }
+
+    fn instance(&mut self, instance: &Instance, hierarchy: &mut Hierarchy<'_>) -> Vec<ElabAssign> {
+        let matches: Vec<_> = hierarchy
+            .set
+            .modules
+            .iter()
+            .filter(|m| m.name.name == instance.module.name)
+            .collect();
+        let module = match matches.as_slice() {
+            [module] => *module,
+            [] => {
+                self.fail(
+                    instance.module.span,
+                    format!("unknown module `{}`", instance.module.name),
+                );
+                return Vec::new();
+            }
+            _ => {
+                self.fail(
+                    instance.module.span,
+                    format!(
+                        "module `{}` is declared more than once",
+                        instance.module.name
+                    ),
+                );
+                return Vec::new();
+            }
+        };
+        let formal_parameters: Vec<_> = module.parameters.iter().filter(|p| !p.local).collect();
+        let mut parameters = HashMap::new();
+        for (index, connection) in instance.parameters.iter().enumerate() {
+            let parameter = match &connection.name {
+                Some(name) => formal_parameters
+                    .iter()
+                    .find(|p| p.name.name == name.name)
+                    .copied(),
+                None => formal_parameters.get(index).copied(),
+            };
+            let Some(parameter) = parameter else {
+                self.fail(
+                    connection.value.span,
+                    "unknown, local or excess parameter override",
+                );
+                continue;
+            };
+            if parameters.contains_key(&parameter.name.name) {
+                self.fail(
+                    connection.value.span,
+                    format!("duplicate parameter override `{}`", parameter.name.name),
+                );
+                continue;
+            }
+            match constant_value(
+                &connection.value,
+                &HashMap::new(),
+                &mut self.parameters,
+                &mut HashSet::new(),
+            ) {
+                Ok(value) => {
+                    parameters.insert(parameter.name.name.clone(), value);
+                }
+                Err(diagnostic) => self.errors.push(diagnostic),
+            }
+        }
+        let mut connections = vec![None; module.ports.len()];
+        for (index, connection) in instance.ports.iter().enumerate() {
+            let index = match &connection.name {
+                Some(name) => module.ports.iter().position(|p| p.name.name == name.name),
+                None => (index < module.ports.len()).then_some(index),
+            };
+            match index {
+                Some(index) if connections[index].is_none() => {
+                    connections[index] = Some(&connection.value)
+                }
+                Some(_) => self.fail(instance.span, "duplicate port connection"),
+                None => self.fail(instance.span, "unknown or excess port connection"),
+            }
+        }
+        if self.errors.is_empty() && connections.iter().any(Option::is_none) {
+            self.unsupported(
+                instance.span,
+                "unconnected instance ports are outside the native two-state subset",
+            );
+        }
+        if !self.errors.is_empty() {
+            return Vec::new();
+        }
+        let mut child = match hierarchy.build(module, parameters) {
+            Ok(child) => child,
+            Err(errors) => {
+                self.errors.extend(errors);
+                return Vec::new();
+            }
+        };
+        let signal_offset = self.signals.len();
+        let node_offset = self.nodes.len() as u32;
+        // Clocks cross scopes only as direct aliases of scalar input ports.
+        // Keep the existing single-clock contract across the whole hierarchy.
+        let mut clocks = HashMap::new();
+        for assignment in &child.assigns {
+            if let Some(clock) = assignment.clock {
+                if clocks.contains_key(&clock) {
+                    continue;
+                }
+                let Some(connection) = connections.get(clock).copied().flatten() else {
+                    self.unsupported(
+                        instance.span,
+                        "instance clock must connect directly to an input port",
+                    );
+                    return Vec::new();
+                };
+                let ExprKind::Ident(name) = &connection.kind else {
+                    self.unsupported(
+                        connection.span,
+                        "instance clock must connect directly to an input port",
+                    );
+                    return Vec::new();
+                };
+                let Some(parent_clock) = self.lookup(name, connection.span) else {
+                    return Vec::new();
+                };
+                let signal = &self.signals[parent_clock];
+                if signal.direction != Some(PortDirection::Input) || signal.width != 1 {
+                    self.unsupported(
+                        connection.span,
+                        "instance clock must connect to a scalar input port",
+                    );
+                    return Vec::new();
+                }
+                if self
+                    .ff_clock
+                    .is_some_and(|previous| previous != parent_clock)
+                {
+                    self.unsupported(connection.span, "multiple clocks are not supported");
+                    return Vec::new();
+                }
+                self.ff_clock = Some(parent_clock);
+                clocks.insert(clock, parent_clock);
+            }
+        }
+        for signal in &mut child.signals {
+            signal.name = format!("{}.{}", instance.name.name, signal.name);
+            signal.elab.0 += node_offset;
+            signal.direction = None;
+        }
+        self.nodes.extend(child.nodes);
+        self.signals.extend(child.signals);
+        for assignment in &mut child.assigns {
+            assignment.elab.0 += node_offset;
+            assignment.signal += signal_offset;
+            assignment.clock = assignment.clock.map(|clock| clocks[&clock]);
+            relocate(&mut assignment.value, signal_offset, node_offset);
+        }
+        let mut assigns = child.assigns;
+        for (index, port) in module.ports.iter().enumerate() {
+            let connection = connections[index].unwrap();
+            let signal = signal_offset + index;
+            let width = self.signals[signal].width;
+            match port.direction {
+                PortDirection::Input => {
+                    if let Some(value) = self.expr(connection) {
+                        if value.width != width {
+                            self.fail(
+                                connection.span,
+                                format!(
+                                    "instance input `{}` width mismatch: expected {width}, got {}",
+                                    port.name.name, value.width
+                                ),
+                            );
+                            continue;
+                        }
+                        let elab = self.node(instance.id, ElabKind::Assign, width);
+                        assigns.push(ElabAssign {
+                            elab,
+                            span: connection.span,
+                            signal,
+                            lsb: 0,
+                            width,
+                            value,
+                            clock: None,
+                        });
+                    }
+                }
+                PortDirection::Output => {
+                    if let Some(targets) = self.assignment_targets(connection) {
+                        if targets.iter().map(|t| t.2).sum::<u32>() != width {
+                            self.fail(
+                                connection.span,
+                                format!("instance output `{}` width mismatch", port.name.name),
+                            );
+                            continue;
+                        }
+                        let mut offset = width;
+                        for (target, lsb, target_width) in targets {
+                            offset -= target_width;
+                            let elab = self.node(instance.id, ElabKind::Assign, target_width);
+                            assigns.push(ElabAssign {
+                                elab,
+                                span: connection.span,
+                                signal: target,
+                                lsb,
+                                width: target_width,
+                                value: RtlExpr::new(
+                                    RtlKind::Signal {
+                                        signal,
+                                        lsb: offset,
+                                    },
+                                    target_width,
+                                    elab,
+                                ),
+                                clock: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        assigns
     }
 
     fn declare(&mut self, signal: SignalInfo) {

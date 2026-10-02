@@ -82,6 +82,10 @@ pub enum BitBinding {
 /// Every bit of one elaborated signal, LSB-first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignalBinding {
+    /// A qualified name for a child signal. Root/legacy sidecars recover the
+    /// unqualified name from source provenance as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub elab: ElabNodeId,
     pub bits: Vec<BitBinding>,
 }
@@ -302,6 +306,9 @@ impl DebugDatabase {
     /// by logic from a folded constant and from a primary input.
     pub fn signal_bits(&self, name: &str) -> Option<&SignalBinding> {
         self.signals.iter().find(|binding| {
+            if let Some(qualified) = &binding.name {
+                return qualified == name;
+            }
             self.elab_node(binding.elab)
                 .and_then(|node| self.source_node(node.source))
                 .and_then(|source| source.name.as_deref())

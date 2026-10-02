@@ -77,6 +77,7 @@ def main() -> int:
 read_verilog -sv {quoted(verilog_file)}
 hierarchy -check -top {top_module}
 proc -norom
+flatten
 opt
 techmap
 opt
