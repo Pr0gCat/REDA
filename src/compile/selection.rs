@@ -1,0 +1,436 @@
+//! Quality selection for the qualified two-input/three-output family.
+//! No function IDs, source names, block counts or volume select a candidate.
+use super::fragment_synth::{
+    rewrite::realise_physical_rewrite_with_size, torch_row::compile_player_torch_row,
+};
+use super::{CompileError, CompiledCircuit, Netlist};
+use crate::redstone::{
+    simulator::{position::Position, Simulator},
+    world::{block::BlockKind, storage::World},
+};
+use std::collections::{BTreeSet, HashMap};
+
+pub const METRICS: [&str; 12] = [
+    "worst_settle_ticks",
+    "total_settle_ticks",
+    "driver_glitches",
+    "driver_single_input_glitches",
+    "driver_last_change_ticks",
+    "driver_total_pulse_ticks",
+    "driver_worst_pulse_ticks",
+    "lamp_glitches",
+    "lamp_single_input_glitches",
+    "lamp_last_change_ticks",
+    "lamp_total_pulse_ticks",
+    "lamp_worst_pulse_ticks",
+];
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Quality {
+    pub setup: [u64; 12],
+    pub target: [u64; 12],
+}
+impl Quality {
+    pub fn dominates(&self, other: &Self) -> bool {
+        self.setup
+            .iter()
+            .chain(&self.target)
+            .zip(other.setup.iter().chain(&other.target))
+            .all(|(a, b)| a <= b)
+    }
+}
+fn position((x, y, z): (i32, i32, i32)) -> Position {
+    Position::new(x, y, z)
+}
+fn signal(world: &World, p: Position) -> Option<bool> {
+    let block = world.get(p.x, p.y, p.z);
+    match block.kind {
+        BlockKind::RedstoneWire => Some(block.power > 0),
+        BlockKind::Torch
+        | BlockKind::WallTorch
+        | BlockKind::Repeater
+        | BlockKind::Comparator
+        | BlockKind::Lever
+        | BlockKind::Lamp => Some(block.lit),
+        _ => None,
+    }
+}
+fn values<'a>(
+    netlist: &'a Netlist,
+    order: &[usize],
+    inputs: impl Iterator<Item = (&'a str, bool)>,
+) -> Option<HashMap<&'a str, bool>> {
+    let mut values: HashMap<_, _> = inputs.collect();
+    for &index in order {
+        let gate = &netlist.gates[index];
+        let operands = gate
+            .inputs
+            .iter()
+            .map(|name| values.get(name.as_str()).copied())
+            .collect::<Option<Vec<_>>>()?;
+        values.insert(&gate.output, gate.kind.evaluate(&operands));
+    }
+    Some(values)
+}
+
+pub struct Phase<'a> {
+    pub from: usize,
+    pub to: usize,
+    pub phase: usize,
+    pub address: usize,
+    pub ticks: u64,
+    pub start: u64,
+    pub expected: [bool; 3],
+    pub driver: [bool; 3],
+    pub lamp: [bool; 3],
+    pub events: &'a [crate::redstone::simulator::observer::Observation],
+}
+
+/// Complete two-input/three-output continuous-history qualification. Each
+/// declared lamp is distinct, and every implemented gate must agree in all32
+/// phases. Only observer records are cleared; the simulator history is retained.
+pub fn qualify(source: &Netlist, compiled: &CompiledCircuit) -> Option<Quality> {
+    qualify_with_phases(source, compiled, |_| {})
+}
+
+pub fn qualify_with_phases(
+    source: &Netlist,
+    compiled: &CompiledCircuit,
+    mut record: impl FnMut(Phase<'_>),
+) -> Option<Quality> {
+    compiled.physical_rewrite()?;
+    if source.inputs.len() != 2
+        || source.outputs.len() != 3
+        || source.gates.iter().any(|g| g.kind.is_sequential())
+    {
+        return None;
+    }
+    compiled.validate_rewrite_view(source).ok()?;
+    let inputs = source
+        .inputs
+        .iter()
+        .map(|name| compiled.input_positions.get(name).copied().map(position))
+        .collect::<Option<Vec<_>>>()?;
+    if inputs
+        .iter()
+        .any(|p| compiled.world.get(p.x, p.y, p.z).kind != BlockKind::Lever)
+    {
+        return None;
+    }
+    let (drivers, lamps) = if let Some(rewrite) = compiled.physical_rewrite() {
+        (
+            rewrite
+                .source_output_driver_positions()
+                .iter()
+                .copied()
+                .map(position)
+                .collect::<Vec<_>>(),
+            rewrite
+                .source_output_positions()
+                .iter()
+                .copied()
+                .map(position)
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        (
+            source
+                .outputs
+                .iter()
+                .map(|name| {
+                    compiled
+                        .gate_output_positions
+                        .get(name)
+                        .copied()
+                        .map(position)
+                })
+                .collect::<Option<Vec<_>>>()?,
+            source
+                .outputs
+                .iter()
+                .map(|name| compiled.output_positions.get(name).copied().map(position))
+                .collect::<Option<Vec<_>>>()?,
+        )
+    };
+    if lamps
+        .iter()
+        .map(|p| (p.x, p.y, p.z))
+        .collect::<BTreeSet<_>>()
+        .len()
+        != 3
+        || lamps
+            .iter()
+            .any(|p| compiled.world.get(p.x, p.y, p.z).kind != BlockKind::Lamp)
+    {
+        return None;
+    }
+    let implementation = compiled.implementation_netlist(source);
+    let source_order = source.combinational_order()?;
+    let implementation_order = implementation.combinational_order()?;
+    let input_bindings = compiled.physical_rewrite().map_or(&source.inputs[..], |r| {
+        r.rewrite_certificate().rewritten_inputs_in_source_order()
+    });
+    let mut sim = Simulator::new(compiled.world.clone());
+    sim.run_until_stable(2000).ok()?;
+    sim.attach_observer(
+        drivers
+            .iter()
+            .chain(&lamps)
+            .enumerate()
+            .map(|(index, p)| (*p, format!("boundary{index}"))),
+    );
+    let mut quality = Quality::default();
+    let initial = values(
+        source,
+        &source_order,
+        source.inputs.iter().map(|name| (name.as_str(), false)),
+    )?;
+    let mut previous_outputs: [bool; 3] =
+        std::array::from_fn(|bit| initial[source.outputs[bit].as_str()]);
+    let mut previous = 0usize;
+    for from in 0..4 {
+        for to in 0..4 {
+            for (phase, address) in [from, to].into_iter().enumerate() {
+                sim.reset_observer();
+                let start = sim.current_tick();
+                for (bit, p) in inputs.iter().enumerate() {
+                    let mut lever = sim.world().get(p.x, p.y, p.z).clone();
+                    lever.lit = address & (1 << bit) != 0;
+                    sim.world_mut().set(p.x, p.y, p.z, lever);
+                }
+                let ticks = sim.run_until_stable(2000).ok()?;
+                let expected = values(
+                    source,
+                    &source_order,
+                    source
+                        .inputs
+                        .iter()
+                        .enumerate()
+                        .map(|(bit, name)| (name.as_str(), address & (1 << bit) != 0)),
+                )?;
+                let implemented = values(
+                    implementation,
+                    &implementation_order,
+                    input_bindings
+                        .iter()
+                        .enumerate()
+                        .map(|(bit, name)| (name.as_str(), address & (1 << bit) != 0)),
+                )?;
+                for gate in &implementation.gates {
+                    let p = position(*compiled.gate_output_positions.get(&gate.output)?);
+                    if signal(sim.world(), p)? != implemented[gate.output.as_str()] {
+                        return None;
+                    }
+                }
+                let metrics = if phase == 0 {
+                    &mut quality.setup
+                } else {
+                    &mut quality.target
+                };
+                metrics[0] = metrics[0].max(ticks);
+                metrics[1] += ticks;
+                for (index, p) in drivers.iter().chain(&lamps).enumerate() {
+                    let bit = index % 3;
+                    let target = expected[source.outputs[bit].as_str()];
+                    if signal(sim.world(), *p)? != target {
+                        return None;
+                    }
+                    let label = format!("boundary{index}");
+                    let events: Vec<_> = sim
+                        .observations()
+                        .iter()
+                        .filter(|e| e.label == label)
+                        .collect();
+                    if events
+                        .iter()
+                        .any(|e| e.tick < start || e.tick > start + ticks)
+                        || events.last().is_some_and(|e| e.value != target)
+                        || events.is_empty() && previous_outputs[bit] != target
+                    {
+                        return None;
+                    }
+                    let offset = if index < 3 { 2 } else { 7 };
+                    metrics[offset] += u64::from(events.len() > 1);
+                    metrics[offset + 1] +=
+                        u64::from(events.len() > 1 && (previous ^ address).count_ones() == 1);
+                    metrics[offset + 2] =
+                        metrics[offset + 2].max(events.last().map_or(0, |e| e.tick - start));
+                    for pair in events.windows(2) {
+                        if pair[0].value != target {
+                            let width = pair[1].tick - pair[0].tick;
+                            metrics[offset + 3] += width;
+                            metrics[offset + 4] = metrics[offset + 4].max(width);
+                        }
+                    }
+                }
+                record(Phase {
+                    from,
+                    to,
+                    phase,
+                    address,
+                    ticks,
+                    start,
+                    expected: std::array::from_fn(|bit| expected[source.outputs[bit].as_str()]),
+                    driver: std::array::from_fn(|bit| {
+                        signal(sim.world(), drivers[bit]).expect("checked driver")
+                    }),
+                    lamp: std::array::from_fn(|bit| {
+                        signal(sim.world(), lamps[bit]).expect("checked lamp")
+                    }),
+                    events: sim.observations(),
+                });
+                previous_outputs =
+                    std::array::from_fn(|bit| expected[source.outputs[bit].as_str()]);
+                previous = address;
+            }
+        }
+    }
+    Some(quality)
+}
+
+fn certify_backup(source: &Netlist, compiled: &CompiledCircuit) -> Option<CompiledCircuit> {
+    let candidate = compiled.physical_candidate()?;
+    let rewrite = realise_physical_rewrite_with_size(
+        source,
+        source,
+        candidate,
+        &super::topology::Library::default_library(),
+        &source.inputs,
+        &source.outputs,
+        1_000_000,
+        Some(compiled.world.size()),
+    )
+    .ok()?;
+    let sealed = CompiledCircuit::from_certified_rewrite(rewrite);
+    if sealed.world.size() != compiled.world.size()
+        || sealed
+            .world
+            .cells()
+            .iter()
+            .enumerate()
+            .any(|(flat, &index)| {
+                let (x, y, z) = sealed.world.decode(flat);
+                sealed.world.palette().get(index) != Some(compiled.world.get(x, y, z))
+            })
+    {
+        return None;
+    }
+    Some(sealed)
+}
+
+/// Default policy for the bounded family; other boundaries keep their compiler.
+/// Both alternatives must certify and preserve the complete source boundary.
+pub fn compile_selected(source: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    super::checked_topological_order(source)?;
+    if source.inputs.len() != 2
+        || source.outputs.len() != 3
+        || source.gates.iter().any(|g| g.kind.is_sequential())
+    {
+        return super::compile_without_rewrite(source);
+    }
+    let player = compile_player_torch_row(source, 1_000_000)
+        .ok()
+        .map(CompiledCircuit::from_certified_rewrite)
+        .and_then(|c| qualify(source, &c).map(|q| (c, q)));
+    let raw_backup = super::compile_without_rewrite(source);
+    let backup = raw_backup
+        .as_ref()
+        .ok()
+        .and_then(|c| certify_backup(source, c))
+        .and_then(|c| qualify(source, &c).map(|q| (c, q)));
+    match (player, backup) {
+        (Some((player, p)), Some((backup, b))) => Ok(if b.dominates(&p) && !p.dominates(&b) {
+            backup
+        } else {
+            player
+        }),
+        (Some((player, _)), None) => Ok(player),
+        (None, Some((backup, _))) => Ok(backup),
+        (None, None) => Err(raw_backup
+            .err()
+            .unwrap_or(CompileError::CandidateMetadataViolation {
+                item: "quality selection".into(),
+                reason: "no fully certified and truth-correct candidate".into(),
+            })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compile::{topology::GateKind, Gate};
+    fn source() -> Netlist {
+        Netlist {
+            inputs: vec!["left".into(), "right".into()],
+            outputs: vec!["zero".into(), "negative".into(), "mixed".into()],
+            gates: vec![
+                Gate::nor("zero", &["left", "right"]),
+                Gate::nor("negative", &["left"]),
+                Gate::nor("mixed", &["negative", "right"]),
+            ],
+        }
+    }
+    #[test]
+    fn unified_backup_retains_an_exact_certifiable_manifest() {
+        let source = source();
+        let raw = super::super::compile_without_rewrite(&source).unwrap();
+        assert_eq!(raw.planner_kind(), super::super::PlannerKind::Unified3d);
+        let sealed = certify_backup(&source, &raw)
+            .expect("planner manifest must certify with exact original bounds");
+        assert!(qualify(&source, &sealed).is_some());
+        assert_eq!(sealed.input_positions, raw.input_positions);
+        assert_eq!(sealed.output_positions, raw.output_positions);
+        assert_eq!(sealed.gate_output_positions, raw.gate_output_positions);
+        assert!(realise_physical_rewrite_with_size(
+            &source,
+            &source,
+            raw.physical_candidate().unwrap(),
+            &super::super::topology::Library::default_library(),
+            &source.inputs,
+            &source.outputs,
+            1_000_000,
+            Some((1, 1, 1))
+        )
+        .is_err());
+    }
+    #[test]
+    fn modified_sealed_views_never_qualify() {
+        let source = source();
+        let make = || {
+            CompiledCircuit::from_certified_rewrite(
+                compile_player_torch_row(&source, 1_000_000).unwrap(),
+            )
+        };
+        let mut bad = make();
+        bad.output_positions.clear();
+        assert!(qualify(&source, &bad).is_none());
+        let mut bad = make();
+        let p = position(*bad.gate_output_positions.values().next().unwrap());
+        bad.world.set(
+            p.x,
+            p.y,
+            p.z,
+            crate::redstone::world::block::BlockState::air(),
+        );
+        assert!(qualify(&source, &bad).is_none());
+        let mut changed = source.clone();
+        changed.gates[0].inputs.swap(0, 1);
+        assert!(qualify(&changed, &make()).is_none());
+    }
+    #[test]
+    fn selector_preserves_realisability_cycle_and_driver_errors() {
+        let mut invalid = source();
+        invalid.gates[0].kind = GateKind::And;
+        let mut cyclic = source();
+        cyclic.gates[0].inputs = vec!["mixed".into()];
+        let mut undriven = source();
+        undriven.gates[0].inputs = vec!["missing".into()];
+        let mut undriven_output = source();
+        undriven_output.outputs = vec!["left".into(); 3];
+        for source in [invalid, cyclic, undriven, undriven_output] {
+            assert_eq!(
+                compile_selected(&source).err(),
+                super::super::compile_without_rewrite(&source).err()
+            );
+        }
+    }
+}

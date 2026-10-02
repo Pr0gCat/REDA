@@ -686,7 +686,7 @@ fn shipping_matrix(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Pos
     let public = source.outputs.clone();
     let mut seen = std::collections::BTreeSet::new();
     source.outputs.retain(|n| seen.insert(n.clone()));
-    let c = reda::compile::compile(&source).unwrap();
+    let c = reda::compile::compile_without_rewrite(&source).unwrap();
     let position = |(x, y, z)| Position::new(x, y, z);
     let inputs = source
         .inputs

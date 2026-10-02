@@ -146,6 +146,7 @@ fn compile_recursive_contract(
         observations: CircuitObservations::default(),
         legacy_emission: None,
         physical_rewrite: None,
+        physical_candidate: None,
         planner_kind: PlannerKind::FragmentSynth,
     };
     Ok(SynthesisResult {
@@ -425,6 +426,7 @@ mod tests {
             observations: CircuitObservations::from_expanded(best.candidate()),
             legacy_emission: None,
             physical_rewrite: None,
+            physical_candidate: None,
             planner_kind: PlannerKind::FragmentSynth,
         };
         let metrics = best.metrics().clone();

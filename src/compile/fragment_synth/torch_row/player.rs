@@ -1,4 +1,4 @@
-//! Experimental player-inspired matrix. Not selected by the shipping compiler.
+//! Player-inspired matrix, selected by the qualified two-input/three-output compiler.
 use super::*;
 use crate::compile::{topology::GateKind, Gate};
 use std::collections::BTreeMap;

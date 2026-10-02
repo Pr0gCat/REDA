@@ -11427,6 +11427,7 @@ mod tests {
                                 .map(|gate| plan.facing_of(gate))
                                 .collect(),
                             physical_rewrite: None,
+                            physical_candidate: None,
                             planner_kind: compile::PlannerKind::Unified3d,
                             legacy_emission: None,
                         };
@@ -26142,6 +26143,7 @@ mod tests {
                                     .map(|g| plan.facing_of(g))
                                     .collect(),
                                 physical_rewrite: None,
+                                physical_candidate: None,
                                 planner_kind: compile::PlannerKind::Unified3d,
                                 legacy_emission: None,
                             };
@@ -26282,6 +26284,7 @@ mod tests {
                 .map(|g| plan.facing_of(g))
                 .collect(),
             physical_rewrite: None,
+            physical_candidate: None,
             planner_kind: compile::PlannerKind::Unified3d,
             legacy_emission: None,
         };
@@ -27872,6 +27875,7 @@ mod tests {
                 .map(|g| plan.facing_of(g))
                 .collect(),
             physical_rewrite: None,
+            physical_candidate: None,
             planner_kind: compile::PlannerKind::Unified3d,
             legacy_emission: None,
         };
@@ -28791,6 +28795,7 @@ mod tests {
                 .map(|g| plan.facing_of(g))
                 .collect(),
             physical_rewrite: None,
+            physical_candidate: None,
             planner_kind: compile::PlannerKind::Unified3d,
             legacy_emission: None,
         };
@@ -29372,6 +29377,7 @@ mod tests {
                     .map(|g| plan.facing_of(g))
                     .collect(),
                 physical_rewrite: None,
+                physical_candidate: None,
                 planner_kind: compile::PlannerKind::Unified3d,
                 legacy_emission: None,
             };

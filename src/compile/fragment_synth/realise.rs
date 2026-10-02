@@ -583,9 +583,19 @@ pub(crate) fn prepare_expanded_for_physical_verification(
     netlist: &Netlist,
     library: &Library,
 ) -> Result<PendingPhysicalVerification, CertificationError> {
+    prepare_expanded_with_size(candidate, netlist, library, None)
+}
+
+fn prepare_expanded_with_size(
+    candidate: &ExpandedPhysicalCandidate,
+    netlist: &Netlist,
+    library: &Library,
+    size: Option<(i32, i32, i32)>,
+) -> Result<PendingPhysicalVerification, CertificationError> {
     let structure = certify_expanded_structure(candidate, netlist, library)?;
     let adapter = ExpandedCandidateAdapter::new(candidate)?;
-    let size = adapter.deterministic_world_size()?;
+    let minimum = adapter.deterministic_world_size()?;
+    let size = size.unwrap_or(minimum);
     let emitted = emit_candidate(&adapter, size).map_err(EmissionFailure::from)?;
     Ok(PendingPhysicalVerification { emitted, structure })
 }
@@ -598,7 +608,22 @@ pub fn realise_and_verify_expanded(
     netlist: &Netlist,
     library: &Library,
 ) -> Result<CertifiedWorld, CertificationError> {
-    let pending = prepare_expanded_for_physical_verification(candidate, netlist, library)?;
+    realise_and_verify_expanded_with_size(candidate, netlist, library, None)
+}
+
+/// Preserve a supplied world envelope while applying the identical structural,
+/// ownership, bounds and electrical verification pipeline to every emitted cell.
+pub(crate) fn realise_and_verify_expanded_with_size(
+    candidate: &ExpandedPhysicalCandidate,
+    netlist: &Netlist,
+    library: &Library,
+    size: Option<(i32, i32, i32)>,
+) -> Result<CertifiedWorld, CertificationError> {
+    let pending = if size.is_some() {
+        prepare_expanded_with_size(candidate, netlist, library, size)?
+    } else {
+        prepare_expanded_for_physical_verification(candidate, netlist, library)?
+    };
     verify_expanded_candidate(candidate, &pending.emitted)?;
     Ok(CertifiedWorld {
         emitted: pending.emitted,

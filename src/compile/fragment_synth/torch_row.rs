@@ -29,8 +29,8 @@ pub fn compile_torch_row(
     compile_matrix(source, proof_work_limit, false)
 }
 
-/// Experimental player geometry; all existing equivalence and physical checks apply.
-/// This entry is never selected by the automatic compiler.
+/// Player-derived geometry; all equivalence and strict physical checks apply.
+/// The default compiler compares this family with fully certified backups.
 pub fn compile_player_torch_row(
     source: &Netlist,
     proof_work_limit: u64,

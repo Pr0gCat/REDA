@@ -89,6 +89,7 @@ pub mod routing_stats;
 /// model. Test-only, so it ships in nothing and takes no dependency.
 #[cfg(test)]
 pub mod satcnf;
+pub mod selection;
 /// The static strength walk against the running `Simulator`, cell by cell.
 /// Measurement only -- see the module doc.
 #[cfg(test)]
@@ -1727,7 +1728,7 @@ impl CircuitObservations {
         netlist: &Netlist,
         plan: &planner::PlanCandidate,
         world: &World,
-    ) -> Result<Self, CompileError> {
+    ) -> Result<(Self, fragment_synth::candidate::ExpandedPhysicalCandidate), CompileError> {
         let adapted = fragment_synth::legacy_adapter::LegacyCandidateAdapter::adapt_plan(
             netlist, plan, world,
         )
@@ -1735,7 +1736,7 @@ impl CircuitObservations {
             item: "circuit observations".to_string(),
             reason: error.to_string(),
         })?;
-        Ok(Self::from_expanded(&adapted.candidate))
+        Ok((Self::from_expanded(&adapted.candidate), adapted.candidate))
     }
 }
 
@@ -1743,13 +1744,20 @@ fn observations_from_plan(
     netlist: &Netlist,
     plan: &planner::PlanCandidate,
     world: &World,
-) -> Result<CircuitObservations, CompileError> {
+) -> Result<
+    (
+        CircuitObservations,
+        Option<fragment_synth::candidate::ExpandedPhysicalCandidate>,
+    ),
+    CompileError,
+> {
     if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
         // The fragment-synthesis adapter is deliberately combinational-only;
         // stateful physical observations will be added with its own topology.
-        Ok(CircuitObservations::default())
+        Ok((CircuitObservations::default(), None))
     } else {
         CircuitObservations::from_plan(netlist, plan, world)
+            .map(|(observations, candidate)| (observations, Some(candidate)))
     }
 }
 
@@ -1796,6 +1804,7 @@ pub struct CompiledCircuit {
     legacy_emission: Option<LegacyEmission>,
     planner_kind: PlannerKind,
     physical_rewrite: Option<fragment_synth::rewrite::CertifiedPhysicalRewrite>,
+    physical_candidate: Option<fragment_synth::candidate::ExpandedPhysicalCandidate>,
 }
 
 impl CompiledCircuit {
@@ -1852,6 +1861,7 @@ impl CompiledCircuit {
             legacy_emission: None,
             planner_kind: PlannerKind::FragmentSynth,
             physical_rewrite: Some(rewrite),
+            physical_candidate: None,
         }
     }
 
@@ -1888,6 +1898,15 @@ impl CompiledCircuit {
             return Err("compiled observations differ from certified rewrite");
         }
         Ok(())
+    }
+
+    pub(crate) fn physical_candidate(
+        &self,
+    ) -> Option<&fragment_synth::candidate::ExpandedPhysicalCandidate> {
+        self.physical_rewrite
+            .as_ref()
+            .map(|r| r.implemented_candidate())
+            .or(self.physical_candidate.as_ref())
     }
 
     /// The graph corresponding to physical gate positions and facings.
@@ -7787,9 +7806,20 @@ fn merge_output_group_root(
 /// they hold* with something in *the circuit this compiled*, so a silent
 /// lowering in here would mean those are two different netlists, silently.
 /// (`summarize_worst_case` does not fail an assertion on that; it walks
-/// forever.) Requiring the caller to lower makes holding the wrong netlist
-/// impossible rather than merely discouraged.
+/// forever.) Requiring the caller to lower keeps the source contract explicit.
+/// A qualified physical rewrite retains both source and implementation;
+/// consumers use `CompiledCircuit::implementation_netlist` and the sealed
+/// `physical_rewrite` boundary bindings rather than treating source gate names
+/// as physical positions. The bounded two-input/three-output selector compares
+/// all setup/target delay, glitch and wrong-pulse metrics separately. Other
+/// boundaries and DFFs retain the verified planner/channel path.
 pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    selection::compile_selected(netlist)
+}
+
+/// Original verified planner/channel fallback, retained as an independent
+/// control and a candidate for strictly qualified rewrite selection.
+pub fn compile_without_rewrite(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     // Both compilers refuse the same netlists for the same reasons, and this
     // says so once rather than leaving it a property of the fallback happening
     // to duplicate it. It also keeps the trial below from being spent on a
@@ -8208,7 +8238,8 @@ fn compile_channelled_with_reserve(
 
     let seed = planner::seed_from_legacy_parts(netlist, &legacy_emission).map_err(planner_error)?;
     let realised = planner::realise_and_verify(&seed, netlist, size).map_err(planner_error)?;
-    let observations = observations_from_plan(netlist, &seed, &realised.world)?;
+    let (observations, physical_candidate) =
+        observations_from_plan(netlist, &seed, &realised.world)?;
 
     Ok(CompiledCircuit {
         observations,
@@ -8218,6 +8249,7 @@ fn compile_channelled_with_reserve(
         gate_output_positions: realised.ports.gate_output_positions,
         gate_facings: vec![geometry::CellFacing::NORTH; netlist.gates.len()],
         physical_rewrite: None,
+        physical_candidate,
         planner_kind: PlannerKind::Legacy,
         legacy_emission: Some(legacy_emission),
     })
@@ -8305,7 +8337,8 @@ pub fn compile_grown(
         .collect();
     let size = planner::candidate_world_size(&candidate);
     let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
-    let observations = observations_from_plan(netlist, &candidate, &realised.world)?;
+    let (observations, physical_candidate) =
+        observations_from_plan(netlist, &candidate, &realised.world)?;
 
     Ok(CompiledCircuit {
         observations,
@@ -8315,6 +8348,7 @@ pub fn compile_grown(
         gate_output_positions: realised.ports.gate_output_positions,
         gate_facings,
         physical_rewrite: None,
+        physical_candidate,
         planner_kind: PlannerKind::Unified3d,
         legacy_emission: None,
     })
@@ -8344,7 +8378,8 @@ fn compile_planned_within(
         .collect();
     let size = planner::candidate_world_size(&candidate);
     let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
-    let observations = observations_from_plan(netlist, &candidate, &realised.world)?;
+    let (observations, physical_candidate) =
+        observations_from_plan(netlist, &candidate, &realised.world)?;
 
     Ok(CompiledCircuit {
         observations,
@@ -8354,6 +8389,7 @@ fn compile_planned_within(
         gate_output_positions: realised.ports.gate_output_positions,
         gate_facings,
         physical_rewrite: None,
+        physical_candidate,
         planner_kind: PlannerKind::Unified3d,
         legacy_emission: None,
     })

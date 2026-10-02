@@ -3,7 +3,7 @@
 
 use super::candidate::{CandidateError, CompatibilityViews, ExpandedPhysicalCandidate};
 use super::identity::{ObservationId, PortId};
-use super::realise::{realise_and_verify_expanded, CertificationError, CertifiedWorld};
+use super::realise::{CertificationError, CertifiedWorld};
 use crate::compile::equivalence::{
     prove_combinational_equivalence, prove_netlist_rewrite, EquivalenceCertificate,
     EquivalenceError, NetlistRewriteCertificate, NetlistRewriteError,
@@ -87,6 +87,28 @@ pub fn realise_physical_rewrite(
     outputs_in_source_order: &[String],
     proof_work_limit: u64,
 ) -> Result<CertifiedPhysicalRewrite, PhysicalRewriteError> {
+    realise_physical_rewrite_with_size(
+        source,
+        implemented,
+        candidate,
+        library,
+        inputs_in_source_order,
+        outputs_in_source_order,
+        proof_work_limit,
+        None,
+    )
+}
+
+pub(crate) fn realise_physical_rewrite_with_size(
+    source: &Netlist,
+    implemented: &Netlist,
+    candidate: &ExpandedPhysicalCandidate,
+    library: &Library,
+    inputs_in_source_order: &[String],
+    outputs_in_source_order: &[String],
+    proof_work_limit: u64,
+    size: Option<(i32, i32, i32)>,
+) -> Result<CertifiedPhysicalRewrite, PhysicalRewriteError> {
     let rewrite = prove_netlist_rewrite(
         source,
         implemented,
@@ -98,8 +120,13 @@ pub fn realise_physical_rewrite(
     let equivalence =
         prove_combinational_equivalence(implemented, candidate, library, proof_work_limit)
             .map_err(PhysicalRewriteError::Equivalence)?;
-    let physical = realise_and_verify_expanded(candidate, implemented, library)
-        .map_err(PhysicalRewriteError::Certification)?;
+    let physical = super::realise::realise_and_verify_expanded_with_size(
+        candidate,
+        implemented,
+        library,
+        size,
+    )
+    .map_err(PhysicalRewriteError::Certification)?;
     let observations = candidate
         .compatibility_views(implemented)
         .map_err(PhysicalRewriteError::Boundary)?;
