@@ -1,0 +1,35 @@
+{
+  "status": "qualified_test_contract_repair",
+  "parent": "92e750a",
+  "scope": "test consumer contract only",
+  "routing_stats_suite": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 43.81
+  },
+  "existing_assertions_removed_or_relaxed": false,
+  "added_checks": [
+    "default FragmentSynth layout",
+    "analyze rejects nonlegacy layout",
+    "distinct_totals rejects nonlegacy layout"
+  ],
+  "artifacts": {
+    "docs/routing-report-control-contract-2026-10-02-explicit-emitter.log.gz": {
+      "sha256": "84137ac9b976e7ae4569d73ab28b9e8635a88d4a4abb89aeda46d055c7e9109e",
+      "raw_sha256": "29b2315f447e814adc5370a1c41eb30fc1f44f88e8e9a6924ede022b73b7f8e0"
+    },
+    "docs/routing-report-control-contract-2026-10-02-control-contract.log.gz": {
+      "sha256": "d5e0c6aee58679ad1451ece2e0e871f7e813b4cfb2a8c8d8e5eec2d1622d04bc",
+      "raw_sha256": "3d09ad3e07d08273e1a3a5d60528d9a7a49e15d1651f686de283cb18690c4a8a"
+    },
+    "docs/routing-report-control-contract-2026-10-02-control-contract-retry.log.gz": {
+      "sha256": "15278e51c6028d69d416231d7b8a4804fcaa9523c88dc978f84c304a1bde7e40",
+      "raw_sha256": "06dd539bcefa9a98065dd58d5561847621b611bce2cd543d38745ff22f77dfc9"
+    },
+    "docs/routing-report-control-contract-2026-10-02-control-contract-host.log.gz": {
+      "sha256": "d0b58393e1bb237998f5441267726ce9ecefee41f0a2dc3acf409a5a71e40d15",
+      "raw_sha256": "70f4c668208aa690a4e3b7f5bb02c741300c88c9dfadf7bf0ab1b6c9140e0f1a"
+    }
+  }
+}

@@ -13,7 +13,34 @@
   "tests_deleted": 0,
   "tests_skipped": 0,
   "threshold_changes": false,
-  "full_root": "pending; pre-existing seventeen circuit failures not claimed fixed",
+  "full_root": {
+    "scope": "worktree with separate arithmetic/search changes still uncommitted",
+    "passed": 1167,
+    "failed": 17,
+    "ignored": 71,
+    "elapsed_seconds": 311.63,
+    "failure_names_unchanged": true,
+    "failed_tests": [
+      "compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded",
+      "compile::planner::tests::a_negotiation_that_has_not_converged_returns_an_error_and_not_a_plan",
+      "compile::planner::tests::a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate",
+      "compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone",
+      "compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped",
+      "compile::planner::tests::legacy_adapter_keeps_and4_and_fanout_routes_byte_exact",
+      "compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact",
+      "compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+      "compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded",
+      "compile::planner::tests::the_strength_verifier_follows_a_repeater_that_feeds_a_climb",
+      "compile::relax::build::tests::physical_really_has_a_primitive_with_no_variants",
+      "compile::resettle_differential::the_reported_stale_dust_case_settles_clean",
+      "compile::routing_stats::tests::compact_channel_repeater_counts_match_the_emitted_world",
+      "compile::strength_differential::tests::genuine_decay_is_still_refused",
+      "compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse",
+      "compile::tests::compile_falls_back_when_the_planner_cannot_route",
+      "compile::tests::which_path_compile_takes_on_each_of_the_six_condition_circuits"
+    ],
+    "panic_reports": 17
+  },
   "artifacts": {
     "docs/test-driver-panic-reporting-2026-10-02-old.rs.gz": {
       "sha256": "618a925e660ed45a82c04b8e9dc234f84085d198bcd486d897e2586f1494f602",
@@ -26,6 +53,10 @@
     "docs/test-driver-panic-reporting-2026-10-02-workers.log.gz": {
       "sha256": "87e53f1c00a0f9b2eb9b36a15b57b7fcc9d200bdf4a94bf3c3517d25b5f2ebb7",
       "raw_sha256": "89e78a7c863a79b323b21b5c801829da20234bc925d39a537c2ae1628d462d28"
+    },
+    "docs/test-driver-panic-reporting-2026-10-02-root.log.gz": {
+      "sha256": "b7f2e3efa936ec8836622da1b8174c07d5b093c8323ae5e59d8b2c43b03a0094",
+      "raw_sha256": "8fc98c84d3eaf130244c069a50d1e44d28a544a32f2ebc61bd131aa50690b465"
     }
   }
 }

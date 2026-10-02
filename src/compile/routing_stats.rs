@@ -887,7 +887,9 @@ mod tests {
         )
         .unwrap();
         let netlist = crate::compile::lowering::lower_optimised(&artifact.netlist).unwrap();
-        let compact = compile(&netlist).unwrap();
+        // Measure the original compiler control before rewrite selection.
+        // Keep its compact policy and every historical compaction assertion.
+        let compact = super::super::compile_without_rewrite(&netlist).unwrap();
         assert_eq!(compact.planner_kind(), PlannerKind::Legacy);
         assert_eq!(
             compact.legacy_emission().unwrap().track_spacing,
@@ -911,13 +913,28 @@ mod tests {
         assert!(after.non_air_blocks < before.non_air_blocks);
         assert!(after.occupied_volume < before.occupied_volume);
         assert!(compact.legacy_emission().unwrap().span_aware_feedthrough);
+        // The default certified fragment is a different physical layout.
+        // Legacy-only reports must refuse it rather than invent channel data.
+        let selected = compile(&netlist).unwrap();
+        assert_eq!(selected.planner_kind(), PlannerKind::FragmentSynth);
+        assert_eq!(
+            analyze(&netlist, &selected).err(),
+            Some(CompileError::NotALegacyLayout {
+                report: "`routing_stats::analyze`".to_string(),
+            })
+        );
+        assert_eq!(
+            distinct_totals(&netlist, &selected),
+            Err(CompileError::NotALegacyLayout {
+                report: "`routing_stats::distinct_totals_by_part`".to_string(),
+            })
+        );
         let total = distinct_totals(&netlist, &compact).unwrap();
         assert_eq!(
             total.repeaters,
             compact.world.positions_of(BlockKind::Repeater).count()
         );
     }
-
     /// This module refuses a layout it cannot describe, rather than describing
     /// it wrongly or hanging.
     ///
