@@ -59,12 +59,14 @@ fn positive_literal(bits: u8, mask: u8) -> bool {
 fn direct_zero_product(rows: &[(usize, u8, u8, u8)]) -> Option<u8> {
     if !needs_input_buffer(rows)
         || rows.len() != 3
-        || !rows.iter().all(|r| r.2.count_ones() == 2)
+        || !rows
+            .iter()
+            .all(|r| r.2.count_ones() == 2 || (r.2.count_ones() == 1 && r.1 == 0))
         || !(0..3).all(|bit| rows.iter().filter(|r| r.3 & (1 << bit) != 0).count() == 1)
     {
         return None;
     }
-    rows.iter().find(|r| r.1 == 0).map(|r| r.3)
+    rows.iter().find(|r| r.1 == 0 && r.2 == 3).map(|r| r.3)
 }
 
 // Independent 00, 11 and mixed full cubes each drive one output. Keep
@@ -73,14 +75,22 @@ fn direct_zero_product(rows: &[(usize, u8, u8, u8)]) -> Option<u8> {
 fn independent_mixed_product(rows: &[(usize, u8, u8, u8)]) -> Option<(u8, u8)> {
     direct_zero_product(rows)?;
     rows.iter()
-        .find(|r| r.1 == 1 || r.1 == 2)
+        .find(|r| r.2 == 3 && (r.1 == 1 || r.1 == 2))
         .map(|r| (r.1, r.3))
+}
+
+fn independent_negative_literal(rows: &[(usize, u8, u8, u8)]) -> Option<(usize, u8)> {
+    direct_zero_product(rows)?;
+    rows.iter()
+        .find(|r| r.2.count_ones() == 1 && r.1 == 0)
+        .map(|r| (r.2.trailing_zeros() as usize, r.3))
 }
 
 fn matrix_address_z(rows: &[(usize, u8, u8, u8)]) -> [i32; 2] {
     match independent_mixed_product(rows) {
         Some((1, _)) => [8, 2],
         Some(_) => [2, 8],
+        None if direct_zero_product(rows).is_some() => [2, 8],
         None => [4, 7],
     }
 }
@@ -190,7 +200,9 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
         }
     }
     for &(row, address, mask, word) in &rows {
-        if direct_zero_product(&rows).is_some() && address != 3 {
+        if direct_zero_product(&rows).is_some() && address == 0
+            || independent_mixed_product(&rows).is_some() && (address == 1 || address == 2)
+        {
             continue;
         }
         let x = row_x(row)
@@ -293,6 +305,26 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
         put(&mut w, lamps[bit].down(), BlockKind::Solid);
         put(&mut w, lamps[bit], BlockKind::Lamp);
     }
+    if let Some((input, word)) = independent_negative_literal(&rows) {
+        let z = address_z[input];
+        put(&mut w, Position::new(8, 4, z), BlockKind::Solid);
+        put(&mut w, Position::new(8, 4, z - 1), BlockKind::WallTorch);
+        let mut t = w.get(8, 4, z - 1).clone();
+        t.facing = Some(Facing::North);
+        w.set(8, 4, z - 1, t);
+        for at in [
+            Position::new(8, 3, z - 1),
+            Position::new(9, 2, z - 1),
+            Position::new(10, 1, z - 1),
+        ] {
+            wire(&mut w, at);
+        }
+        let bit = word.trailing_zeros() as usize;
+        drivers[bit] = Position::new(10, 1, z - 1);
+        lamps[bit] = Position::new(11, 1, z - 1);
+        put(&mut w, lamps[bit].down(), BlockKind::Solid);
+        put(&mut w, lamps[bit], BlockKind::Lamp);
+    }
     if let Some((_, word)) = independent_mixed_product(&rows) {
         // Separate raw arms feed the old matched source relays. The mixed
         // product reads strong lever floors directly; dust never bridges them.
@@ -332,6 +364,7 @@ fn player_world(words: [u8; 4]) -> (World, [Position; 2], [Position; 3], [Positi
     for (bit, z) in output_z.into_iter().enumerate() {
         if direct_zero_product(&rows).is_some_and(|word| word & (1 << bit) != 0)
             || independent_mixed_product(&rows).is_some_and(|(_, word)| word & (1 << bit) != 0)
+            || independent_negative_literal(&rows).is_some_and(|(_, word)| word & (1 << bit) != 0)
         {
             continue;
         }
@@ -431,7 +464,17 @@ fn player_logic(words: [u8; 4]) -> (Netlist, BTreeMap<String, Position>) {
         }
     }
     for &(address, bits, mask, word) in &rows {
-        if bits == 0 && direct_zero_product(&rows).is_some() {
+        if mask.count_ones() == 1 && independent_negative_literal(&rows).is_some() {
+            let input = mask.trailing_zeros() as usize;
+            let name = "independent_negative_literal";
+            add(
+                Gate::nor(name, &[&format!("source{input}")]),
+                Position::new(8, 4, address_z[input] - 1),
+            );
+            terms[word.trailing_zeros() as usize].push(name.into());
+            continue;
+        }
+        if bits == 0 && mask == 3 && direct_zero_product(&rows).is_some() {
             let name = "direct_zero_product";
             add(
                 Gate::nor(name, &["source0", "source1"]),
@@ -3007,6 +3050,25 @@ mod tests {
                         }
                         tables.push(words);
                     }
+                }
+            }
+        }
+        for negative_input in 0..2 {
+            for nor_output in 0..3 {
+                for and_output in 0..3 {
+                    if nor_output == and_output {
+                        continue;
+                    }
+                    let unary_output = 3 - nor_output - and_output;
+                    let mut words = [0; 4];
+                    words[0] |= 1 << nor_output;
+                    words[3] |= 1 << and_output;
+                    for (address, word) in words.iter_mut().enumerate() {
+                        if address & (1 << negative_input) == 0 {
+                            *word |= 1 << unary_output;
+                        }
+                    }
+                    tables.push(words);
                 }
             }
         }

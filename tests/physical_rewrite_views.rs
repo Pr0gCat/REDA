@@ -359,6 +359,8 @@ fn flat_projection_covers_qualified_generation_techniques_and_constants() {
         [7, 7, 7, 7],
         [4, 0, 1, 2],
         [6, 7, 1, 1],
+        [6, 4, 0, 1],
+        [6, 0, 2, 1],
     ] {
         let mut source = Netlist {
             inputs: vec!["a".into(), "b".into()],

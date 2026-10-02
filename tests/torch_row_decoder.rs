@@ -2472,6 +2472,18 @@ fn player_matrix_certifies_native_and_fresh_yosys_sources() {
         [0; 4],
         [7; 4],
         [1; 4],
+        [5, 0, 4, 2], // Independent AND, NOR and negative literal.
+        [3, 0, 2, 4], // Independent AND, NOR and negative literal.
+        [6, 0, 4, 1], // Independent AND, NOR and negative literal.
+        [3, 0, 1, 4], // Independent AND, NOR and negative literal.
+        [6, 0, 2, 1], // Independent AND, NOR and negative literal.
+        [5, 0, 1, 2], // Independent AND, NOR and negative literal.
+        [5, 4, 0, 2], // Independent AND, NOR and negative literal.
+        [3, 2, 0, 4], // Independent AND, NOR and negative literal.
+        [6, 4, 0, 1], // Independent AND, NOR and negative literal.
+        [3, 1, 0, 4], // Independent AND, NOR and negative literal.
+        [6, 2, 0, 1], // Independent AND, NOR and negative literal.
+        [5, 1, 0, 2], // Independent AND, NOR and negative literal.
     ] {
         let native = matrix_frontend_source(words);
         let text = matrix_frontend_text(words);
@@ -2519,16 +2531,31 @@ fn certified_rewrite_retains_actual_selected_techniques_and_placements() {
         let source = matrix_frontend_source(words);
         let rewrite = compile_player_torch_row(&source, 1_000_000).unwrap();
         let candidate = rewrite.implemented_candidate();
-        assert_eq!(candidate.instances.instances.len(), rewrite.implemented().gates.len());
-        assert!(candidate.instances.instances.iter().any(|instance|
-            instance.expanded.topology.primitives.iter().any(|primitive|
-                primitive.primitive == Primitive::Comparator)));
-        assert_eq!(candidate.compatibility_views(rewrite.implemented()).unwrap(),
-            *rewrite.implemented_observations());
+        assert_eq!(
+            candidate.instances.instances.len(),
+            rewrite.implemented().gates.len()
+        );
+        assert!(candidate.instances.instances.iter().any(|instance| instance
+            .expanded
+            .topology
+            .primitives
+            .iter()
+            .any(|primitive| primitive.primitive == Primitive::Comparator)));
+        assert_eq!(
+            candidate
+                .compatibility_views(rewrite.implemented())
+                .unwrap(),
+            *rewrite.implemented_observations()
+        );
         for placement in candidate.placements.values() {
             for block in &placement.blocks {
-                assert_eq!(&block.state,
-                    rewrite.physical().world().get(block.at.x, block.at.y, block.at.z));
+                assert_eq!(
+                    &block.state,
+                    rewrite
+                        .physical()
+                        .world()
+                        .get(block.at.x, block.at.y, block.at.z)
+                );
             }
         }
         // Mutation of a caller's clone cannot change the sealed manifest.
