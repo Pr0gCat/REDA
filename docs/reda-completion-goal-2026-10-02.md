@@ -65,7 +65,7 @@
 
 原生支援 `reg`、wildcard legacy `always`、現有正緣／enable clocked forms，以及連續賦值的串接／巢狀／slice targets。標準 `seven_segment.v` 現在可在 native/auto 且 Python 不存在時完成實體生成；三次完整512階段波形與已封存有效優化結果完全相同，未退步。25項compiler、12項DFF來源語意、24項frontend unit、2項DFF實體、6項CLI selection通過，WASM library檢查通過。詳見[原生legacy HDL](native-legacy-hdl-2026-10-02.md)。第5/6項有實際進展但尚未完成，parameter／instance／inout與更廣循序範圍仍待實作。
 
-第8項另重現路由根因：typed request 的arrival balancing runway使一般／unary末端與frozen reference不同，ring charge及pinned fixture前置幾何因此失配。原始期待、simulator與verifier均保留，已封存[路由證據](reda-completion-routing-audit-2026-10-02.json)。需分開legacy compatibility與經完整qualification的balancing候選後再驗收，不以更新快照宣告修好。八項總目標繼續active。
+第8項初步路由盤點曾懷疑 unary arrival-balancing runway。後續單獨實驗未修好三個原始失敗，完整4096預設比較更發現9項退步，故撤回排除unary的假設。凍結控制與生成路由的刷新reserve確有不同，改由呼叫端明確指定；原始期待、simulator與verifier均保留。詳見[刷新政策與拒絕實驗](generator-legacy-refresh-policy-2026-10-02.md)。其他歷史端點／pinned／climb根因仍未解決，不以更新快照宣告修好。八項總目標繼續active。
 
 ## 原生整數參數進展
 

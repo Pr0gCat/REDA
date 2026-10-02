@@ -1237,6 +1237,7 @@ impl PhysicalRouter for DurablePhysicalRouter {
             RoutingJoinPolicy::Off,
             true,
             true,
+            ReservePolicy::LatestLegalCell,
             move |at| guidance.map_or(0, |guidance| guidance.penalty(*at)),
             |_, _, _| {},
             guidance,
@@ -1255,6 +1256,7 @@ impl PhysicalRouter for DurablePhysicalRouter {
             RoutingJoinPolicy::Off,
             true,
             true,
+            ReservePolicy::LatestLegalCell,
             |_| 0,
             |_, _, _| {},
             None,
@@ -1274,6 +1276,7 @@ impl PhysicalRouter for DurablePhysicalRouter {
             RoutingJoinPolicy::Off,
             true,
             true,
+            ReservePolicy::LatestLegalCell,
             move |at| guidance.map_or(0, |guidance| guidance.penalty(*at)),
             |_, _, _| {},
             guidance,
@@ -1293,6 +1296,7 @@ impl PhysicalRouter for DurablePhysicalRouter {
             RoutingJoinPolicy::Off,
             true,
             true,
+            ReservePolicy::LatestLegalCell,
             |_| 0,
             |_, _, _| {},
             None,
@@ -1445,6 +1449,7 @@ fn available_tree_roots(
 pub(crate) fn route_with_policy<Price, Claim>(
     request: RouteRequest<'_>,
     join_policy: RoutingJoinPolicy,
+    reserve: ReservePolicy,
     price: Price,
     claim: Claim,
 ) -> Result<RealisedRouteTree, RouterFailure>
@@ -1457,6 +1462,7 @@ where
         join_policy,
         false,
         false,
+        reserve,
         price,
         claim,
         None,
@@ -1483,6 +1489,7 @@ where
         join_policy,
         true,
         false,
+        ReservePolicy::LatestLegalCell,
         price,
         claim,
         None,
@@ -1510,6 +1517,7 @@ where
         join_policy,
         true,
         true,
+        ReservePolicy::LatestLegalCell,
         price,
         claim,
         None,
@@ -1524,6 +1532,7 @@ fn route_with_local_policy<Price, Claim>(
     join_policy: RoutingJoinPolicy,
     strict_local: bool,
     seed_rules: bool,
+    reserve: ReservePolicy,
     mut price: Price,
     mut claim: Claim,
     guidance: Option<RouteGuidance>,
@@ -1540,6 +1549,7 @@ where
         join_policy,
         strict_local,
         seed_rules,
+        reserve,
         &mut work,
         &mut price,
         &mut claim,
@@ -1555,6 +1565,7 @@ fn route_ordered_attempt<Price, Claim>(
     join_policy: RoutingJoinPolicy,
     strict_local: bool,
     seed_rules: bool,
+    reserve_policy: ReservePolicy,
     work: &mut RouterWork,
     price: &mut Price,
     claim: &mut Claim,
@@ -1598,7 +1609,6 @@ where
     let stage_claims = strict_local || seed_rules;
 
     let ring_reroute_limit = ring_reroute_limit(strict_local, seed_rules);
-    let reserve_policy = reserve_policy(strict_local, seed_rules);
     for (ordinal, sink) in request.sinks.as_slice().iter().enumerate() {
         let mut ring_forbidden = BTreeSet::new();
         let mut local_reroutes = 0usize;

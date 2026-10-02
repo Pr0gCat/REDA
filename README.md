@@ -35,6 +35,9 @@ The default compiler also tries deterministic, certified route-refresh reduction
 on combinational boundaries with one to six inputs. It accepts only complete
 retained-history truth and nonregressing setup/target timing, glitch and pulse
 metrics. See [measured seven-segment and ROM improvements](docs/generator-qualified-refresh-reduction-2026-10-02.md).
+Legacy compatibility routing now preserves caller-owned refresh reserves;
+[validation and rejected experiments](docs/generator-legacy-refresh-policy-2026-10-02.md)
+record unchanged default waves and the remaining root failures.
 
 ## The circuits
 

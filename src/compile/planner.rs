@@ -4992,6 +4992,9 @@ fn legacy_lay_net_reference(
     Ok(route)
 }
 
+/// Historical compatibility control through the production typed adapter.
+/// Ordinary generation chooses its own reserve explicitly at its call sites.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn lay_net(
     signal: &str,
@@ -5002,11 +5005,43 @@ fn lay_net(
     reservation: &mut Reservation,
     prices: &Prices,
 ) -> Result<Route, Box<RoutingFailure>> {
+    lay_net_with_reserve(
+        signal,
+        source,
+        consumers,
+        netlist,
+        candidate,
+        reservation,
+        prices,
+        crate::compile::routing::ReservePolicy::TotalStairs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lay_net_with_reserve(
+    signal: &str,
+    source: Anchor,
+    consumers: &[NetConsumer],
+    netlist: &Netlist,
+    candidate: &PlanCandidate,
+    reservation: &mut Reservation,
+    prices: &Prices,
+    reserve: crate::compile::routing::ReservePolicy,
+) -> Result<Route, Box<RoutingFailure>> {
     let route_id = RouteId(0);
     let (typed_source, typed_sinks) =
         typed_legacy_request_parts(route_id, signal, source, consumers, netlist, candidate);
     let typed_reservations = typed_reservations(reservation, route_id, signal);
-    let adapter = LegacyPlannerRouterAdapter::new(signal, consumers, netlist, reservation, prices);
+    // The caller owns its refresh policy; the adapter preserves it rather
+    // than replacing compatibility or ordinary generation with a global default.
+    let adapter = LegacyPlannerRouterAdapter::new(
+        signal,
+        consumers,
+        netlist,
+        reservation,
+        prices,
+        reserve,
+    );
     match adapter.route(RouteRequest {
         id: route_id,
         source: typed_source,
@@ -5036,6 +5071,7 @@ struct LegacyPlannerRouterAdapter<'a> {
     netlist: &'a Netlist,
     reservation: RefCell<&'a mut Reservation>,
     prices: &'a Prices<'a>,
+    reserve: crate::compile::routing::ReservePolicy,
     failure: RefCell<Option<Box<RoutingFailure>>>,
 }
 
@@ -5046,6 +5082,7 @@ impl<'a> LegacyPlannerRouterAdapter<'a> {
         netlist: &'a Netlist,
         reservation: &'a mut Reservation,
         prices: &'a Prices<'a>,
+        reserve: crate::compile::routing::ReservePolicy,
     ) -> Self {
         Self {
             signal,
@@ -5053,6 +5090,7 @@ impl<'a> LegacyPlannerRouterAdapter<'a> {
             netlist,
             reservation: RefCell::new(reservation),
             prices,
+            reserve,
             failure: RefCell::new(None),
         }
     }
@@ -5127,6 +5165,7 @@ impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
         let outcome = crate::compile::routing::route_with_policy(
             request,
             join_policy,
+            self.reserve,
             |at| self.prices.price(at),
             |at, owner, kind| {
                 let (owner, occupancy) = match (owner, kind) {
@@ -5643,8 +5682,14 @@ fn route_in_order(
         let (typed_source, typed_sinks) =
             typed_legacy_request_parts(route_id, signal, source, &consumers, netlist, &candidate);
         let typed_reservations = typed_reservations(&reservation, route_id, signal);
-        let adapter =
-            LegacyPlannerRouterAdapter::new(signal, &consumers, netlist, &mut reservation, &prices);
+        let adapter = LegacyPlannerRouterAdapter::new(
+            signal,
+            &consumers,
+            netlist,
+            &mut reservation,
+            &prices,
+            crate::compile::routing::ReservePolicy::TerminalStairs,
+        );
         match adapter.route(RouteRequest {
             id: route_id,
             source: typed_source,
@@ -6242,7 +6287,7 @@ fn negotiate_charging(
                     own_join,
                     search,
                 };
-                lay_net(
+                lay_net_with_reserve(
                     signal,
                     source,
                     &consumers,
@@ -6250,6 +6295,7 @@ fn negotiate_charging(
                     &candidate,
                     &mut reservation,
                     &prices,
+                    crate::compile::routing::ReservePolicy::TerminalStairs,
                 )
             };
             match outcome {
@@ -7608,8 +7654,14 @@ mod tests {
         let typed_reservations = typed_reservations(&reservation, route, "n");
         let congestion = Congestion::default();
         let prices = Prices::RipUp(&congestion);
-        let adapter =
-            LegacyPlannerRouterAdapter::new("n", &consumers, &netlist, &mut reservation, &prices);
+        let adapter = LegacyPlannerRouterAdapter::new(
+            "n",
+            &consumers,
+            &netlist,
+            &mut reservation,
+            &prices,
+            crate::compile::routing::ReservePolicy::TotalStairs,
+        );
 
         let failure = adapter
             .route(RouteRequest {
