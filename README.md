@@ -31,6 +31,11 @@ the placer and router; `src/formats` writes the schematic. The four invariants
 `compile()` and are constraints, not cost terms: a layout that violates one is
 illegal, not expensive.
 
+The default compiler also tries deterministic, certified route-refresh reduction
+on combinational boundaries with one to six inputs. It accepts only complete
+retained-history truth and nonregressing setup/target timing, glitch and pulse
+metrics. See [measured seven-segment and ROM improvements](docs/generator-qualified-refresh-reduction-2026-10-02.md).
+
 ## The circuits
 
 Four hand-written reference circuits, built gate by gate, plus the same two

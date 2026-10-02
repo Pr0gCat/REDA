@@ -1475,12 +1475,21 @@ mod tests {
     use crate::compile::topology::{Library, LibraryEntry, Primitive, Template};
 
     fn check(netlist: &Netlist) {
-        let compiled = compile(netlist).expect("reference circuits compile");
         let library = Library::default_library();
-        let graph = expand(netlist, &library)
+        let original_graph = expand(netlist, &library)
             .expect("reference circuits only use NOR gates of fan-in 1..=3");
+        let original = crate::compile::compile_without_rewrite(netlist)
+            .expect("independent reference compilation");
+        verify_expansion_matches_compiled(netlist, &original_graph, &original)
+            .expect("the original expansion must account for the independent compiler");
+        let compiled = compile(netlist).expect("reference circuits compile");
+        let graph = compiled
+            .physical_rewrite()
+            .map_or(original_graph, |rewrite| {
+                crate::compile::primitive_graph::from_certified_rewrite(rewrite)
+            });
         verify_expansion_matches_compiled(netlist, &graph, &compiled)
-            .expect("the expanded graph must account for exactly what compile() built");
+            .expect("the actual selected graph must account for exactly what compile() built");
     }
 
     fn symbolic_candidate(netlist: &Netlist, library: &Library) -> ExpandedPhysicalCandidate {

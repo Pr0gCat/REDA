@@ -1,4 +1,4 @@
-//! Move an interior refresh off a staircase onto the preceding flat cell.
+//! Structural relocation and removal proposals for route-owned refreshes.
 //! This mutates only a draft manifest. Callers must still certify the complete
 //! source rewrite and electrical world, then qualify its retained waveforms.
 use super::candidate::ExpandedPhysicalCandidate;
@@ -75,4 +75,93 @@ pub fn flatten_refreshes(candidate: &mut ExpandedPhysicalCandidate) -> usize {
         }
     }
     moved
+}
+
+/// Structurally eligible interior relays, in stable route/coordinate order.
+/// Eligibility is not a strength or functional proof; certify each resulting draft.
+pub fn removable_flat_refreshes(
+    candidate: &ExpandedPhysicalCandidate,
+) -> Vec<(super::identity::RouteId, crate::compile::geometry::Anchor)> {
+    let mut sites = Vec::new();
+    for (id, route) in &candidate.routes {
+        for cell in &route.cells {
+            if cell.state.kind == BlockKind::Repeater
+                && removal_state(candidate, *id, cell.at).is_some()
+            {
+                sites.push((*id, cell.at));
+            }
+        }
+    }
+    sites.sort_unstable();
+    sites
+}
+
+fn removal_state(
+    candidate: &ExpandedPhysicalCandidate,
+    id: super::identity::RouteId,
+    at: crate::compile::geometry::Anchor,
+) -> Option<crate::redstone::world::block::BlockState> {
+    let route = candidate.routes.get(&id)?;
+    let relay = route.cells.iter().find(|c| c.at == at)?;
+    if relay.state.kind != BlockKind::Repeater
+        || candidate.observations.values().any(|o| o.site.at == at)
+        || candidate
+            .placements
+            .values()
+            .any(|p| p.blocks.iter().any(|b| b.at == at))
+        || candidate
+            .boundaries
+            .values()
+            .any(|p| p.blocks.iter().any(|b| b.at == at))
+    {
+        return None;
+    }
+    let mut replacement = None;
+    for branch in &route.branches {
+        let Some(index) = branch.path.iter().position(|p| *p == at) else {
+            continue;
+        };
+        if index == 0
+            || index + 1 >= branch.path.len()
+            || branch.terminal.at == at
+            || branch.terminal.repeaters == 0
+        {
+            return None;
+        }
+        let before = branch.path[index - 1];
+        let after = branch.path[index + 1];
+        if before.y != at.y
+            || after.y != at.y
+            || !crate::compile::routing::route_step_is_legal(before, at, after, &relay.state)
+        {
+            return None;
+        }
+        let dust = route
+            .cells
+            .iter()
+            .find(|c| c.at == before && c.state.kind == BlockKind::RedstoneWire)?;
+        replacement = Some(dust.state.clone());
+    }
+    replacement
+}
+
+/// Remove one eligible refresh from a draft, updating every affected branch count.
+/// Floor, paths, bindings and observations remain intact. Full certification and
+/// retained-history quality decide whether the resulting electrical world is usable.
+pub fn remove_flat_refresh(
+    candidate: &mut ExpandedPhysicalCandidate,
+    id: super::identity::RouteId,
+    at: crate::compile::geometry::Anchor,
+) -> bool {
+    let Some(state) = removal_state(candidate, id, at) else {
+        return false;
+    };
+    let route = candidate.routes.get_mut(&id).unwrap();
+    route.cells.iter_mut().find(|c| c.at == at).unwrap().state = state;
+    for branch in &mut route.branches {
+        if branch.path.contains(&at) {
+            branch.terminal.repeaters -= 1;
+        }
+    }
+    true
 }

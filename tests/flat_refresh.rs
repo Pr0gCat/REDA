@@ -90,10 +90,65 @@ fn staircase_refresh_relocation_makes_the_actual_decoder_manifest_certifiable() 
         selected.physical_rewrite().is_some(),
         "default selects the qualified structural refresh correction"
     );
+    let improved = reda::compile::selection::qualify_boundary(&n, &selected).unwrap();
+    assert!(improved.dominates(&quality));
+    assert!(improved.target[1] <= 8671, "retained target settle cap");
+    assert!(improved.setup[1] <= 8636, "retained setup settle cap");
+    let zero = reda::compile::selection::compile_selected_with_refresh_budget(&n, 0).unwrap();
+    assert_eq!(zero.world.size(), public.world.size());
+    for flat in 0..zero.world.cells().len() {
+        let (x, y, z) = zero.world.decode(flat);
+        assert_eq!(zero.world.get(x, y, z), public.world.get(x, y, z));
+    }
     assert_eq!(
-        reda::compile::selection::qualify_boundary(&n, &selected),
+        reda::compile::selection::qualify_boundary(&n, &zero),
         Some(quality)
     );
+
+    // Draft reduction preserves identity and updates all shared-prefix branches.
+    use reda::compile::fragment_synth::refresh::{removable_flat_refreshes, remove_flat_refresh};
+    let before = public.physical_rewrite().unwrap().implemented_candidate();
+    let sites = removable_flat_refreshes(before);
+    assert!(!sites.is_empty());
+    assert!(sites.windows(2).all(|pair| pair[0] < pair[1]));
+    let (route_id, at) = sites[0];
+    let mut reduced = before.clone();
+    assert!(remove_flat_refresh(&mut reduced, route_id, at));
+    assert_eq!(reduced.instances, before.instances);
+    assert_eq!(reduced.placements, before.placements);
+    assert_eq!(reduced.boundaries, before.boundaries);
+    assert_eq!(reduced.connections, before.connections);
+    assert_eq!(reduced.observations, before.observations);
+    for (id, route) in &before.routes {
+        let current = &reduced.routes[id];
+        assert_eq!(current.floors, route.floors);
+        assert_eq!(current.branches.len(), route.branches.len());
+        for (old, new) in route.branches.iter().zip(&current.branches) {
+            let mut expected = old.clone();
+            if *id == route_id && old.path.contains(&at) {
+                expected.terminal.repeaters -= 1;
+            }
+            assert_eq!(*new, expected);
+        }
+        for (old, new) in route.cells.iter().zip(&current.cells) {
+            if *id == route_id && old.at == at {
+                assert_eq!(new.at, old.at);
+                assert_eq!(
+                    new.state.kind,
+                    reda::redstone::world::block::BlockKind::RedstoneWire
+                );
+            } else {
+                assert_eq!(new, old);
+            }
+        }
+    }
+    let reduced_routes = reduced.routes.clone();
+    assert!(!remove_flat_refresh(&mut reduced, route_id, at));
+    assert_eq!(reduced.routes, reduced_routes);
+    let mut observed = before.clone();
+    observed.observations.values_mut().next().unwrap().site.at = at;
+    assert!(!remove_flat_refresh(&mut observed, route_id, at));
+    assert_eq!(observed.routes, before.routes);
 
     let graph =
         reda::compile::primitive_graph::from_certified_rewrite(public.physical_rewrite().unwrap());

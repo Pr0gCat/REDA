@@ -54,3 +54,9 @@
 ## 路由到達時間與配平實驗
 
 觀測全部 gate-input terminal 與最後 interior repeater；原始／共享 cover 分別覆蓋74／100／109個 operand pair，各512階段。實測 cube 的d2於tick6、d0於tick8到達，3／4個刷新元件形成2-tick暫態。僅調整branch-exclusive既有repeater延遲，可使兩者同於tick8並消除此cube脈衝，但原始Native總穩定時間8823→8829、setup8786→8792，故拒絕。末端dust改repeater另造成mixed cover內部錯值，也拒絕並保存錯誤紀錄。反向input placement同樣退步。四組實驗各三次bytes一致，未改預設、控制、simulator或verifier。詳見 [路由到達時間實驗](generator-route-arrival-experiment-2026-10-02.md)。下一步縮短較慢路徑，再評估配平，八項仍未完成。
+
+## 有效刷新縮減
+
+首次取得完整 Native seven segment 的實際預設改善：總穩定時間8823→8671、輸出毛刺切換85→83、錯值脈衝1425→1385；較大61-gate 16×7 ROM亦改善15745→15731、157→153、4531→4467。setup/target全部28項不退步，512階段內部與公开真值通過，ROM另核對獨立字表。每組大電路三次bytes相同，4096小家族三次保持原成果。依穩定順序逐一提案、認證、完整qualification、接受後組合；default預算256，無名稱或座標白名單。199單次提案中192雖嚴格認證但內部真值失敗，均拒絕，證明不能省略runtime驗證。詳見[有效刷新縮減](generator-qualified-refresh-reduction-2026-10-02.md)。
+
+推進第1/2/3項但未全部完成：一般API budget、共享decoder、更多ROM/Mux與更大輸入規模仍需處理，其餘循序／HDL／無Yosys／真實Minecraft／全專案收斂繼續保持未完成。

@@ -534,9 +534,8 @@ fn critical_path_non_merge_gate_count(netlist: &Netlist, path: &[String]) -> usi
 }
 
 /// Sum the repeater blocks physically routed along `critical_path`'s edges,
-/// by looking each hop up in `compile::routing_stats::analyze` -- the same
-/// per-edge breakdown `routing_cost_report` uses, read back from the
-/// *already compiled* world rather than assumed from a uniform per-hop cost.
+/// using certified route paths or `compile::routing_stats::analyze`, read
+/// back from the compiled world rather than assumed from a uniform hop cost.
 ///
 /// For each consecutive pair of signals in the path, the second is some
 /// gate's output; the first must be one of that gate's inputs, which
@@ -544,17 +543,16 @@ fn critical_path_non_merge_gate_count(netlist: &Netlist, path: &[String]) -> usi
 /// path shorter than two signals (a primary input with no gates behind it)
 /// has no edges and so no repeaters.
 ///
-/// `None` when the layout has no per-edge route breakdown to read.
+/// `None` when route ownership or primitive delays do not fit the model.
 ///
-/// `routing_stats` recomputes the row/channel/track emitter's own geometry and
-/// reads the world along it, so it can only describe a circuit that emitter
-/// laid out. Since the hybrid `compile` landed, a circuit may instead have
-/// been placed by relaxation and routed by A*, and its routes are not in the
-/// `CompiledCircuit` at all -- they live in the `PlanCandidate`, which
-/// realisation consumes. There is no number to return, so this returns none
-/// rather than an invented one; `TimingSummary`'s model term is `Option` for
-/// the same reason, and the exactness check that reads it is skipped rather
-/// than softened.
+/// For a sealed implementation, read the exact certified branch paths and
+/// count the actual repeater blocks in its world. The existing settle model
+/// prices unit-delay repeaters; nonunit retiming is not representable here.
+/// A logically rewritten source graph also cannot supply physical hops: use
+/// the sealed implementation graph as `summarize_worst_case` does.
+///
+/// Otherwise `routing_stats` describes only the recorded legacy emitter
+/// geometry. An unsealed relaxation layout has no supported breakdown here.
 ///
 /// Panics if `compiled` is not really the result of compiling `netlist`, or
 /// if `critical_path` was not produced by walking `netlist` (both are
@@ -575,6 +573,68 @@ pub fn critical_path_repeaters(
         .enumerate()
         .map(|(i, gate)| (gate.output.as_str(), i))
         .collect();
+    if let Some(rewrite) = compiled.physical_rewrite() {
+        use crate::compile::fragment_synth::identity::ConnectionId;
+        use crate::compile::fragment_synth::instance_graph::InstanceRole;
+        use crate::compile::routing::RouteTarget;
+        use crate::redstone::world::block::BlockKind;
+        if rewrite.implemented() != netlist {
+            assert_eq!(
+                rewrite.source(),
+                netlist,
+                "timing netlist belongs to the compiled circuit"
+            );
+            // A source hop is not a physical hop after a logical rewrite.
+            return None;
+        }
+        let manifest = rewrite.implemented_candidate();
+        let mut repeaters = 0;
+        for hop in critical_path.windows(2) {
+            let index = *producer_of
+                .get(hop[1].as_str())
+                .expect("critical path receiver exists");
+            let input = netlist.gates[index]
+                .inputs
+                .iter()
+                .position(|s| s == &hop[0])
+                .expect("critical path source feeds receiver");
+            let instance = manifest.instances.instances.iter().find(|i| {
+                i.logical_gate.0 as usize == index && i.role == InstanceRole::Canonical
+            })?;
+            // The gate-delay model assumes a torch implementation. Passive
+            // junctions and comparator implementations have different depth.
+            if instance.expanded.topology.primitives.is_empty()
+                || instance
+                    .expanded
+                    .topology
+                    .primitives
+                    .iter()
+                    .any(|p| p.primitive != crate::compile::topology::Primitive::Torch)
+            {
+                return None;
+            }
+            let target = RouteTarget::Connection(ConnectionId::External {
+                instance: instance.id,
+                input_index: input as u16,
+            });
+            let branch = manifest
+                .routes
+                .values()
+                .flat_map(|r| &r.branches)
+                .find(|b| b.target == target)?;
+            for at in &branch.path {
+                let state = compiled.world.get(at.x, at.y, at.z);
+                if state.kind == BlockKind::Repeater {
+                    // The existing model prices unit-delay relays, not arbitrary retiming.
+                    if state.delay != 1 {
+                        return None;
+                    }
+                    repeaters += 1;
+                }
+            }
+        }
+        return Some(repeaters);
+    }
     let report = routing_stats::analyze(netlist, compiled).ok()?;
 
     Some(

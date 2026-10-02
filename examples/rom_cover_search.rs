@@ -486,6 +486,48 @@ fn measure(
     Ok(result)
 }
 
+fn search_refreshes(source: &Netlist, budget: usize, trace: bool, trace_landings: bool) {
+    use reda::compile::fragment_synth::refresh::{removable_flat_refreshes, remove_flat_refresh};
+    let baseline = reda::compile::selection::compile_flat_refresh_candidate(source).unwrap();
+    let manifest = baseline.physical_rewrite().unwrap().implemented_candidate();
+    let sites = removable_flat_refreshes(manifest);
+    let baseline_quality = reda::compile::selection::qualify_boundary(source, &baseline).unwrap();
+    println!(
+        "{}",
+        json!({"polarity":null,"search":"control","eligible":sites.len(),"budget":budget,"source_inputs":source.inputs,"source_outputs":source.outputs,"result":measure(source,&baseline,trace,trace_landings)})
+    );
+    for (ordinal, &(route, at)) in sites.iter().take(budget).enumerate() {
+        let mut draft = manifest.clone();
+        assert!(remove_flat_refresh(&mut draft, route, at));
+        let result = (|| -> Result<_, String> {
+            let rewrite = realise_physical_rewrite(
+                source,
+                source,
+                &draft,
+                &Library::default_library(),
+                &source.inputs,
+                &source.outputs,
+                1_000_000,
+            )
+            .map_err(|e| format!("strict refresh removal: {e:?}"))?;
+            let c = reda::compile::CompiledCircuit::from_certified_rewrite(rewrite);
+            let measured = measure(source, &c, trace, trace_landings)?;
+            let q = reda::compile::selection::qualify_boundary(source, &c)
+                .ok_or("retained qualification failed")?;
+            eprintln!(
+                "refresh {ordinal}: no regression={}, strict improvement={}",
+                q.dominates(&baseline_quality),
+                q != baseline_quality
+            );
+            Ok(measured)
+        })();
+        println!(
+            "{}",
+            json!({"polarity":null,"search":"single_refresh_removal","ordinal":ordinal,"route":route,"at":at,"source_inputs":source.inputs,"source_outputs":source.outputs,"result":result})
+        );
+    }
+}
+
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     let text = std::fs::read_to_string(&args[1]).unwrap();
@@ -517,6 +559,13 @@ fn main() {
     let balance = terminal_mode || args.iter().any(|a| a == "--balance-primary");
     let trace_landings = args.iter().any(|a| a == "--trace-landings");
     let trace = trace_landings || args.iter().any(|a| a == "--trace");
+    if let Some(value) = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--refresh-search="))
+    {
+        search_refreshes(&source, value.parse().unwrap(), trace, trace_landings);
+        return;
+    }
     for index in 0..=count {
         let polarity = if index == 0 { None } else { Some(index - 1) };
         let mut implementation = polarity.map_or_else(
@@ -551,6 +600,19 @@ fn main() {
                 let c = reda::compile::selection::compile_flat_refresh_candidate(&source)
                     .map_err(|e| format!("strict flat draft: {e:?}"))?;
                 return measure(&source, &c, trace, trace_landings);
+            }
+            if index == 0 {
+                if let Some(value) = args
+                    .iter()
+                    .find_map(|a| a.strip_prefix("--selected-budget="))
+                {
+                    let c = reda::compile::selection::compile_selected_with_refresh_budget(
+                        &source,
+                        value.parse().unwrap(),
+                    )
+                    .map_err(|e| format!("selected compile: {e:?}"))?;
+                    return measure(&source, &c, trace, trace_landings);
+                }
             }
             if index == 0 && args.iter().any(|a| a == "--default") {
                 let c = reda::compile::compile(&source)

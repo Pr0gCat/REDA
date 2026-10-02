@@ -91,6 +91,13 @@ fn rewritten_compiled_views_measure_actual_nets_without_source_name_collisions()
                 .iter()
                 .any(|gate| &gate.output == signal)));
     assert!(summary.critical_path_repeater_count.is_none());
+    assert!(summary.critical_path_model_game_ticks.is_none());
+    assert!(reda::timing::critical_path_repeaters(
+        &source,
+        &compiled,
+        &["left".into(), "implemented:literal_a".into()]
+    )
+    .is_none());
 }
 
 #[test]

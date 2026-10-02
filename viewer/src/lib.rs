@@ -1048,6 +1048,9 @@ fn topology_views(
     rewrite: Option<&reda::compile::fragment_synth::rewrite::CertifiedPhysicalRewrite>,
 ) -> (PrimitiveGraph, Vec<GateMeta>, Vec<CellMeta>) {
     let implemented = rewrite.map_or(lowered, |rewrite| rewrite.implemented());
+    // A route-only rewrite retains the lowered graph and its provenance.
+    // Boundary equivalence alone cannot recover ownership after a graph change.
+    let preserves_lowered = implemented == lowered;
     let graph = if let Some(rewrite) = rewrite {
         primitive_graph::from_certified_rewrite(rewrite)
     } else {
@@ -1060,7 +1063,7 @@ fn topology_views(
         .enumerate()
         .zip(compute_gate_layers(implemented))
         .map(|((index, gate), layer)| {
-            let origin = if rewrite.is_none() {
+            let origin = if preserves_lowered {
                 Some(&source.gates[provenance[index]])
             } else {
                 None
@@ -1077,7 +1080,7 @@ fn topology_views(
         })
         .collect();
     let mut lowered_by_source = vec![Vec::new(); source.gates.len()];
-    if rewrite.is_none() {
+    if preserves_lowered {
         for (index, &owner) in provenance.iter().enumerate() {
             lowered_by_source[owner].push(index);
         }
@@ -1091,7 +1094,7 @@ fn topology_views(
         .map(|(index, layer)| CellMeta {
             layer,
             lowered: lowered_by_source[index].clone(),
-            terminals: if rewrite.is_none() {
+            terminals: if preserves_lowered {
                 source_terminals[index].clone()
             } else {
                 Vec::new()

@@ -99,7 +99,8 @@ fn report_timing(
          ratio (measured/bound) = {:.2}x",
         summary.logic_depth, summary.logic_depth_bound_game_ticks, summary.ratio,
     );
-    // The model's repeater term is read out of `compile::routing_stats`, which
+    // Sealed corrections read their exact certified paths and actual world.
+    // Unsealed legacy circuits use `compile::routing_stats`, which
     // recomputes the row/channel/track emitter's own geometry and reads the
     // world along it. Since the hybrid `compile` landed, the world may instead
     // have been placed by relaxation, and then there is no such geometry and no
@@ -479,8 +480,8 @@ fn the_settle_model_is_exact_on_the_emitters_layout() {
 /// | seven_segment | 84 | `Legacy` | never routes, same failure |
 ///
 /// These remain the independent original producer paths. The default selector
-/// now returns a strictly certified `FragmentSynth` refresh correction for the
-/// full decoder; its retained-history quality is checked below and separately
+/// now returns strictly certified `FragmentSynth` refresh corrections for the
+/// single segment and full decoder; its retained-history quality is checked below and separately
 /// compared against the original producer by the flat-refresh experiment.
 ///
 /// The two frontiers behind the last two rows are recorded in
@@ -508,7 +509,7 @@ fn every_reference_circuit_records_which_path_produced_it() {
             "segment_a",
             build_single_segment_netlist(0).0,
             PlannerKind::Legacy,
-            PlannerKind::Legacy,
+            PlannerKind::FragmentSynth,
         ),
         (
             "seven_segment",

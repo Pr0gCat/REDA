@@ -417,10 +417,93 @@ fn certify_backup(source: &Netlist, compiled: &CompiledCircuit) -> Option<Compil
     Some(sealed)
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct RefreshQuality {
+    core: Quality,
+    // setup driver/lamp, then target driver/lamp glitch-transition counts.
+    groups: [u64; 4],
+}
+impl RefreshQuality {
+    fn dominates(&self, other: &Self) -> bool {
+        self.core.dominates(&other.core)
+            && self.groups.iter().zip(other.groups).all(|(a, b)| *a <= b)
+    }
+}
+fn refresh_quality(
+    source: &Netlist,
+    compiled: &CompiledCircuit,
+    require_certificate: bool,
+) -> Option<RefreshQuality> {
+    let mut groups = [0; 4];
+    let core = qualify_boundary_impl(source, compiled, require_certificate, |phase| {
+        for channel in 0..2 {
+            if (0..source.outputs.len()).any(|bit| {
+                let label = format!("boundary{}", channel * source.outputs.len() + bit);
+                phase.events.iter().filter(|e| e.label == label).count() > 1
+            }) {
+                groups[phase.phase * 2 + channel] += 1;
+            }
+        }
+    })?;
+    Some(RefreshQuality { core, groups })
+}
+fn improve_refreshes(
+    source: &Netlist,
+    mut best: CompiledCircuit,
+    mut quality: RefreshQuality,
+    budget: usize,
+) -> (CompiledCircuit, RefreshQuality) {
+    use super::fragment_synth::refresh::{removable_flat_refreshes, remove_flat_refresh};
+    if budget == 0 {
+        return (best, quality);
+    }
+    let sites = removable_flat_refreshes(best.physical_rewrite().unwrap().implemented_candidate());
+    for (route, at) in sites.into_iter().take(budget) {
+        let mut candidate = best
+            .physical_rewrite()
+            .unwrap()
+            .implemented_candidate()
+            .clone();
+        if !remove_flat_refresh(&mut candidate, route, at) {
+            continue;
+        }
+        let Ok(rewrite) = realise_physical_rewrite_with_size(
+            source,
+            source,
+            &candidate,
+            &super::topology::Library::default_library(),
+            &source.inputs,
+            &source.outputs,
+            1_000_000,
+            Some(best.world.size()),
+        ) else {
+            continue;
+        };
+        let circuit = CompiledCircuit::from_certified_rewrite(rewrite);
+        let Some(measured) = refresh_quality(source, &circuit, true) else {
+            continue;
+        };
+        if measured.dominates(&quality) && measured != quality {
+            best = circuit;
+            quality = measured;
+        }
+    }
+    (best, quality)
+}
+
 /// Compare the bounded player family and certify structural refresh corrections.
 /// Selected rewrites must certify and preserve the complete source boundary.
 /// The larger-boundary control is the independent original compilation.
 pub fn compile_selected(source: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    compile_selected_with_refresh_budget(source, 256)
+}
+
+/// Bounded, deterministic refresh proposals outside the fixed player family.
+/// Zero still checks the seed; the budget limits attempted structural reductions.
+pub fn compile_selected_with_refresh_budget(
+    source: &Netlist,
+    budget: usize,
+) -> Result<CompiledCircuit, CompileError> {
     super::checked_topological_order(source)?;
     if source.inputs.len() != 2
         || source.outputs.len() != 3
@@ -432,13 +515,15 @@ pub fn compile_selected(source: &Netlist) -> Result<CompiledCircuit, CompileErro
             && !source.gates.iter().any(|g| g.kind.is_sequential())
         {
             if let Ok((flat, moved)) = flat_refresh_from_compiled(source, &raw) {
-                if moved > 0 {
-                    if let (Some(control), Some(candidate)) = (
-                        qualify_boundary_impl(source, &raw, false, |_| {}),
-                        qualify_boundary(source, &flat),
-                    ) {
-                        if candidate.dominates(&control) {
-                            return Ok(flat);
+                if let (Some(control), Some(candidate)) = (
+                    refresh_quality(source, &raw, false),
+                    refresh_quality(source, &flat, true),
+                ) {
+                    if candidate.dominates(&control) {
+                        let (best, quality) =
+                            improve_refreshes(source, flat, candidate.clone(), budget);
+                        if moved > 0 || quality != candidate {
+                            return Ok(best);
                         }
                     }
                 }
@@ -487,6 +572,21 @@ mod tests {
                 Gate::nor("mixed", &["negative", "right"]),
             ],
         }
+    }
+    #[test]
+    fn fewer_individual_glitches_cannot_hide_more_glitch_transitions() {
+        let mut control = RefreshQuality {
+            core: Quality::default(),
+            groups: [0, 0, 1, 1],
+        };
+        control.core.target[1] = 10;
+        let mut candidate = control.clone();
+        candidate.core.target[1] = 9;
+        candidate.groups[3] = 2;
+        assert!(candidate.core.dominates(&control.core));
+        assert!(!candidate.dominates(&control));
+        candidate.groups[3] = 1;
+        assert!(candidate.dominates(&control));
     }
     #[test]
     fn unified_backup_retains_an_exact_certifiable_manifest() {

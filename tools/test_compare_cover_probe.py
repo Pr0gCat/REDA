@@ -34,6 +34,30 @@ class InternalTraceAudit(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     compare(control, row)
 
+    def test_qualified_refresh_defaults_and_literal_rom(self):
+        docs = Path(__file__).resolve().parents[1] / 'docs'
+
+        def load(name):
+            with gzip.open(docs / name, 'rt') as stream:
+                return json.loads(stream.readline())
+
+        prefix = 'generator-qualified-refresh-reduction-2026-10-02-'
+        for frontend in ['native', 'yosys']:
+            control = load('generator-flat-refresh-certification-2026-10-02-' + frontend + '-control.jsonl.gz')
+            candidate = load(prefix + frontend + '.jsonl.gz')
+            self.assertTrue(compare(control, candidate)['accepted'])
+        control = load(prefix + 'rom-control.jsonl.gz')
+        candidate = load(prefix + 'rom-default.jsonl.gz')
+        self.assertTrue(compare(control, candidate)['accepted'])
+        words = [0x15, 0x62, 0x3a, 0x41, 0x0c, 0x71, 0x26, 0x5b,
+                 0x64, 0x19, 0x4f, 0x32, 0x75, 0x0a, 0x53, 0x2d]
+        for row in [control, candidate]:
+            phases = row['result']['Ok']['phases']
+            self.assertEqual(len(phases), 512)
+            for phase in phases:
+                self.assertEqual(phase['expected'],
+                                 [bool(words[phase['address']] & (1 << bit)) for bit in range(7)])
+
     def test_complete_landing_replay_and_operand_bindings(self):
         docs = Path(__file__).resolve().parents[1] / 'docs'
         with gzip.open(docs / 'generator-flat-refresh-certification-2026-10-02-native-control.jsonl.gz', 'rt') as stream:
