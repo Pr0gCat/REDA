@@ -50,3 +50,7 @@
 ## 大型內部波形及拒絕實驗
 
 新增 opt-in gate event trace，完整 retained-history 各閘事件由獨立 Python 重建狀態。觀察到原始／共享 cover 的早期條件暫態及後續傳播，並定位 cover builder 的多餘 OR/NOR、singleton merge、未使用常數閘。測試末級 NOR 融合與 output-cone pruning，全部來源等價、嚴格認證及512階段真值通過，三次全 bytes 一致；但最差與毛刺仍退步於44 ticks／85切換的固定原始控制，四個新 cover 全拒絕，未改預設。下一步需量測 landing operands 的物理到達時間後處理配平。見 [大型內部波形實驗](generator-cover-internal-timing-2026-10-02.md)。其餘驗收仍保持未完成。
+
+## 路由到達時間與配平實驗
+
+觀測全部 gate-input terminal 與最後 interior repeater；原始／共享 cover 分別覆蓋74／100／109個 operand pair，各512階段。實測 cube 的d2於tick6、d0於tick8到達，3／4個刷新元件形成2-tick暫態。僅調整branch-exclusive既有repeater延遲，可使兩者同於tick8並消除此cube脈衝，但原始Native總穩定時間8823→8829、setup8786→8792，故拒絕。末端dust改repeater另造成mixed cover內部錯值，也拒絕並保存錯誤紀錄。反向input placement同樣退步。四組實驗各三次bytes一致，未改預設、控制、simulator或verifier。詳見 [路由到達時間實驗](generator-route-arrival-experiment-2026-10-02.md)。下一步縮短較慢路徑，再評估配平，八項仍未完成。

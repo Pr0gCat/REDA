@@ -14,9 +14,8 @@ use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
 #[path = "../src/frontend/cover.rs"]
 mod cover;
-fn evaluate(n: &Netlist, address: usize) -> HashMap<String, bool> {
-    let mut v: HashMap<_, _> = n
-        .inputs
+fn evaluate(n: &Netlist, address: usize, input_order: &[String]) -> HashMap<String, bool> {
+    let mut v: HashMap<_, _> = input_order
         .iter()
         .enumerate()
         .map(|(i, s)| (s.clone(), address & (1 << i) != 0))
@@ -73,7 +72,9 @@ fn candidate(source: &Netlist, polarity: usize, fuse: bool) -> Netlist {
     let high = gate(&mut n, vec![low.clone()], true, fuse);
     let mut shared = BTreeMap::new();
     let states = 1 << source.inputs.len();
-    let values: Vec<_> = (0..states).map(|a| evaluate(source, a)).collect();
+    let values: Vec<_> = (0..states)
+        .map(|a| evaluate(source, a, &source.inputs))
+        .collect();
     for (i, out) in source.outputs.iter().enumerate() {
         let inverted = polarity & (1 << i) != 0;
         let table: Vec<_> = values.iter().map(|v| v[out]).collect();
@@ -128,6 +129,148 @@ fn candidate(source: &Netlist, polarity: usize, fuse: bool) -> Netlist {
     }
     n
 }
+// Experimental route mutation. Whole-candidate proof and retained quality remain mandatory.
+fn balance_primary(
+    n: &Netlist,
+    candidate: &mut reda::compile::fragment_synth::candidate::ExpandedPhysicalCandidate,
+    terminal_mode: bool,
+) -> usize {
+    use reda::compile::fragment_synth::identity::ConnectionId;
+    use reda::compile::routing::{DelayedOwner, RouteTarget, RouteTerminalKind};
+    use reda::redstone::world::block::Facing;
+    // This experiment starts from unit-delay routes; counts are delay units only there.
+    if candidate
+        .routes
+        .values()
+        .flat_map(|r| &r.cells)
+        .any(|c| c.state.kind == BlockKind::Repeater && c.state.delay != 1)
+    {
+        return 0;
+    }
+    let mut proposals = vec![];
+    for instance in &candidate.instances.instances {
+        let g = &n.gates[instance.logical_gate.0 as usize];
+        if g.kind.wire_name() != "nor"
+            || g.inputs.len() < 2
+            || !g.inputs.iter().all(|s| n.inputs.contains(s))
+        {
+            continue;
+        }
+        let branches: Vec<_> = candidate
+            .routes
+            .values()
+            .flat_map(|route| {
+                route
+                    .branches
+                    .iter()
+                    .filter_map(move |branch| match branch.target {
+                        RouteTarget::Connection(ConnectionId::External {
+                            instance: receiver,
+                            ..
+                        }) if receiver == instance.id => Some((route, branch)),
+                        _ => None,
+                    })
+            })
+            .collect();
+        if branches.len() != g.inputs.len() {
+            continue;
+        }
+        let maximum = branches
+            .iter()
+            .map(|(_, b)| b.terminal.repeaters)
+            .max()
+            .unwrap();
+        for (route, branch) in branches {
+            let delta = maximum - branch.terminal.repeaters;
+            if delta == 0 || delta > 4 || branch.path.len() < 2 {
+                continue;
+            }
+            if !terminal_mode {
+                if let Some(cell) = branch
+                    .path
+                    .iter()
+                    .rev()
+                    .filter_map(|at| route.cells.iter().find(|c| c.at == *at))
+                    .find(|cell| {
+                        cell.at != branch.terminal.at
+                            && cell.state.kind == BlockKind::Repeater
+                            && u64::from(cell.state.delay) + delta <= 4
+                            && route
+                                .branches
+                                .iter()
+                                .filter(|b| b.path.contains(&cell.at))
+                                .count()
+                                == 1
+                            && !candidate
+                                .observations
+                                .values()
+                                .any(|o| o.site.at == cell.at)
+                    })
+                {
+                    let mut state = cell.state.clone();
+                    state.delay += delta as u8;
+                    proposals.push((route.id, branch.sink, cell.at, state));
+                }
+                continue;
+            }
+            let at = branch.terminal.at;
+            if route
+                .branches
+                .iter()
+                .filter(|b| b.path.contains(&at))
+                .count()
+                != 1
+                || candidate.observations.values().any(|o| o.site.at == at)
+            {
+                continue;
+            }
+            let previous = branch.path[branch.path.len() - 2];
+            let Some(cell) = route.cells.iter().find(|c| c.at == at) else {
+                continue;
+            };
+            let mut state = cell.state.clone();
+            if state.kind == BlockKind::RedstoneWire {
+                if previous.y != at.y {
+                    continue;
+                }
+                let facing = match (at.x - previous.x, at.z - previous.z) {
+                    (1, 0) => Facing::West,
+                    (-1, 0) => Facing::East,
+                    (0, 1) => Facing::North,
+                    (0, -1) => Facing::South,
+                    _ => continue,
+                };
+                state.kind = BlockKind::Repeater;
+                state.name = "minecraft:repeater".into();
+                state.facing = Some(facing);
+                state.power = 0;
+                state.delay = delta as u8;
+                state.lit = true;
+            } else if state.kind == BlockKind::Repeater && u64::from(state.delay) + delta <= 4 {
+                state.delay += delta as u8;
+            } else {
+                continue;
+            }
+            proposals.push((route.id, branch.sink, at, state));
+        }
+    }
+    for (route_id, sink, at, state) in &proposals {
+        let route = candidate.routes.get_mut(route_id).unwrap();
+        let branch = route.branches.iter_mut().find(|b| b.sink == *sink).unwrap();
+        let cell = route.cells.iter_mut().find(|c| c.at == *at).unwrap();
+        if cell.state.kind == BlockKind::RedstoneWire {
+            branch.terminal.repeaters += 1;
+        }
+        cell.state = state.clone();
+        if *at != branch.terminal.at {
+            continue;
+        }
+        branch.terminal.state = state.clone();
+        branch.terminal.kind = RouteTerminalKind::RepeaterIntoSupport;
+        branch.terminal.delayed_owner = Some(DelayedOwner::Route(*route_id));
+    }
+    proposals.len()
+}
 fn signal(w: &World, p: (i32, i32, i32)) -> bool {
     let b = w.get(p.0, p.1, p.2);
     if b.kind == BlockKind::RedstoneWire {
@@ -136,7 +279,12 @@ fn signal(w: &World, p: (i32, i32, i32)) -> bool {
         b.lit
     }
 }
-fn measure(source: &Netlist, c: &reda::compile::CompiledCircuit, trace: bool) -> serde_json::Value {
+fn measure(
+    source: &Netlist,
+    c: &reda::compile::CompiledCircuit,
+    trace: bool,
+    trace_landings: bool,
+) -> Result<serde_json::Value, String> {
     let implementation = c.implementation_netlist(source);
     let states = 1usize << source.inputs.len();
     let drivers = c.physical_rewrite().map_or_else(
@@ -176,7 +324,74 @@ fn measure(source: &Netlist, c: &reda::compile::CompiledCircuit, trace: bool) ->
             )
         }));
     }
+    let mut landings = BTreeMap::new();
+    if trace_landings {
+        use reda::compile::fragment_synth::identity::ConnectionId;
+        use reda::compile::routing::RouteTarget;
+        let adapted;
+        let manifest = if let Some(rewrite) = c.physical_rewrite() {
+            rewrite.implemented_candidate()
+        } else {
+            adapted = LegacyCandidateAdapter::adapt(implementation, c).unwrap();
+            &adapted.candidate
+        };
+        for route in manifest.routes.values() {
+            for branch in &route.branches {
+                let RouteTarget::Connection(ConnectionId::External {
+                    instance,
+                    input_index,
+                }) = branch.target
+                else {
+                    continue;
+                };
+                let owner = manifest
+                    .instances
+                    .instances
+                    .iter()
+                    .find(|i| i.id == instance)
+                    .unwrap();
+                let g = &implementation.gates[owner.logical_gate.0 as usize];
+                let terminal = branch.terminal.at;
+                let mut sites = vec![("terminal", terminal)];
+                if let Some(at) = branch.path.iter().rev().find(|at| {
+                    c.world.get(at.x, at.y, at.z).kind == BlockKind::Repeater && **at != terminal
+                }) {
+                    sites.push(("last_repeater", *at));
+                }
+                for (role, at) in sites {
+                    let state = c.world.get(at.x, at.y, at.z);
+                    assert!(
+                        matches!(state.kind, BlockKind::RedstoneWire | BlockKind::Repeater),
+                        "unsupported landing observation: {state:?}"
+                    );
+                    let name = format!("{}/{}/{role}", route.id.0, branch.sink.ordinal);
+                    watched.push((Position::new(at.x, at.y, at.z), format!("landing/{name}")));
+                    landings.insert(name, json!({"role":role,"at":at,"state":state,"receiver":g.output,"receiver_at":c.gate_output_positions[&g.output],"input_index":input_index,"source":g.inputs[input_index as usize],"receiver_kind":g.kind.wire_name(),"terminal":branch.terminal,"path":branch.path}));
+                }
+            }
+        }
+    }
     sim.attach_observer(watched);
+    let landing_values = |sim: &Simulator| {
+        landings
+            .iter()
+            .map(|(name, site)| {
+                let at = &site["at"];
+                (
+                    name.clone(),
+                    signal(
+                        sim.world(),
+                        (
+                            at["x"].as_i64().unwrap() as i32,
+                            at["y"].as_i64().unwrap() as i32,
+                            at["z"].as_i64().unwrap() as i32,
+                        ),
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let initial_landings = landing_values(&sim);
     let mut phases = vec![];
     for from in 0..states {
         for to in 0..states {
@@ -190,20 +405,20 @@ fn measure(source: &Netlist, c: &reda::compile::CompiledCircuit, trace: bool) ->
                     sim.world_mut().set(p.0, p.1, p.2, lever);
                 }
                 sim.run_until_stable(2000).unwrap();
-                let expected = evaluate(source, address);
-                let internal = evaluate(implementation, address);
+                let expected = evaluate(source, address, &source.inputs);
+                let internal = evaluate(implementation, address, &source.inputs);
                 for g in &implementation.gates {
-                    assert_eq!(
-                        signal(sim.world(), c.gate_output_positions[&g.output]),
-                        internal[&g.output],
-                        "internal {} at {}",
-                        g.output,
-                        address
-                    );
+                    let actual = signal(sim.world(), c.gate_output_positions[&g.output]);
+                    if actual != internal[&g.output] {
+                        return Err(format!("qualification: internal {} at from {from} to {to} phase {phase} address {address}: expected {}, actual {actual}",g.output,internal[&g.output]));
+                    }
                 }
                 for (i, out) in source.outputs.iter().enumerate() {
-                    assert_eq!(signal(sim.world(), drivers[i]), expected[out]);
-                    assert_eq!(signal(sim.world(), lamps[i]), expected[out]);
+                    if signal(sim.world(), drivers[i]) != expected[out]
+                        || signal(sim.world(), lamps[i]) != expected[out]
+                    {
+                        return Err(format!("qualification: public output {i} at from {from} to {to} phase {phase} address {address}"));
+                    }
                 }
                 let measured_internal: BTreeMap<_, _> = implementation
                     .gates
@@ -215,7 +430,18 @@ fn measure(source: &Netlist, c: &reda::compile::CompiledCircuit, trace: bool) ->
                         )
                     })
                     .collect();
-                phases.push(json!({"internal":measured_internal,"driver":drivers.iter().map(|&p|signal(sim.world(),p)).collect::<Vec<_>>(),"lamp":lamps.iter().map(|&p|signal(sim.world(),p)).collect::<Vec<_>>(),"from":from,"to":to,"phase":phase,"address":address,"ticks":sim.current_tick()-start,"expected":source.outputs.iter().map(|s|expected[s]).collect::<Vec<_>>(),"events":sim.observations().iter().filter(|e|!e.label.starts_with("internal/")).map(|e|json!({"label":e.label,"tick":e.tick-start,"value":e.value})).collect::<Vec<_>>() }));
+                phases.push(json!({"internal":measured_internal,"driver":drivers.iter().map(|&p|signal(sim.world(),p)).collect::<Vec<_>>(),"lamp":lamps.iter().map(|&p|signal(sim.world(),p)).collect::<Vec<_>>(),"from":from,"to":to,"phase":phase,"address":address,"ticks":sim.current_tick()-start,"expected":source.outputs.iter().map(|s|expected[s]).collect::<Vec<_>>(),"events":sim.observations().iter().filter(|e|e.label.parse::<usize>().is_ok()).map(|e|json!({"label":e.label,"tick":e.tick-start,"value":e.value})).collect::<Vec<_>>() }));
+                if trace_landings {
+                    let values = landing_values(&sim);
+                    phases.last_mut().unwrap()["landings"] = json!(values);
+                    phases.last_mut().unwrap()["landing_events"] = json!(sim
+                        .observations()
+                        .iter()
+                        .filter_map(|e| e.label.strip_prefix("landing/").map(
+                            |name| json!({"landing":name,"tick":e.tick-start,"value":e.value})
+                        ))
+                        .collect::<Vec<_>>());
+                }
                 if trace {
                     phases.last_mut().unwrap()["internal_events"] = json!(sim
                         .observations()
@@ -248,12 +474,16 @@ fn measure(source: &Netlist, c: &reda::compile::CompiledCircuit, trace: bool) ->
             .map(|g| json!({"output":g.output,"inputs":g.inputs,"kind":g.kind.wire_name()}))
             .collect::<Vec<_>>()
     };
-    let mut result = json!({"source_gates":gates(source),"implemented_inputs":implementation.inputs,"implemented_gates":gates(implementation),"strict_certified":c.physical_rewrite().is_some(),"exact_world_fingerprint":exact,"phases":phases,"fingerprint":reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&c.world)});
+    let mut result = json!({"source_gates":gates(source),"implemented_inputs":c.physical_rewrite().map_or(&implementation.inputs[..], |r| r.rewrite_certificate().rewritten_inputs_in_source_order()),"implemented_gates":gates(implementation),"strict_certified":c.physical_rewrite().is_some(),"exact_world_fingerprint":exact,"phases":phases,"fingerprint":reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&c.world)});
+    if trace_landings {
+        result["landing_sites"] = json!(landings);
+        result["initial_landings"] = json!(initial_landings);
+    }
     if trace {
         result["gate_positions"] = json!(c.gate_output_positions);
         result["implemented_outputs"] = json!(implementation.outputs);
     }
-    result
+    Ok(result)
 }
 
 fn main() {
@@ -283,13 +513,19 @@ fn main() {
     );
     let count = args.get(3).map_or(2, |s| s.parse::<usize>().unwrap());
     assert!(count <= 1 << source.outputs.len());
-    let trace = args.iter().any(|a| a == "--trace");
+    let terminal_mode = args.iter().any(|a| a == "--balance-terminal");
+    let balance = terminal_mode || args.iter().any(|a| a == "--balance-primary");
+    let trace_landings = args.iter().any(|a| a == "--trace-landings");
+    let trace = trace_landings || args.iter().any(|a| a == "--trace");
     for index in 0..=count {
         let polarity = if index == 0 { None } else { Some(index - 1) };
         let mut implementation = polarity.map_or_else(
             || source.clone(),
             |p| candidate(&source, p, args.iter().any(|a| a == "--fused-reductions")),
         );
+        if polarity.is_some() && args.iter().any(|a| a == "--reverse-inputs") {
+            implementation.inputs.reverse();
+        }
         if polarity.is_some() && args.iter().any(|a| a == "--prune-unused") {
             let mut live: HashSet<_> = implementation.outputs.iter().cloned().collect();
             for i in implementation
@@ -309,17 +545,17 @@ fn main() {
             let raw =
                 compile_without_rewrite(&implementation).map_err(|e| format!("compile: {e:?}"))?;
             if index == 0 && args.iter().any(|a| a == "--control") {
-                return Ok(measure(&source, &raw, trace));
+                return measure(&source, &raw, trace, trace_landings);
             }
-            if index == 0 && args.iter().any(|a| a == "--flat-refresh") {
+            if index == 0 && !balance && args.iter().any(|a| a == "--flat-refresh") {
                 let c = reda::compile::selection::compile_flat_refresh_candidate(&source)
                     .map_err(|e| format!("strict flat draft: {e:?}"))?;
-                return Ok(measure(&source, &c, trace));
+                return measure(&source, &c, trace, trace_landings);
             }
             if index == 0 && args.iter().any(|a| a == "--default") {
                 let c = reda::compile::compile(&source)
                     .map_err(|e| format!("default compile: {e:?}"))?;
-                return Ok(measure(&source, &c, trace));
+                return measure(&source, &c, trace, trace_landings);
             }
             let mut adapted = LegacyCandidateAdapter::adapt(&implementation, &raw)
                 .map_err(|e| format!("manifest: {e:?}"))?;
@@ -328,13 +564,18 @@ fn main() {
             } else {
                 0
             };
+            if balance {
+                let changed =
+                    balance_primary(&implementation, &mut adapted.candidate, terminal_mode);
+                eprintln!("polarity {polarity:?}: balanced {changed} primary landings");
+            }
             eprintln!("polarity {polarity:?}: moved {moved} refreshes");
             let rewrite = realise_physical_rewrite(
                 &source,
                 &implementation,
                 &adapted.candidate,
                 &Library::default_library(),
-                &implementation.inputs,
+                &source.inputs,
                 &implementation.outputs,
                 1_000_000,
             )
@@ -357,11 +598,12 @@ fn main() {
                 }
                 format!("strict proof: {e:?}; disconnected dust diagnostics: {}",json!({"dust":bad,"illegal_steps":illegal}))
             })?;
-            Ok(measure(
+            measure(
                 &source,
                 &reda::compile::CompiledCircuit::from_certified_rewrite(rewrite),
                 trace,
-            ))
+                trace_landings,
+            )
         })();
         println!(
             "{}",

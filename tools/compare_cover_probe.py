@@ -19,6 +19,16 @@ def quality(arm,kind):
     q[name+'_glitch_transitions']+=any_glitch
   previous=p['address']
  return dict(q)
+def replay_events(previous, events, key, ticks):
+    measured=dict(previous);last_tick={name:0 for name in measured}
+    for event in events:
+        name=event[key]
+        assert name in measured
+        assert 0<=last_tick[name]<=event['tick']<=ticks
+        assert isinstance(event['value'],bool) and event['value']!=measured[name]
+        measured[name]=event['value'];last_tick[name]=event['tick']
+    return measured
+
 def compare(control_row, candidate_row):
     control=control_row['result']['Ok']
     if 'Err' in candidate_row['result']:
@@ -45,6 +55,20 @@ def compare(control_row, candidate_row):
                     pending.remove(g)
             return values
         previous_internal=evaluate(record['implemented_gates'],record['implemented_inputs'],0)
+        if 'landing_sites' in record:
+            sites=record['landing_sites'];previous_landings=record['initial_landings']
+            assert set(sites)==set(previous_landings)
+            gates={g['output']:g for g in record['implemented_gates']}
+            observed=set()
+            for name,site in sites.items():
+                gate=gates[site['receiver']];index=site['input_index']
+                assert 0<=index<len(gate['inputs']) and gate['inputs'][index]==site['source']
+                assert gate['kind']==site['receiver_kind']
+                assert site['role'] in ['terminal','last_repeater']
+                if site['role']=='last_repeater':assert site['state']['kind']=='Repeater'
+                if site['state']['kind']=='Repeater':assert previous_landings[name]==previous_internal[site['source']]
+                observed.add((site['receiver'],index))
+            assert observed=={(g['output'],i) for g in gates.values() for i in range(len(g['inputs']))}, 'missing gate-input route observations'
         previous=record['phases'][0]['expected']
         width=len(previous)
         for p in record['phases']:
@@ -54,15 +78,16 @@ def compare(control_row, candidate_row):
             assert set(p['internal'])=={g['output'] for g in record['implemented_gates']}
             assert all(value==internal[s] for s,value in p['internal'].items())
             if 'internal_events' in p:
-                measured={s:previous_internal[s] for s in p['internal']}
-                last_tick={s:0 for s in measured}
-                for event in p['internal_events']:
-                    name=event['signal']
-                    assert name in measured
-                    assert 0<=last_tick[name]<=event['tick']<=p['ticks']
-                    assert event['value']!=measured[name]
-                    measured[name]=event['value'];last_tick[name]=event['tick']
+                measured=replay_events({s:previous_internal[s] for s in p['internal']},p['internal_events'],'signal',p['ticks'])
                 assert measured==p['internal'], 'internal events do not explain the retained state'
+            if 'landing_sites' in record:
+                assert set(p['landings'])==set(record['landing_sites'])
+                measured=replay_events(previous_landings,p['landing_events'],'landing',p['ticks'])
+                assert measured==p['landings'], 'landing events do not explain the retained state'
+                for name,site in record['landing_sites'].items():
+                    if site['state']['kind']=='Repeater':
+                        assert measured[name]==internal[site['source']]
+                previous_landings=measured
             previous_internal=internal
             assert p['driver']==p['lamp']==p['expected']
             assert all(0<=int(e['label'])<2*width for e in p['events'])
