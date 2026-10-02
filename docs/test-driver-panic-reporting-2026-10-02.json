@@ -1,0 +1,31 @@
+{
+  "parent": "bccd475",
+  "scope": "test diagnostics only",
+  "worker_tests": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0
+  },
+  "controlled_overlap": {
+    "old_reports": 0,
+    "fixed_reports": 1
+  },
+  "tests_deleted": 0,
+  "tests_skipped": 0,
+  "threshold_changes": false,
+  "full_root": "pending; pre-existing seventeen circuit failures not claimed fixed",
+  "artifacts": {
+    "docs/test-driver-panic-reporting-2026-10-02-old.rs.gz": {
+      "sha256": "618a925e660ed45a82c04b8e9dc234f84085d198bcd486d897e2586f1494f602",
+      "raw_sha256": "57ef0e461b84f5fdb64d91d0d572c7298c7c50bd852e793a035d2601b1e08e33"
+    },
+    "docs/test-driver-panic-reporting-2026-10-02-fixed.rs.gz": {
+      "sha256": "d7479a8c0445d67267008fbf51a852fb77a342d066b9d38eae0e5f2c104e6f3c",
+      "raw_sha256": "fa08642df621e3cf3743338d25779f52d41473d3b4f9ae30a5fcc694838453b6"
+    },
+    "docs/test-driver-panic-reporting-2026-10-02-workers.log.gz": {
+      "sha256": "87e53f1c00a0f9b2eb9b36a15b57b7fcc9d200bdf4a94bf3c3517d25b5f2ebb7",
+      "raw_sha256": "89e78a7c863a79b323b21b5c801829da20234bc925d39a537c2ae1628d462d28"
+    }
+  }
+}

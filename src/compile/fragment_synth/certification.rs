@@ -70,31 +70,6 @@ mod driver_tests {
         assert_eq!(parallel.unwrap(), expected);
     }
 
-    /// Run `body` with panic reporting off: these tests panic on purpose and
-    /// the hook would otherwise print a backtrace for each one.
-    ///
-    /// The hook is process-global, so it goes back on as soon as `body`
-    /// returns *or* unwinds -- a guard, not a pair of statements -- and `body`
-    /// should hold nothing but the call that panics. Assertions belong outside
-    /// it, where a failure still prints.
-    fn without_panic_output<T>(body: impl FnOnce() -> T) -> T {
-        type Hook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
-
-        struct Restore(Option<Hook>);
-
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                if let Some(hook) = self.0.take() {
-                    std::panic::set_hook(hook);
-                }
-            }
-        }
-
-        let _restore = Restore(Some(std::panic::take_hook()));
-        std::panic::set_hook(Box::new(|_| {}));
-        body()
-    }
-
     #[test]
     fn the_lowest_index_error_is_the_one_returned() {
         // Three failures and a panic above them: a serial run would have
@@ -106,9 +81,10 @@ mod driver_tests {
                 _ => Ok(index),
             }
         };
-        // Only the runs are silenced; the assertions are not.
-        let serial = without_panic_output(|| run_indexed(CertificationWorkers::serial(), 64, run));
-        let parallel = without_panic_output(|| run_indexed(wide(), 64, run));
+        // Let the test harness capture expected panic output. A process-global
+        // hook would also silence unrelated tests running on other threads.
+        let serial = run_indexed(CertificationWorkers::serial(), 64, run);
+        let parallel = run_indexed(wide(), 64, run);
         assert_eq!(serial, Err(9));
         assert_eq!(parallel, Err(9));
     }
@@ -162,15 +138,13 @@ mod driver_tests {
 
     #[test]
     fn the_lowest_index_panic_is_the_one_that_propagates() {
-        let caught = without_panic_output(|| {
-            std::panic::catch_unwind(|| {
-                run_indexed(wide(), 32, |index| -> Result<usize, usize> {
-                    match index {
-                        12 => panic!("first"),
-                        25 => panic!("second"),
-                        _ => Ok(index),
-                    }
-                })
+        let caught = std::panic::catch_unwind(|| {
+            run_indexed(wide(), 32, |index| -> Result<usize, usize> {
+                match index {
+                    12 => panic!("first"),
+                    25 => panic!("second"),
+                    _ => Ok(index),
+                }
             })
         });
         let payload = caught.expect_err("the panic must propagate");
