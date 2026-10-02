@@ -13482,7 +13482,10 @@ mod tests {
     /// something is `g1`'s own terminal repeater. Were a later placement to
     /// earn `g1` a dust terminal instead, every vector would pass with the rule
     /// deleted -- so the shape that makes the vectors mean anything is asserted
-    /// before they are swept.
+    /// before they are swept. The fixture now explicitly supplies that strong
+    /// sibling terminal and verifies the resulting candidate, so arrival-runway
+    /// selection cannot remove the challenge. Removing the pinned net's diode
+    /// must then fail truth while the verified isolated world passes all vectors.
     #[test]
     fn a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate() {
         let netlist = shared_pinned_output_netlist();
@@ -13490,7 +13493,7 @@ mod tests {
 
         // `g1` is `g26`'s input 1, and `g4` is its input 0: the two land on
         // the same support block, which is the coupling this test is about.
-        let candidate = plan_from_netlist(&netlist, &placements).expect("the chunk plans");
+        let mut candidate = plan_from_netlist(&netlist, &placements).expect("the chunk plans");
         let (shared_support, _, _) = candidate
             .input_connection_at(1, 1)
             .expect("`g26`'s second input has a physical landing");
@@ -13502,6 +13505,43 @@ mod tests {
             shared_support,
             "the pinned net and its sibling share one support block"
         );
+        // The challenge needs strong support power independently of the
+        // placement's qualified dust/runway preference. Realise that same
+        // diode at the existing collinear sibling terminal, then verify the
+        // complete candidate before comparing either world.
+        let sibling = candidate
+            .routes
+            .iter_mut()
+            .find(|route| route.id == "g1")
+            .unwrap();
+        let ordinal = sibling
+            .terminals
+            .iter()
+            .position(|terminal| terminal.sink.gate == "g26" && terminal.sink.input_index == 1)
+            .unwrap();
+        let terminal = sibling.terminals[ordinal].sink.anchor;
+        if sibling.terminals[ordinal].kind != RouteTerminalKind::RepeaterIntoSupport {
+            assert_eq!(
+                sibling.terminals[ordinal].kind,
+                RouteTerminalKind::DirectedDustIntoSupport
+            );
+            let path = &sibling.branch_paths[ordinal];
+            let before = path[path.len() - 2];
+            let direction = compile::direction_from(
+                Position::new(before.x, before.y, before.z),
+                Position::new(terminal.x, terminal.y, terminal.z),
+            );
+            let index = sibling
+                .anchors
+                .iter()
+                .position(|at| *at == terminal)
+                .unwrap();
+            sibling.realisation[index] = compile::repeater(direction);
+            sibling.terminals[ordinal].kind = RouteTerminalKind::RepeaterIntoSupport;
+            sibling.terminals[ordinal].repeaters += 1;
+        }
+        let verified = realise_and_verify(&candidate, &netlist, candidate_world_size(&candidate))
+            .expect("the strong-sibling challenge is physically verified");
         let sibling_drives_support = candidate
             .routes()
             .iter()
@@ -13518,8 +13558,9 @@ mod tests {
              that, the vectors below cannot see the defect at all"
         );
 
-        let compiled = crate::compile::compile_planned(&netlist, &placements)
+        let mut compiled = crate::compile::compile_planned(&netlist, &placements)
             .unwrap_or_else(|error| panic!("the chunk compiles: {error}"));
+        compiled.world = verified.world;
         let vectors = simulated_truth_table_driving_pins(
             &compiled,
             &["g0", "g1", "g2"],
@@ -13532,6 +13573,36 @@ mod tests {
         )
         .expect("the pinned output reports its own gate on every vector");
         assert_eq!(vectors, 8);
+
+        let terminal = candidate
+            .routes
+            .iter()
+            .find(|route| route.id == "g4")
+            .unwrap()
+            .terminals
+            .iter()
+            .find(|terminal| terminal.sink.gate == "g26" && terminal.sink.input_index == 0)
+            .unwrap()
+            .sink
+            .anchor;
+        compiled
+            .world
+            .set(terminal.x, terminal.y, terminal.z, compile::dust());
+        let failure = simulated_truth_table_driving_pins(
+            &compiled,
+            &["g0", "g1", "g2"],
+            &netlist.outputs,
+            |bits| {
+                let g4 = !bits[0];
+                vec![!(g4 || bits[1] || bits[2]), g4]
+            },
+            &placements,
+        )
+        .expect_err("removing the isolation diode must expose backfeed");
+        assert!(
+            failure.contains("readings wrong over 8 vectors"),
+            "the negative control must fail truth, not setup or settling: {failure}"
+        );
     }
 
     /// The contract the world above rests on, asked of the router request

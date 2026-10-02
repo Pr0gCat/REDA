@@ -1,0 +1,22 @@
+{
+  "status": "qualified_strong_sibling_control",
+  "production_code_changed": false,
+  "original_shared_support_assertion_preserved": true,
+  "original_eight_vector_truth_assertion_preserved": true,
+  "candidate_physically_verified_before_truth": true,
+  "negative_control_requires_truth_error_not_setup_or_settle_error": true,
+  "tests_passed": 1,
+  "elapsed_seconds": 0.17,
+  "before_excerpt_from_still_running_root": true,
+  "full_root_complete": false,
+  "artifacts": {
+    "docs/pinned-fanout-control-2026-10-02-before.log.gz": {
+      "sha256": "cac38e9cf7524d60f1b0552abcca5f304a71995b41cf6158d9990cfd8ce2bbb2",
+      "raw_sha256": "a379558f8e9ebf78bb750ab26af9ca45d7982f33f60968020295044e53549759"
+    },
+    "docs/pinned-fanout-control-2026-10-02-after.log.gz": {
+      "sha256": "19b38689d41311240592743e165f1d1710d5468c2c0eb9d004fba4859cbc60b1",
+      "raw_sha256": "34b95f97b0dd4f249f7fc4a2eb1ede01e6e2bab80a9e01d7c327d6690f007da5"
+    }
+  }
+}
