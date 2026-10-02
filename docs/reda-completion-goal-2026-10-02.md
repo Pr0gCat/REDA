@@ -40,3 +40,9 @@
 已提出依幾何／ownership 前移內部階梯刷新元件的通解，並提供 `compile_flat_refresh_candidate()`。Native／fresh Yosys 完整 seven segment 均嚴格認證、所有512階段內部與公開真值通過；完整階段與原始控制相同，三次完整生成相同。共享 cover mask 0/1 雖認證成功但品質退步，因此不採用。見 [平直刷新認證修復](generator-flat-refresh-certification-2026-10-02.md)。
 
 此步完成的是大型 candidate 認證的前置缺口，沒有宣告大型延遲／毛刺改善或預設整合完成；下一步建立適用更廣邊界的逐項 runtime qualification/selection，並改進 cover 的物理路徑時序。其餘七項狀態保持未完成，root baseline 15 failures 尚未收斂。
+
+## 較大邊界預設整合進展
+
+`compile()` 現在對一至六個組合輸入、任意非空公開輸出邊界，嘗試平直刷新候選；嚴格認證、完整 retained-history 真值及 setup/target 共24項不退步才選用。Native／fresh Yosys 完整 seven segment 的實際預設結果與前輪認證候選完全一致。固定2/3家族仍保留原規則。詳見 [較大邊界預設整合](generator-default-flat-refresh-selection-2026-10-02.md)。
+
+這只推進第一項的預設認證整合，沒有把平直刷新當成完整共享解碼生成，也沒有大型延遲／毛刺改善。較大 ROM/Mux、可擴展通用組合／搜尋、循序／HDL、真實 Minecraft 與全專案收斂仍未完成。回歸另定位 reference size 舊快照失敗：and4原始／預設同為238，full_adder同為1017；沒有改寫其232／1065歷史期望，需後續追根因。路徑測試保留原始 Legacy decoder，另驗收預設 FragmentSynth 嚴格認證。

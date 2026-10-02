@@ -19,7 +19,9 @@ use reda::circuits::seven_segment::{
     build_seven_segment_netlist, build_single_segment_netlist, INPUT_NAMES as DECODER_INPUT_NAMES,
     TRUTH_TABLE,
 };
-use reda::compile::{compile, compile_legacy, CompiledCircuit, Netlist, PlannerKind};
+use reda::compile::{
+    compile, compile_legacy, compile_without_rewrite, CompiledCircuit, Netlist, PlannerKind,
+};
 use reda::redstone::rules::taxonomy::flags_of;
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, Face, Facing};
@@ -476,6 +478,11 @@ fn the_settle_model_is_exact_on_the_emitters_layout() {
 /// | segment_a | 46 | `Legacy` | never routes -- `no safe local route`, at 8 rounds or at 64 |
 /// | seven_segment | 84 | `Legacy` | never routes, same failure |
 ///
+/// These remain the independent original producer paths. The default selector
+/// now returns a strictly certified `FragmentSynth` refresh correction for the
+/// full decoder; its retained-history quality is checked below and separately
+/// compared against the original producer by the flat-refresh experiment.
+///
 /// The two frontiers behind the last two rows are recorded in
 /// `docs/superpowers/specs/2026-08-15-routing-at-scale.md`. A row that changes
 /// is either routing having been fixed -- in which case the block count in
@@ -484,32 +491,51 @@ fn the_settle_model_is_exact_on_the_emitters_layout() {
 /// this exists to catch.
 #[test]
 fn every_reference_circuit_records_which_path_produced_it() {
-    let circuits: [(&str, Netlist, PlannerKind); 4] = [
-        ("and4", build_and4_netlist().0, PlannerKind::Unified3d),
+    let circuits: [(&str, Netlist, PlannerKind, PlannerKind); 4] = [
+        (
+            "and4",
+            build_and4_netlist().0,
+            PlannerKind::Unified3d,
+            PlannerKind::Unified3d,
+        ),
         (
             "full_adder",
             build_full_adder_netlist().0,
+            PlannerKind::Unified3d,
             PlannerKind::Unified3d,
         ),
         (
             "segment_a",
             build_single_segment_netlist(0).0,
             PlannerKind::Legacy,
+            PlannerKind::Legacy,
         ),
         (
             "seven_segment",
             build_seven_segment_netlist().0,
             PlannerKind::Legacy,
+            PlannerKind::FragmentSynth,
         ),
     ];
 
-    for (name, netlist, expected) in circuits {
+    for (name, netlist, original_path, selected_path) in circuits {
+        let original = compile_without_rewrite(&netlist).expect("original reference compiles");
+        assert_eq!(
+            original.planner_kind(),
+            original_path,
+            "{name} original producer"
+        );
         let compiled = compile(&netlist).expect("every reference circuit compiles");
         assert_eq!(
             compiled.planner_kind(),
-            expected,
-            "{name} took the other path -- if that is intended, its block count moved too"
+            selected_path,
+            "{name} selected producer"
         );
+        if selected_path == PlannerKind::FragmentSynth {
+            assert!(compiled.physical_rewrite().is_some());
+            compiled.validate_rewrite_view(&netlist).unwrap();
+            assert!(reda::compile::selection::qualify_boundary(&netlist, &compiled).is_some());
+        }
     }
 }
 

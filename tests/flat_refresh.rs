@@ -73,6 +73,28 @@ fn staircase_refresh_relocation_makes_the_actual_decoder_manifest_certifiable() 
     assert!(public.physical_rewrite().is_some());
     assert_eq!(public.world.size(), compiled.world.size());
     public.validate_rewrite_view(&n).unwrap();
+    let mut phases = 0;
+    let quality = reda::compile::selection::qualify_boundary_with_phases(&n, &public, |p| {
+        phases += 1;
+        assert_eq!(p.expected.len(), 7);
+        assert_eq!(p.driver, p.expected);
+        assert_eq!(p.lamp, p.expected);
+    })
+    .unwrap();
+    assert_eq!(phases, 512);
+    assert_eq!(quality.target[0], 44);
+    assert_eq!(quality.target[1], 8823);
+    assert_eq!(quality.setup[1], 8786);
+    let selected = reda::compile::compile(&n).unwrap();
+    assert!(
+        selected.physical_rewrite().is_some(),
+        "default selects the qualified structural refresh correction"
+    );
+    assert_eq!(
+        reda::compile::selection::qualify_boundary(&n, &selected),
+        Some(quality)
+    );
+
     let graph =
         reda::compile::primitive_graph::from_certified_rewrite(public.physical_rewrite().unwrap());
     reda::compile::equivalence::verify_expansion_matches_compiled(&n, &graph, &public).unwrap();
@@ -82,4 +104,45 @@ fn staircase_refresh_relocation_makes_the_actual_decoder_manifest_certifiable() 
             .unexplained
             .is_empty()
     );
+}
+
+#[test]
+fn qualification_checks_complete_boundaries_and_constant_outputs() {
+    use reda::compile::{selection::qualify_boundary_with_phases, Gate, Netlist};
+    for width in [1, 3, 6] {
+        let source = Netlist {
+            inputs: (0..width).map(|i| format!("i{i}")).collect(),
+            outputs: ["negative", "positive", "one", "zero"]
+                .map(String::from)
+                .to_vec(),
+            gates: vec![
+                Gate::nor("negative", &["i0"]),
+                Gate::nor("positive", &["negative"]),
+                Gate::nor("one", &[]),
+                Gate::nor("zero", &["one"]),
+            ],
+        };
+        let raw = compile_without_rewrite(&source).unwrap();
+        assert!(qualify_boundary_with_phases(&source, &raw, |_| panic!(
+            "unsealed baseline must not qualify publicly"
+        ))
+        .is_none());
+        let candidate = reda::compile::selection::compile_flat_refresh_candidate(&source).unwrap();
+        let mut phases = 0;
+        let quality = qualify_boundary_with_phases(&source, &candidate, |p| {
+            let states = 1 << width;
+            assert_eq!(
+                (p.from, p.to, p.phase),
+                (phases / (2 * states), (phases / 2) % states, phases % 2)
+            );
+            assert_eq!(p.address, if p.phase == 0 { p.from } else { p.to });
+            let bit = p.address & 1 != 0;
+            assert_eq!(p.expected, [!bit, bit, true, false]);
+            assert_eq!(p.driver, p.expected);
+            assert_eq!(p.lamp, p.expected);
+            phases += 1;
+        });
+        assert!(quality.is_some());
+        assert_eq!(phases, 2 * (1 << width) * (1 << width));
+    }
 }

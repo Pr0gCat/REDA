@@ -266,6 +266,11 @@ fn main() {
                     .map_err(|e| format!("strict flat draft: {e:?}"))?;
                 return Ok(measure(&source, &c));
             }
+            if index == 0 && args.iter().any(|a| a == "--default") {
+                let c = reda::compile::compile(&source)
+                    .map_err(|e| format!("default compile: {e:?}"))?;
+                return Ok(measure(&source, &c));
+            }
             let mut adapted = LegacyCandidateAdapter::adapt(&implementation, &raw)
                 .map_err(|e| format!("manifest: {e:?}"))?;
             let moved = if args.iter().any(|a| a == "--flat-refresh") {

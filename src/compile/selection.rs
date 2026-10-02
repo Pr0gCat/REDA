@@ -1,4 +1,5 @@
-//! Quality selection for the qualified two-input/three-output family.
+//! Retained-history quality selection: a two-input/three-output player family
+//! and structural flat refresh candidates with up to six inputs.
 //! No function IDs, source names, block counts or volume select a candidate.
 use super::fragment_synth::{
     rewrite::realise_physical_rewrite_with_size, torch_row::compile_player_torch_row,
@@ -97,9 +98,63 @@ pub fn qualify_with_phases(
     compiled: &CompiledCircuit,
     mut record: impl FnMut(Phase<'_>),
 ) -> Option<Quality> {
-    compiled.physical_rewrite()?;
-    if source.inputs.len() != 2
-        || source.outputs.len() != 3
+    if source.inputs.len() != 2 || source.outputs.len() != 3 {
+        return None;
+    }
+    qualify_boundary_with_phases(source, compiled, |p| {
+        record(Phase {
+            from: p.from,
+            to: p.to,
+            phase: p.phase,
+            address: p.address,
+            ticks: p.ticks,
+            start: p.start,
+            expected: p.expected.try_into().expect("three source outputs"),
+            driver: p.driver.try_into().expect("three source drivers"),
+            lamp: p.lamp.try_into().expect("three source lamps"),
+            events: p.events,
+        })
+    })
+}
+
+/// Complete retained-history qualification for up to six combinational inputs.
+/// Every source output and implemented gate is checked; outputs never truncate.
+pub fn qualify_boundary(source: &Netlist, compiled: &CompiledCircuit) -> Option<Quality> {
+    qualify_boundary_with_phases(source, compiled, |_| {})
+}
+
+pub struct BoundaryPhase<'a> {
+    pub from: usize,
+    pub to: usize,
+    pub phase: usize,
+    pub address: usize,
+    pub ticks: u64,
+    pub start: u64,
+    pub expected: Vec<bool>,
+    pub driver: Vec<bool>,
+    pub lamp: Vec<bool>,
+    pub events: &'a [crate::redstone::simulator::observer::Observation],
+}
+
+pub fn qualify_boundary_with_phases(
+    source: &Netlist,
+    compiled: &CompiledCircuit,
+    record: impl FnMut(BoundaryPhase<'_>),
+) -> Option<Quality> {
+    qualify_boundary_impl(source, compiled, true, record)
+}
+
+fn qualify_boundary_impl(
+    source: &Netlist,
+    compiled: &CompiledCircuit,
+    require_certificate: bool,
+    mut record: impl FnMut(BoundaryPhase<'_>),
+) -> Option<Quality> {
+    if require_certificate {
+        compiled.physical_rewrite()?;
+    }
+    if !(1..=6).contains(&source.inputs.len())
+        || source.outputs.is_empty()
         || source.gates.iter().any(|g| g.kind.is_sequential())
     {
         return None;
@@ -156,7 +211,7 @@ pub fn qualify_with_phases(
         .map(|p| (p.x, p.y, p.z))
         .collect::<BTreeSet<_>>()
         .len()
-        != 3
+        != source.outputs.len()
         || lamps
             .iter()
             .any(|p| compiled.world.get(p.x, p.y, p.z).kind != BlockKind::Lamp)
@@ -184,11 +239,11 @@ pub fn qualify_with_phases(
         &source_order,
         source.inputs.iter().map(|name| (name.as_str(), false)),
     )?;
-    let mut previous_outputs: [bool; 3] =
-        std::array::from_fn(|bit| initial[source.outputs[bit].as_str()]);
+    let mut previous_outputs: Vec<bool> =
+        source.outputs.iter().map(|s| initial[s.as_str()]).collect();
     let mut previous = 0usize;
-    for from in 0..4 {
-        for to in 0..4 {
+    for from in 0..(1usize << source.inputs.len()) {
+        for to in 0..(1usize << source.inputs.len()) {
             for (phase, address) in [from, to].into_iter().enumerate() {
                 sim.reset_observer();
                 let start = sim.current_tick();
@@ -229,7 +284,7 @@ pub fn qualify_with_phases(
                 metrics[0] = metrics[0].max(ticks);
                 metrics[1] += ticks;
                 for (index, p) in drivers.iter().chain(&lamps).enumerate() {
-                    let bit = index % 3;
+                    let bit = index % source.outputs.len();
                     let target = expected[source.outputs[bit].as_str()];
                     if signal(sim.world(), *p)? != target {
                         return None;
@@ -248,7 +303,7 @@ pub fn qualify_with_phases(
                     {
                         return None;
                     }
-                    let offset = if index < 3 { 2 } else { 7 };
+                    let offset = if index < source.outputs.len() { 2 } else { 7 };
                     metrics[offset] += u64::from(events.len() > 1);
                     metrics[offset + 1] +=
                         u64::from(events.len() > 1 && (previous ^ address).count_ones() == 1);
@@ -262,24 +317,33 @@ pub fn qualify_with_phases(
                         }
                     }
                 }
-                record(Phase {
+                record(BoundaryPhase {
                     from,
                     to,
                     phase,
                     address,
                     ticks,
                     start,
-                    expected: std::array::from_fn(|bit| expected[source.outputs[bit].as_str()]),
-                    driver: std::array::from_fn(|bit| {
-                        signal(sim.world(), drivers[bit]).expect("checked driver")
-                    }),
-                    lamp: std::array::from_fn(|bit| {
-                        signal(sim.world(), lamps[bit]).expect("checked lamp")
-                    }),
+                    expected: source
+                        .outputs
+                        .iter()
+                        .map(|s| expected[s.as_str()])
+                        .collect(),
+                    driver: drivers
+                        .iter()
+                        .map(|p| signal(sim.world(), *p).expect("checked driver"))
+                        .collect(),
+                    lamp: lamps
+                        .iter()
+                        .map(|p| signal(sim.world(), *p).expect("checked lamp"))
+                        .collect(),
                     events: sim.observations(),
                 });
-                previous_outputs =
-                    std::array::from_fn(|bit| expected[source.outputs[bit].as_str()]);
+                previous_outputs = source
+                    .outputs
+                    .iter()
+                    .map(|s| expected[s.as_str()])
+                    .collect();
                 previous = address;
             }
         }
@@ -292,13 +356,20 @@ pub fn qualify_with_phases(
 /// waveforms before promoting the candidate to a default policy.
 pub fn compile_flat_refresh_candidate(source: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let raw = super::compile_without_rewrite(source)?;
+    flat_refresh_from_compiled(source, &raw).map(|(c, _)| c)
+}
+
+fn flat_refresh_from_compiled(
+    source: &Netlist,
+    raw: &CompiledCircuit,
+) -> Result<(CompiledCircuit, usize), CompileError> {
     let mut candidate = raw.physical_candidate().cloned().ok_or_else(|| {
         CompileError::CandidateMetadataViolation {
             item: "flat refresh candidate".into(),
             reason: "a complete combinational manifest is required".into(),
         }
     })?;
-    super::fragment_synth::refresh::flatten_refreshes(&mut candidate);
+    let moved = super::fragment_synth::refresh::flatten_refreshes(&mut candidate);
     let rewrite = realise_physical_rewrite_with_size(
         source,
         source,
@@ -313,7 +384,7 @@ pub fn compile_flat_refresh_candidate(source: &Netlist) -> Result<CompiledCircui
         item: "flat refresh candidate".into(),
         reason: format!("{error:?}"),
     })?;
-    Ok(CompiledCircuit::from_certified_rewrite(rewrite))
+    Ok((CompiledCircuit::from_certified_rewrite(rewrite), moved))
 }
 
 fn certify_backup(source: &Netlist, compiled: &CompiledCircuit) -> Option<CompiledCircuit> {
@@ -346,15 +417,34 @@ fn certify_backup(source: &Netlist, compiled: &CompiledCircuit) -> Option<Compil
     Some(sealed)
 }
 
-/// Default policy for the bounded family; other boundaries keep their compiler.
-/// Both alternatives must certify and preserve the complete source boundary.
+/// Compare the bounded player family and certify structural refresh corrections.
+/// Selected rewrites must certify and preserve the complete source boundary.
+/// The larger-boundary control is the independent original compilation.
 pub fn compile_selected(source: &Netlist) -> Result<CompiledCircuit, CompileError> {
     super::checked_topological_order(source)?;
     if source.inputs.len() != 2
         || source.outputs.len() != 3
         || source.gates.iter().any(|g| g.kind.is_sequential())
     {
-        return super::compile_without_rewrite(source);
+        let raw = super::compile_without_rewrite(source)?;
+        if (1..=6).contains(&source.inputs.len())
+            && !source.outputs.is_empty()
+            && !source.gates.iter().any(|g| g.kind.is_sequential())
+        {
+            if let Ok((flat, moved)) = flat_refresh_from_compiled(source, &raw) {
+                if moved > 0 {
+                    if let (Some(control), Some(candidate)) = (
+                        qualify_boundary_impl(source, &raw, false, |_| {}),
+                        qualify_boundary(source, &flat),
+                    ) {
+                        if candidate.dominates(&control) {
+                            return Ok(flat);
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(raw);
     }
     let player = compile_player_torch_row(source, 1_000_000)
         .ok()

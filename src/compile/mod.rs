@@ -7812,7 +7812,9 @@ fn merge_output_group_root(
 /// `physical_rewrite` boundary bindings rather than treating source gate names
 /// as physical positions. The bounded two-input/three-output selector compares
 /// all setup/target delay, glitch and wrong-pulse metrics separately. Other
-/// boundaries and DFFs retain the verified planner/channel path.
+/// combinational boundaries with up to six inputs can select a strictly
+/// certified flat refresh correction after all retained setup/target metrics
+/// dominate the original path. DFFs and other boundaries keep their compiler.
 pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     selection::compile_selected(netlist)
 }
