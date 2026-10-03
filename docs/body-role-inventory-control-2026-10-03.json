@@ -1,0 +1,36 @@
+{
+  "status": "qualified_inventory_control_repair_only",
+  "head": "7656aa0e495e52ae99e78d1012c24ea4b99dbb1e",
+  "observation": "The inventory precondition requires Comparator to have zero variants, while it now has four supported orientations. Its original comment explicitly identifies this assumption as invalid when support changes. Returning an empty inventory would remove an implemented feature.",
+  "solution": "Retain the negative inventory control for unsupported fixed body roles, now against required port interfaces; add positive interface checks for all implemented body primitives. Keep the already committed actual build refusal test unchanged.",
+  "old_test": "physical_really_has_a_primitive_with_no_variants",
+  "new_test": "physical_variants_preserve_the_body_role_boundary",
+  "proof": [
+    "Same relaxation test count and no new skips.",
+    "All shared previous relaxation controls still pass.",
+    "Updated inventory control checks both every valid orientation and every incompatible Comparator orientation.",
+    "Actual three-role build rejection test remains byte-identical."
+  ],
+  "baseline_source_sha256": "624ae76d3e9b663a4be872827e66b72a4bba9adc76f7079f1dbc5ced00547395",
+  "production_changes": false,
+  "physical_or_quality_snapshot_changes": false,
+  "candidate_source_sha256": "0503c40f951351dc3031cdbf57c6629ae4a2b505d1ada1eadde691684303a9f8",
+  "session_id": 76802,
+  "exit_code": 0,
+  "validation": {
+    "passed": 56,
+    "failed": 0,
+    "ignored": 0,
+    "shared_existing_controls": 55,
+    "shared_outcomes_identical": true,
+    "old_and_new_test_counts_equal": true,
+    "only_inventory_control_region_changed": true,
+    "actual_build_rejection_control_byte_identical": true
+  },
+  "limits": "No production changes or new full-project run; historical circuit/quality snapshots and role-refusal control are unchanged. The obsolete metadata inventory precondition is updated to required-interface availability, not repinned geometry or lowered physical/timing acceptance.",
+  "artifact_sha256": {
+    "docs/body-role-inventory-control-2026-10-03-before.rs": "679eab9e53e769be5852049a33423e79cb5a509814bf5af260d9f00f9ebd4a3c",
+    "docs/body-role-inventory-control-2026-10-03-source.rs.gz": "d06ce0ace3fb27447b15052186de56ac1e1d540a1c9edacf8ca0925899c97126",
+    "docs/body-role-inventory-control-2026-10-03.log.gz": "6c5f8edb71ec6c65809d49edb5b12c0b233aa51b6c63dc2e0bd31cec7bf6f87e"
+  }
+}

@@ -1588,20 +1588,28 @@ mod tests {
         }
     }
 
-    /// The precondition the three `is_empty()` guards in `build` exist for:
-    /// `physical.rs` really does have a primitive with no variants.
-    ///
-    /// Named for what it checks. It does not call `build` -- no netlist can
-    /// reach those guards today, because nothing in the library instantiates a
-    /// comparator -- so calling it a refusal test would claim coverage it does
-    /// not have. What it pins is that the guards are not dead reasoning.
+    /// Comparator orientations now exist, but cannot supply the ports of the
+    /// fixed body roles placement implements. Preserve that negative control
+    /// and check the corresponding positive interfaces too. The test above
+    /// exercises actual rejection at build rather than only inventory metadata.
     #[test]
-    fn physical_really_has_a_primitive_with_no_variants() {
-        assert!(
-            physical::variants(Primitive::Comparator).is_empty(),
-            "this test is about the primitive that has none; if that changed, \
-             pick another or delete this"
-        );
+    fn physical_variants_preserve_the_body_role_boundary() {
+        let comparator = physical::variants(Primitive::Comparator);
+        assert!(!comparator.is_empty(), "the negative case has physical variants");
+        for (primitive, ports) in [
+            (Primitive::Torch, &[PortKind::TorchInput, PortKind::TorchOutput][..]),
+            (Primitive::Repeater, &[PortKind::RepeaterRear, PortKind::RepeaterFront][..]),
+            (Primitive::Lever, &[PortKind::LeverOutput][..]),
+        ] {
+            let variants = physical::variants(primitive);
+            assert!(!variants.is_empty(), "{primitive:?} supplies the implemented role");
+            for &port in ports {
+                assert!(variants.iter().all(|variant| variant.ports_of(port).next().is_some()),
+                    "every {primitive:?} orientation supplies {port:?}");
+                assert!(comparator.iter().all(|variant| variant.ports_of(port).next().is_none()),
+                    "Comparator cannot supply the unrelated {port:?} body role");
+            }
+        }
     }
 }
 
