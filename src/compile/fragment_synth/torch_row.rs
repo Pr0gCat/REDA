@@ -1,4 +1,4 @@
-//! Bounded two-input/three-output torch-row synthesis. Recognition evaluates
+//! Bounded truth-table torch-row synthesis. Recognition evaluates
 //! functions, never module, case or gate names. Physical certification remains
 //! mandatory and this entry does not choose a winner by size.
 use super::rewrite::{realise_physical_rewrite, CertifiedPhysicalRewrite, PhysicalRewriteError};
@@ -11,6 +11,18 @@ use crate::redstone::world::{
 };
 
 mod player;
+mod four;
+
+/// Certify a balanced four-input matrix from the source truth table.
+/// This entry is not selected by the default compiler yet. It supports one
+/// through seven outputs with no constant-low column; every call must pass
+/// source equivalence and the unchanged expanded physical certifier.
+pub fn compile_balanced_torch_matrix(
+    source: &Netlist,
+    proof_work_limit: u64,
+) -> Result<CertifiedPhysicalRewrite, TorchRowError> {
+    four::compile(source, proof_work_limit)
+}
 
 #[derive(Debug)]
 pub enum TorchRowError {
@@ -1227,6 +1239,42 @@ fn typed_world_candidate_with_library(
         enum ConductorOwner {
             Junction(InstanceId),
             Route(RouteId),
+        }
+        // A driven dangling load is still a real physical net. Give it a
+        // source-owned route with no logical sink instead of inventing a gate.
+        for &primitive in candidate.placements.keys() {
+            let source = PhysicalEndpointId::PrimitiveOutput(primitive);
+            if route_ids.contains_key(&source) {
+                continue;
+            }
+            let at = candidate.observations[&ObservationId::PrimitiveOutput(primitive)].site.at;
+            let p = Position::new(at.x, at.y, at.z);
+            let state = world.get(p.x, p.y, p.z);
+            let output = if state.kind == BlockKind::Repeater {
+                p.offset(state.facing.unwrap().opposite())
+            } else {
+                p.down()
+            };
+            if world.get(output.x, output.y, output.z).kind != BlockKind::RedstoneWire {
+                continue;
+            }
+            let id = RouteId(candidate.routes.len() as u32);
+            let cells = if claimed.insert(anchor(output)) {
+                vec![placed(output)]
+            } else {
+                vec![]
+            };
+            route_ids.insert(source, id);
+            candidate.routes.insert(
+                id,
+                RealisedRouteTree {
+                    id,
+                    source,
+                    cells,
+                    floors: vec![],
+                    branches: vec![],
+                },
+            );
         }
         let mut domains = BTreeMap::new();
         for (&id, j) in &candidate.junctions {
