@@ -1,0 +1,13 @@
+{
+  "status": "default first run live, original handle89560; no restart",
+  "scope": "isolated widened matrix admission and selection; exact source archived; three unchanged original-control artifacts already qualified",
+  "archive_sha256": "f31100aff82ba1bef75e5f2bb28583e2f1cabcf6edcd69ad83438a8715c5b937",
+  "default_executable_sha256": "54b378bb77dbc816314ddce13b7c8565979be2db8c53e2560d7983608f674617",
+  "radix_integration": "two tests passed; production owned parser separately committed f3d63d8",
+  "pending": [
+    "actual default terminal",
+    "three separately retained default artifacts and phase equality",
+    "independent quality audit against fixed original control",
+    "full broader matrix/API/constant regressions before production adoption"
+  ]
+}

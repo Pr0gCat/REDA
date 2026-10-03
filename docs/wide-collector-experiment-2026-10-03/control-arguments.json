@@ -1,0 +1,8 @@
+[
+  "/home/seith/REDA/target/release/examples/wide_control",
+  "/tmp/reda-wide-collector-20261003/tests/fixtures/wide_rom_binary.sv",
+  "wide_rom",
+  "0",
+  "--control",
+  "--trace"
+]

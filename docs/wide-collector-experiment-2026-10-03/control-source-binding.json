@@ -1,0 +1,5 @@
+{
+  "scope": "same native fixture and lowering, original compile_without_rewrite, unchanged caps and512 phases; export/reload added before simulator; not matrix generation",
+  "probe_sha256": "6063de4a0f7548504cbb731a9ce8f1dc15c93da38ec9301515ecb5d1287672d3",
+  "fixture_sha256": "71ccc0b0f27b4116d96bb3bc232fa0dabbe679d649b00d151f6968576c1efe66"
+}
