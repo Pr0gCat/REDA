@@ -1,0 +1,4 @@
+CASE bcd_seven_segment gates=32
+WORLD bcd_seven_segment a8b17f9c38cbc8b363d326f8dd1633162489f6dc421e0c624d296c68485f07f7
+CASE rom16x7 gates=61
+WORLD rom16x7 f4658639e48b15d789732aa49f27db0031fd4e45f04212d65a1bf21d5adbe7ce

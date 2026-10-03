@@ -1,0 +1,23 @@
+[
+  {
+    "repeat": 1,
+    "exact_immutable_records": true,
+    "functions": 4096,
+    "sha256": "e91fb1bb40a166035c58d2202cbf726d400d873e24a974c789eee8cad0a68b20",
+    "zero_regressions": true
+  },
+  {
+    "repeat": 2,
+    "exact_immutable_records": true,
+    "functions": 4096,
+    "sha256": "e91fb1bb40a166035c58d2202cbf726d400d873e24a974c789eee8cad0a68b20",
+    "zero_regressions": true
+  },
+  {
+    "repeat": 3,
+    "exact_immutable_records": true,
+    "functions": 4096,
+    "sha256": "e91fb1bb40a166035c58d2202cbf726d400d873e24a974c789eee8cad0a68b20",
+    "zero_regressions": true
+  }
+]

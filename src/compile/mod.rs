@@ -1220,26 +1220,63 @@ const BARE_TERMINATION_RESERVE: i32 = 2;
 /// resets the budget on its own (a mandatory repeater always refreshes to
 /// full, and a lamp reads whatever arrives with no requirement past it) --
 /// so the chain, and the extra reserve it costs, goes no further than
-/// `into` itself.
-fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
+/// `into` itself. Its own unrefreshable bypass clearance is paid before that
+/// reset, whether or not the next consumer is another merge.
+fn bare_reserve_for_merge(
+    netlist: &Netlist,
+    nets: &[Net],
+    into: usize,
+    bypass_clearances: &[i32],
+) -> i32 {
+    // The first refresh after the pin cannot repair a dead clearance hop.
+    let reserve = BARE_TERMINATION_RESERVE + bypass_clearances[into];
     let Some(net) = nets
         .iter()
         .find(|n| matches!(n.source, Source::Gate(g) if g == into))
     else {
         // `into`'s own output feeds nothing further (a declared output
         // only) -- the chain stops at its pin, same base reserve.
-        return BARE_TERMINATION_RESERVE;
+        return reserve;
     };
     let mut sinks = net.sinks.iter().flatten().copied();
     let Some((first_gate, _)) = sinks.next() else {
-        return BARE_TERMINATION_RESERVE;
+        return reserve;
     };
     let single_sink = sinks.all(|(g, _)| g == first_gate);
     if single_sink && netlist.gates[first_gate].is_merge() {
-        BARE_TERMINATION_RESERVE + bare_reserve_for_merge(netlist, nets, first_gate)
+        reserve + bare_reserve_for_merge(netlist, nets, first_gate, bypass_clearances)
     } else {
-        BARE_TERMINATION_RESERVE
+        reserve
     }
+}
+
+/// Additional unrefreshable source hops in the actual bypass geometry.
+/// A merge bypass sometimes moves one dust cell beyond its output pin before
+/// turning. Its feeding bare branches must pay this hop before emission.
+fn merge_bypass_clearances(
+    netlist: &Netlist,
+    nets: &[Net],
+    plan: &Floorplan,
+    bypass: &[bool],
+    gate_pin: &[Position],
+    facing: geometry::CellFacing,
+) -> Vec<i32> {
+    let mut clearances = vec![0; netlist.gates.len()];
+    for (index, net) in nets.iter().enumerate() {
+        let Source::Gate(source) = net.source else {
+            continue;
+        };
+        if !bypass[index] || !netlist.gates[source].is_merge() {
+            continue;
+        }
+        let (sink, input_index) = net.sinks[0][0];
+        let pin = gate_pin[source];
+        let exit_x = approach_column(plan.centre_x[sink], input_index);
+        clearances[source] = i32::from(
+            bypass_source_start(netlist, net, pin, exit_x, facing) != pin,
+        );
+    }
+    clearances
 }
 
 /// Where a **bypassed** net's own path must actually start from, instead of
@@ -4246,9 +4283,10 @@ fn bare_branch_landing_strength(
     gate_pin: &[Position],
     facing: geometry::CellFacing,
     tap_only_reserve: bool,
+    bypass_clearances: &[i32],
 ) -> u8 {
     let (gate, input_index) = target;
-    let reserve = bare_reserve_for_merge(netlist, nets, gate);
+    let reserve = bare_reserve_for_merge(netlist, nets, gate, bypass_clearances);
     let row_z_gate = row_z[plan.row_of[gate]];
     let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
     let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
@@ -4354,6 +4392,7 @@ fn compute_net_source_strengths(
     gate_cell: &[NorCell],
     facing: geometry::CellFacing,
     tap_only_reserve: bool,
+    bypass_clearances: &[i32],
 ) -> Vec<u8> {
     let mut net_source_strength = vec![MAX_SIGNAL_STRENGTH; nets.len()];
 
@@ -4442,6 +4481,7 @@ fn compute_net_source_strengths(
                     gate_pin,
                     facing,
                     tap_only_reserve,
+                    bypass_clearances,
                 )
                 .saturating_sub(1)
             } else {
@@ -4697,6 +4737,10 @@ fn emit(
     // one sourced by a merge (see `compute_net_source_strengths`'s own doc
     // comment). Has to run before `plan_strengths`, which now consumes this
     // instead of assuming the constant unconditionally.
+    let bypass_clearances = merge_bypass_clearances(
+        netlist, nets, plan, bypass, &gate_pin, facing,
+    );
+    let bypass_clearances = bypass_clearances.as_slice();
     let net_source_strength = compute_net_source_strengths(
         netlist,
         nets,
@@ -4710,6 +4754,7 @@ fn emit(
         &gate_cell,
         facing,
         tap_only_reserve,
+        bypass_clearances,
     );
 
     // Strength planning: work out what every ramp's entry and every track's
@@ -4868,7 +4913,7 @@ fn emit(
             }
             waypoints.push(socket);
             if merge_branch_is_bare(netlist, net, gate) {
-                let reserve = bare_reserve_for_merge(netlist, nets, gate);
+                let reserve = bare_reserve_for_merge(netlist, nets, gate, bypass_clearances);
                 let (_, terminal) = lay_bent_path_bare(
                     world,
                     start,
@@ -4946,7 +4991,7 @@ fn emit(
                         waypoints.push(socket);
                         route.begin(Leg::Branch { gate, input_index });
                         if merge_branch_is_bare(netlist, net, gate) {
-                            let reserve = bare_reserve_for_merge(netlist, nets, gate);
+                            let reserve = bare_reserve_for_merge(netlist, nets, gate, bypass_clearances);
                             let (_, terminal) = lay_bent_path_bare(
                                 world,
                                 landing,
