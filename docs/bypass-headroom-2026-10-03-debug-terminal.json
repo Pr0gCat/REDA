@@ -1,0 +1,12 @@
+{
+  "original_session": 93604,
+  "exit": 0,
+  "test": "public_default_selects_the_complete_quality_checked_matrix",
+  "passed": 1,
+  "failed": 0,
+  "seconds": 3759.87,
+  "artifact": "docs/bypass-headroom-2026-10-03/cargo-default-integration-terminal.log.gz",
+  "sha256": "a8058dadce97116d9083ae1887ff3b8550f256a228452ed241a94a70b7872b71",
+  "library_session_56809": "still live; ten failures observed",
+  "goal_complete": false
+}
