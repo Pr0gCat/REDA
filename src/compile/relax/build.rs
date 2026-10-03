@@ -767,6 +767,12 @@ pub fn build(
                     gate.output
                 ));
             }
+            if kind != Primitive::Torch {
+                return Err(format!(
+                    "gate `{}` requires a Torch body, got `{kind:?}`",
+                    gate.output
+                ));
+            }
             bodies.push(Body {
                 what: BodyKind::Primitive { node, kind },
                 position,
@@ -795,6 +801,12 @@ pub fn build(
                 if physical::variants(kind).is_empty() {
                     return Err(format!(
                         "gate `{}`'s branch {input_index} needs a `{kind:?}`, which has no physical variants",
+                        gate.output
+                    ));
+                }
+                if kind != Primitive::Repeater {
+                    return Err(format!(
+                        "gate `{}`'s branch {input_index} requires a Repeater body, got `{kind:?}`",
                         gate.output
                     ));
                 }
@@ -854,6 +866,11 @@ pub fn build(
         if physical::variants(kind).is_empty() {
             return Err(format!(
                 "declared input `{name}` needs a `{kind:?}`, which has no physical variants"
+            ));
+        }
+        if kind != Primitive::Lever {
+            return Err(format!(
+                "declared input `{name}` requires a Lever body, got `{kind:?}`"
             ));
         }
         bodies.push(Body {
@@ -1533,6 +1550,42 @@ mod tests {
             refusal.contains('m') && refusal.contains('4'),
             "the refusal names the gate and its arity, got {refusal:?}"
         );
+    }
+
+    /// Having physical orientations does not make a primitive compatible with
+    /// the fixed NOR, branch-diode, or primary-input geometry used by placement.
+    #[test]
+    fn physical_variants_do_not_authorize_an_incompatible_body_role() {
+        let netlist = Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["out".into(), "spy".into()],
+            gates: vec![
+                nor("na", &["a"]), nor("nb", &["b"]),
+                merge("m", &["na", "nb"]),
+                nor("out", &["m"]), nor("spy", &["nb"]),
+            ],
+        };
+        let start = vec![Anchor { x: 0, y: 1, z: 0 };
+            netlist.gates.len() + netlist.inputs.len()];
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        build(&netlist, &graph, &start, &PortPlacements::default()).expect("valid roles build");
+        assert_eq!(physical::variants(Primitive::Comparator).len(), 4);
+        for (role, context) in [("Torch", "gate `na`"),
+            ("Repeater", "gate `m`'s branch 1"), ("Lever", "declared input `a`")] {
+            let mut graph = expand(&netlist, &Library::default_library()).expect("expands");
+            let node = graph.nodes.iter_mut().find(|node| match &node.provenance {
+                Provenance::Gate { gate: 0, .. } => role == "Torch",
+                Provenance::Gate { gate: 2, role: TemplateNode::IsolatingRepeater(1) } =>
+                    role == "Repeater",
+                Provenance::PrimaryInput { name } => role == "Lever" && name == "a",
+                _ => false,
+            }).expect("the tested role exists");
+            node.primitive = Primitive::Comparator;
+            let error = build(&netlist, &graph, &start, &PortPlacements::default())
+                .expect_err("physical variants alone cannot authorize this body role");
+            assert!(error.contains(context) && error.contains(role)
+                && error.contains("Comparator"), "{error}");
+        }
     }
 
     /// The precondition the three `is_empty()` guards in `build` exist for:
