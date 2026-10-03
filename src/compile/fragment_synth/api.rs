@@ -138,10 +138,16 @@ fn compile_recursive_contract(
     let mut best_quality = crate::compile::selection::recursive_quality(
         input.lowered, &result.compiled, input.pins,
     );
-    use recursive::StructuralChoice::{PackedDense, PackedStandard};
-    // Both choices are actual composition attempts. A single gate has no
-    // structural partition to improve, so its proposal stream is empty.
-    let choices: &[recursive::StructuralChoice] = if input.lowered.gates.len() > 1 {
+    use recursive::StructuralChoice::{BalancedMatrix, PackedDense, PackedStandard};
+    // Composition precedes the bounded decoder rewrite in a fixed order.
+    // A single gate has no structural partition to improve.
+    let choices: &[recursive::StructuralChoice] = if input.lowered.gates.len() > 1
+        && input.lowered.inputs.len() == 4
+        && (1..=7).contains(&input.lowered.outputs.len())
+        && input.pins.is_none_or(|pins| pins.is_empty())
+    {
+        &[PackedDense, PackedStandard, BalancedMatrix]
+    } else if input.lowered.gates.len() > 1 {
         &[PackedDense, PackedStandard]
     } else {
         &[]
@@ -206,17 +212,21 @@ fn result_from_product(
     product: recursive::RecursiveProduct,
     case_fingerprint: SynthesisCaseFingerprint,
 ) -> SynthesisResult {
-    let compiled = CompiledCircuit {
-        world: product.world,
-        input_positions: product.input_positions,
-        output_positions: product.output_positions,
-        gate_output_positions: product.gate_output_positions,
-        gate_facings: product.gate_facings,
-        observations: CircuitObservations::default(),
-        legacy_emission: None,
-        physical_rewrite: None,
-        physical_candidate: None,
-        planner_kind: PlannerKind::FragmentSynth,
+    let compiled = if let Some(rewrite) = product.physical_rewrite {
+        CompiledCircuit::from_certified_rewrite(rewrite)
+    } else {
+        CompiledCircuit {
+            world: product.world,
+            input_positions: product.input_positions,
+            output_positions: product.output_positions,
+            gate_output_positions: product.gate_output_positions,
+            gate_facings: product.gate_facings,
+            observations: CircuitObservations::default(),
+            legacy_emission: None,
+            physical_rewrite: None,
+            physical_candidate: None,
+            planner_kind: PlannerKind::FragmentSynth,
+        }
     };
     SynthesisResult {
         compiled,

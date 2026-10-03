@@ -219,5 +219,49 @@ fn public_default_selects_the_complete_quality_checked_matrix() {
             canonical_world_fingerprint(expected.physical().world())
         );
         assert!(actual.physical_rewrite().is_some());
+        let recursive = reda::compile::fragment_synth::compile_fragment_synth(
+            reda::compile::fragment_synth::SynthesisInput {
+                lowered: &source, source_provenance: None, pins: None,
+            },
+            reda::compile::fragment_synth::SynthesisBudget::Evaluations(0),
+        ).unwrap();
+        assert_eq!(canonical_world_fingerprint(&recursive.compiled.world),
+            canonical_world_fingerprint(&actual.world));
+        assert_eq!(recursive.evaluations_used, 0);
+        assert!(recursive.compiled.physical_rewrite().is_some());
+        assert!(reda::compile::evaluation::CircuitEvaluation::from_synthesis(
+            &source, &recursive,
+        ).is_ok());
     }
+}
+
+#[test]
+fn recursive_matrix_root_retains_constant_and_repeated_boundary_occurrences() {
+    let mut source = Netlist {
+        inputs: (0..4).map(|bit| format!("input{bit}")).collect(),
+        outputs: ["low", "high", "copy0", "low", "high", "copy3", "low"]
+            .into_iter().map(str::to_owned).collect(),
+        gates: vec![Gate::nor("high", &[]), Gate::nor("low", &["high"]),
+            Gate::merge("copy0", &["input0"]), Gate::merge("copy3", &["input3"])],
+    };
+    // A large source with unused internal work still has this complete public
+    // boundary. The rewrite owns its implementation, not invented source sites.
+    let mut previous = "input0".to_owned();
+    for index in 0..33 {
+        let next = format!("unused{index}");
+        source.gates.push(Gate::nor(&next, &[&previous]));
+        previous = next;
+    }
+    let result = reda::compile::fragment_synth::compile_fragment_synth(
+        reda::compile::fragment_synth::SynthesisInput {
+            lowered: &source, source_provenance: None, pins: None,
+        }, reda::compile::fragment_synth::SynthesisBudget::Evaluations(0),
+    ).unwrap();
+    let rewrite = result.compiled.physical_rewrite().unwrap();
+    assert_eq!(rewrite.source_output_positions().len(), source.outputs.len());
+    assert_eq!(rewrite.source_output_driver_positions().len(), source.outputs.len());
+    assert!(result.compiled.validate_rewrite_view(&source).is_ok());
+    assert!(reda::compile::selection::qualify_boundary(&source, &result.compiled).is_some());
+    assert!(reda::compile::evaluation::CircuitEvaluation::from_synthesis(&source, &result).is_ok());
+    assert_eq!(result.evaluations_used, 0);
 }

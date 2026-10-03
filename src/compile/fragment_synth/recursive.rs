@@ -77,6 +77,7 @@ pub(crate) const TERMINAL_GATES: usize = 32;
 const MAX_RECURSIVE_WORKERS: usize = 8;
 
 pub(crate) struct RecursiveProduct {
+    pub physical_rewrite: Option<super::rewrite::CertifiedPhysicalRewrite>,
     pub world: World,
     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
@@ -110,6 +111,8 @@ pub(crate) struct RecursiveProduct {
 
 #[derive(Debug, Error)]
 pub(crate) enum RecursiveError {
+    #[error("balanced matrix refused: {0}")]
+    Matrix(String),
     #[error(transparent)]
     Partition(#[from] PartitionError),
     #[error(transparent)]
@@ -445,7 +448,7 @@ fn describe_pending_routes(
 /// identity a baseline can be found under.
 pub(crate) fn producer_revision() -> Fingerprint {
     canonical_fingerprint(
-        format!("recursive-contract-producer-v2:structural-search-v1:terminal-gates={TERMINAL_GATES}").as_bytes(),
+        format!("recursive-contract-producer-v3:structural-search-v2:matrix-root-repair-v1:terminal-gates={TERMINAL_GATES}").as_bytes(),
     )
 }
 
@@ -676,6 +679,7 @@ pub(crate) fn assemble_product(
     };
 
     RecursiveProduct {
+        physical_rewrite: None,
         world,
         input_positions,
         output_positions,
@@ -741,6 +745,36 @@ const LEAF_LADDERS: [&[i32]; 2] = [&LEAF_PITCHES, &[STANDARD_PITCH]];
 pub(crate) enum StructuralChoice {
     PackedDense,
     PackedStandard,
+    BalancedMatrix,
+}
+
+fn compile_matrix_root(
+    lowered: &Netlist,
+    pins: Option<&PortPlacements>,
+    search: &SearchConfig,
+) -> Result<RecursiveProduct, RecursiveError> {
+    if pins.is_some_and(|pins| !pins.is_empty()) {
+        return Err(RecursiveError::Matrix("caller pins require composition".into()));
+    }
+    let rewrite = super::torch_row::compile_balanced_torch_matrix(
+        lowered, search.max_equivalence_proof_steps,
+    ).map_err(|error| RecursiveError::Matrix(format!("{error:?}")))?;
+    let certificate = rewrite.certify_runtime(&CertificationConfig::from_search(search))?;
+    let metrics = certificate.metrics().clone();
+    let compiled = compile::CompiledCircuit::from_certified_rewrite(rewrite);
+    Ok(RecursiveProduct {
+        physical_rewrite: compiled.physical_rewrite,
+        world: compiled.world,
+        input_positions: compiled.input_positions,
+        output_positions: compiled.output_positions,
+        gate_output_positions: compiled.gate_output_positions,
+        gate_facings: compiled.gate_facings,
+        candidate_fingerprint: metrics.candidate_fingerprint.clone(),
+        metrics,
+        depth: 1,
+        peak_workers: 1,
+        diagnostics: None,
+    })
 }
 
 pub(crate) fn compile_proposal(
@@ -750,6 +784,7 @@ pub(crate) fn compile_proposal(
     choice: StructuralChoice,
 ) -> Result<RecursiveProduct, RecursiveError> {
     let pitches: &[i32] = match choice {
+        StructuralChoice::BalancedMatrix => return compile_matrix_root(lowered, pins, search),
         StructuralChoice::PackedDense => &LEAF_PITCHES,
         StructuralChoice::PackedStandard => &[STANDARD_PITCH],
     };
@@ -794,6 +829,15 @@ fn compile_with_layout(
     let pins = caller.compiled();
     if lowered.gates.len() <= direct_leaf_cutoff {
         match compile_root_leaf(lowered, &caller, search, workers) {
+            // A typed routing refusal is not permission to weaken its rules.
+            // Try the existing complete truth-table rewrite at this boundary;
+            // retain the original refusal if it cannot certify the same source.
+            Err(error @ RecursiveError::Schedule(ScheduleError::Leaf {
+                error: LeafError::Planner(planner::PlannerError::NoLocalRoute { .. }
+                    | planner::PlannerError::PhysicalInvariant { .. }), ..
+            })) if pins.is_none() && lowered.gates.len() > 1 => {
+                return compile_matrix_root(lowered, pins, search).or(Err(error));
+            }
             // The planner can lay a route's dust on that route's own committed
             // stone (`a_route_lays_dust_on_its_own_committed_stone`), and dust
             // cannot stand on dust. Such a world only runs in the simulator, so
@@ -802,6 +846,17 @@ fn compile_with_layout(
                 ..
             })) => {}
             result => return result,
+        }
+    }
+    // Above the direct-leaf grain, use the already certified complete decoder
+    // when this free boundary fits it. Forced composition proposals keep their
+    // own construction path. Any matrix refusal leaves the original solver.
+    if direct_leaf_cutoff > 0 && lowered.gates.len() > direct_leaf_cutoff
+        && pins.is_none() && lowered.inputs.len() == 4
+        && (1..=7).contains(&lowered.outputs.len())
+    {
+        if let Ok(product) = compile_matrix_root(lowered, pins, search) {
+            return Ok(product);
         }
     }
     // **The unpinned cutover.** Above the direct-leaf grain, a root that

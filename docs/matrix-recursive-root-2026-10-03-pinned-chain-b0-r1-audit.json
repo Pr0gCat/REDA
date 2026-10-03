@@ -1,0 +1,38 @@
+{
+  "case": "pinned-chain",
+  "budget": 0,
+  "phases": 8,
+  "hidden_extra_transitions": 0,
+  "quality": [
+    {
+      "worst_settle_ticks": 9,
+      "total_settle_ticks": 9,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 6,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 9,
+      "lamp_glitch_transitions": 0
+    },
+    {
+      "worst_settle_ticks": 12,
+      "total_settle_ticks": 21,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 6,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 12,
+      "lamp_glitch_transitions": 0
+    }
+  ],
+  "regressions": [],
+  "improvements": [],
+  "evaluations_used": 0,
+  "trace": [],
+  "world_fingerprint": "454c6e3b1d3036d98305a45fd3d6fa4c466d7d7e79bd0b8fb6a83c7f03517d87",
+  "release_qualified": false
+}

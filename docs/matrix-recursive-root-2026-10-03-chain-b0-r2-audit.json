@@ -1,0 +1,38 @@
+{
+  "case": "chain",
+  "budget": 0,
+  "phases": 8,
+  "hidden_extra_transitions": 0,
+  "quality": [
+    {
+      "worst_settle_ticks": 5,
+      "total_settle_ticks": 5,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 4,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 5,
+      "lamp_glitch_transitions": 0
+    },
+    {
+      "worst_settle_ticks": 8,
+      "total_settle_ticks": 13,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 4,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 8,
+      "lamp_glitch_transitions": 0
+    }
+  ],
+  "regressions": [],
+  "improvements": [],
+  "evaluations_used": 0,
+  "trace": [],
+  "world_fingerprint": "3605a9e50bdfefe73271f419be7e860b498bae4bf512bd96b4bc25278ad38fbd",
+  "release_qualified": false
+}

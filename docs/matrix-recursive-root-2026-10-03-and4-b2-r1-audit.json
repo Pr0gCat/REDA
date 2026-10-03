@@ -1,0 +1,89 @@
+{
+  "case": "and4",
+  "budget": 2,
+  "phases": 512,
+  "hidden_extra_transitions": 0,
+  "quality": [
+    {
+      "worst_settle_ticks": 44,
+      "total_settle_ticks": 1277,
+      "driver_glitches": 10,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 24,
+      "driver_glitch_transitions": 10,
+      "lamp_glitches": 10,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 28,
+      "lamp_glitch_transitions": 10,
+      "driver_total_pulse_ticks": 72,
+      "driver_worst_pulse_ticks": 16,
+      "lamp_total_pulse_ticks": 102,
+      "lamp_worst_pulse_ticks": 19
+    },
+    {
+      "worst_settle_ticks": 42,
+      "total_settle_ticks": 1261,
+      "driver_glitches": 9,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 28,
+      "driver_glitch_transitions": 9,
+      "lamp_glitches": 9,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 32,
+      "lamp_glitch_transitions": 9,
+      "driver_total_pulse_ticks": 56,
+      "driver_worst_pulse_ticks": 20,
+      "lamp_total_pulse_ticks": 83,
+      "lamp_worst_pulse_ticks": 23
+    }
+  ],
+  "regressions": [],
+  "improvements": [],
+  "evaluations_used": 2,
+  "trace": [
+    {
+      "accepted": false,
+      "cap_work": {
+        "backtracks": 0,
+        "certification_transitions": 240,
+        "proof_steps": 0,
+        "router_expansions": 0,
+        "verification_checks": 0
+      },
+      "certified_quality": {
+        "non_air_blocks": 395,
+        "observed_settle": 34,
+        "occupied_volume": 6380,
+        "static_routed_delay": 34
+      },
+      "choice_fingerprint": "e21126c50cb4e8a4f011a63ced4676f177bd0df7baee0e02324ffc907169f566",
+      "fragment_fingerprint": "d96e5b5709ecaf857de806f9a704ca81659f1b07b3690dbe7513b9b6b2619c2b",
+      "parent_fingerprint": "f8e7cb59d4d93361c196ec1dd34b68469659bc115b615750dbcef54c7f6489ac",
+      "proposal_index": 0,
+      "terminal": "NoImprovement"
+    },
+    {
+      "accepted": false,
+      "cap_work": {
+        "backtracks": 0,
+        "certification_transitions": 240,
+        "proof_steps": 0,
+        "router_expansions": 0,
+        "verification_checks": 0
+      },
+      "certified_quality": {
+        "non_air_blocks": 521,
+        "observed_settle": 42,
+        "occupied_volume": 10850,
+        "static_routed_delay": 42
+      },
+      "choice_fingerprint": "6bad6dd0ed83f7635692843fb8c9c8b70a7dfead1ca09eaf98bbc3dfeed428a6",
+      "fragment_fingerprint": "d96e5b5709ecaf857de806f9a704ca81659f1b07b3690dbe7513b9b6b2619c2b",
+      "parent_fingerprint": "f8e7cb59d4d93361c196ec1dd34b68469659bc115b615750dbcef54c7f6489ac",
+      "proposal_index": 1,
+      "terminal": "NoImprovement"
+    }
+  ],
+  "world_fingerprint": "15e2c23ab2502c7489db53f5099c8d9846d42172053de013c731ba32dcc3a28f",
+  "release_qualified": false
+}

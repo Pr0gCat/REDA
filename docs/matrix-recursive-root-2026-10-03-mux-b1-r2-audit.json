@@ -1,0 +1,60 @@
+{
+  "case": "mux",
+  "budget": 1,
+  "phases": 128,
+  "hidden_extra_transitions": 0,
+  "quality": [
+    {
+      "worst_settle_ticks": 12,
+      "total_settle_ticks": 388,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 8,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 12,
+      "lamp_glitch_transitions": 0
+    },
+    {
+      "worst_settle_ticks": 12,
+      "total_settle_ticks": 403,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 8,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 12,
+      "lamp_glitch_transitions": 0
+    }
+  ],
+  "regressions": [],
+  "improvements": [],
+  "evaluations_used": 1,
+  "trace": [
+    {
+      "accepted": false,
+      "cap_work": {
+        "backtracks": 0,
+        "certification_transitions": 56,
+        "proof_steps": 0,
+        "router_expansions": 0,
+        "verification_checks": 0
+      },
+      "certified_quality": {
+        "non_air_blocks": 575,
+        "observed_settle": 38,
+        "occupied_volume": 20493,
+        "static_routed_delay": 38
+      },
+      "choice_fingerprint": "e21126c50cb4e8a4f011a63ced4676f177bd0df7baee0e02324ffc907169f566",
+      "fragment_fingerprint": "1c4a4d31514f7fba3c7378f6ffb7dfedc8bf802090020c5e104ddaf652f3d590",
+      "parent_fingerprint": "952d7541062d7b3a8a993d76c5b765543b7d0c72f60221444c824f399024e612",
+      "proposal_index": 0,
+      "terminal": "NoImprovement"
+    }
+  ],
+  "world_fingerprint": "87b1ec69982a22ac0eca65e065c62c9021997f9772862209763b67c15108e00b",
+  "release_qualified": false
+}
