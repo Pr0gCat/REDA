@@ -178,12 +178,12 @@ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,
                 })
         })
         .collect();
-    // Empty columns need separately bound constant drivers, not fictitious routes.
-    if (0..source.outputs.len()).any(|bit| words.iter().all(|w| w & (1 << bit) == 0)) {
-        return Err(TorchRowError::UnsupportedBoundary);
+    let mut rows: Vec<_> = (0..16).filter(|&row| words[row] != 0).collect();
+    if rows.is_empty() {
+        rows.push(0);
     }
-    let rows: Vec<_> = (0..16).filter(|&row| words[row] != 0).collect();
-    let (mut world, mut inputs, drivers, lamps) = matrix(&words, &rows, source.outputs.len(), true);
+    let (mut world, mut inputs, mut drivers, mut lamps) =
+        matrix(&words, &rows, source.outputs.len(), true);
     for p in &mut inputs {
         let lever = world.get(p.x, p.y, p.z).clone();
         world.set(p.x, p.y, p.z, block(BlockKind::RedstoneWire));
@@ -293,6 +293,40 @@ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,
     let mut outputs = vec![];
     for (bit, column) in terms.iter().enumerate() {
         let x = 30 + 3 * bit as i32;
+        if column.is_empty() {
+            // A real unpowered support drives a constant-high torch; its
+            // isolated output powers the support of a constant-low inverter.
+            // Replace the empty collector, including every unused repeater.
+            for z in 5..world.size().2 {
+                world.set(x, 1, z, BlockState::air());
+                world.set(x, 0, z, BlockState::air());
+            }
+            let high_at = Position::new(x, 4, end - 1);
+            world.set(x - 1, 4, end - 1, block(BlockKind::Solid));
+            torch(&mut world, x, 4, end - 1, Facing::East);
+            wire(&mut world, x, 3, end - 1);
+            let low_at = Position::new(x, 2, end);
+            torch(&mut world, x, 2, end, Facing::South);
+            wire(&mut world, x, 1, end);
+            world.set(x, 0, end + 1, block(BlockKind::Solid));
+            world.set(x, 1, end + 1, block(BlockKind::Lamp));
+            let high = binding.gate(
+                format!("constant_high{bit}"),
+                GateKind::Nor(0),
+                vec![],
+                high_at,
+            );
+            let low = binding.gate(
+                format!("constant_low{bit}"),
+                GateKind::Nor(1),
+                vec![high],
+                low_at,
+            );
+            drivers[bit] = low_at;
+            lamps[bit] = Position::new(x, 1, end + 1);
+            outputs.push(low);
+            continue;
+        }
         let first = column[0].0;
         // No active driver exists before the first programmed torch.
         for z in 5..first {

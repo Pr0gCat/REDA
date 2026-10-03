@@ -1,8 +1,9 @@
 //! Retained-history quality selection: a two-input/three-output player family
-//! and structural flat refresh candidates with up to six inputs.
+//! a balanced four-input matrix, and flat refresh candidates up to six inputs.
 //! No function IDs, source names, block counts or volume select a candidate.
 use super::fragment_synth::{
-    rewrite::realise_physical_rewrite_with_size, torch_row::compile_player_torch_row,
+    rewrite::realise_physical_rewrite_with_size,
+    torch_row::{compile_balanced_torch_matrix, compile_player_torch_row},
 };
 use super::{CompileError, CompiledCircuit, Netlist};
 use crate::redstone::{
@@ -418,15 +419,28 @@ fn certify_backup(source: &Netlist, compiled: &CompiledCircuit) -> Option<Compil
 }
 
 #[derive(Clone, PartialEq, Eq)]
+struct PhaseQuality {
+    settlement: u64,
+    arrivals: Vec<u64>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
 struct RefreshQuality {
     core: Quality,
     // setup driver/lamp, then target driver/lamp glitch-transition counts.
     groups: [u64; 4],
+    phases: Vec<PhaseQuality>,
 }
 impl RefreshQuality {
     fn dominates(&self, other: &Self) -> bool {
         self.core.dominates(&other.core)
             && self.groups.iter().zip(other.groups).all(|(a, b)| *a <= b)
+            && self.phases.len() == other.phases.len()
+            && self.phases.iter().zip(&other.phases).all(|(a, b)| {
+                a.settlement <= b.settlement
+                    && a.arrivals.len() == b.arrivals.len()
+                    && a.arrivals.iter().zip(&b.arrivals).all(|(a, b)| a <= b)
+            })
     }
 }
 fn refresh_quality(
@@ -435,6 +449,7 @@ fn refresh_quality(
     require_certificate: bool,
 ) -> Option<RefreshQuality> {
     let mut groups = [0; 4];
+    let mut phases = Vec::new();
     let core = qualify_boundary_impl(source, compiled, require_certificate, |phase| {
         for channel in 0..2 {
             if (0..source.outputs.len()).any(|bit| {
@@ -444,8 +459,27 @@ fn refresh_quality(
                 groups[phase.phase * 2 + channel] += 1;
             }
         }
+        phases.push(PhaseQuality {
+            settlement: phase.ticks,
+            arrivals: (0..2 * source.outputs.len())
+                .map(|index| {
+                    let label = format!("boundary{index}");
+                    phase
+                        .events
+                        .iter()
+                        .filter(|event| event.label == label)
+                        .map(|event| event.tick - phase.start)
+                        .max()
+                        .unwrap_or(0)
+                })
+                .collect(),
+        });
     })?;
-    Some(RefreshQuality { core, groups })
+    Some(RefreshQuality {
+        core,
+        groups,
+        phases,
+    })
 }
 fn improve_refreshes(
     source: &Netlist,
@@ -510,26 +544,41 @@ pub fn compile_selected_with_refresh_budget(
         || source.gates.iter().any(|g| g.kind.is_sequential())
     {
         let raw = super::compile_without_rewrite(source)?;
-        if (1..=6).contains(&source.inputs.len())
-            && !source.outputs.is_empty()
-            && !source.gates.iter().any(|g| g.kind.is_sequential())
+        if !(1..=6).contains(&source.inputs.len())
+            || source.outputs.is_empty()
+            || source.gates.iter().any(|g| g.kind.is_sequential())
         {
-            if let Ok((flat, moved)) = flat_refresh_from_compiled(source, &raw) {
-                if let (Some(control), Some(candidate)) = (
-                    refresh_quality(source, &raw, false),
-                    refresh_quality(source, &flat, true),
-                ) {
-                    if candidate.dominates(&control) {
-                        let (best, quality) =
-                            improve_refreshes(source, flat, candidate.clone(), budget);
-                        if moved > 0 || quality != candidate {
-                            return Ok(best);
-                        }
+            return Ok(raw);
+        }
+        let Some(mut quality) = refresh_quality(source, &raw, false) else {
+            return Ok(raw);
+        };
+        let mut best = raw;
+        if let Ok((flat, moved)) = flat_refresh_from_compiled(source, &best) {
+            if let Some(candidate) = refresh_quality(source, &flat, true) {
+                if candidate.dominates(&quality) {
+                    let (improved, measured) =
+                        improve_refreshes(source, flat, candidate.clone(), budget);
+                    if moved > 0 || measured != candidate {
+                        best = improved;
+                        quality = measured;
                     }
                 }
             }
         }
-        return Ok(raw);
+        // Compare complete retained histories, using only structural boundary
+        // recognition. A rejected method leaves the already qualified best.
+        if source.inputs.len() == 4 && (1..=7).contains(&source.outputs.len()) {
+            if let Ok(rewrite) = compile_balanced_torch_matrix(source, 1_000_000) {
+                let matrix = CompiledCircuit::from_certified_rewrite(rewrite);
+                if let Some(measured) = refresh_quality(source, &matrix, true) {
+                    if measured.dominates(&quality) && measured != quality {
+                        best = matrix;
+                    }
+                }
+            }
+        }
+        return Ok(best);
     }
     let player = compile_player_torch_row(source, 1_000_000)
         .ok()
@@ -578,6 +627,10 @@ mod tests {
         let mut control = RefreshQuality {
             core: Quality::default(),
             groups: [0, 0, 1, 1],
+            phases: vec![PhaseQuality {
+                settlement: 10,
+                arrivals: vec![4, 8],
+            }],
         };
         control.core.target[1] = 10;
         let mut candidate = control.clone();
@@ -587,6 +640,11 @@ mod tests {
         assert!(!candidate.dominates(&control));
         candidate.groups[3] = 1;
         assert!(candidate.dominates(&control));
+        candidate.phases[0].arrivals[0] = 5;
+        assert!(!candidate.dominates(&control));
+        candidate.phases[0].arrivals[0] = 4;
+        candidate.phases[0].settlement = 11;
+        assert!(!candidate.dominates(&control));
     }
     #[test]
     fn unified_backup_retains_an_exact_certifiable_manifest() {

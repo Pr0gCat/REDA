@@ -12,6 +12,21 @@ def read(path):
     return gzip.decompress(data) if str(path).endswith('.gz') else data
 
 
+def expected_value(oracle, address, words, rows, width):
+    kind = oracle['kind']
+    if kind == 'bit':
+        assert 0 <= oracle['bit'] < 4 and isinstance(oracle['inverted'], bool)
+        return bool(address & (1 << oracle['bit'])) ^ oracle['inverted']
+    if kind == 'mismatch':
+        assert 0 <= oracle['row'] < 16 and 0 < oracle['mask'] < 16
+        return bool((address ^ oracle['row']) & oracle['mask'])
+    if kind == 'row':
+        assert 0 <= oracle['row'] < 16
+        return address == oracle['row']
+    assert kind == 'prefix' and 0 <= oracle['bit'] < width and 0 <= oracle['last'] < len(rows)
+    return address in rows[:oracle['last'] + 1] and bool(words[address] & (1 << oracle['bit']))
+
+
 def audit(log, control):
     lines = read(log).decode().splitlines()
     assert len(lines) == 514
@@ -48,18 +63,7 @@ def audit(log, control):
     assert len({tuple(d['position']) for d in definitions.values()}) == len(definitions)
 
     def expected(oracle, address):
-        kind = oracle['kind']
-        if kind == 'bit':
-            assert 0 <= oracle['bit'] < 4 and isinstance(oracle['inverted'], bool)
-            return bool(address & (1 << oracle['bit'])) ^ oracle['inverted']
-        if kind == 'mismatch':
-            assert 0 <= oracle['row'] < 16 and 0 < oracle['mask'] < 16
-            return bool((address ^ oracle['row']) & oracle['mask'])
-        if kind == 'row':
-            assert 0 <= oracle['row'] < 16
-            return address == oracle['row']
-        assert kind == 'prefix' and 0 <= oracle['bit'] < width and 0 <= oracle['last'] < len(rows)
-        return address in rows[:oracle['last'] + 1] and bool(words[address] & (1 << oracle['bit']))
+        return expected_value(oracle, address, words, rows, width)
 
     observed = {label: expected(d['oracle'], 0) for label, d in definitions.items()}
     assert source['power_on'] == observed

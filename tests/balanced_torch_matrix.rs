@@ -81,7 +81,7 @@ fn full_source_boundaries_are_certified_without_name_selection() {
 }
 
 #[test]
-fn invalid_stateful_and_unimplemented_boundaries_fail_closed() {
+fn invalid_stateful_and_out_of_range_boundaries_fail_closed() {
     let source = native(
         include_str!("fixtures/seven_segment.v"),
         "bcd_seven_segment",
@@ -101,10 +101,9 @@ fn invalid_stateful_and_unimplemented_boundaries_fail_closed() {
     zero.gates.push(Gate::nor("always_high", &[]));
     zero.gates.push(Gate::nor("always_low", &["always_high"]));
     zero.outputs[0] = "always_low".into();
-    assert!(matches!(
-        compile_balanced_torch_matrix(&zero, 10_000_000),
-        Err(TorchRowError::UnsupportedBoundary)
-    ));
+    let low = compile_balanced_torch_matrix(&zero, 10_000_000).unwrap();
+    let compiled = reda::compile::CompiledCircuit::from_certified_rewrite(low);
+    assert!(reda::compile::selection::qualify_boundary(&zero, &compiled).is_some());
     let mut too_wide = source.clone();
     too_wide.outputs.push(source.outputs[0].clone());
     assert!(matches!(
@@ -180,5 +179,45 @@ fn collector_end_repeater_and_output_aliases_have_distinct_landings() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn all_low_high_and_mixed_constants_preserve_every_declared_output() {
+    for words in [
+        vec!["low"; 7],
+        vec!["high"; 7],
+        vec!["low", "high", "input0", "low", "high", "input3", "low"],
+    ] {
+        let source = Netlist {
+            inputs: (0..4).map(|bit| format!("input{bit}")).collect(),
+            outputs: words.iter().map(|word| word.to_string()).collect(),
+            gates: vec![Gate::nor("high", &[]), Gate::nor("low", &["high"])],
+        };
+        let result = compile_balanced_torch_matrix(&source, 10_000_000).unwrap();
+        assert_eq!(result.source_output_positions().len(), 7);
+        assert_eq!(result.source_output_driver_positions().len(), 7);
+        let compiled = reda::compile::CompiledCircuit::from_certified_rewrite(result);
+        assert!(reda::compile::selection::qualify_boundary(&source, &compiled).is_some());
+    }
+}
+
+#[test]
+fn public_default_selects_the_complete_quality_checked_matrix() {
+    for (text, top) in [
+        (
+            include_str!("fixtures/seven_segment.v"),
+            "bcd_seven_segment",
+        ),
+        (include_str!("fixtures/rom16x7.sv"), "rom16x7"),
+    ] {
+        let source = native(text, top);
+        let expected = compile_balanced_torch_matrix(&source, 10_000_000).unwrap();
+        let actual = reda::compile::compile(&source).unwrap();
+        assert_eq!(
+            canonical_world_fingerprint(&actual.world),
+            canonical_world_fingerprint(expected.physical().world())
+        );
+        assert!(actual.physical_rewrite().is_some());
     }
 }

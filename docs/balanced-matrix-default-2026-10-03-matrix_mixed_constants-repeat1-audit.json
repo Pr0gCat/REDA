@@ -1,0 +1,11 @@
+{
+  "phases": 512,
+  "hidden_extra_transitions": 0,
+  "historical_quality_compared": false,
+  "certified": false,
+  "release_qualified": false,
+  "all_implemented_gate_events_replayed": true,
+  "implemented_gate_count": 292,
+  "total_observed_sites": 347,
+  "expanded_certificate_claim_requires_bound_executable_and_source": true
+}

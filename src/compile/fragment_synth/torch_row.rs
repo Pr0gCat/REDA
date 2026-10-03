@@ -15,7 +15,7 @@ mod four;
 
 /// Certify a balanced four-input matrix from the source truth table.
 /// This entry is not selected by the default compiler yet. It supports one
-/// through seven outputs with no constant-low column; every call must pass
+/// through seven outputs, including constants; every call must pass
 /// source equivalence and the unchanged expanded physical certifier.
 pub fn compile_balanced_torch_matrix(
     source: &Netlist,

@@ -25,6 +25,13 @@ class BalancedMatrixWaveAudit(unittest.TestCase):
             self.assertEqual(result['public_phase_channel_arrival_regressions'], [])
             self.assertEqual(result['settlement_phase_regressions'], [])
             self.assertFalse(result['release_qualified'])
+        for top in ['matrix_all_low', 'matrix_all_high', 'matrix_mixed_constants']:
+            log = root / f'docs/balanced-matrix-default-2026-10-03-{top}-repeat1.log.gz'
+            result = audit_certificate_waves(log)
+            self.assertTrue(result['all_implemented_gate_events_replayed'])
+            self.assertEqual(result['hidden_extra_transitions'], 0)
+            self.assertFalse(result['historical_quality_compared'])
+            self.assertFalse(result['release_qualified'])
         original = gzip.decompress((root / 'docs/balanced-matrix-expanded-certificate-2026-10-03-seven-repeat1.log.gz').read_bytes()).decode().splitlines()
         control = json.loads(gzip.decompress((root / f"docs/{controls['seven']}.jsonl.gz").read_bytes()).splitlines()[0])
         for corruption in ['missing_binding', 'wrong_graph', 'wrong_sample', 'missing_event', 'no_certificate', 'truncated']:

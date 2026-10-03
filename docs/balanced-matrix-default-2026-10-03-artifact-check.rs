@@ -1,0 +1,1 @@
+fn main(){ for path in std::env::args().skip(1) { let world=reda::formats::litematic::load(std::path::Path::new(&path)).unwrap();println!("{} {}",path,reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&world).as_str()); } }
