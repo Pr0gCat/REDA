@@ -1,0 +1,340 @@
+{
+  "status": "three_world_physical_premise_passed_expanded_certificate_pending",
+  "method": "Derive all programmed rows from four-input truth tables, omit rows whose output word is zero, align true/negative literals and row/collection refreshes, and remove the common unnecessary output delay stage. No function/module-name selector, changed physics or extra waits.",
+  "certified": false,
+  "release_qualified": false,
+  "compiler_integrated": false,
+  "game_conformance": false,
+  "prototype": "docs/shared-matrix-four-input-prototype-2026-10-03.rs",
+  "prototype_sha256": "03a2969014daa22cd6bd249d971893957f0f3daf09170dbfe31072335d83aa7e",
+  "auditor": "tools/audit_shared_matrix_premise.py",
+  "auditor_sha256": "e2e6c71f41d95013b2ebcdfb62cba3321f3d6dd798d47d57736ef357ff0c2855",
+  "binary_sha256": "14a3a75bf0ca8ceb3be82cfdf05fc7c7bfa91cfad0426bf62d69e55a3a7caba0",
+  "library_sha256": "e1a5724db4dd744aebd570bf1788a01738cb55918238962af0e1109e60538a7d",
+  "completion_audit": "Original session 66353 became unavailable. All six original logs have exactly one source record, 512 phase records and the terminal result marker; host ps confirms no matching process remains. No restart or inferred shell exit code.",
+  "cases": {
+    "seven": {
+      "source": "tests/fixtures/seven_segment.v",
+      "source_sha256": "137ca43b1dd5801a046af0f1ce17a909df9ed32dfc66ea29f83659232fffba05",
+      "top": "bcd_seven_segment",
+      "reference": "docs/native-module-instances-2026-10-02-seven-native.jsonl.gz",
+      "reference_sha256": "43f90057a21f1783da1adf4f00bd0bd29c2913e11f7ec9e117efa2e9d50cc807",
+      "reference_expanded_certificate": true,
+      "observed_sites": 213,
+      "rows": 10,
+      "world_fingerprint": "6699f0085c04f1b405a51923112df152f0593c656342e94004c020ffbe4343e1",
+      "quality": {
+        "setup": {
+          "control": {
+            "worst_settle_ticks": 44,
+            "total_settle_ticks": 8636,
+            "driver_glitches": 262,
+            "driver_single_input_glitches": 0,
+            "driver_last_change_ticks": 40,
+            "driver_glitch_transitions": 102,
+            "lamp_glitches": 181,
+            "lamp_single_input_glitches": 0,
+            "lamp_last_change_ticks": 44,
+            "lamp_glitch_transitions": 83,
+            "driver_total_pulse_ticks": 1450,
+            "driver_worst_pulse_ticks": 20,
+            "lamp_total_pulse_ticks": 1385,
+            "lamp_worst_pulse_ticks": 23
+          },
+          "prototype": {
+            "worst_settle_ticks": 22,
+            "total_settle_ticks": 4710,
+            "driver_glitches": 0,
+            "driver_single_input_glitches": 0,
+            "driver_last_change_ticks": 18,
+            "driver_glitch_transitions": 0,
+            "lamp_glitches": 0,
+            "lamp_single_input_glitches": 0,
+            "lamp_last_change_ticks": 22,
+            "lamp_glitch_transitions": 0
+          },
+          "regressed": [],
+          "improved": [
+            "driver_glitch_transitions",
+            "driver_glitches",
+            "driver_last_change_ticks",
+            "driver_total_pulse_ticks",
+            "driver_worst_pulse_ticks",
+            "lamp_glitch_transitions",
+            "lamp_glitches",
+            "lamp_last_change_ticks",
+            "lamp_total_pulse_ticks",
+            "lamp_worst_pulse_ticks",
+            "total_settle_ticks",
+            "worst_settle_ticks"
+          ]
+        },
+        "target": {
+          "control": {
+            "worst_settle_ticks": 44,
+            "total_settle_ticks": 8671,
+            "driver_glitches": 262,
+            "driver_single_input_glitches": 0,
+            "driver_last_change_ticks": 40,
+            "driver_glitch_transitions": 102,
+            "lamp_glitches": 181,
+            "lamp_single_input_glitches": 0,
+            "lamp_last_change_ticks": 44,
+            "lamp_glitch_transitions": 83,
+            "driver_total_pulse_ticks": 1450,
+            "driver_worst_pulse_ticks": 20,
+            "lamp_total_pulse_ticks": 1385,
+            "lamp_worst_pulse_ticks": 23
+          },
+          "prototype": {
+            "worst_settle_ticks": 22,
+            "total_settle_ticks": 4729,
+            "driver_glitches": 0,
+            "driver_single_input_glitches": 0,
+            "driver_last_change_ticks": 18,
+            "driver_glitch_transitions": 0,
+            "lamp_glitches": 0,
+            "lamp_single_input_glitches": 0,
+            "lamp_last_change_ticks": 22,
+            "lamp_glitch_transitions": 0
+          },
+          "regressed": [],
+          "improved": [
+            "driver_glitch_transitions",
+            "driver_glitches",
+            "driver_last_change_ticks",
+            "driver_total_pulse_ticks",
+            "driver_worst_pulse_ticks",
+            "lamp_glitch_transitions",
+            "lamp_glitches",
+            "lamp_last_change_ticks",
+            "lamp_total_pulse_ticks",
+            "lamp_worst_pulse_ticks",
+            "total_settle_ticks",
+            "worst_settle_ticks"
+          ]
+        }
+      },
+      "repeats": [
+        {
+          "repeat": 1,
+          "complete_records_and_world_identity": true,
+          "phases": 512,
+          "all_event_replay": true,
+          "public_channel_arrival_regressions": 0,
+          "settlement_phase_regressions": 0,
+          "hidden_extra_transitions": 0
+        },
+        {
+          "repeat": 2,
+          "complete_records_and_world_identity": true,
+          "phases": 512,
+          "all_event_replay": true,
+          "public_channel_arrival_regressions": 0,
+          "settlement_phase_regressions": 0,
+          "hidden_extra_transitions": 0
+        },
+        {
+          "repeat": 3,
+          "complete_records_and_world_identity": true,
+          "phases": 512,
+          "all_event_replay": true,
+          "public_channel_arrival_regressions": 0,
+          "settlement_phase_regressions": 0,
+          "hidden_extra_transitions": 0
+        }
+      ]
+    },
+    "rom": {
+      "source": "tests/fixtures/rom16x7.sv",
+      "source_sha256": "f1ab2297e7a6d64e09549ebc68fca4b210fa58a62720e5a6c7910aec4c8619d2",
+      "top": "rom16x7",
+      "reference": "docs/generator-qualified-refresh-reduction-2026-10-02-rom-control.jsonl.gz",
+      "reference_sha256": "bdbc9590ce37b4e08abe216a367a144192e5738912e4d09efb0befaf5d73dc93",
+      "reference_expanded_certificate": false,
+      "observed_sites": 309,
+      "rows": 16,
+      "world_fingerprint": "e671d2b5247d610c0a48976b6da16a7e8e392689b3cc57af4cef4fcfc0c8610f",
+      "quality": {
+        "setup": {
+          "control": {
+            "worst_settle_ticks": 82,
+            "total_settle_ticks": 15677,
+            "driver_glitches": 403,
+            "driver_single_input_glitches": 0,
+            "driver_last_change_ticks": 78,
+            "driver_glitch_transitions": 164,
+            "lamp_glitches": 349,
+            "lamp_single_input_glitches": 0,
+            "lamp_last_change_ticks": 82,
+            "lamp_glitch_transitions": 156,
+            "driver_total_pulse_ticks": 4722,
+            "driver_worst_pulse_ticks": 44,
+            "lamp_total_pulse_ticks": 4519,
+            "lamp_worst_pulse_ticks": 47
+          },
+          "prototype": {
+            "worst_settle_ticks": 26,
+            "total_settle_ticks": 6166,
+            "driver_glitches": 0,
+            "driver_single_input_glitches": 0,
+            "driver_last_change_ticks": 22,
+            "driver_glitch_transitions": 0,
+            "lamp_glitches": 0,
+            "lamp_single_input_glitches": 0,
+            "lamp_last_change_ticks": 26,
+            "lamp_glitch_transitions": 0
+          },
+          "regressed": [],
+          "improved": [
+            "driver_glitch_transitions",
+            "driver_glitches",
+            "driver_last_change_ticks",
+            "driver_total_pulse_ticks",
+            "driver_worst_pulse_ticks",
+            "lamp_glitch_transitions",
+            "lamp_glitches",
+            "lamp_last_change_ticks",
+            "lamp_total_pulse_ticks",
+            "lamp_worst_pulse_ticks",
+            "total_settle_ticks",
+            "worst_settle_ticks"
+          ]
+        },
+        "target": {
+          "control": {
+            "worst_settle_ticks": 82,
+            "total_settle_ticks": 15745,
+            "driver_glitches": 405,
+            "driver_single_input_glitches": 0,
+            "driver_last_change_ticks": 78,
+            "driver_glitch_transitions": 165,
+            "lamp_glitches": 351,
+            "lamp_single_input_glitches": 0,
+            "lamp_last_change_ticks": 82,
+            "lamp_glitch_transitions": 157,
+            "driver_total_pulse_ticks": 4742,
+            "driver_worst_pulse_ticks": 44,
+            "lamp_total_pulse_ticks": 4531,
+            "lamp_worst_pulse_ticks": 47
+          },
+          "prototype": {
+            "worst_settle_ticks": 26,
+            "total_settle_ticks": 6192,
+            "driver_glitches": 0,
+            "driver_single_input_glitches": 0,
+            "driver_last_change_ticks": 22,
+            "driver_glitch_transitions": 0,
+            "lamp_glitches": 0,
+            "lamp_single_input_glitches": 0,
+            "lamp_last_change_ticks": 26,
+            "lamp_glitch_transitions": 0
+          },
+          "regressed": [],
+          "improved": [
+            "driver_glitch_transitions",
+            "driver_glitches",
+            "driver_last_change_ticks",
+            "driver_total_pulse_ticks",
+            "driver_worst_pulse_ticks",
+            "lamp_glitch_transitions",
+            "lamp_glitches",
+            "lamp_last_change_ticks",
+            "lamp_total_pulse_ticks",
+            "lamp_worst_pulse_ticks",
+            "total_settle_ticks",
+            "worst_settle_ticks"
+          ]
+        }
+      },
+      "repeats": [
+        {
+          "repeat": 1,
+          "complete_records_and_world_identity": true,
+          "phases": 512,
+          "all_event_replay": true,
+          "public_channel_arrival_regressions": 0,
+          "settlement_phase_regressions": 0,
+          "hidden_extra_transitions": 0
+        },
+        {
+          "repeat": 2,
+          "complete_records_and_world_identity": true,
+          "phases": 512,
+          "all_event_replay": true,
+          "public_channel_arrival_regressions": 0,
+          "settlement_phase_regressions": 0,
+          "hidden_extra_transitions": 0
+        },
+        {
+          "repeat": 3,
+          "complete_records_and_world_identity": true,
+          "phases": 512,
+          "all_event_replay": true,
+          "public_channel_arrival_regressions": 0,
+          "settlement_phase_regressions": 0,
+          "hidden_extra_transitions": 0
+        }
+      ]
+    }
+  },
+  "limitations": [
+    "Expanded physical certificate and source/implementation consumer bindings have not been constructed; no default generator change is qualified.",
+    "The original ROM reference uses ordinary compiler verification, not an expanded certificate. Its complete source/gate/landing trace is independently replayed; the flag remains false.",
+    "The generator is a four-input, one-through-seven-output premise; broader input counts and full retained family controls remain required.",
+    "No Minecraft server conformance, full project pass or completion of any of the eight goal items."
+  ],
+  "sdk_source_sha256": "29f596d00cdaf0da820293964b759aab3646e152fad9e48430571690fc8afebe",
+  "artifact_sha256": {
+    "docs/shared-matrix-balanced-output-2026-10-03-full-row-audit.json": "3d7abefb61e9d4588c527d7dc8296a8818b45065292a6bcc1588d21edda69f14",
+    "docs/shared-matrix-balanced-output-2026-10-03-full-row.log.gz": "06ffdd5bcda4865e5bc8f8fdf0440d63b6eafa550d6d2c6be6fc2c34ffe08d40",
+    "docs/shared-matrix-balanced-output-2026-10-03-pruned-only-audit.json": "0a9f2a506712a9b823611a336abbf15c5276f9718fc397cf3d2043ce6ed4d6a9",
+    "docs/shared-matrix-balanced-output-2026-10-03-pruned-only.log.gz": "58027fdc42daca5a4d1c8c3889c629bc1c30898b39d26fc0b194a85299324c9b",
+    "docs/shared-matrix-balanced-output-2026-10-03-rom-repeat1-audit.json": "05dbed9c8ad0cbd4f2af6544214873e1fbcedefe93d41741f5c5f73829a38895",
+    "docs/shared-matrix-balanced-output-2026-10-03-rom-repeat1.log.gz": "d2e7a4df4d1a6412115b3169f79233d42114989437479e1549d543a109b014cf",
+    "docs/shared-matrix-balanced-output-2026-10-03-rom-repeat2-audit.json": "05dbed9c8ad0cbd4f2af6544214873e1fbcedefe93d41741f5c5f73829a38895",
+    "docs/shared-matrix-balanced-output-2026-10-03-rom-repeat2.log.gz": "ff081382ed230514f1c9f018cc1b3d7b82d47843e579c84ab4fd46291b17e7c7",
+    "docs/shared-matrix-balanced-output-2026-10-03-rom-repeat3-audit.json": "05dbed9c8ad0cbd4f2af6544214873e1fbcedefe93d41741f5c5f73829a38895",
+    "docs/shared-matrix-balanced-output-2026-10-03-rom-repeat3.log.gz": "314f963a0bfcee653d8cd8ba4d0a884deb76e43c7c98bad4b0821968a1865eb0",
+    "docs/shared-matrix-balanced-output-2026-10-03-rom.litematic": "65566798979a46605fe0e36200fdd800b080af9e532da90e622889e72f8819fa",
+    "docs/shared-matrix-balanced-output-2026-10-03-sdk-source.tar.gz": "29f596d00cdaf0da820293964b759aab3646e152fad9e48430571690fc8afebe",
+    "docs/shared-matrix-balanced-output-2026-10-03-seven-repeat1-audit.json": "25e08f9dfdebd111a320854307774d4cc6f445234b5a54145ebd94e3f67d2be4",
+    "docs/shared-matrix-balanced-output-2026-10-03-seven-repeat1.log.gz": "dc66d35b35fa9818c46a41f2e9e4d43997202877ff8911951a6933643db500d8",
+    "docs/shared-matrix-balanced-output-2026-10-03-seven-repeat2-audit.json": "25e08f9dfdebd111a320854307774d4cc6f445234b5a54145ebd94e3f67d2be4",
+    "docs/shared-matrix-balanced-output-2026-10-03-seven-repeat2.log.gz": "cbe2610e5f2658bdc9da26c73e458e38810b9fbb09ed01f7d2d593db241b1d7b",
+    "docs/shared-matrix-balanced-output-2026-10-03-seven-repeat3-audit.json": "25e08f9dfdebd111a320854307774d4cc6f445234b5a54145ebd94e3f67d2be4",
+    "docs/shared-matrix-balanced-output-2026-10-03-seven-repeat3.log.gz": "cfd2294158fb310e9e377857187976778639800c725508d8f1343d67635c737d",
+    "docs/shared-matrix-balanced-output-2026-10-03-seven.litematic": "3848786b0d056bf03fb58dd4744b5a8615b53129c7813829d4ca34d2fcd58883"
+  },
+  "tool_controls": {
+    "command": "python3 tools/test_audit_shared_matrix_premise.py",
+    "test_cases": 1,
+    "passed": true,
+    "checks": [
+      "Complete seven-segment and ROM premise histories independently replay.",
+      "Missing event rejected.",
+      "Incorrect internal sample rejected.",
+      "False certification claim rejected.",
+      "Truncated protocol rejected."
+    ]
+  },
+  "test_sha256": "87e72d855fef986e83fc56717488846778e473532c81181d10da8d3047e4549f",
+  "same_binary_rejected_arms": {
+    "full-row": {
+      "world_fingerprint": "b1536956a3f2de15e0d0e9e7026fabbd989eade37c66ad6525cc028c757b8a30",
+      "worst_target_ticks": 28,
+      "public_phase_channel_arrival_regressions": 814,
+      "settlement_phase_regressions": 2,
+      "hidden_extra_transitions": 0,
+      "rejected": true
+    },
+    "pruned-only": {
+      "world_fingerprint": "09525882df0b38208c008ece0e3e9b700672985ad9ee92ae967addee2e0c194a",
+      "worst_target_ticks": 24,
+      "public_phase_channel_arrival_regressions": 84,
+      "settlement_phase_regressions": 0,
+      "hidden_extra_transitions": 0,
+      "rejected": true
+    }
+  }
+}
