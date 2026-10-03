@@ -1010,7 +1010,7 @@ impl<'n> Parser<'n> {
 }
 
 /// Interpret `width'<base><digits>` into LSB-first bits, applying the
-/// version 1 rules: explicit width, binary or decimal, `_` allowed, no
+/// native subset rules: explicit width, binary/octal/decimal/hex, `_` allowed, no
 /// `x`/`z`/`?`, and the value must fit without truncation.
 fn parse_sized_literal(width: &str, base: char, digits: &str) -> Result<(u32, Vec<bool>), String> {
     let width_text: String = width.chars().filter(|&c| c != '_').collect();
@@ -1027,19 +1027,28 @@ fn parse_sized_literal(width: &str, base: char, digits: &str) -> Result<(u32, Ve
     }
     let mut bits = vec![false; width as usize];
     match base {
-        'b' => {
+        'b' | 'o' | 'h' => {
+            let (radix, digit_bits, name) = match base {
+                'b' => (2, 1, "binary"),
+                'o' => (8, 3, "octal"),
+                'h' => (16, 4, "hexadecimal"),
+                _ => unreachable!(),
+            };
             let mut significant: Vec<bool> = Vec::new();
             for c in digits.chars() {
                 match c {
-                    '_' => {}
-                    '0' => significant.push(false),
-                    '1' => significant.push(true),
+                    '_' => continue,
                     'x' | 'X' | 'z' | 'Z' | '?' => {
                         return Err(format!(
                             "literal digit `{c}`: four-state values are not supported"
                         ))
                     }
-                    _ => return Err(format!("`{c}` is not a binary digit")),
+                    _ => {}
+                }
+                let value = c.to_digit(radix)
+                    .ok_or_else(|| format!("`{c}` is not a {name} digit"))?;
+                for shift in (0..digit_bits).rev() {
+                    significant.push(value & (1 << shift) != 0);
                 }
             }
             if significant.is_empty() {
@@ -1090,11 +1099,6 @@ fn parse_sized_literal(width: &str, base: char, digits: &str) -> Result<(u32, Ve
                 *bit = (value >> i) & 1 == 1;
             }
         }
-        'h' | 'o' => {
-            return Err(format!(
-                "literal base `'{base}` is not supported; use binary (`'b`) or decimal (`'d`)"
-            ))
-        }
         other => return Err(format!("`'{other}` is not a literal base")),
     }
     Ok((width, bits))
@@ -1106,6 +1110,32 @@ mod tests {
 
     fn parse_one(text: &str) -> Result<SourceSet, Diagnostic> {
         parse_sources(&[(FileId(0), text)])
+    }
+
+    #[test]
+    fn power_of_two_literals_match_integer_bits_without_truncation() {
+        for width in 1..=12 {
+            for value in 0u32..4096 {
+                let expected: Vec<_> = (0..width).map(|bit| value & (1 << bit) != 0).collect();
+                for (base, text) in [('h', format!("00_{value:X}")), ('o', format!("00_{value:o}"))] {
+                    let actual = parse_sized_literal(&width.to_string(), base, &text);
+                    if value < (1 << width) {
+                        assert_eq!(actual, Ok((width, expected.clone())));
+                    } else {
+                        assert!(actual.unwrap_err().contains("truncation is not performed"));
+                    }
+                }
+            }
+        }
+        for base in ['h', 'o'] {
+            assert!(parse_sized_literal("8", base, "___").is_err());
+            assert!(parse_sized_literal("4097", base, "1").is_err());
+            assert!(parse_sized_literal("0", base, "0").is_err());
+        }
+        // Values wider than host integers still use the supported bit-vector width.
+        let (width, bits) = parse_sized_literal("4096", 'h', &"f".repeat(1024)).unwrap();
+        assert_eq!(width, 4096);
+        assert!(bits.into_iter().all(|bit| bit));
     }
 
     #[test]
@@ -1201,7 +1231,12 @@ mod tests {
         assert!(parse_sized_literal("2", 'd', "4").is_err());
         assert!(parse_sized_literal("2", 'b', "1x").is_err());
         assert!(parse_sized_literal("0", 'b', "0").is_err());
-        assert!(parse_sized_literal("8", 'h', "ff").is_err());
+        assert_eq!(parse_sized_literal("8", 'h', "fF"), Ok((8, vec![true; 8])));
+        assert_eq!(parse_sized_literal("8", 'o', "377"), Ok((8, vec![true; 8])));
+        assert!(parse_sized_literal("8", 'h', "100").is_err());
+        assert!(parse_sized_literal("8", 'o', "400").is_err());
+        assert!(parse_sized_literal("8", 'h', "xF").is_err());
+        assert!(parse_sized_literal("8", 'o', "8").is_err());
         assert_eq!(
             parse_sized_literal("2", 'b', "0011"),
             Ok((2, vec![true, true]))

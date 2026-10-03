@@ -1,0 +1,41 @@
+{
+  "status": "qualified owned parser snapshot; no dirty arithmetic or foundation adopted",
+  "parser_unit_tests": {
+    "passed": 7,
+    "scope": "current worktree, pure parser tests"
+  },
+  "staged_integration": {
+    "passed": 2,
+    "final_rebuilt": true,
+    "scope": "HEAD plus only owned radix hunks; final formatted test explicitly rebuilt and passed"
+  },
+  "staged_parser_sha256": "c20160db2cded43758b1b30cb323252e7a02600894b9959d03cb96a6db86c8e6",
+  "integration_sha256": "36118cc61d7b7bf41d41ebaac1f9d9266c7e76dba014655242c10595fe72b611",
+  "binary_sha256": "7d762dffcfc51b6a188e8689b6cdf3147a53a00645abb7686c22673399f7c599",
+  "unchanged_limits": [
+    "4096 bits",
+    "no truncation",
+    "no four-state values"
+  ],
+  "missing_scope": [
+    "sized/packed parameters",
+    "signed literal modifiers",
+    "general native HDL completion"
+  ],
+  "proof_sha256": {
+    "retry.log.gz": "be72490781bc20267aa2ab2391389a39587e3fcf77ca161df0171be78c0b9593",
+    "parser.stderr.gz": "14482824027a6df0c0fd09df1c12cef6677ffe1735e8695625436c6767478c5a",
+    "final.log.gz": "be72490781bc20267aa2ab2391389a39587e3fcf77ca161df0171be78c0b9593",
+    "final.stderr.gz": "5e1d6f846f19f61cf246fefb87f991860c8161a9654a014c6cb61b488f1bb7bf",
+    "test.log.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "radix-integration.stderr.gz": "037990faf665a0561d1fa01c3a3d59e39485030bd396986dc3311dfa816a8552",
+    "retry.stderr.gz": "21f5533362048f03f769709d5d62a8efd9f8731d2c359444ca7f19f51f1216d7",
+    "radix-integration.log.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "final-rebuilt.stderr.gz": "3ab5b468b12656ba9401d6755bc5e296c85059dc88b53b66b02127370d34d3fa",
+    "final-rebuilt.log.gz": "be72490781bc20267aa2ab2391389a39587e3fcf77ca161df0171be78c0b9593",
+    "parser.log.gz": "b9f3532aba5b5c522f85deb909261612dd8a5e89bd266a256c6fb4d433015e6b",
+    "test.stderr.gz": "dd1b235cdbce3c9d142673be2c649acd6f828da41961ac922d013ce1b26b761f",
+    "owned-readme.patch.gz": "bcd4cc40c6c5b3cef3c5acc5d660c3023129e996f88dbc5d1eb1d5329b0b0ab2",
+    "owned-parser.patch.gz": "db77b141372cfe78005fad77a9cfa8d2c89602d9c1b6a3bcd9f99b5be5269b41"
+  }
+}

@@ -1,0 +1,9 @@
+[
+  "cargo",
+  "test",
+  "--release",
+  "--manifest-path",
+  "/tmp/reda-radix-staged-20261003/Cargo.toml",
+  "--test",
+  "systemverilog_radix_literals"
+]

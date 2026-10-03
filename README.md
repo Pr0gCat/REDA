@@ -171,6 +171,8 @@ gets marked, the reasoning stays as it was. Start with
 
 原生前端亦支援 `reg`、`always @*`／`always @(*)`、現有正緣／enable `always` 形式與串接連續賦值目標。標準七段 `.v` 可無 Yosys 生成；支援範圍及完整驗證見[原生 legacy HDL](docs/native-legacy-hdl-2026-10-02.md)。
 
+原生資料常數與 case 標籤支援明確寬度的二／八／十／十六進位表示；保留禁止截斷、拒絕四態值與 4096-bit 上限。完整驗證及尚未支援的參數／signed literal 限制見[原生常數表示](docs/native-radix-literals-2026-10-03.md)。
+
 `build_circuit` 與 `mc_dump` 的 HDL 輸入預設使用 `--frontend auto`：先嘗試原生編譯器，只有明確分類為不支援的功能才回退 Yosys。語法、語意、內部驗證與後續實體編譯錯誤會直接失敗。`--frontend native` 禁止回退；`--frontend yosys` 強制使用 Yosys。實際前端與回退原因輸出到 stderr。
 
 ```bash
