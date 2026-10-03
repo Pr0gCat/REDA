@@ -139,7 +139,9 @@ impl CircuitEvaluation {
         }
         let mut report = Self::from_compiled(lowered, &result.compiled);
         let metrics = &result.metrics;
-        let manifest = TransitionManifest::new(lowered.inputs.clone());
+        let manifest = TransitionManifest::new(
+            result.compiled.implementation_netlist(lowered).inputs.clone(),
+        );
         if metrics.emitted_world_fingerprint != canonical_world_fingerprint(&result.compiled.world)
             || metrics.candidate_fingerprint != result.candidate_fingerprint
             || metrics.quality.non_air_blocks != report.physical.metrics.non_air_blocks
@@ -168,6 +170,9 @@ impl CircuitEvaluation {
 /// they say nothing about the netlist, which reaches the report as its own
 /// argument and supplies every logical count in it.
 fn describes(lowered: &Netlist, compiled: &CompiledCircuit) -> bool {
+    if compiled.physical_rewrite().is_some() {
+        return compiled.validate_rewrite_view(lowered).is_ok();
+    }
     compiled.gate_facings.len() == lowered.gates.len()
         && (lowered.inputs.iter()).all(|name| compiled.input_positions.contains_key(name))
         && (lowered.outputs.iter()).all(|name| compiled.output_positions.contains_key(name))

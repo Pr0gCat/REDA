@@ -24,6 +24,7 @@ pub enum PhysicalRewriteError {
 /// Read-only access keeps the netlists, proofs and world tied together.
 #[derive(Debug, Clone)]
 pub struct CertifiedPhysicalRewrite {
+    library: std::sync::Arc<Library>,
     source: Netlist,
     implemented: Netlist,
     rewrite: NetlistRewriteCertificate,
@@ -37,6 +38,28 @@ pub struct CertifiedPhysicalRewrite {
 }
 
 impl CertifiedPhysicalRewrite {
+    /// Measure the retained implementation with its own library and emission
+    /// extent. Source gate names are not observations of a rewritten circuit.
+    pub fn certify_runtime(
+        &self,
+        config: &super::config::CertificationConfig,
+    ) -> Result<
+        super::certification::CertifiedCandidate,
+        super::certification::CandidateCertificationError,
+    > {
+        super::certification::CompleteCandidateCertifier.certify_with_size(
+            self.implemented_candidate.clone(),
+            &self.implemented,
+            self.implementation_library(),
+            config,
+            Some(self.physical.world().size()),
+        )
+    }
+    /// Library IDs are meaningful only in the exact library that expanded
+    /// this implementation. Keep that context with its certified artifact.
+    pub(crate) fn implementation_library(&self) -> &Library {
+        &self.library
+    }
     pub fn source(&self) -> &Netlist {
         &self.source
     }
@@ -175,6 +198,7 @@ pub(crate) fn realise_physical_rewrite_with_size(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(CertifiedPhysicalRewrite {
+        library: std::sync::Arc::new(library.clone()),
         source: source.clone(),
         implemented: implemented.clone(),
         rewrite,

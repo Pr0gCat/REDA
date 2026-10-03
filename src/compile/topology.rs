@@ -573,6 +573,7 @@ pub enum EmbeddingHint {
 /// `nodes` and `internal_edges` are what let this shape hold a technique that
 /// is *not* one-to-one with its gate.  The shipped `Buf` entry already uses
 /// that shape: two torches joined by one internal edge.
+#[derive(Debug, Clone)]
 pub struct Template {
     /// Every node this entry's graph has, and the primitive kind it will be
     /// realised as. A `Vec`, not a set, so `expand` instantiates them in one
@@ -611,6 +612,7 @@ pub struct Template {
 }
 
 /// One named technique for realising a [`GateKind`] in primitives.
+#[derive(Debug, Clone)]
 pub struct LibraryEntry {
     /// Identifies the technique, for diagnostics -- not consulted by
     /// `expand`, which only ever looks at `template`.
@@ -647,6 +649,7 @@ pub struct ComparatorSubtractContract {
     pub side_input: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct Library {
     entries: BTreeMap<GateKind, Vec<LibraryEntry>>,
     stateful_entries: BTreeMap<GateKind, StatefulTopology>,

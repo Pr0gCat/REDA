@@ -18,7 +18,8 @@ use crate::compile::fragment_synth::candidate::{
 use crate::compile::fragment_synth::config::CertificationConfig;
 use crate::compile::fragment_synth::manifest::{Transition, TransitionManifest};
 use crate::compile::fragment_synth::realise::{
-    realise_and_verify_expanded, CertificationError as PhysicalCertificationError, CertifiedWorld,
+    realise_and_verify_expanded_with_size,
+    CertificationError as PhysicalCertificationError, CertifiedWorld,
 };
 use crate::compile::fragment_synth::timing_graph::{
     ExactDelay, RealisedTimingGraph, TimingGraphError,
@@ -1096,7 +1097,24 @@ impl ExpandedCandidateCertifier for CompleteCandidateCertifier {
         library: &Library,
         config: &CertificationConfig,
     ) -> Result<CertifiedCandidate, CandidateCertificationError> {
-        let world = realise_and_verify_expanded(&candidate, lowered, library)?;
+        self.certify_with_size(candidate, lowered, library, config, None)
+    }
+}
+
+impl CompleteCandidateCertifier {
+    /// Keep a generator's explicit emission extent while running all the
+    /// ordinary physical, equivalence, timing and bounded functional checks.
+    /// An extent is not a certificate; cropped or mismatched worlds fail the
+    /// same strict realiser used by the default certification entry.
+    pub(crate) fn certify_with_size(
+        &self,
+        candidate: ExpandedPhysicalCandidate,
+        lowered: &Netlist,
+        library: &Library,
+        config: &CertificationConfig,
+        size: Option<(i32, i32, i32)>,
+    ) -> Result<CertifiedCandidate, CandidateCertificationError> {
+        let world = realise_and_verify_expanded_with_size(&candidate, lowered, library, size)?;
         let timing_graph = RealisedTimingGraph::derive(&candidate, world.structural_certificate())?;
         let static_timing = timing_graph.analyse()?;
         let equivalence = prove_combinational_equivalence(
@@ -1527,6 +1545,69 @@ fn bits_of(mask: usize, width: usize) -> Vec<bool> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_explicit_matrix_extent_preserves_world_binding_and_all_runtime_caps() {
+        use super::{CompleteCandidateCertifier, CandidateCertificationError};
+        use crate::compile::fragment_synth::{
+            benchmark::canonical_world_fingerprint,
+            config::{SearchConfig, CertificationConfig},
+            torch_row::compile_balanced_torch_matrix,
+        };
+        use crate::frontend::{compile_systemverilog, CompileOptions, SourceInput};
+        let source = compile_systemverilog(&[SourceInput {
+            name: "matrix.sv",
+            text: include_str!("../../../tests/fixtures/seven_segment.v"),
+        }], &CompileOptions::new("bcd_seven_segment")).unwrap().netlist;
+        let rewrite = compile_balanced_torch_matrix(&source, 1_000_000).unwrap();
+        let config = CertificationConfig::from_search(&SearchConfig::checked_defaults());
+        let certify = |size, config: &CertificationConfig| {
+            CompleteCandidateCertifier.certify_with_size(
+                rewrite.implemented_candidate().clone(), rewrite.implemented(),
+                rewrite.implementation_library(), config, size,
+            )
+        };
+        let size = Some(rewrite.physical().world().size());
+        let certificate = rewrite.certify_runtime(&config).unwrap();
+        assert_eq!(canonical_world_fingerprint(certificate.world()),
+            canonical_world_fingerprint(rewrite.physical().world()));
+        assert_eq!(certificate.metrics().emitted_world_fingerprint,
+            canonical_world_fingerprint(rewrite.physical().world()));
+        // Reuse a real result envelope, then bind its public certificate fields
+        // to this implementation. Evaluation must retain the source's logical
+        // counts while checking the implementation's measured manifest.
+        let seed = crate::compile::Netlist {
+            inputs: vec!["a".into()], outputs: vec!["y".into()],
+            gates: vec![crate::compile::Gate::nor("y", &["a"])],
+        };
+        let mut result = crate::compile::fragment_synth::compile_fragment_synth(
+            crate::compile::fragment_synth::SynthesisInput {
+                lowered: &seed, source_provenance: None, pins: None,
+            }, crate::compile::fragment_synth::SynthesisBudget::Evaluations(0),
+        ).unwrap();
+        result.compiled = crate::compile::CompiledCircuit::from_certified_rewrite(rewrite.clone());
+        result.metrics = certificate.metrics().clone();
+        result.candidate_fingerprint = result.metrics.candidate_fingerprint.clone();
+        let evaluate = |result: &crate::compile::fragment_synth::SynthesisResult| {
+            crate::compile::evaluation::CircuitEvaluation::from_synthesis(&source, result)
+        };
+        assert_eq!(evaluate(&result).unwrap().logical.lowered_gate_count,
+            source.gates.len() as u64);
+        assert!(crate::compile::evaluation::CircuitEvaluation::from_synthesis(&seed, &result).is_err());
+        result.compiled.gate_facings.clear();
+        assert!(evaluate(&result).is_err());
+        assert!(CompleteCandidateCertifier.certify_with_size(
+            rewrite.implemented_candidate().clone(), rewrite.implemented(),
+            &crate::compile::topology::Library::default_library(), &config, size,
+        ).is_err());
+        assert!(certify(Some((1, 1, 1)), &config).is_err());
+        let mut capped = config.clone();
+        capped.max_certification_transitions = 0;
+        assert!(matches!(rewrite.certify_runtime(&capped),
+            Err(CandidateCertificationError::TransitionCapExceeded { .. })));
+        capped = config;
+        capped.max_game_ticks_per_transition = 0;
+        assert!(rewrite.certify_runtime(&capped).is_err());
+    }
     use super::{
         external_signal_is_high, settle, CandidateCertificationError, CompleteCandidateCertifier,
         ExpandedCandidateCertifier, TransitionPhase,
