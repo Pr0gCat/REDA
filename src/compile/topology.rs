@@ -296,7 +296,7 @@ impl GateKind {
     /// `primitive_graph::expand` can turn into primitives; everything else
     /// has to go through `lowering::lower` first.
     pub fn is_realisable(self) -> bool {
-        matches!(self, GateKind::Nor(_) | GateKind::Or(_))
+        matches!(self, GateKind::Nor(_) | GateKind::Or(0..=3))
     }
 
     /// Whether this gate owns state and therefore cuts dependency edges for
@@ -1208,9 +1208,49 @@ pub fn expansion_for(kind: GateKind) -> Expansion {
 /// generic final inverter: each branch names the NOR/merge topology that
 /// actually computes the selected output polarity.
 pub fn expansion_for_polarity(kind: GateKind, polarity: SignalPolarity) -> Expansion {
+    if let GateKind::Or(arity) = kind {
+        if arity > 3 {
+            return wide_or_expansion(arity, polarity);
+        }
+    }
     match polarity {
         SignalPolarity::Positive => positive_expansion_for(kind),
         SignalPolarity::Negative => negative_expansion_for(kind),
+    }
+}
+
+// A wide Boolean OR needs isolated, bounded-fan-in stages. Preserve the
+// reference builders and the existing two-/three-input merge recipes.
+fn wide_or_expansion(arity: usize, polarity: SignalPolarity) -> Expansion {
+    let mut steps = Vec::new();
+    let mut level: Vec<_> = (0..arity)
+        .map(|pin| Operand::Input {
+            pin,
+            polarity: SignalPolarity::Positive,
+        })
+        .collect();
+    while level.len() > 3 {
+        level = level
+            .chunks(3)
+            .map(|group| {
+                if group.len() == 1 {
+                    return group[0];
+                }
+                let nor = steps.len();
+                steps.push(Step::Nor(group.to_vec()));
+                steps.push(Step::Nor(vec![Operand::Step(nor)]));
+                Operand::Step(nor + 1)
+            })
+            .collect();
+    }
+    let nor = steps.len();
+    steps.push(Step::Nor(level));
+    if polarity == SignalPolarity::Positive {
+        steps.push(Step::Nor(vec![Operand::Step(nor)]));
+    }
+    Expansion {
+        steps,
+        pre_materialize_negative_inputs: Vec::new(),
     }
 }
 

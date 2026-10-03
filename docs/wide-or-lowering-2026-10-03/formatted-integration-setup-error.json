@@ -1,0 +1,1 @@
+{"error": "FileNotFoundError: rustc not on PATH before tools/env.sh", "scope": "setup only, compiler not started"}

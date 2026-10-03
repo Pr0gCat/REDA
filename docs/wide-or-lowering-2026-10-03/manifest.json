@@ -1,0 +1,258 @@
+{
+  "baseline_head": "a72aa36",
+  "baseline_scope": "actual production working tree preserving existing dirty foundations; lowering/polarity/reference builder files match HEAD",
+  "qualified_scope": "wide OR lowering; physical default arities4,5,7 only; no eight-item completion",
+  "logical_arities": [
+    4,
+    5,
+    7,
+    10
+  ],
+  "source_files_changed": [
+    "src/compile/topology.rs"
+  ],
+  "unit_passes": {
+    "topology": 33,
+    "lowering": 19,
+    "polarity": 9
+  },
+  "permanent_integration_pass": true,
+  "physical_audit": {
+    "qualified": true,
+    "worlds": 9,
+    "phases": 13824,
+    "all_lowered_gate_and_public_events_replayed": true,
+    "three_repeats_complete_records_equal": true,
+    "corruption_controls": [
+      {
+        "count": 4,
+        "kind": "wrong_truth",
+        "rejected": true
+      },
+      {
+        "count": 4,
+        "kind": "missing_event",
+        "rejected": true
+      },
+      {
+        "count": 4,
+        "kind": "wrong_public_event",
+        "rejected": true
+      },
+      {
+        "count": 5,
+        "kind": "wrong_truth",
+        "rejected": true
+      },
+      {
+        "count": 5,
+        "kind": "missing_event",
+        "rejected": true
+      },
+      {
+        "count": 5,
+        "kind": "wrong_public_event",
+        "rejected": true
+      },
+      {
+        "count": 7,
+        "kind": "wrong_truth",
+        "rejected": true
+      },
+      {
+        "count": 7,
+        "kind": "missing_event",
+        "rejected": true
+      },
+      {
+        "count": 7,
+        "kind": "wrong_public_event",
+        "rejected": true
+      }
+    ],
+    "worlds_detail": [
+      {
+        "count": 4,
+        "repeat": 1,
+        "phases": 512,
+        "world_fingerprint": "d04073d8fa9385d2247f3562ffd052fc786248b3d28824eb2632c009be2ad0fe",
+        "artifact_sha256": "5072941496c760f3c3c52c74956a66e735bb18e62966326a8520e05e89d3356c"
+      },
+      {
+        "count": 4,
+        "repeat": 2,
+        "phases": 512,
+        "world_fingerprint": "d04073d8fa9385d2247f3562ffd052fc786248b3d28824eb2632c009be2ad0fe",
+        "artifact_sha256": "5072941496c760f3c3c52c74956a66e735bb18e62966326a8520e05e89d3356c"
+      },
+      {
+        "count": 4,
+        "repeat": 3,
+        "phases": 512,
+        "world_fingerprint": "d04073d8fa9385d2247f3562ffd052fc786248b3d28824eb2632c009be2ad0fe",
+        "artifact_sha256": "5072941496c760f3c3c52c74956a66e735bb18e62966326a8520e05e89d3356c"
+      },
+      {
+        "count": 5,
+        "repeat": 1,
+        "phases": 2048,
+        "world_fingerprint": "578c3771adb4b371afbda3ebf9c3f181a0f40691fff3f29a90cee9e09964e741",
+        "artifact_sha256": "e4240ef74fe1c6781f2621d2fc074f3f76255dcece5ef8a022cc1efbd6a0d9e5"
+      },
+      {
+        "count": 5,
+        "repeat": 2,
+        "phases": 2048,
+        "world_fingerprint": "578c3771adb4b371afbda3ebf9c3f181a0f40691fff3f29a90cee9e09964e741",
+        "artifact_sha256": "e4240ef74fe1c6781f2621d2fc074f3f76255dcece5ef8a022cc1efbd6a0d9e5"
+      },
+      {
+        "count": 5,
+        "repeat": 3,
+        "phases": 2048,
+        "world_fingerprint": "578c3771adb4b371afbda3ebf9c3f181a0f40691fff3f29a90cee9e09964e741",
+        "artifact_sha256": "e4240ef74fe1c6781f2621d2fc074f3f76255dcece5ef8a022cc1efbd6a0d9e5"
+      },
+      {
+        "count": 7,
+        "repeat": 1,
+        "phases": 2048,
+        "world_fingerprint": "a0c86076723c90308373635269025c54b4c3a167274d7200ec6ec27f060d0b34",
+        "artifact_sha256": "6d1e4ba4912778e4d3f783fe7b1e0d9400d8ed79ae7bbc8367b0b52554666a47"
+      },
+      {
+        "count": 7,
+        "repeat": 2,
+        "phases": 2048,
+        "world_fingerprint": "a0c86076723c90308373635269025c54b4c3a167274d7200ec6ec27f060d0b34",
+        "artifact_sha256": "6d1e4ba4912778e4d3f783fe7b1e0d9400d8ed79ae7bbc8367b0b52554666a47"
+      },
+      {
+        "count": 7,
+        "repeat": 3,
+        "phases": 2048,
+        "world_fingerprint": "a0c86076723c90308373635269025c54b4c3a167274d7200ec6ec27f060d0b34",
+        "artifact_sha256": "6d1e4ba4912778e4d3f783fe7b1e0d9400d8ed79ae7bbc8367b0b52554666a47"
+      }
+    ],
+    "scope": "wide OR support only; not complete ROM/Mux, arbitrary composition or eight-item completion"
+  },
+  "candidate_source_hashes": "source-hashes.json",
+  "final_applied_files": {
+    "src/compile/topology.rs": "7741f65cb0b239f0b36dde8781f63a3cdbf4fbb00ebbaa704d24d5369fc9aa1c",
+    "tests/lowering_wide_merge.rs": "3a1f627b1a833657eaf479828257f8c65c73fb32324a987244b95a561b5e8487"
+  },
+  "formatting": "applied helper and integration test formatted independently; tested source snapshot preserved separately",
+  "built_artifact_hashes": {
+    "libreda_wide_or.rlib": "a8d8620cf4834f2f652704abe7b39c569db1076359642c34d25de524de247325",
+    "candidate-tests": "90cd18e22bfc39a6c0f34ff0d1faaf686647be6df2ff0604c4e7522d94279f35",
+    "control-tests": "196ed437879f1ff2b29952eb323780b6f91e921a16f6e12fd9acafb8dd3c99f9",
+    "production-integration-tests": "a6869a90177fe7ac53bbb86cf694bca2cd1534ed1adbd09acc90262bc41bdab4",
+    "unit-tests": "6b328bb9324786ccf961b33aaa181ce5e628faa770101c96cf1299d0ec5b4fee",
+    "physical-probe": "81323bc72d64d9ec6ea4b07b36f2f267f5dbb32ca554e38a5c2c930f8b2e6c64"
+  },
+  "artifacts": {
+    "physical-5-r1.jsonl.gz": "a8a9c65dd4a261d79ff3359c0570a4000a97079ad6782c2863923c727aa8ec13",
+    "physical-5-r2.jsonl.gz": "de1207e1e89722a7a778830238d76dc2d2e4dfc7680374da406b626512500069",
+    "physical-7-r3-arguments.json": "8f67b3a81b937f8a568f422ed8ae257d366a481f4ccc10d059cbc27741a1509f",
+    "formatted-integration-build-terminal.json": "c8d7dc9d3ef50d9098d880ba8c8e90d94e1f73b83bcf655d92e56f187c4d3a1f",
+    "physical-4-r1.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "physical-7-r3.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "unit-build-terminal.json": "0a03bb3c8e441c3cd12cfe938b7b2a5c64983e62452647bc1f4c7353172958c8",
+    "physical-7-r2.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "build-arguments.json": "eb3ebab2547cc053f089a4dce54f67714dd6eb7698cf1baae5591d12de5f42d3",
+    "wide-or-5-repeat3.litematic": "e4240ef74fe1c6781f2621d2fc074f3f76255dcece5ef8a022cc1efbd6a0d9e5",
+    "physical-4-r1.jsonl.gz": "c6adc50575e0405a59b883911546cab30655f36a16a9361e17dc4aa5911c11f9",
+    "check-terminal.json": "a4000369a5e1cfd1863febbb4004bd0831e2153c8d4bf3ee79a4a3cee384c1e9",
+    "physical-build-arguments.json": "5207839ce394c270cb67577502f1f12979c51463808e1f27aa4de30cda3edab1",
+    "applied-topology.rs": "7741f65cb0b239f0b36dde8781f63a3cdbf4fbb00ebbaa704d24d5369fc9aa1c",
+    "control-arguments.json": "686b51e10b30ec822322554113c7299de22b77821c15ad8007d2a295f01d16cb",
+    "formatted-integration-build.log.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "unit-polarity.log.gz": "ed7f0f9eb64ba378ce3bfc9ee014809f9512882b16e6b0c23ff4c6036998148a",
+    "physical-results.json": "ad7942dd8f59ee478a883d1ab81bfd4c5cb749fe89654dac697bff90203a9dbd",
+    "control-build-terminal.json": "1ab60d090a8c16517a8a635f8496e2f07e4cf13e268f812424b6f2b67a165ddb",
+    "wide-or-7-repeat2.litematic": "6d1e4ba4912778e4d3f783fe7b1e0d9400d8ed79ae7bbc8367b0b52554666a47",
+    "unit-build.log.gz": "dd4d5e1e86258d2e34d2c5ef9d5e5a75909f0debcc1d91e70a407ff67b24276c",
+    "failed-first-physical-build.log.gz": "c3685069a200b1a3beb2a6ee8925dbc5dd8f890f8b55ec28c1bae21f0b53bf98",
+    "physical-4-r3.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "run-physical.py": "443314682f86d89ae36dc73c89970b25f08a84465c9a528c5d12cf954b3b16b6",
+    "physical-7-r2-arguments.json": "58c3809365b7b2fab06aaad420434b93b724b15749f4774ba6d8c97d533055ae",
+    "wide-or-4-repeat3.litematic": "5072941496c760f3c3c52c74956a66e735bb18e62966326a8520e05e89d3356c",
+    "physical-failed-first.rs": "a67c31c4a4c05472ba1fde05c168d383808e591b74844b820e113d008c84974c",
+    "production-integration-build-terminal.json": "83b841c078886ddaf16f488458a75fe3e1fbc0935837b58b4e685d8431e04521",
+    "wide-or-4-repeat2.litematic": "5072941496c760f3c3c52c74956a66e735bb18e62966326a8520e05e89d3356c",
+    "unit-topology-arguments.json": "1312680b895eefd550266033628c44b3953bf1c1e6742345464b61906b2103b8",
+    "unit-lowering-arguments.json": "80607856f4ed22b49f9978c167d2847b63f1ae27cc0b05896f5614ce6ff23056",
+    "formatted-integration-build-arguments.json": "3c6bf91e7a9eeb14dfdfe411689a7a3ad8c72b55933ceb7f5b4a5e9b10b9d5e0",
+    "source-hashes.json": "326f96a3a5f942248da1ae2f5975270bd6b51e11fe3dca05822aa366b79e9f5f",
+    "wide-or-7-repeat1.litematic": "6d1e4ba4912778e4d3f783fe7b1e0d9400d8ed79ae7bbc8367b0b52554666a47",
+    "physical-build-terminal.json": "500d7d318b7282bf9dd17bcef05bf170357eb01af4359d44f1562d1e4c2c8139",
+    "audit-physical.py": "53bfafcd3fae9a2866df2673e5f1a43f50bb4455f3475d43599bcb4866a97c8c",
+    "physical-4-r2-arguments.json": "beea78490739c001819ccaa77444087a63e3d47b73ed1d2f269692472ec42b53",
+    "tested-source.tar.gz": "f559475bb8222c375b4b68547e13ecada9d73d77a4cfd43f03fea3e2c510810b",
+    "physical-7-r1.jsonl.gz": "10f86994963efa2d84e69a2a7455f4fdbe9d6643a7a989c3846a51eaa2e6054d",
+    "physical-5-r2-arguments.json": "cdb53af419c04467f026cfbd3dd3a577cda3ba4e58ec7b34df33295517fe5df7",
+    "failed-first-build-terminal.json": "932787f256571030b374d0a29c48418f17910c7163e3782413da07eeb175be92",
+    "failed-first-build.log.gz": "5e48eacbba14131531813349df6a5ed8fa334078779729996ee7c3b006b425c6",
+    "run-final-checks.py": "223f11fb442a145219d2b3b43fa68446a187d878e8908dac172f04b0ca310ba4",
+    "check-build-terminal.json": "a59fb0fb353e1b18dcb5389d8672204e34df313f5e73e40a57d05045d22ce44b",
+    "physical.rs": "283f0862d4e364f2d21bc90143b8d4a7ffc2e8afeee8937fe81434291f1eb771",
+    "physical-5-r1-arguments.json": "d2512507ee81c5e5cc8c94b0200b0a866088346dd446aea13236cc9a441f7926",
+    "production-integration-build.log.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "physical-4-r2.jsonl.gz": "c79326cb43731bf152e628a5dc31943f936e14124327468c3202ee38a41503e2",
+    "physical-7-r1-arguments.json": "6517c3d7b2ae2b43da43b6e9e94d8193f6d095bc16e61949862fd993230da3ce",
+    "formatted-integration-setup-error.json": "c5ba12c3c43981581b3d6aba3df8a3e8cfb93094c81c485a341c0ca8a77ad972",
+    "physical-5-r2.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "build.log.gz": "d9da12287a3c676d60b547b5ffe7d0c3d6f9fb7c026d0cb1a80980e14ce64c6f",
+    "physical-4-r1-arguments.json": "0c170f9f74551bf719f263f91c2eba969e940937eb360dae5b7dea51baf8d98e",
+    "control-terminal.json": "9cb7fdcb28fd68ad699d7cc2d1a406a32846d531b96df49c7a275613c1f01bf2",
+    "run-fixture-complete.py": "0dce628e6e998b20202390b2feca301fce36456dcdfd32c625a81cae61c8c456",
+    "control.log.gz": "2182b7fad46e1b13642f3f390599d81af99bbef4f8d41253623fdf410463e10c",
+    "unit-lowering.log.gz": "443c03a821c78a56e43a169b327c034c262d9f4c492b9cd7fe0a8b744626203a",
+    "unit-polarity-arguments.json": "cf2fbbc08f1d05d6c22807dc51c18d08af6fa94e3e67c6b3beccf6c25b045e9b",
+    "unit-topology.log.gz": "6aee1333800123b3588d481696a9dc831213fa8031b3c1b25131f47ef60d0930",
+    "production-integration-build-arguments.json": "6b92cf119a74cf3b17578b516e7774a1fb1490b0414be557a700044c408c659b",
+    "check-build-arguments.json": "faf08c617aed6a8d10301e0778de417e5eddc6dbbddab31cd70b9d0a9a2ececb",
+    "formatted-integration-test-terminal.json": "ed2bd8f210b5df4251a8d256048af5cf486a64abab7d81bd8dd11c9f5e9c0a13",
+    "check.log.gz": "376089c071af099fa81856f7217a3410c758f85ce690d5421b3bdde9e34c4916",
+    "production-integration-terminal.json": "6016bbe104eec602617f5408c71a420cd58587ad312760a56c702a3e18e10043",
+    "run.py": "8d08bba7031bcc519646c2c0f0fd4e603f04eca807e541918211e3507707a4ca",
+    "unit-lowering-terminal.json": "76d1044cd06d678343e693122dc86ba0fcb2cc16f0d73526f42a71f4aa62bb27",
+    "physical-5-r3.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "control-build.log.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "physical-protocol.json": "aba97c3425b6503494f5a7c138ef6fb1c3829e5298b247b682535b9abc079a03",
+    "physical-7-r3.jsonl.gz": "4eec00943ebc61dcef722d2d708246bc681ee1fd40139535f6162e87eeada482",
+    "physical-4-r3-arguments.json": "14091a1a91c1e29d9578eeaee1ccbde6bdb7d8f74011728e881e08d3cc50749f",
+    "physical-4-r2.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "unit-topology-terminal.json": "0f57c71bb61fd25e1fd07e4b6258517fa89274621bf56dbc7a9bff502dff249a",
+    "wide-or-5-repeat1.litematic": "e4240ef74fe1c6781f2621d2fc074f3f76255dcece5ef8a022cc1efbd6a0d9e5",
+    "control-build-arguments.json": "557dcd0fcefd8fd6081472b8ccc193753ec0c5fb58003a942bade6e524bc01d2",
+    "physical-5-r3-arguments.json": "bef9389e27c27ca9e1283270bdf974d96140709b7460081f2d175a5f877f8a97",
+    "production-integration.log.gz": "8898d6d3401f1b8502597ee54b7a2df8180a67000778de1564ee1a054728f811",
+    "physical-4-r3.jsonl.gz": "92a96d7bf3ee5dc58b28c56d70c274dffaa1ab08a910b73c4bd1059c25d412ed",
+    "failed-first-physical-build-terminal.json": "69749c33e74d2846a4cbc82f141e0179c249ccb22d1e95ff934e86052d551ef9",
+    "physical-audit.json": "09036d6578ea8cef136d0cc6232130a14c0fb25faea75a7c292f58e1015ea044",
+    "physical-7-r1.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "build-terminal.json": "397558d269301c016df8329bb84e9f5249fdfcc29edebecd71e5d4e144993072",
+    "check-build.log.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "production-lowering_wide_merge.rs": "3a1f627b1a833657eaf479828257f8c65c73fb32324a987244b95a561b5e8487",
+    "baseline-topology.rs": "e45ef2d089c0bc6d978f6631dbb70fd816fb07151c238b35343e3cde47c6bfd4",
+    "formatted-integration-test.log.gz": "527fae08ace038fd8590508f06f3cd76553272e91b6a0931e837a90c46bdce8a",
+    "physical-5-r1.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "physical-5-r3.jsonl.gz": "aeb874409a139b1bdd705454b846284e216265e5d10429dacd20928c4ac1bf03",
+    "unit-polarity-terminal.json": "e103131221bde2ebd4d0d50f5472ceeffe3d3b036687233d8805e09a54a90740",
+    "physical-build.log.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "check.rs": "f5d9937a3c5f7f60fa83b394e85acb3f4013c3ae2afc2f1f830a4b5850e5d1ed",
+    "wide-or-4-repeat1.litematic": "5072941496c760f3c3c52c74956a66e735bb18e62966326a8520e05e89d3356c",
+    "wide-or-5-repeat2.litematic": "e4240ef74fe1c6781f2621d2fc074f3f76255dcece5ef8a022cc1efbd6a0d9e5",
+    "unit-build-arguments.json": "9eac56444a3cee4f818a04396d764d95e4733606ba2444e4f13dc40bc58488b9",
+    "check-arguments.json": "a6936156738e7e0017e47aab71d2775426cdebf115aeda1652ecae5643b229e2",
+    "wide-or-7-repeat3.litematic": "6d1e4ba4912778e4d3f783fe7b1e0d9400d8ed79ae7bbc8367b0b52554666a47",
+    "physical-7-r2.jsonl.gz": "1027971ef2d0e04ddb27a1da9c486556f4702ecdc6b3d966d0711b7865388d84"
+  },
+  "formatted_integration_final_pass": {
+    "exit_code": 0,
+    "seconds": 0.10000813199440017,
+    "source_sha256": "3a1f627b1a833657eaf479828257f8c65c73fb32324a987244b95a561b5e8487"
+  }
+}

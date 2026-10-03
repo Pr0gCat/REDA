@@ -1,0 +1,56 @@
+[
+  {
+    "count": 4,
+    "repeat": 1,
+    "exit_code": 0,
+    "seconds": 1.7576925120083615
+  },
+  {
+    "count": 4,
+    "repeat": 2,
+    "exit_code": 0,
+    "seconds": 1.7591982769663446
+  },
+  {
+    "count": 4,
+    "repeat": 3,
+    "exit_code": 0,
+    "seconds": 1.7648709819768555
+  },
+  {
+    "count": 5,
+    "repeat": 1,
+    "exit_code": 0,
+    "seconds": 1.411716544011142
+  },
+  {
+    "count": 5,
+    "repeat": 2,
+    "exit_code": 0,
+    "seconds": 1.4082566300057806
+  },
+  {
+    "count": 5,
+    "repeat": 3,
+    "exit_code": 0,
+    "seconds": 1.4073317169677466
+  },
+  {
+    "count": 7,
+    "repeat": 1,
+    "exit_code": 0,
+    "seconds": 0.5102457100292668
+  },
+  {
+    "count": 7,
+    "repeat": 2,
+    "exit_code": 0,
+    "seconds": 0.5038490939768963
+  },
+  {
+    "count": 7,
+    "repeat": 3,
+    "exit_code": 0,
+    "seconds": 0.512870611040853
+  }
+]

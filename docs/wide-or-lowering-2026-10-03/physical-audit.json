@@ -1,0 +1,120 @@
+{
+  "qualified": true,
+  "worlds": 9,
+  "phases": 13824,
+  "all_lowered_gate_and_public_events_replayed": true,
+  "three_repeats_complete_records_equal": true,
+  "corruption_controls": [
+    {
+      "count": 4,
+      "kind": "wrong_truth",
+      "rejected": true
+    },
+    {
+      "count": 4,
+      "kind": "missing_event",
+      "rejected": true
+    },
+    {
+      "count": 4,
+      "kind": "wrong_public_event",
+      "rejected": true
+    },
+    {
+      "count": 5,
+      "kind": "wrong_truth",
+      "rejected": true
+    },
+    {
+      "count": 5,
+      "kind": "missing_event",
+      "rejected": true
+    },
+    {
+      "count": 5,
+      "kind": "wrong_public_event",
+      "rejected": true
+    },
+    {
+      "count": 7,
+      "kind": "wrong_truth",
+      "rejected": true
+    },
+    {
+      "count": 7,
+      "kind": "missing_event",
+      "rejected": true
+    },
+    {
+      "count": 7,
+      "kind": "wrong_public_event",
+      "rejected": true
+    }
+  ],
+  "worlds_detail": [
+    {
+      "count": 4,
+      "repeat": 1,
+      "phases": 512,
+      "world_fingerprint": "d04073d8fa9385d2247f3562ffd052fc786248b3d28824eb2632c009be2ad0fe",
+      "artifact_sha256": "5072941496c760f3c3c52c74956a66e735bb18e62966326a8520e05e89d3356c"
+    },
+    {
+      "count": 4,
+      "repeat": 2,
+      "phases": 512,
+      "world_fingerprint": "d04073d8fa9385d2247f3562ffd052fc786248b3d28824eb2632c009be2ad0fe",
+      "artifact_sha256": "5072941496c760f3c3c52c74956a66e735bb18e62966326a8520e05e89d3356c"
+    },
+    {
+      "count": 4,
+      "repeat": 3,
+      "phases": 512,
+      "world_fingerprint": "d04073d8fa9385d2247f3562ffd052fc786248b3d28824eb2632c009be2ad0fe",
+      "artifact_sha256": "5072941496c760f3c3c52c74956a66e735bb18e62966326a8520e05e89d3356c"
+    },
+    {
+      "count": 5,
+      "repeat": 1,
+      "phases": 2048,
+      "world_fingerprint": "578c3771adb4b371afbda3ebf9c3f181a0f40691fff3f29a90cee9e09964e741",
+      "artifact_sha256": "e4240ef74fe1c6781f2621d2fc074f3f76255dcece5ef8a022cc1efbd6a0d9e5"
+    },
+    {
+      "count": 5,
+      "repeat": 2,
+      "phases": 2048,
+      "world_fingerprint": "578c3771adb4b371afbda3ebf9c3f181a0f40691fff3f29a90cee9e09964e741",
+      "artifact_sha256": "e4240ef74fe1c6781f2621d2fc074f3f76255dcece5ef8a022cc1efbd6a0d9e5"
+    },
+    {
+      "count": 5,
+      "repeat": 3,
+      "phases": 2048,
+      "world_fingerprint": "578c3771adb4b371afbda3ebf9c3f181a0f40691fff3f29a90cee9e09964e741",
+      "artifact_sha256": "e4240ef74fe1c6781f2621d2fc074f3f76255dcece5ef8a022cc1efbd6a0d9e5"
+    },
+    {
+      "count": 7,
+      "repeat": 1,
+      "phases": 2048,
+      "world_fingerprint": "a0c86076723c90308373635269025c54b4c3a167274d7200ec6ec27f060d0b34",
+      "artifact_sha256": "6d1e4ba4912778e4d3f783fe7b1e0d9400d8ed79ae7bbc8367b0b52554666a47"
+    },
+    {
+      "count": 7,
+      "repeat": 2,
+      "phases": 2048,
+      "world_fingerprint": "a0c86076723c90308373635269025c54b4c3a167274d7200ec6ec27f060d0b34",
+      "artifact_sha256": "6d1e4ba4912778e4d3f783fe7b1e0d9400d8ed79ae7bbc8367b0b52554666a47"
+    },
+    {
+      "count": 7,
+      "repeat": 3,
+      "phases": 2048,
+      "world_fingerprint": "a0c86076723c90308373635269025c54b4c3a167274d7200ec6ec27f060d0b34",
+      "artifact_sha256": "6d1e4ba4912778e4d3f783fe7b1e0d9400d8ed79ae7bbc8367b0b52554666a47"
+    }
+  ],
+  "scope": "wide OR support only; not complete ROM/Mux, arbitrary composition or eight-item completion"
+}
