@@ -1,0 +1,18 @@
+{
+  "status": "terminal exit0 twice; final cached check confirms final source",
+  "scope": "strict certified full source boundaries and unchanged frozen worlds; no wider-ROM or new-quality claim",
+  "test": "full_source_boundaries_are_certified_without_name_selection",
+  "initial_session": 43318,
+  "final_exit_code": 0,
+  "source_sha256": {
+    "src/compile/fragment_synth/torch_row/four.rs": "0eaabe87a54bcbd245451fa7027216c7b6a43cc14a5ad1a780c77b30d257e2b1",
+    "tests/balanced_torch_matrix.rs": "bf22926c0a09ac8e1f2bf92e02bfd689914bb51b2799b3ea98768c509136b0dc"
+  },
+  "binary_sha256": "e5059022f2aa178a516eaa27499a4036969b2562c592cca729656a3cc8c577a0",
+  "evidence_sha256": {
+    "final.log.gz": "05e5e35e7535befa360a28dde73e59eb72b5d5eafcda4b67a6efb9fce01e5efb",
+    "initial.log.gz": "aa9e225d472f727d9d151c761c2f4b6e7a64211d9ef155d0815fc4f62a50645e",
+    "final.stderr.gz": "dc13c1694856f8583f2a4a511f356ef53786bebeecf24dfe23b5d11d29ebc30e",
+    "initial.stderr.gz": "fb8d0e397c9274e40b11171b7900bcb8bf6541bf281e9863673bb68c506501bc"
+  }
+}

@@ -33,6 +33,14 @@ fn repeater(world: &mut World, x: i32, y: i32, z: i32, facing: Facing, delay: u8
     state.delay = delay;
     world.set(x, y, z, state);
 }
+
+// The initial polarity-balancing stage and the recurring supply stages must
+// have identical physical positions and implementation observations.
+fn literal_refresh_positions(last_row: i32) -> impl Iterator<Item = i32> {
+    std::iter::once(2)
+        .chain((14..=last_row).step_by(16))
+        .filter(move |z| *z <= last_row)
+}
 fn matrix(
     words: &[u64],
     rows: &[usize],
@@ -64,11 +72,10 @@ fn matrix(
         // Both polarities share arrival time. Later address columns skip one
         // row refresh and therefore receive one extra input-buffer stage.
         let extra = u8::from(bit >= 2);
-        repeater(&mut world, x, 5, 2, Facing::North, 2 + extra);
-        repeater(&mut world, x + 3, 5, 2, Facing::North, 1 + extra);
-        for z in (14..=last_row).step_by(16) {
-            for column in [x, x + 3] {
-                repeater(&mut world, column, 5, z, Facing::North, 1);
+        for z in literal_refresh_positions(last_row) {
+            for (column, initial_delay) in [(x, 2 + extra), (x + 3, 1 + extra)] {
+                let delay = if z == 2 { initial_delay } else { 1 };
+                repeater(&mut world, column, 5, z, Facing::North, delay);
             }
         }
     }
@@ -208,7 +215,7 @@ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,
             Position::new(x + 1, 4, 1),
         );
         for (column, inverted, mut previous) in [(x, false, input), (x + 3, true, inverse)] {
-            for z in [2, 14, 30, 46, 62].into_iter().filter(|z| *z <= last_row) {
+            for z in literal_refresh_positions(last_row) {
                 previous = binding.buffer(
                     format!("literal{bit}_{inverted}_{z}"),
                     previous,

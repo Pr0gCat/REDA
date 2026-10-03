@@ -1,0 +1,9 @@
+{
+  "source_sha256": {
+    "src/compile/fragment_synth/torch_row/four.rs": "0eaabe87a54bcbd245451fa7027216c7b6a43cc14a5ad1a780c77b30d257e2b1",
+    "tests/balanced_torch_matrix.rs": "bf22926c0a09ac8e1f2bf92e02bfd689914bb51b2799b3ea98768c509136b0dc"
+  },
+  "test_session": 43318,
+  "status": "live build; tests edited before test compile, verify final binary/source before acceptance",
+  "scope": "unify literal geometry and implementation refresh positions; no boundary admission changes; no larger-ROM claim"
+}

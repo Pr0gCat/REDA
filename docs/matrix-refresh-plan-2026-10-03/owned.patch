@@ -1,0 +1,70 @@
+diff --git a/src/compile/fragment_synth/torch_row/four.rs b/src/compile/fragment_synth/torch_row/four.rs
+index 44231c1..be6a81d 100644
+--- a/src/compile/fragment_synth/torch_row/four.rs
++++ b/src/compile/fragment_synth/torch_row/four.rs
+@@ -33,6 +33,14 @@ fn repeater(world: &mut World, x: i32, y: i32, z: i32, facing: Facing, delay: u8
+     state.delay = delay;
+     world.set(x, y, z, state);
+ }
++
++// The initial polarity-balancing stage and the recurring supply stages must
++// have identical physical positions and implementation observations.
++fn literal_refresh_positions(last_row: i32) -> impl Iterator<Item = i32> {
++    std::iter::once(2)
++        .chain((14..=last_row).step_by(16))
++        .filter(move |z| *z <= last_row)
++}
+ fn matrix(
+     words: &[u64],
+     rows: &[usize],
+@@ -64,11 +72,10 @@ fn matrix(
+         // Both polarities share arrival time. Later address columns skip one
+         // row refresh and therefore receive one extra input-buffer stage.
+         let extra = u8::from(bit >= 2);
+-        repeater(&mut world, x, 5, 2, Facing::North, 2 + extra);
+-        repeater(&mut world, x + 3, 5, 2, Facing::North, 1 + extra);
+-        for z in (14..=last_row).step_by(16) {
+-            for column in [x, x + 3] {
+-                repeater(&mut world, column, 5, z, Facing::North, 1);
++        for z in literal_refresh_positions(last_row) {
++            for (column, initial_delay) in [(x, 2 + extra), (x + 3, 1 + extra)] {
++                let delay = if z == 2 { initial_delay } else { 1 };
++                repeater(&mut world, column, 5, z, Facing::North, delay);
+             }
+         }
+     }
+@@ -208,7 +215,7 @@ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,
+             Position::new(x + 1, 4, 1),
+         );
+         for (column, inverted, mut previous) in [(x, false, input), (x + 3, true, inverse)] {
+-            for z in [2, 14, 30, 46, 62].into_iter().filter(|z| *z <= last_row) {
++            for z in literal_refresh_positions(last_row) {
+                 previous = binding.buffer(
+                     format!("literal{bit}_{inverted}_{z}"),
+                     previous,
+diff --git a/tests/balanced_torch_matrix.rs b/tests/balanced_torch_matrix.rs
+index 35e36e4..82d18ba 100644
+--- a/tests/balanced_torch_matrix.rs
++++ b/tests/balanced_torch_matrix.rs
+@@ -27,6 +27,21 @@ fn full_source_boundaries_are_certified_without_name_selection() {
+     ] {
+         let source = native(text, top);
+         let first = compile_balanced_torch_matrix(&source, 10_000_000).unwrap();
++        // Immutable actual-default worlds, qualified before stage-plan changes.
++        // Shared geometry/binding changes must preserve these existing controls.
++        let frozen = match top {
++            "bcd_seven_segment" => {
++                "a8b17f9c38cbc8b363d326f8dd1633162489f6dc421e0c624d296c68485f07f7"
++            }
++            "rom16x7" => {
++                "f4658639e48b15d789732aa49f27db0031fd4e45f04212d65a1bf21d5adbe7ce"
++            }
++            _ => unreachable!(),
++        };
++        assert_eq!(
++            canonical_world_fingerprint(first.physical().world()).as_str(),
++            frozen
++        );
+         assert_eq!(first.source().inputs, source.inputs);
+         assert_eq!(first.source().outputs, source.outputs);
+         assert_eq!(first.source_input_positions().len(), source.inputs.len());

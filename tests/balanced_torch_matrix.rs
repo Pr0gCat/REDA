@@ -27,6 +27,21 @@ fn full_source_boundaries_are_certified_without_name_selection() {
     ] {
         let source = native(text, top);
         let first = compile_balanced_torch_matrix(&source, 10_000_000).unwrap();
+        // Immutable actual-default worlds, qualified before stage-plan changes.
+        // Shared geometry/binding changes must preserve these existing controls.
+        let frozen = match top {
+            "bcd_seven_segment" => {
+                "a8b17f9c38cbc8b363d326f8dd1633162489f6dc421e0c624d296c68485f07f7"
+            }
+            "rom16x7" => {
+                "f4658639e48b15d789732aa49f27db0031fd4e45f04212d65a1bf21d5adbe7ce"
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            canonical_world_fingerprint(first.physical().world()).as_str(),
+            frozen
+        );
         assert_eq!(first.source().inputs, source.inputs);
         assert_eq!(first.source().outputs, source.outputs);
         assert_eq!(first.source_input_positions().len(), source.inputs.len());
