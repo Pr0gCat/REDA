@@ -149,6 +149,16 @@ fn qualify_boundary_impl(
     source: &Netlist,
     compiled: &CompiledCircuit,
     require_certificate: bool,
+    record: impl FnMut(BoundaryPhase<'_>),
+) -> Option<Quality> {
+    qualify_boundary_ports(source, compiled, require_certificate, None, record)
+}
+
+fn qualify_boundary_ports(
+    source: &Netlist,
+    compiled: &CompiledCircuit,
+    require_certificate: bool,
+    caller_ports: Option<&super::planner::PortPlacements>,
     mut record: impl FnMut(BoundaryPhase<'_>),
 ) -> Option<Quality> {
     if require_certificate {
@@ -166,11 +176,14 @@ fn qualify_boundary_impl(
         .iter()
         .map(|name| compiled.input_positions.get(name).copied().map(position))
         .collect::<Option<Vec<_>>>()?;
-    if inputs
-        .iter()
-        .any(|p| compiled.world.get(p.x, p.y, p.z).kind != BlockKind::Lever)
-    {
-        return None;
+    let mut measured_world = compiled.world.clone();
+    for (name, p) in source.inputs.iter().zip(&inputs) {
+        let caller = caller_ports.is_some_and(|ports| ports.get(name).is_some());
+        if measured_world.get(p.x, p.y, p.z).kind
+            != if caller { BlockKind::Air } else { BlockKind::Lever }
+        {
+            return None;
+        }
     }
     let (drivers, lamps) = if let Some(rewrite) = compiled.physical_rewrite() {
         (
@@ -207,6 +220,14 @@ fn qualify_boundary_impl(
                 .collect::<Option<Vec<_>>>()?,
         )
     };
+    for (name, p) in source.outputs.iter().zip(&lamps) {
+        if caller_ports.is_some_and(|ports| ports.get(name).is_some()) {
+            if measured_world.get(p.x, p.y, p.z).kind != BlockKind::Air {
+                return None;
+            }
+            super::probe_caller_cell(&mut measured_world, (p.x, p.y, p.z));
+        }
+    }
     if lamps
         .iter()
         .map(|p| (p.x, p.y, p.z))
@@ -215,7 +236,7 @@ fn qualify_boundary_impl(
         != source.outputs.len()
         || lamps
             .iter()
-            .any(|p| compiled.world.get(p.x, p.y, p.z).kind != BlockKind::Lamp)
+            .any(|p| measured_world.get(p.x, p.y, p.z).kind != BlockKind::Lamp)
     {
         return None;
     }
@@ -225,7 +246,7 @@ fn qualify_boundary_impl(
     let input_bindings = compiled.physical_rewrite().map_or(&source.inputs[..], |r| {
         r.rewrite_certificate().rewritten_inputs_in_source_order()
     });
-    let mut sim = Simulator::new(compiled.world.clone());
+    let mut sim = Simulator::new(measured_world);
     sim.run_until_stable(2000).ok()?;
     sim.attach_observer(
         drivers
@@ -249,6 +270,12 @@ fn qualify_boundary_impl(
                 sim.reset_observer();
                 let start = sim.current_tick();
                 for (bit, p) in inputs.iter().enumerate() {
+                    if caller_ports.is_some_and(|ports| ports.get(&source.inputs[bit]).is_some()) {
+                        super::drive_caller_cell(
+                            sim.world_mut(), (p.x, p.y, p.z), address & (1 << bit) != 0,
+                        );
+                        continue;
+                    }
                     let mut lever = sim.world().get(p.x, p.y, p.z).clone();
                     lever.lit = address & (1 << bit) != 0;
                     sim.world_mut().set(p.x, p.y, p.z, lever);
@@ -425,14 +452,14 @@ struct PhaseQuality {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-struct RefreshQuality {
+pub(crate) struct RefreshQuality {
     core: Quality,
     // setup driver/lamp, then target driver/lamp glitch-transition counts.
     groups: [u64; 4],
     phases: Vec<PhaseQuality>,
 }
 impl RefreshQuality {
-    fn dominates(&self, other: &Self) -> bool {
+    pub(crate) fn dominates(&self, other: &Self) -> bool {
         self.core.dominates(&other.core)
             && self.groups.iter().zip(other.groups).all(|(a, b)| *a <= b)
             && self.phases.len() == other.phases.len()
@@ -448,9 +475,28 @@ fn refresh_quality(
     compiled: &CompiledCircuit,
     require_certificate: bool,
 ) -> Option<RefreshQuality> {
+    quality_with_ports(source, compiled, require_certificate, None)
+}
+
+/// Measure an already root-certified recursive world with its exact caller ports.
+/// Fixtures are installed only in the measurement copy, never in the product.
+pub(crate) fn recursive_quality(
+    source: &Netlist,
+    compiled: &CompiledCircuit,
+    caller_ports: Option<&super::planner::PortPlacements>,
+) -> Option<RefreshQuality> {
+    quality_with_ports(source, compiled, false, caller_ports)
+}
+
+fn quality_with_ports(
+    source: &Netlist,
+    compiled: &CompiledCircuit,
+    require_certificate: bool,
+    caller_ports: Option<&super::planner::PortPlacements>,
+) -> Option<RefreshQuality> {
     let mut groups = [0; 4];
     let mut phases = Vec::new();
-    let core = qualify_boundary_impl(source, compiled, require_certificate, |phase| {
+    let core = qualify_boundary_ports(source, compiled, require_certificate, caller_ports, |phase| {
         for channel in 0..2 {
             if (0..source.outputs.len()).any(|bit| {
                 let label = format!("boundary{}", channel * source.outputs.len() + bit);

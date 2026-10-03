@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use serde::Serialize;
 use thiserror::Error;
 
@@ -7,7 +9,9 @@ use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
 use crate::compile::fragment_synth::manifest::TransitionManifest;
 use crate::compile::fragment_synth::partition::canonical_order;
 use crate::compile::fragment_synth::recursive;
-use crate::compile::fragment_synth::search::{ProposalTrace, StopReason, SynthesisBudget};
+use crate::compile::fragment_synth::search::{
+    CapWorkCounters, ProposalTerminal, ProposalTrace, StopReason, SynthesisBudget,
+};
 use crate::compile::geometry::Anchor;
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
 use crate::compile::planner::{PortPin, PortPlacements};
@@ -40,6 +44,8 @@ pub enum SynthesisError {
     InvalidNetlist(String),
     #[error("recursive contract synthesis failed: {0}")]
     RecursiveContract(String),
+    #[error("time-budgeted synthesis needs a monotonic host clock on browser WebAssembly")]
+    TimeBudgetUnavailable,
 }
 
 /// Which synthesis path a case is compiled by.
@@ -62,19 +68,11 @@ pub(crate) enum SynthesisPath {
 pub struct SynthesisResult {
     pub compiled: CompiledCircuit,
     pub metrics: CandidateMetrics,
-    /// One entry per proposal the search evaluated. The production path is
-    /// the recursive contract, which runs no proposal loop, so this is always
-    /// empty from [`compile_fragment_synth`]; the type is kept because the
-    /// field is public and the budgeted search that fills it still exists.
+    /// One entry per structural proposal actually constructed and evaluated.
     pub trace: Vec<ProposalTrace>,
-    /// Proposals the search spent. Always zero from [`compile_fragment_synth`],
-    /// for the same reason `trace` is empty.
     pub evaluations_used: u64,
     pub case_fingerprint: SynthesisCaseFingerprint,
     pub candidate_fingerprint: Fingerprint,
-    /// Why the search stopped. From [`compile_fragment_synth`] this only ever
-    /// names the kind of budget the caller passed, since the one circuit is
-    /// built and returned whatever the budget was.
     pub stop_reason: StopReason,
     /// What the recursive producer built, when its shape records it: the
     /// leaves it certified and the root trunks it laid. `None` for a direct
@@ -83,29 +81,24 @@ pub struct SynthesisResult {
     pub recursive_diagnostics: Option<RecursiveDiagnostics>,
 }
 
-/// The public entry: one producer, the recursive contract, at every budget.
+/// Compile the recursive baseline, then search existing root composition shapes.
 ///
-/// There is no selector in front of this and no fallback behind it. The case
-/// fingerprint is computed for the recursive contract path and the recursive
-/// producer is the only thing then asked to compile; a refusal is returned as
-/// [`SynthesisError::RecursiveContract`], never swallowed into another run
-/// that would ship a different circuit under this fingerprint.
-///
-/// **The budget buys nothing on this path.** The recursive contract has no
-/// proposal loop: it builds one certified circuit and returns it, so every
-/// budget yields the same world, `evaluations_used` is zero and `trace` is
-/// empty. A budget is still not ignored -- it is what the reported
-/// [`StopReason`] names -- but a caller that raises it gets the same answer
-/// sooner rather than a better one.
-///
-/// The recursive path decides its own shape from the request: a root at or
-/// below its direct-leaf grain is planned in one piece, an unpinned root above
-/// it is packed, and a pinned root above it is allocated and composed. None of
-/// that is visible here.
+/// Zero budget preserves the baseline. Proposals use the same recursive pin,
+/// leaf and root certification contracts; no legacy seed fallback is reachable.
+/// Only complete retained-history quality dominance admits a replacement.
+/// The current qualification protocol covers one to six combinational inputs;
+/// products outside that coverage cannot be selected by this search.
 pub fn compile_fragment_synth(
     input: SynthesisInput<'_>,
     budget: SynthesisBudget,
 ) -> Result<SynthesisResult, SynthesisError> {
+    // Browser std has no Instant clock. Evaluation budgets must not call it,
+    // and a time request must fail honestly instead of panicking or pretending
+    // the proposal stream respected a duration it could not measure.
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    if matches!(budget, SynthesisBudget::Time(_)) {
+        return Err(SynthesisError::TimeBudgetUnavailable);
+    }
     let search_config = SearchConfig::checked_defaults();
     let library = Library::default_library();
     let certification_config = CertificationConfig::from_search(&search_config);
@@ -119,8 +112,7 @@ pub fn compile_fragment_synth(
 ///
 /// `case_fingerprint` must have been computed for
 /// [`SynthesisPath::RecursiveContract`]; both production callers of this
-/// function are the ones that compute it that way. This is the only producer
-/// call in production.
+/// function are the ones that compute it that way. The same producer owns baseline and proposal construction.
 fn compile_recursive_contract(
     input: SynthesisInput<'_>,
     budget: SynthesisBudget,
@@ -129,14 +121,91 @@ fn compile_recursive_contract(
 ) -> Result<SynthesisResult, SynthesisError> {
     let product = recursive::compile(input.lowered, input.pins, search_config)
         .map_err(|error| SynthesisError::RecursiveContract(error.to_string()))?;
-    // This path has no proposal loop, so it never exhausts a budget: it
-    // builds one certified circuit and stops. What it can still report
-    // honestly is *which* budget the caller asked under, so a reader is
-    // not told a time-budgeted call ran out of evaluations.
-    let stop_reason = match budget {
+    let mut result = result_from_product(product, case_fingerprint);
+    let started = matches!(budget, SynthesisBudget::Time(_)).then(Instant::now);
+    let spent = |evaluations: u64| match budget {
+        SynthesisBudget::Evaluations(limit) => evaluations >= limit,
+        SynthesisBudget::Time(limit) => started.as_ref().expect("time budget clock").elapsed() >= limit,
+    };
+    let budget_reason = match budget {
         SynthesisBudget::Evaluations(_) => StopReason::EvaluationBudget,
         SynthesisBudget::Time(_) => StopReason::TimeBudget,
     };
+    if spent(0) {
+        result.stop_reason = budget_reason;
+        return Ok(result);
+    }
+    let mut best_quality = crate::compile::selection::recursive_quality(
+        input.lowered, &result.compiled, input.pins,
+    );
+    use recursive::StructuralChoice::{PackedDense, PackedStandard};
+    // Both choices are actual composition attempts. A single gate has no
+    // structural partition to improve, so its proposal stream is empty.
+    let choices: &[recursive::StructuralChoice] = if input.lowered.gates.len() > 1 {
+        &[PackedDense, PackedStandard]
+    } else {
+        &[]
+    };
+    result.stop_reason = StopReason::ProposalStreamExhausted;
+    for &choice in choices {
+        if spent(result.evaluations_used) {
+            result.stop_reason = budget_reason;
+            break;
+        }
+        let parent_fingerprint = result.candidate_fingerprint.clone();
+        let choice_fingerprint = canonical_fingerprint(
+            format!("recursive-structural-choice-v1:{choice:?}").as_bytes(),
+        );
+        let mut trace = ProposalTrace {
+            proposal_index: result.evaluations_used,
+            parent_fingerprint,
+            fragment_fingerprint: result.case_fingerprint.0.clone(),
+            choice_fingerprint,
+            terminal: ProposalTerminal::Refused,
+            cap_work: CapWorkCounters::default(),
+            certified_quality: None,
+            accepted: false,
+        };
+        result.evaluations_used += 1;
+        if let Ok(product) = recursive::compile_proposal(
+            input.lowered, input.pins, search_config, choice,
+        ) {
+            trace.certified_quality = Some(product.metrics.quality);
+            trace.cap_work.certification_transitions = product.metrics.transition_count;
+            let candidate = result_from_product(product, result.case_fingerprint.clone());
+            let quality = crate::compile::selection::recursive_quality(
+                input.lowered, &candidate.compiled, input.pins,
+            );
+            match (quality, best_quality.as_ref()) {
+                (Some(quality), Some(incumbent)) => {
+                    trace.terminal = ProposalTerminal::NoImprovement;
+                    if quality.dominates(incumbent) && quality != *incumbent {
+                        trace.accepted = true;
+                        trace.terminal = ProposalTerminal::Accepted;
+                        best_quality = Some(quality);
+                        result.compiled = candidate.compiled;
+                        result.metrics = candidate.metrics;
+                        result.candidate_fingerprint = candidate.candidate_fingerprint;
+                        result.recursive_diagnostics = candidate.recursive_diagnostics;
+                    }
+                }
+                _ => trace.terminal = ProposalTerminal::VerificationFailed,
+            }
+        }
+        result.trace.push(trace);
+    }
+    // Budget exhaustion takes precedence when the final permitted proposal
+    // was evaluated, matching the established budgeted-loop contract.
+    if spent(result.evaluations_used) {
+        result.stop_reason = budget_reason;
+    }
+    Ok(result)
+}
+
+fn result_from_product(
+    product: recursive::RecursiveProduct,
+    case_fingerprint: SynthesisCaseFingerprint,
+) -> SynthesisResult {
     let compiled = CompiledCircuit {
         world: product.world,
         input_positions: product.input_positions,
@@ -149,16 +218,16 @@ fn compile_recursive_contract(
         physical_candidate: None,
         planner_kind: PlannerKind::FragmentSynth,
     };
-    Ok(SynthesisResult {
+    SynthesisResult {
         compiled,
         metrics: product.metrics,
         trace: Vec::new(),
         evaluations_used: 0,
         case_fingerprint,
         candidate_fingerprint: product.candidate_fingerprint,
-        stop_reason,
+        stop_reason: StopReason::ProposalStreamExhausted,
         recursive_diagnostics: product.diagnostics,
-    })
+    }
 }
 
 #[derive(Serialize)]
@@ -657,7 +726,7 @@ mod tests {
         );
 
         // The seed *could* build this geometry; the public entry must not ask
-        // it to. A non-zero budget makes the point sharper: nothing spends it.
+        // it to. A non-zero budget cannot bypass this baseline refusal.
         let refused =
             super::compile_fragment_synth(input(&unsupported), SynthesisBudget::Evaluations(4));
         let Err(SynthesisError::RecursiveContract(message)) = refused else {
@@ -677,59 +746,69 @@ mod tests {
         );
     }
 
-    /// **F1.** The recursive path spends no budget, but it does not misreport
-    /// which budget the caller asked under.
+    /// Real proposal counts, deterministic prefixes and honest stopping reasons.
     #[test]
     fn the_public_entry_reports_the_stop_reason_matching_the_budget_kind() {
         let netlist = two_gate_chain();
         let input = || SynthesisInput {
-            lowered: &netlist,
-            source_provenance: None,
-            pins: None,
+            lowered: &netlist, source_provenance: None, pins: None,
         };
-
-        for budget in [
-            SynthesisBudget::Evaluations(0),
-            SynthesisBudget::Evaluations(4),
-        ] {
-            let result = super::compile_fragment_synth(input(), budget).unwrap();
-            assert_eq!(result.stop_reason, StopReason::EvaluationBudget);
-            // The budget bought nothing, which is the honest thing to report
-            // for a path with no proposal loop.
-            assert_eq!(result.evaluations_used, 0);
-            assert!(result.trace.is_empty());
+        let full = super::compile_fragment_synth(input(), SynthesisBudget::Evaluations(4)).unwrap();
+        assert_eq!(full.evaluations_used, 2);
+        assert_eq!(full.stop_reason, StopReason::ProposalStreamExhausted);
+        for budget in [0, 1, 2, 4] {
+            let result = super::compile_fragment_synth(input(), SynthesisBudget::Evaluations(budget)).unwrap();
+            let count = budget.min(2) as usize;
+            assert_eq!(result.evaluations_used, count as u64);
+            assert_eq!(result.trace, full.trace[..count]);
+            assert_eq!(result.stop_reason, if budget <= 2 {
+                StopReason::EvaluationBudget
+            } else { StopReason::ProposalStreamExhausted });
+            assert_eq!(result.case_fingerprint, full.case_fingerprint);
         }
-
-        for budget in [
-            SynthesisBudget::Time(Duration::from_millis(1)),
-            SynthesisBudget::Time(Duration::from_secs(30)),
-        ] {
-            let result = super::compile_fragment_synth(input(), budget).unwrap();
-            assert_eq!(
-                result.stop_reason,
-                StopReason::TimeBudget,
-                "a time-budgeted call must not report an evaluation budget"
-            );
-            assert_eq!(result.evaluations_used, 0);
-            assert!(result.trace.is_empty());
-        }
-
-        // Same circuit either way: the budget names the stop reason, not the
-        // producer.
-        let evaluations =
-            super::compile_fragment_synth(input(), SynthesisBudget::Evaluations(4)).unwrap();
-        let timed =
-            super::compile_fragment_synth(input(), SynthesisBudget::Time(Duration::from_secs(30)))
-                .unwrap();
-        assert_eq!(
-            evaluations.candidate_fingerprint,
-            timed.candidate_fingerprint
-        );
-        assert_eq!(evaluations.case_fingerprint, timed.case_fingerprint);
+        let zero = super::compile_fragment_synth(input(), SynthesisBudget::Time(Duration::ZERO)).unwrap();
+        assert_eq!(zero.stop_reason, StopReason::TimeBudget);
+        assert_eq!(zero.evaluations_used, 0);
+        assert!(zero.trace.is_empty());
+        let timed = super::compile_fragment_synth(input(), SynthesisBudget::Time(Duration::from_secs(30))).unwrap();
+        assert!(matches!(timed.stop_reason, StopReason::TimeBudget | StopReason::ProposalStreamExhausted));
+        assert_eq!(timed.trace, full.trace[..timed.evaluations_used as usize]);
+        assert_eq!(timed.case_fingerprint, full.case_fingerprint);
     }
 
-    /// **F3.** Revising the recursive producer -- its grain, its split, its
-    /// packing -- makes a new case, and leaves every seed case alone.
+    #[test]
+    fn recursive_search_qualifies_exact_caller_ports_without_changing_the_world() {
+        let netlist = two_gate_chain();
+        let mut pins = PortPlacements::default();
+        pins.pin("a", Anchor { x: 1, y: 1, z: 4 }, Facing::South);
+        pins.pin("y", Anchor { x: 4, y: 1, z: 4 }, Facing::North);
+        let input = SynthesisInput {
+            lowered: &netlist, source_provenance: None, pins: Some(&pins),
+        };
+        let baseline = super::compile_fragment_synth(input, SynthesisBudget::Evaluations(0)).unwrap();
+        let fingerprint = crate::compile::fragment_synth::benchmark::canonical_world_fingerprint;
+        let before = fingerprint(&baseline.compiled.world);
+        assert!(crate::compile::selection::recursive_quality(
+            &netlist, &baseline.compiled, Some(&pins),
+        ).is_some());
+        assert_eq!(fingerprint(&baseline.compiled.world), before);
+        for at in [(1, 1, 4), (4, 1, 4)] {
+            assert_eq!(baseline.compiled.world.get(at.0, at.1, at.2).kind,
+                crate::redstone::world::block::BlockKind::Air);
+        }
+        let searched = super::compile_fragment_synth(input, SynthesisBudget::Evaluations(2)).unwrap();
+        assert_eq!(searched.evaluations_used, 2);
+        assert_eq!(searched.compiled.input_positions, baseline.compiled.input_positions);
+        assert_eq!(searched.compiled.output_positions, baseline.compiled.output_positions);
+        let before_quality = crate::compile::selection::recursive_quality(
+            &netlist, &baseline.compiled, Some(&pins),
+        ).unwrap();
+        let after_quality = crate::compile::selection::recursive_quality(
+            &netlist, &searched.compiled, Some(&pins),
+        ).unwrap();
+        assert!(after_quality.dominates(&before_quality));
+    }
+
     #[test]
     fn the_recursive_producer_revision_is_part_of_the_recursive_case_identity() {
         let netlist = two_gate_chain();
@@ -783,7 +862,7 @@ mod tests {
     /// measurements certified under different rules separate.
     /// ExpandedStrict RouteContinuity v7, Connectivity v5 and Coupling v8
     /// preserve multiple comparator terminal contracts on one primary support.
-    /// Any further change must explicitly update these snapshots.
+    /// Retain the original producer's snapshots when a new producer is shipped.
     #[test]
     fn the_shipping_case_fingerprint_pins_the_current_verifier_revision() {
         const TWO_GATE_CHAIN_CASE: &str =
@@ -816,10 +895,24 @@ mod tests {
             let shipped = super::compile_fragment_synth(input, SynthesisBudget::Evaluations(0))
                 .unwrap()
                 .case_fingerprint;
-            actual_cases.push(shipped.as_str().to_owned());
+            // Frozen controls keep their v1 producer identity. The new
+            // structural search must not relabel them as its own evidence.
+            let search = SearchConfig::checked_defaults();
+            let historical = synthesis_case_fingerprint_with_revisions(
+                &input,
+                SynthesisPath::RecursiveContract,
+                &search,
+                &CertificationConfig::from_search(&search),
+                &Library::default_library(),
+                topology_aware_seed_placement_revision(),
+                crate::compile::metrics::canonical_fingerprint(
+                    b"recursive-contract-producer-v1:terminal-gates=32",
+                ),
+            ).unwrap();
+            actual_cases.push(historical.as_str().to_owned());
+            assert_ne!(shipped, historical);
             // And the fingerprint function alone agrees, so the public entry
             // is not computing an identity of its own.
-            let search = SearchConfig::checked_defaults();
             assert_eq!(
                 synthesis_case_fingerprint(
                     &input,
@@ -939,7 +1032,7 @@ mod tests {
         ));
     }
 
-    /// The public API is one producer at every budget, and a case's identity
+    /// The public API keeps the recursive producer at every budget, and its identity
     /// does not move with the budget.
     ///
     /// The regression this pins: letting the budget decide the path made the
@@ -976,16 +1069,15 @@ mod tests {
         assert_eq!(
             circuits.len(),
             1,
-            "one producer, one circuit, at every budget"
+            "this chain has no accepted structural improvement"
         );
     }
 
     /// The seed's budgeted proposal loop, named explicitly.
     ///
     /// This reached the seed through the public entry until the cutover. The
-    /// property is the seed producer's -- the recursive path has no proposal
-    /// loop and spends no evaluations -- so it is exercised through the
-    /// test-only legacy helper rather than anything that ships.
+    /// property is the seed producer's, so it is exercised through the
+    /// test-only legacy helper rather than the recursive structural search.
     #[test]
     fn complete_seed_syntheses_at_larger_evaluation_budgets_extend_one_trace_prefix() {
         let netlist = Netlist {

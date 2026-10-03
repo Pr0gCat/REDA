@@ -445,7 +445,7 @@ fn describe_pending_routes(
 /// identity a baseline can be found under.
 pub(crate) fn producer_revision() -> Fingerprint {
     canonical_fingerprint(
-        format!("recursive-contract-producer-v1:terminal-gates={TERMINAL_GATES}").as_bytes(),
+        format!("recursive-contract-producer-v2:structural-search-v1:terminal-gates={TERMINAL_GATES}").as_bytes(),
     )
 }
 
@@ -727,16 +727,36 @@ fn compile_with_workers(
 
 /// [`compile_with_workers`] with the direct-root-leaf grain named.
 ///
-/// The only thing a caller may vary is where the *direct leaf* arm stops, and
-/// only a test does: the packed driver below still splits at its own
-/// production grain, so lowering this changes which branch a small netlist
-/// takes and nothing about how that branch behaves. Production always passes
-/// [`TERMINAL_GATES`].
+/// Baseline and test cutoffs retain the ordinary leaf ladder. Structural
+/// proposals use `compile_with_layout` to request a particular existing ladder
+/// and force composition. Nested nodes retain their production grain.
 /// The leaf grids a packed root is built on, in order: every leaf on the
 /// densest grid it certifies on, then every leaf on the standard grid. A dense
 /// leaf can crowd a trunk its parent then cannot route; the second rung builds
 /// exactly what the standard grid always built.
 const LEAF_LADDERS: [&[i32]; 2] = [&LEAF_PITCHES, &[STANDARD_PITCH]];
+
+/// Existing root composition alternatives, in a fixed structural order.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum StructuralChoice {
+    PackedDense,
+    PackedStandard,
+}
+
+pub(crate) fn compile_proposal(
+    lowered: &Netlist,
+    pins: Option<&PortPlacements>,
+    search: &SearchConfig,
+    choice: StructuralChoice,
+) -> Result<RecursiveProduct, RecursiveError> {
+    let pitches: &[i32] = match choice {
+        StructuralChoice::PackedDense => &LEAF_PITCHES,
+        StructuralChoice::PackedStandard => &[STANDARD_PITCH],
+    };
+    // Serial proposals preserve the same leaf/composition contracts without
+    // creating a second parallel scheduler for the search.
+    compile_with_layout(lowered, pins, search, 1, 0, &[pitches])
+}
 
 fn trace_refusal(producer: &str, pitches: &[i32], error: &PackedRecursiveError) {
     if std::env::var_os("REDA_TRACE_PINNED").is_some() {
@@ -750,6 +770,17 @@ fn compile_with_cutoff(
     search: &SearchConfig,
     workers: usize,
     direct_leaf_cutoff: usize,
+) -> Result<RecursiveProduct, RecursiveError> {
+    compile_with_layout(lowered, pins, search, workers, direct_leaf_cutoff, &LEAF_LADDERS)
+}
+
+fn compile_with_layout(
+    lowered: &Netlist,
+    pins: Option<&PortPlacements>,
+    search: &SearchConfig,
+    workers: usize,
+    direct_leaf_cutoff: usize,
+    leaf_ladders: &[&[i32]],
 ) -> Result<RecursiveProduct, RecursiveError> {
     let gauge = Gauge::default();
     let session = Session {
@@ -791,7 +822,7 @@ fn compile_with_cutoff(
         // again on the standard grid ([`LEAF_LADDERS`]).
         let certification = CertificationConfig::from_search(search);
         let mut refusal = None;
-        for pitches in LEAF_LADDERS {
+        for &pitches in leaf_ladders {
             match synthesise_packed_recursive_on(
                 lowered,
                 &root,
@@ -846,7 +877,7 @@ fn compile_with_cutoff(
     }
     if let (Some(compiled), None) = (pins, short) {
         let root = root_chunk_id(lowered)?;
-        for pitches in LEAF_LADDERS {
+        for &pitches in leaf_ladders {
             match synthesise_packed_recursive_pinned(
                 lowered,
                 &root,

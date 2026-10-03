@@ -1,0 +1,23 @@
+[
+  {
+    "repeat": 1,
+    "rows": 4096,
+    "raw_sha256": "e91fb1bb40a166035c58d2202cbf726d400d873e24a974c789eee8cad0a68b20",
+    "retained_artifact": "docs/balanced-matrix-default-2026-10-03-family-repeat1.jsonl.gz",
+    "exact_previous_bytes": true
+  },
+  {
+    "repeat": 2,
+    "rows": 4096,
+    "raw_sha256": "e91fb1bb40a166035c58d2202cbf726d400d873e24a974c789eee8cad0a68b20",
+    "retained_artifact": "docs/balanced-matrix-default-2026-10-03-family-repeat2.jsonl.gz",
+    "exact_previous_bytes": true
+  },
+  {
+    "repeat": 3,
+    "rows": 4096,
+    "raw_sha256": "e91fb1bb40a166035c58d2202cbf726d400d873e24a974c789eee8cad0a68b20",
+    "retained_artifact": "docs/balanced-matrix-default-2026-10-03-family-repeat3.jsonl.gz",
+    "exact_previous_bytes": true
+  }
+]

@@ -1,0 +1,81 @@
+{
+  "case": "pinned-chain",
+  "budget": 2,
+  "phases": 8,
+  "hidden_extra_transitions": 0,
+  "quality": [
+    {
+      "worst_settle_ticks": 9,
+      "total_settle_ticks": 9,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 6,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 9,
+      "lamp_glitch_transitions": 0
+    },
+    {
+      "worst_settle_ticks": 12,
+      "total_settle_ticks": 21,
+      "driver_glitches": 0,
+      "driver_single_input_glitches": 0,
+      "driver_last_change_ticks": 6,
+      "driver_glitch_transitions": 0,
+      "lamp_glitches": 0,
+      "lamp_single_input_glitches": 0,
+      "lamp_last_change_ticks": 12,
+      "lamp_glitch_transitions": 0
+    }
+  ],
+  "regressions": [],
+  "improvements": [],
+  "evaluations_used": 2,
+  "trace": [
+    {
+      "accepted": false,
+      "cap_work": {
+        "backtracks": 0,
+        "certification_transitions": 2,
+        "proof_steps": 0,
+        "router_expansions": 0,
+        "verification_checks": 0
+      },
+      "certified_quality": {
+        "non_air_blocks": 284,
+        "observed_settle": 38,
+        "occupied_volume": 9540,
+        "static_routed_delay": 38
+      },
+      "choice_fingerprint": "e21126c50cb4e8a4f011a63ced4676f177bd0df7baee0e02324ffc907169f566",
+      "fragment_fingerprint": "3f616aa2c449e84d59a500f9e182b912f376171de17e7f0a8f0cbd7a9c7177f7",
+      "parent_fingerprint": "0db6348af8d0f0fb879a2af82ed84d97d92b6195ed978fae78b8699797284f56",
+      "proposal_index": 0,
+      "terminal": "NoImprovement"
+    },
+    {
+      "accepted": false,
+      "cap_work": {
+        "backtracks": 0,
+        "certification_transitions": 2,
+        "proof_steps": 0,
+        "router_expansions": 0,
+        "verification_checks": 0
+      },
+      "certified_quality": {
+        "non_air_blocks": 332,
+        "observed_settle": 42,
+        "occupied_volume": 13420,
+        "static_routed_delay": 42
+      },
+      "choice_fingerprint": "6bad6dd0ed83f7635692843fb8c9c8b70a7dfead1ca09eaf98bbc3dfeed428a6",
+      "fragment_fingerprint": "3f616aa2c449e84d59a500f9e182b912f376171de17e7f0a8f0cbd7a9c7177f7",
+      "parent_fingerprint": "0db6348af8d0f0fb879a2af82ed84d97d92b6195ed978fae78b8699797284f56",
+      "proposal_index": 1,
+      "terminal": "NoImprovement"
+    }
+  ],
+  "world_fingerprint": "454c6e3b1d3036d98305a45fd3d6fa4c466d7d7e79bd0b8fb6a83c7f03517d87",
+  "release_qualified": false
+}
