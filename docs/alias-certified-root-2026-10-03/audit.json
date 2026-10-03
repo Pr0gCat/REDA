@@ -1,0 +1,8 @@
+{
+  "worlds": 6,
+  "continuous_phases": 192,
+  "all_implementation_and_public_events_replayed": true,
+  "duplicate_outputs_have_distinct_positions": true,
+  "repeats_exact": true,
+  "worst_settlement_ticks": 8
+}

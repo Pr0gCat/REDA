@@ -1,0 +1,18 @@
+[
+  {
+    "corruption": "alias_truth",
+    "rejected": true
+  },
+  {
+    "corruption": "missing_event",
+    "rejected": true
+  },
+  {
+    "corruption": "collapsed_port",
+    "rejected": true
+  },
+  {
+    "corruption": "nondeterminism",
+    "rejected": true
+  }
+]

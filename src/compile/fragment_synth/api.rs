@@ -756,6 +756,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn primary_alias_roots_keep_certified_source_and_distinct_output_ports() {
+        for depth in [0, 32] {
+            let mut gates = Vec::new();
+            let mut driver = "a".to_owned();
+            for index in 0..depth {
+                let output = format!("stage{index}");
+                gates.push(Gate::nor(&output, &[driver.as_str()]));
+                driver = output;
+            }
+            gates.push(Gate::nor("y", &[driver.as_str(), "b"]));
+            let netlist = Netlist {
+                inputs: vec!["a".into(), "b".into()],
+                outputs: vec!["a".into(), "y".into(), "a".into()],
+                gates,
+            };
+            let input = SynthesisInput { lowered: &netlist, source_provenance: None, pins: None };
+            let baseline = super::compile_fragment_synth(input, SynthesisBudget::Evaluations(0)).unwrap();
+            let rewrite = baseline.compiled.physical_rewrite().unwrap();
+            assert_eq!(rewrite.source(), &netlist);
+            assert_eq!(rewrite.source_output_positions().len(), 3);
+            assert_eq!(rewrite.source_output_positions().iter().collect::<std::collections::BTreeSet<_>>().len(), 3);
+            let searched = super::compile_fragment_synth(input, SynthesisBudget::Evaluations(4)).unwrap();
+            assert_eq!(searched.candidate_fingerprint, baseline.candidate_fingerprint);
+            assert_eq!(searched.compiled.physical_rewrite().unwrap().source(), &netlist);
+        }
+        // An unsupported free boundary stays a typed refusal, never a panic
+        // in the legacy gate-only physical emitter or fabricated support.
+        let pure = Netlist { inputs: vec!["a".into()], outputs: vec!["a".into()], gates: vec![] };
+        assert!(matches!(super::compile_fragment_synth(
+            SynthesisInput { lowered: &pure, source_provenance: None, pins: None },
+            SynthesisBudget::Evaluations(0),
+        ), Err(SynthesisError::RecursiveContract(_))));
+    }
+
     /// Real proposal counts, deterministic prefixes and honest stopping reasons.
     #[test]
     fn the_public_entry_reports_the_stop_reason_matching_the_budget_kind() {

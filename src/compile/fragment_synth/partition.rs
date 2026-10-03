@@ -54,7 +54,7 @@ pub enum PartitionError {
     SequentialGate { name: String },
     #[error("gate {gate} reads {signal}, which is neither a primary input nor a gate output")]
     UndrivenSignal { gate: String, signal: String },
-    #[error("declared output {signal} is not driven by any gate")]
+    #[error("declared output {signal} has no primary-input or gate driver")]
     UndrivenOutput { signal: String },
     #[error("combinational cycle through {signals:?}")]
     Cycle { signals: Vec<String> },
@@ -92,7 +92,7 @@ pub fn canonical_order(netlist: &Netlist) -> Result<Vec<usize>, PartitionError> 
     }
     for output in &netlist.outputs {
         match producer_of.get(output.as_str()) {
-            Some(&producer) if producer != PRIMARY => {}
+            Some(_) => {}
             _ => {
                 return Err(PartitionError::UndrivenOutput {
                     signal: output.clone(),
@@ -192,8 +192,8 @@ pub fn node_chunk_id(netlist: &Netlist, parent: &ChunkId) -> Result<ChunkId, Par
 ///
 /// A declared primary input no gate reads is kept, deterministically, on the
 /// first chunk's boundary inputs, so re-partitioning that chunk keeps it
-/// again.  A netlist with no gates has no chunk to carry anything and
-/// explicitly partitions to zero chunks.
+/// again. A netlist with no gates but declared aliases has one pass-through
+/// chunk; with no gates or declared outputs it partitions to zero chunks.
 pub fn partition(
     netlist: &Netlist,
     parent: &ChunkId,
@@ -204,7 +204,21 @@ pub fn partition(
     }
     let order = canonical_order(netlist)?;
     if order.is_empty() {
-        return Ok(Vec::new());
+        if netlist.outputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let boundary_inputs: Vec<String> = netlist.inputs.iter().cloned()
+            .collect::<BTreeSet<_>>().into_iter().collect();
+        let boundary_outputs: Vec<String> = netlist.outputs.iter().cloned()
+            .collect::<BTreeSet<_>>().into_iter().collect();
+        return Ok(vec![Chunk {
+            id: chunk_id(Some(parent), &boundary_inputs, &boundary_outputs, &[]),
+            netlist: Netlist {
+                inputs: boundary_inputs.clone(), outputs: boundary_outputs.clone(), gates: vec![],
+            },
+            boundary_inputs,
+            boundary_outputs,
+        }]);
     }
     let producer_of = producers(netlist)?;
 
@@ -244,10 +258,16 @@ pub fn partition(
     {
         inputs[0].insert(signal);
     }
-    // Invariant: canonical_order already proved every declared output is
-    // gate-driven, so this indexing cannot hit PRIMARY or miss.
+    // A primary alias is carried through the first child, including its input
+    // boundary. Repartitioning that child preserves the same pass-through.
     for signal in &netlist.outputs {
-        outputs[chunk_of[producer_of[signal.as_str()]]].insert(signal);
+        let producer = producer_of[signal.as_str()];
+        if producer == PRIMARY {
+            inputs[0].insert(signal);
+            outputs[0].insert(signal);
+        } else {
+            outputs[chunk_of[producer]].insert(signal);
+        }
     }
 
     Ok(order
@@ -323,6 +343,25 @@ fn chunk_id(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn primary_aliases_keep_a_driver_through_repartitioning() {
+        for net in [
+            netlist(&["a", "unused"], &["a", "a"], vec![]),
+            netlist(&["a", "b"], &["a", "y", "a"], vec![Gate::nor("y", &["a", "b"])]),
+        ] {
+            let root = root_chunk_id(&net).unwrap();
+            let children = partition(&net, &root, 1).unwrap();
+            assert_eq!(children.len(), 1);
+            assert!(children[0].boundary_inputs.contains(&"a".into()));
+            assert!(children[0].boundary_outputs.contains(&"a".into()));
+            canonical_order(&children[0].netlist).unwrap();
+            let grandchildren = partition(&children[0].netlist, &children[0].id, 1).unwrap();
+            assert_eq!(grandchildren.len(), 1);
+            assert_eq!(grandchildren[0].boundary_inputs, children[0].boundary_inputs);
+            assert_eq!(grandchildren[0].boundary_outputs, children[0].boundary_outputs);
+        }
+    }
+
     use super::*;
 
     fn parent() -> ChunkId {
@@ -469,10 +508,10 @@ mod tests {
             })
         );
 
-        let undriven_output = netlist(&["x"], &["x"], vec![Gate::nor("a", &["x"])]);
+        let undriven_output = netlist(&["x"], &["missing"], vec![Gate::nor("a", &["x"])]);
         assert_eq!(
             root_chunk_id(&undriven_output),
-            Err(PartitionError::UndrivenOutput { signal: "x".into() })
+            Err(PartitionError::UndrivenOutput { signal: "missing".into() })
         );
     }
 }

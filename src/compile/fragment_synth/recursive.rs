@@ -448,7 +448,7 @@ fn describe_pending_routes(
 /// identity a baseline can be found under.
 pub(crate) fn producer_revision() -> Fingerprint {
     canonical_fingerprint(
-        format!("recursive-contract-producer-v3:structural-search-v2:matrix-root-repair-v1:terminal-gates={TERMINAL_GATES}").as_bytes(),
+        format!("recursive-contract-producer-v4:structural-search-v2:matrix-root-repair-v1:primary-alias-rewrite-v1:terminal-gates={TERMINAL_GATES}").as_bytes(),
     )
 }
 
@@ -756,9 +756,11 @@ fn compile_matrix_root(
     if pins.is_some_and(|pins| !pins.is_empty()) {
         return Err(RecursiveError::Matrix("caller pins require composition".into()));
     }
-    let rewrite = super::torch_row::compile_balanced_torch_matrix(
-        lowered, search.max_equivalence_proof_steps,
-    ).map_err(|error| RecursiveError::Matrix(format!("{error:?}")))?;
+    let rewrite = if lowered.inputs.len() == 2 && lowered.outputs.len() == 3 {
+        super::torch_row::compile_player_torch_row(lowered, search.max_equivalence_proof_steps)
+    } else {
+        super::torch_row::compile_balanced_torch_matrix(lowered, search.max_equivalence_proof_steps)
+    }.map_err(|error| RecursiveError::Matrix(format!("{error:?}")))?;
     let certificate = rewrite.certify_runtime(&CertificationConfig::from_search(search))?;
     let metrics = certificate.metrics().clone();
     let compiled = compile::CompiledCircuit::from_certified_rewrite(rewrite);
@@ -827,6 +829,16 @@ fn compile_with_layout(
     // the packed cutover read the same pins.
     let caller = RootPins::normalise(lowered, pins)?;
     let pins = caller.compiled();
+    // Raw primary aliases need a certified source-to-implementation rewrite:
+    // the legacy physical emitter requires gate-driven output lamps. Keep
+    // the source unchanged and use the existing bounded truth-table owner.
+    // Unsupported boundaries and caller pins retain a typed refusal.
+    if lowered.outputs.iter().any(|output| lowered.inputs.contains(output)) {
+        if direct_leaf_cutoff == 0 {
+            return Err(RecursiveError::Matrix("primary aliases require a certified boundary rewrite".into()));
+        }
+        return compile_matrix_root(lowered, pins, search);
+    }
     if lowered.gates.len() <= direct_leaf_cutoff {
         match compile_root_leaf(lowered, &caller, search, workers) {
             // A typed routing refusal is not permission to weaken its rules.
