@@ -1,0 +1,121 @@
+--- a/src/compile/fragment_synth/torch_row/four.rs
++++ b/src/compile/fragment_synth/torch_row/four.rs
+@@ -41,6 +41,32 @@
+         .chain((14..=last_row).step_by(16))
+         .filter(move |z| *z <= last_row)
+ }
++struct RowCollectionPlan {
++    last_column: i32,
++    refreshes: Vec<i32>,
++}
++impl RowCollectionPlan {
++    fn new(outputs: usize) -> Self {
++        let last_column = 30 + 3 * (outputs as i32 - 1);
++        let mut refreshes = vec![14, 28];
++        let mut x = 41;
++        while x <= last_column {
++            refreshes.push(x);
++            // Output contacts occupy multiples of three. A row refresh must
++            // remain a distinct contact, with no more than thirteen dust hops.
++            x += if x % 3 == 2 { 14 } else { 13 };
++        }
++        Self { last_column, refreshes }
++    }
++    fn output_delay(&self, x: i32, short_output: bool) -> u8 {
++        let later = self.refreshes.iter().filter(|&&stage| stage >= 41 && stage > x).count();
++        // Preserve the historical small-boundary balancing stage even when
++        // the row ends before41; larger rows compensate every remaining stage.
++        let late_count = self.refreshes.iter().filter(|&&stage| stage >= 41).count();
++        let delay = later + usize::from(late_count == 0);
++        (delay + usize::from(!short_output)) as u8
++    }
++}
+ fn matrix(
+     words: &[u64],
+     rows: &[usize],
+@@ -49,10 +75,11 @@
+ ) -> (World, Vec<Position>, Vec<Position>, Vec<Position>) {
+     assert_eq!(words.len(), 16);
+     assert!(!rows.is_empty() && rows.iter().all(|row| *row < words.len()));
+-    assert!((1..=7).contains(&outputs));
++    assert!((1..=16).contains(&outputs));
+     let last_row = 4 + 4 * (rows.len() as i32 - 1);
+     let end = last_row + 3;
+-    let last_column = 30 + 3 * (outputs as i32 - 1);
++    let collection = RowCollectionPlan::new(outputs);
++    let last_column = collection.last_column;
+     let mut world = World::new(last_column + 4, 8, end + 4);
+     let mut inputs = Vec::new();
+     for bit in 0..4 {
+@@ -85,7 +112,7 @@
+         for x in 2..=last_column {
+             wire(&mut world, x, 3, z);
+         }
+-        for x in [14, 28, 41].into_iter().filter(|x| *x <= last_column) {
++        for &x in &collection.refreshes {
+             repeater(&mut world, x, 3, z, Facing::West, 1);
+         }
+         for bit in 0..4 {
+@@ -109,7 +136,7 @@
+         for z in (15..=end).step_by(16) {
+             repeater(&mut world, x, 1, z, Facing::North, 1);
+         }
+-        let delay = (if x < 41 { 2 } else { 1 }) - u8::from(short_output);
++        let delay = collection.output_delay(x, short_output);
+         let driver_z = if delay == 0 { end } else { end + 1 };
+         if delay > 0 {
+             world.set(x, 0, driver_z, block(BlockKind::Solid));
+@@ -154,7 +181,7 @@
+     }
+ }
+ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite, TorchRowError> {
+-    if source.inputs.len() != 4 || !(1..=7).contains(&source.outputs.len()) {
++    if source.inputs.len() != 4 || !(1..=16).contains(&source.outputs.len()) {
+         return Err(TorchRowError::UnsupportedBoundary);
+     }
+     prove_netlist_rewrite(source, source, &source.inputs, &source.outputs, limit)
+@@ -203,7 +230,7 @@
+         positions: BTreeMap::new(),
+     };
+     let last_row = 4 + 4 * (rows.len() as i32 - 1);
+-    let last_column = 30 + 3 * (source.outputs.len() as i32 - 1);
++    let collection = RowCollectionPlan::new(source.outputs.len());
+     let mut rails: BTreeMap<(usize, bool), Vec<(i32, String)>> = BTreeMap::new();
+     for bit in 0..4 {
+         let x = 3 + 6 * bit as i32;
+@@ -268,25 +295,21 @@
+             merge,
+             Position::new(28, 3, z),
+         );
+-        let late = if last_column >= 41 {
+-            Some(binding.buffer(
+-                format!("row{address}_buffer41"),
+-                early.clone(),
+-                Position::new(41, 3, z),
+-            ))
+-        } else {
+-            None
+-        };
++        let mut controls = vec![(28, early.clone())];
++        let mut previous = early;
++        for &x in collection.refreshes.iter().filter(|&&x| x >= 41) {
++            previous = binding.buffer(
++                format!("row{address}_buffer{x}"), previous, Position::new(x, 3, z),
++            );
++            controls.push((x, previous.clone()));
++        }
+         for (bit, column) in terms.iter_mut().enumerate() {
+             if words[address] & (1 << bit) == 0 {
+                 continue;
+             }
+             let x = 30 + 3 * bit as i32;
+-            let control = if x < 41 {
+-                early.clone()
+-            } else {
+-                late.as_ref().unwrap().clone()
+-            };
++            let control = controls.iter().rev().find(|(stage, _)| *stage < x)
++                .unwrap().1.clone();
+             let term = binding.gate(
+                 format!("row{address}_bit{bit}"),
+                 GateKind::Nor(1),

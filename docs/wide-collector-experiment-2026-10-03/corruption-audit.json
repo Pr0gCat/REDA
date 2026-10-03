@@ -1,0 +1,11 @@
+{
+  "rejected": [
+    "missing_binding",
+    "wrong_graph",
+    "wrong_sample",
+    "missing_event",
+    "no_certificate",
+    "truncated"
+  ],
+  "scope": "six corruption controls on full ROM16x16 trace; no historical quality comparison"
+}

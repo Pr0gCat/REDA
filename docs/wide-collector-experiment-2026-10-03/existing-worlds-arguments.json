@@ -1,0 +1,12 @@
+[
+  "cargo",
+  "test",
+  "--release",
+  "--manifest-path",
+  "/tmp/reda-wide-collector-20261003/Cargo.toml",
+  "--test",
+  "balanced_torch_matrix",
+  "full_source_boundaries_are_certified_without_name_selection",
+  "--",
+  "--exact"
+]

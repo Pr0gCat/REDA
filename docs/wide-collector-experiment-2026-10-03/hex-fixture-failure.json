@@ -1,0 +1,9 @@
+{
+  "status": "terminal source error before circuit generation",
+  "session": 68680,
+  "native_unsupported": "hexadecimal sized literal",
+  "literal_values_unchanged": true,
+  "binary_fixture_sha256": "71ccc0b0f27b4116d96bb3bc232fa0dabbe679d649b00d151f6968576c1efe66",
+  "prior_hex_fixture_sha256": "b52dac34f4ea2c24ea016f41e0ddbe56a9b983da892851af34f3a86fd14bad32",
+  "scope": "binary spelling remains existing supported frontend subset; no hex support claimed"
+}

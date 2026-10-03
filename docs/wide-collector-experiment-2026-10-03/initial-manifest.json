@@ -1,0 +1,24 @@
+{
+  "production_head": "af9a3d5e52861dc971303bf83aa47f4e17c6ebb3",
+  "test_session": 50090,
+  "status": "live candidate build; no physical acceptance",
+  "isolated_source_archive_sha256": "df5fa8debfb5c741f050999bc8976817fcff02a93b30fc3a58b3161616627f60",
+  "scope": "four-input sixteen-output shared decode candidate; production unchanged; source dirty foundation retained as provenance",
+  "requirements": [
+    "Existing seven/ROM immutable worlds unchanged",
+    "ROM16x16 full512 continuous phases, every gate and primitive event, literal oracle",
+    "Three separately retained exported/reloaded worlds and full raw equality",
+    "Independent corruption controls",
+    "Historical quality control and default/API admission still required"
+  ],
+  "no_changes": [
+    "physics",
+    "simulator",
+    "certifier",
+    "growth caps",
+    "negotiation caps",
+    "waiting phases",
+    "historical controls",
+    "user probe"
+  ]
+}

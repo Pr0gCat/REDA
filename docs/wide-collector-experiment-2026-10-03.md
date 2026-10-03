@@ -1,0 +1,19 @@
+# Wider shared output collection experiment
+
+The current matrix ends its row refresh bindings at x=41 and compensates outputs using a fixed x<41 split. Merely lifting seven-output admission would eventually leave distant row contacts without supply and would give earlier and later outputs unequal logical arrival stages.
+
+An isolated candidate derives a row-collection plan from output positions. Existing decoder stages14 and28 remain unchanged. Collection refreshes begin at41; subsequent gaps alternate14 and13 so refreshes never coincide with output contacts at multiples of three. Geometry and logical buffer ownership consume the same plan. A programmed output uses the last preceding row buffer; its final repeater compensates each remaining row refresh. The historical compensation for small boundaries is retained so existing worlds need not change.
+
+The isolated explicit matrix admission is sixteen outputs with four inputs. Production admission and selection are unchanged. This is an experiment, not adoption of a narrower completion criterion: larger input boundaries, general composition and every other goal requirement remain outstanding.
+
+A literal ROM16x16 fixture and independent direct Netlist construction bind sixteen fixed16-bit words, independent of frontend and implemented graph. The first test requests unchanged strict certification and continuous source/public truth over512 phases. A second observer will export/reload three independent worlds, record every implemented signal and primitive/intermediate event, assert literal words, and independently replay complete histories. Existing full seven-segment/ROM16x7 fingerprint/consumer checks precede those waves. No historical wide-ROM quality control is fabricated; support truth alone cannot justify default optimization admission.
+
+The [initial manifest](wide-collector-experiment-2026-10-03/initial-manifest.json) retains source, fixtures, proof limits and generator details. Session50090 is live building the first test. No result is claimed before terminal. Tests and physics are unchanged in production; the user probe and unrelated dirty work remain untouched.
+
+## Terminal results
+
+The direct Netlist test exits0 after a 2m58s release build and2.09s test; strict certification and512 continuous public truth phases pass. The unchanged full-source integration test exits0 in3.77s, including original seven-segment/ROM16x7 fingerprint and consumer assertions. The observer build exits0 in4.58s.
+
+The initial native observer refuses hexadecimal sized literals before generation. The full source error is retained. A separately named binary fixture spells exactly the same sixteen literal words; this changes source spelling only and does not add hexadecimal support. Three observer runs now pass, each retaining its own exported/reloaded artifact. All1,536 phases independently replay505 implemented gates and557 observation sites. Complete phase/result records and canonical world fingerprints agree. Missing binding, wrong graph, wrong sample, missing event, false certificate and truncated protocol controls are all rejected. Offline audit fields remain honest: the bound Rust executable obtains expanded certificates, while Python replay alone does not confer release qualification.
+
+Worst setup/target settlement is30 game ticks, with zero measured driver/lamp glitches and no hidden extra transitions. No historical wide-source quality comparison exists yet, so these results establish supported truth/determinism rather than improvement or default acceptance. The [terminal manifest](wide-collector-experiment-2026-10-03/terminal-manifest.json) binds full source, executable, traces, failures, artifacts and audits. Production generator/admission remains unchanged. Next obtain the same-source original-method control and qualify the broader default/API policy before adopting this method; larger input boundaries and full eight-item requirements remain incomplete.
