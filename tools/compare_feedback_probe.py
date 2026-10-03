@@ -82,6 +82,14 @@ def audit(records, cases=None):
                 if role in {'MData', 'SData'}:
                     assert cell['locked'] == (clock if role == 'MData' else not clock)
             assert phase['ticks'] >= 16
+            # A stored bit changes once toward its captured value, or holds.
+            # Final truth alone would miss an extra capture followed by recovery.
+            state_labels = {f'gate:{output}' for output in outputs.values()}
+            state_labels |= {f'cell:{output}:SData' for output in outputs.values()}
+            state_labels |= {f'lamp:{port}' for port in names}
+            for label in state_labels:
+                changes = [event for event in phase['events'] if event['label'] == label]
+                assert len(changes) == int(observed[label] != expected[label]), 'extra storage/public pulse'
             last = {label: 0 for label in observed}
             for event in phase['events']:
                 label = event['label']
@@ -96,9 +104,65 @@ def audit(records, cases=None):
             'literal_state_oracle': True, 'all_gate_and_hidden_cell_events_replayed': True}
 
 
+def compare_quality(records, baseline, cases=None):
+    """Compare identical implementations after independently replaying both traces.
+
+    This routing control cannot qualify a changed graph. Check each phase and
+    channel; a faster final public event must not hide a slower earlier output.
+    """
+    audit(records, cases)
+    audit(baseline, cases)
+    old = {record['case']: record for record in baseline}
+    regressions = []
+    for record in records:
+        before = old[record['case']]
+        assert record['gates'] == before['gates'], 'quality control requires identical implemented graph'
+        assert record['outputs'] == before['outputs'], 'quality control requires identical output bindings'
+        assert record['power_on'] == before['power_on']
+        for index, (previous, current) in enumerate(zip(before['phases'], record['phases'])):
+            assert (previous['control'], previous['clock']) == (current['control'], current['clock'])
+            if current['ticks'] > previous['ticks']:
+                regressions.append({'case': record['case'], 'phase': index,
+                                    'metric': 'settlement_ticks',
+                                    'before': previous['ticks'], 'after': current['ticks']})
+            for label in before['power_on']:
+                earlier = [event for event in previous['events'] if event['label'] == label]
+                later = [event for event in current['events'] if event['label'] == label]
+                metrics = [('transitions', len(earlier), len(later)),
+                           ('last_arrival_ticks', earlier[-1]['tick'] if earlier else 0,
+                            later[-1]['tick'] if later else 0)]
+                # Internal pulses remain visible even when final truth agrees.
+                # Compare wrong-target pulse widths when transition shapes agree.
+                # A longer interval at the correct value is not a wider glitch.
+                if [event['value'] for event in earlier] == [event['value'] for event in later]:
+                    metrics.extend((f'pulse_width_ticks:{pulse}',
+                                    earlier[pulse + 1]['tick'] - earlier[pulse]['tick'],
+                                    later[pulse + 1]['tick'] - later[pulse]['tick'])
+                                   for pulse in range(len(earlier) - 1)
+                                   if earlier[pulse]['value'] != earlier[-1]['value'])
+                for metric, first, second in metrics:
+                    if second > first:
+                        regressions.append({'case': record['case'], 'phase': index,
+                                            'channel': label, 'metric': metric,
+                                            'before': first, 'after': second})
+    return {'cases': len(records), 'qualified': not regressions,
+            'regressions': regressions}
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('trace')
-    path = Path(parser.parse_args().trace)
+    parser.add_argument('--baseline', help='Compare same-graph per-phase/channel quality after replaying both complete traces')
+    args = parser.parse_args()
+    path = Path(args.trace)
     data = gzip.decompress(path.read_bytes()) if path.suffix == '.gz' else path.read_bytes()
-    print(json.dumps(audit([json.loads(line) for line in data.splitlines()]), indent=2))
+    records = [json.loads(line) for line in data.splitlines()]
+    if args.baseline:
+        path = Path(args.baseline)
+        data = gzip.decompress(path.read_bytes()) if path.suffix == '.gz' else path.read_bytes()
+        result = compare_quality(records, [json.loads(line) for line in data.splitlines()])
+    else:
+        result = audit(records)
+    print(json.dumps(result, indent=2))
+    if args.baseline and not result['qualified']:
+        raise SystemExit(1)

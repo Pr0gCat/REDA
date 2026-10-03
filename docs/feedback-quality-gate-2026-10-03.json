@@ -1,0 +1,24 @@
+{
+  "scope": "Same-graph quality comparison of the existing complete six feedback cases. No compiler, router, simulator or physical verifier changes in this tooling patch. Arithmetic audit extensions remain outside this patch.",
+  "command": "python3 tools/test_feedback_quality.py",
+  "test_coverage": [
+    "Committed six-case/256-phase historical identity",
+    "Earlier public output delayed while last public event and settlement stay unchanged; CLI returns exit1",
+    "Wrong-target pulse widened without later final arrival",
+    "Synthetic longer correct-value gap accepted",
+    "Extra gate/DFF slave/lamp storage pulses independently refused"
+  ],
+  "proposed_source_sha256": {
+    "tools/compare_feedback_probe.py": "ab91776db6aee0b5048d668104505edbfba87d6af78413002dbfe9ceeb05997f",
+    "tools/test_feedback_quality.py": "7314ecc27b6299189b0e6b44315ffbea6a5c02c14e0ee031261e834cee802bd7",
+    "docs/native-feedback-2026-10-02-trace.jsonl.gz": "147167ed82c13cf2d243c02177a7645bf7e2112628956bb9d8242d75da214658"
+  },
+  "all_eight_goal_items": "incomplete",
+  "validation": {
+    "exact_proposed_source": "Three tests passed using quality-only script plus the already-committed complete six-case corpus in an isolated directory.",
+    "test_exit_code": 0,
+    "default_cases": 6,
+    "phases_per_case": 256,
+    "compiler_source_extensions_included": false
+  }
+}
