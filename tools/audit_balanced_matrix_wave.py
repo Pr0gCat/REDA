@@ -9,7 +9,7 @@ from compare_cover_probe import replay_events
 
 def evaluate(graph, address):
     inputs = graph['inputs']
-    assert len(inputs) == len(set(inputs)) == 4
+    assert len(inputs) == len(set(inputs)) > 0
     values = {name: bool(address & (1 << bit)) for bit, name in enumerate(inputs)}
     pending = list(graph['gates'])
     assert len({g['output'] for g in pending}) == len(pending)
@@ -34,20 +34,25 @@ def evaluate(graph, address):
 
 def audit_certificate_waves(path, control=None):
     lines = read(path).decode().splitlines()
-    assert len(lines) == 514
     assert lines[0].startswith('MATRIX_SOURCE ') and lines[-1].startswith('MATRIX_RESULT ')
     source = json.loads(lines[0].split(' ', 1)[1])
+    assert len(source['inputs']) == len(set(source['inputs'])) > 0
+    states = 1 << len(source['inputs'])
+    phase_count = 2 * states * states
+    assert len(lines) == phase_count + 2
     result_record = json.loads(lines[-1].split(' ', 1)[1])
     assert source['certified'] is False and result_record['certified'] is False
-    assert result_record['phases'] == 512
+    assert result_record['phases'] == phase_count
     assert source['expanded_certificate_obtained'] is True
     graph = source['implementation']
+    assert len(graph['inputs']) == len(source['inputs'])
+    assert len(source['words']) == states
     gate_names = {gate['output'] for gate in graph['gates']}
     assert set(graph['bindings']) == gate_names
     assert len(set(graph['bindings'].values())) == len(gate_names)
     definitions = source['definitions']
-    evaluations = [evaluate(graph, address) for address in range(16)]
-    source_evaluations = [evaluate({'inputs': source['inputs'], 'gates': source['source_gates']}, address) for address in range(16)]
+    evaluations = [evaluate(graph, address) for address in range(states)]
+    source_evaluations = [evaluate({'inputs': source['inputs'], 'gates': source['source_gates']}, address) for address in range(states)]
     assert source['words'] == [sum(int(values[name]) << bit for bit, name in enumerate(source['outputs'])) for values in source_evaluations]
     assert source['rows'] == ([a for a, word in enumerate(source['words']) if word] or [0])
     assert len({tuple(d['position']) for d in definitions.values()}) == len(definitions)
@@ -75,7 +80,7 @@ def audit_certificate_waves(path, control=None):
     replay = ['MATRIX_SOURCE ' + json.dumps(stripped)]
     extra_transitions = 0
     all_hidden_transitions = 0
-    protocol = [(a,b,p,[a,b][p]) for a in range(16) for b in range(16) for p in range(2)]
+    protocol = [(a,b,p,[a,b][p]) for a in range(states) for b in range(states) for p in range(2)]
     for index, line in enumerate(lines[1:-1]):
         assert line.startswith('MATRIX_PHASE ')
         phase = json.loads(line.split(' ', 1)[1])
@@ -103,7 +108,7 @@ def audit_certificate_waves(path, control=None):
     replay.append(lines[-1])
     if control is None:
         # No invented control: this mode proves truth and event replay only.
-        result = {'phases': 512, 'hidden_extra_transitions': all_hidden_transitions,
+        result = {'phases': phase_count, 'hidden_extra_transitions': all_hidden_transitions,
                   'historical_quality_compared': False, 'certified': False,
                   'release_qualified': False}
     else:

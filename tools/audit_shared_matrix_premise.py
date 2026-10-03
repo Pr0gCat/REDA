@@ -1,4 +1,4 @@
-"""Replay an uncertified four-input matrix premise against frozen source traces."""
+"""Replay an uncertified matrix premise against frozen source traces."""
 import argparse
 import gzip
 import json
@@ -13,15 +13,19 @@ def read(path):
 
 
 def expected_value(oracle, address, words, rows, width):
+    states = len(words)
+    assert states >= 2 and states & (states - 1) == 0
+    input_width = states.bit_length() - 1
+    assert 0 <= address < states
     kind = oracle['kind']
     if kind == 'bit':
-        assert 0 <= oracle['bit'] < 4 and isinstance(oracle['inverted'], bool)
+        assert 0 <= oracle['bit'] < input_width and isinstance(oracle['inverted'], bool)
         return bool(address & (1 << oracle['bit'])) ^ oracle['inverted']
     if kind == 'mismatch':
-        assert 0 <= oracle['row'] < 16 and 0 < oracle['mask'] < 16
+        assert 0 <= oracle['row'] < states and 0 < oracle['mask'] < states
         return bool((address ^ oracle['row']) & oracle['mask'])
     if kind == 'row':
-        assert 0 <= oracle['row'] < 16
+        assert 0 <= oracle['row'] < states
         return address == oracle['row']
     assert kind == 'prefix' and 0 <= oracle['bit'] < width and 0 <= oracle['last'] < len(rows)
     return address in rows[:oracle['last'] + 1] and bool(words[address] & (1 << oracle['bit']))
@@ -29,35 +33,38 @@ def expected_value(oracle, address, words, rows, width):
 
 def audit(log, control):
     lines = read(log).decode().splitlines()
-    assert len(lines) == 514
     assert lines[0].startswith('MATRIX_SOURCE ')
     assert lines[-1].startswith('MATRIX_RESULT ')
     assert all(line.startswith('MATRIX_PHASE ') for line in lines[1:-1])
     source = json.loads(lines[0].split(' ', 1)[1])
+    assert len(source['inputs']) == len(set(source['inputs'])) > 0
+    states = 1 << len(source['inputs'])
+    phase_count = 2 * states * states
+    assert len(lines) == phase_count + 2
     phases = [json.loads(line.split(' ', 1)[1]) for line in lines[1:-1]]
     result = json.loads(lines[-1].split(' ', 1)[1])
     assert source['certified'] is False and result['certified'] is False
-    assert result['phases'] == len(phases) == 512
+    assert result['phases'] == len(phases) == phase_count
     # Reuse the retained source/gate/landing audit without altering the control.
     checked_control = compare(control, control)
     assert not checked_control['setup']['regressed'] and not checked_control['target']['regressed']
     reference = control['result']['Ok']
     assert source['inputs'] == control['source_inputs']
     assert source['outputs'] == control['source_outputs']
-    protocol = [(a, b, p, [a, b][p]) for a in range(16)
-                for b in range(16) for p in range(2)]
+    protocol = [(a, b, p, [a, b][p]) for a in range(states)
+                for b in range(states) for p in range(2)]
     assert [(p['from'], p['to'], p['phase'], p['address']) for p in phases] == protocol
     assert [(p['from'], p['to'], p['phase'], p['address']) for p in reference['phases']] == protocol
     width = len(source['outputs'])
-    words = [None] * 16
+    words = [None] * states
     for phase in reference['phases']:
         word = sum(int(value) << bit for bit, value in enumerate(phase['expected']))
         address = phase['address']
         assert words[address] is None or words[address] == word
         words[address] = word
     assert source['words'] == words
-    rows = source.get('rows', list(range(16)))
-    wanted = ([row for row, word in enumerate(words) if word] or [0]) if source.get('prune_empty', False) else list(range(16))
+    rows = source.get('rows', list(range(states)))
+    wanted = ([row for row, word in enumerate(words) if word] or [0]) if source.get('prune_empty', False) else list(range(states))
     assert rows == wanted
     definitions = source['definitions']
     assert len({tuple(d['position']) for d in definitions.values()}) == len(definitions)
