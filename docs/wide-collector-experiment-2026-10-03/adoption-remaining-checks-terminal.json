@@ -1,0 +1,22 @@
+[
+  {
+    "name": "invalid_stateful_and_out_of_range_boundaries_fail_closed",
+    "exit_code": 0,
+    "seconds": 0.838158571976237
+  },
+  {
+    "name": "collector_end_repeater_and_output_aliases_have_distinct_landings",
+    "exit_code": 0,
+    "seconds": 3.0804499380174093
+  },
+  {
+    "name": "all_low_high_and_mixed_constants_preserve_every_declared_output",
+    "exit_code": 0,
+    "seconds": 2.777689195005223
+  },
+  {
+    "name": "recursive_matrix_root_retains_constant_and_repeated_boundary_occurrences",
+    "exit_code": 0,
+    "seconds": 4.287478797021322
+  }
+]

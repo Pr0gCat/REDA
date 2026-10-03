@@ -120,7 +120,7 @@ fn invalid_stateful_and_out_of_range_boundaries_fail_closed() {
     let compiled = reda::compile::CompiledCircuit::from_certified_rewrite(low);
     assert!(reda::compile::selection::qualify_boundary(&zero, &compiled).is_some());
     let mut too_wide = source.clone();
-    too_wide.outputs.push(source.outputs[0].clone());
+    too_wide.outputs.resize(17, source.outputs[0].clone());
     assert!(matches!(
         compile_balanced_torch_matrix(&too_wide, 10_000_000),
         Err(TorchRowError::UnsupportedBoundary)
@@ -279,4 +279,17 @@ fn recursive_matrix_root_retains_constant_and_repeated_boundary_occurrences() {
     assert!(reda::compile::selection::qualify_boundary(&source, &result.compiled).is_some());
     assert!(reda::compile::evaluation::CircuitEvaluation::from_synthesis(&source, &result).is_ok());
     assert_eq!(result.evaluations_used, 0);
+}
+
+#[test]
+fn wider_rom_keeps_strict_observations_and_the_public_default_world() {
+    let source = native(include_str!("../docs/wide-collector-experiment-2026-10-03/wide_rom.sv"), "wide_rom");
+    let expected = compile_balanced_torch_matrix(&source, 10_000_000).unwrap();
+    assert_eq!(expected.source_output_positions().len(), 16);
+    let world = canonical_world_fingerprint(expected.physical().world());
+    assert_eq!(world.as_str(), "aa0306b55c3c97bf45e6da212218ebcbb2eb7e69c3f81243ff11225ca1d5bcaa");
+    assert_eq!(expected.implemented_observations().gate_output_positions.len(), expected.implemented().gates.len());
+    let default = reda::compile::compile(&source).unwrap();
+    let retained = default.physical_rewrite().expect("actual default must retain certified wider matrix");
+    assert_eq!(canonical_world_fingerprint(retained.physical().world()), world);
 }

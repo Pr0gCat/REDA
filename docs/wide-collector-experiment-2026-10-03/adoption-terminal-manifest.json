@@ -1,0 +1,98 @@
+{
+  "status": "qualified for production adoption",
+  "default_driver": 89560,
+  "default_worlds": 3,
+  "default_phases": 1536,
+  "default_records_identical": true,
+  "explicit_constant_worlds": 9,
+  "constant_phases": 4608,
+  "additional_width_worlds": 5,
+  "additional_width_phases": 2560,
+  "old_original_control_worlds": 3,
+  "worst_target_ticks": {
+    "control": 100,
+    "matrix": 30
+  },
+  "quality_regressions": {
+    "aggregate": 0,
+    "settlement_phase": 0,
+    "public_phase_channel_arrival": 0
+  },
+  "prospective_snapshot": {
+    "session": 32189,
+    "scope": "HEAD plus only owned generator files; all dirty foundation excluded",
+    "default": {
+      "exit_code": 0,
+      "seconds": 456.29305806499906
+    },
+    "old_boundaries": {
+      "exit_code": 0,
+      "seconds": 179.7167847569799
+    },
+    "remaining_checks": [
+      {
+        "name": "invalid_stateful_and_out_of_range_boundaries_fail_closed",
+        "exit_code": 0,
+        "seconds": 0.838158571976237
+      },
+      {
+        "name": "collector_end_repeater_and_output_aliases_have_distinct_landings",
+        "exit_code": 0,
+        "seconds": 3.0804499380174093
+      },
+      {
+        "name": "all_low_high_and_mixed_constants_preserve_every_declared_output",
+        "exit_code": 0,
+        "seconds": 2.777689195005223
+      },
+      {
+        "name": "recursive_matrix_root_retains_constant_and_repeated_boundary_occurrences",
+        "exit_code": 0,
+        "seconds": 4.287478797021322
+      }
+    ]
+  },
+  "production_source_sha256": {
+    "src/compile/fragment_synth/torch_row/four.rs": "5f50734f679a6e7eafb3744f30557e00f6d4980a86d5e7afdc3aa90266fb3cd2",
+    "src/compile/fragment_synth/torch_row.rs": "4e6c1b26be084897824a7d9beef45f95ef90f37b74cb033a4c15f493c85c259b",
+    "src/compile/selection.rs": "b81a15ca0d715bee41a9b14f79cc093cb14383c61d0a1a29403cfd7bc948dd11",
+    "tests/balanced_torch_matrix.rs": "f39490350fcd2cfece201450975d3c5f235e7a69290f611e576cb9728a987c84"
+  },
+  "files": {
+    "default-wide-repeat2.log.gz": "7708f0cb15e6f3cdcd05840fdbff58b0ba7ca7a66e57b60f2b6ccfcc81d5e96a",
+    "default-wide-repeat2.stderr.gz": "4061aa51d5e0d341eda4f10d0e78a4e4e4fbfc742b9e2be898690a1f62f736e1",
+    "default-wide-repeat2-arguments.json": "82b9351eabea5baf446e217172fe53102910f62582fbc92d2eca0bffab3c6164",
+    "default-wide-repeat2-terminal.json": "9f32ac77f52d1fad0e8b69d7bf74733810927631ebe960122ecc94eab6254a71",
+    "default-wide-repeat2-audit.json": "1d44808752d1b5c7c10482342cf262d904a96493b2351501d81b5f0a9d4427e8",
+    "default-wide-repeat2-audit.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "default-wide-repeat2.litematic": "7020c3c649757552840e47fada182cb3267a3146701dfc2b617d26b3dbcf1e2f",
+    "default-wide-repeat3.log.gz": "4b0388990c9b7ca00d968f882465aece2d0e473521ff70a209539d3722e1bc29",
+    "default-wide-repeat3.stderr.gz": "4061aa51d5e0d341eda4f10d0e78a4e4e4fbfc742b9e2be898690a1f62f736e1",
+    "default-wide-repeat3-arguments.json": "82b9351eabea5baf446e217172fe53102910f62582fbc92d2eca0bffab3c6164",
+    "default-wide-repeat3-terminal.json": "883008610a21c76d57f4621da774ec39c05a497add729580969e4d08809db384",
+    "default-wide-repeat3-audit.json": "1d44808752d1b5c7c10482342cf262d904a96493b2351501d81b5f0a9d4427e8",
+    "default-wide-repeat3-audit.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "default-wide-repeat3.litematic": "7020c3c649757552840e47fada182cb3267a3146701dfc2b617d26b3dbcf1e2f",
+    "adoption-existing-boundaries.log.gz": "4b6a67eeca930756687445f5ec2784af315302e63e05fc41864a4b3e1e0147ad",
+    "adoption-existing-boundaries.stderr.gz": "dd3fe9c872ce8d495a42f1c45f016f14dcccbe2b727ab7035673ca92cdcb7016",
+    "adoption-existing-boundaries-terminal.json": "82d42523eb329699bb9081a06c40bb6f738e1163cbeca5361d2f7d761592f40e",
+    "adoption-wide-default.log.gz": "f216a5aedf80e851d820177ba7e5c9c37cb2c5707b99d40a8708b65fc6728c8d",
+    "adoption-wide-default.stderr.gz": "dc13c1694856f8583f2a4a511f356ef53786bebeecf24dfe23b5d11d29ebc30e",
+    "adoption-wide-default-terminal.json": "95fdecd2a7c3ca4ac239e4918d1c75df5b131f77befc7b79409e698bddb0ad62",
+    "adoption-remaining-checks-terminal.json": "0370275db5c00bcbaacabcc4f35d9e10f80f6442e1fa8fe773e3338cbff1da94",
+    "adoption-binding.json": "d79cabd0fa36b64d9df7f14edfa22f5e6b4fc4744e0231abec8489237c18ce0d",
+    "adoption-invalid_stateful_and_out_of_range_boundaries_fail_closed.log.gz": "17a6ee4d5834f48d5fea7f635eeb4aec266f633a7f87341599d005607256face",
+    "adoption-invalid_stateful_and_out_of_range_boundaries_fail_closed.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "adoption-collector_end_repeater_and_output_aliases_have_distinct_landings.log.gz": "16488392b8bf63fa7f3a0b6cf257eab4b206c71172b037926b412b999c86d535",
+    "adoption-collector_end_repeater_and_output_aliases_have_distinct_landings.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "adoption-all_low_high_and_mixed_constants_preserve_every_declared_output.log.gz": "c59e7c2c8cdc2841846be365bc7ce5998e0808ae162440755c2d6239a6ee1cd6",
+    "adoption-all_low_high_and_mixed_constants_preserve_every_declared_output.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+    "adoption-recursive_matrix_root_retains_constant_and_repeated_boundary_occurrences.log.gz": "da72b9ced1dbcbd27093ee5818045dc9c43800cf7cdad7386981bbf2957f20b4",
+    "adoption-recursive_matrix_root_retains_constant_and_repeated_boundary_occurrences.stderr.gz": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+  },
+  "remaining_scope": [
+    "more than four inputs",
+    "general composed/pinned matrix proposals",
+    "other seven goal requirements"
+  ]
+}

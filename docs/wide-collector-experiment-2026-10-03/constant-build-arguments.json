@@ -1,0 +1,9 @@
+[
+  "cargo",
+  "build",
+  "--release",
+  "--manifest-path",
+  "/tmp/reda-wide-collector-20261003/Cargo.toml",
+  "--example",
+  "wide_constant_wave"
+]

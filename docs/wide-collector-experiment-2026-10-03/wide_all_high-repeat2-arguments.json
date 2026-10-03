@@ -1,0 +1,7 @@
+[
+  "/home/seith/REDA/target/release/examples/wide_constant_wave",
+  "/tmp/reda-wide-collector-20261003/tests/fixtures/wide_all_high.sv",
+  "wide_all_high",
+  "prune-empty",
+  "short-output"
+]

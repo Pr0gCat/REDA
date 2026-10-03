@@ -15,7 +15,7 @@ mod four;
 
 /// Certify a balanced four-input matrix from the source truth table.
 /// The default selector and recursive root can use this bounded method.
-/// It supports one through seven outputs, including constants; every call must pass
+/// It supports one through sixteen outputs, including constants; every call must pass
 /// source equivalence and the unchanged expanded physical certifier.
 pub fn compile_balanced_torch_matrix(
     source: &Netlist,

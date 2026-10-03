@@ -1,0 +1,7 @@
+[
+  "/home/seith/REDA/target/release/examples/default_wide_wave",
+  "/tmp/reda-wide-collector-20261003/tests/fixtures/wide_rom.sv",
+  "wide_rom",
+  "prune-empty",
+  "short-output"
+]

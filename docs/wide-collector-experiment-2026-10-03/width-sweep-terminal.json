@@ -1,0 +1,62 @@
+[
+  {
+    "width": 8,
+    "arguments": [
+      "/home/seith/REDA/target/release/examples/wide_wave",
+      "/tmp/reda-wide-collector-20261003/tests/fixtures/wide8.sv",
+      "wide8",
+      "prune-empty",
+      "short-output"
+    ],
+    "exit_code": 0,
+    "seconds": 1.8489052709774114
+  },
+  {
+    "width": 9,
+    "arguments": [
+      "/home/seith/REDA/target/release/examples/wide_wave",
+      "/tmp/reda-wide-collector-20261003/tests/fixtures/wide9.sv",
+      "wide9",
+      "prune-empty",
+      "short-output"
+    ],
+    "exit_code": 0,
+    "seconds": 1.9548793719732203
+  },
+  {
+    "width": 10,
+    "arguments": [
+      "/home/seith/REDA/target/release/examples/wide_wave",
+      "/tmp/reda-wide-collector-20261003/tests/fixtures/wide10.sv",
+      "wide10",
+      "prune-empty",
+      "short-output"
+    ],
+    "exit_code": 0,
+    "seconds": 2.155663801007904
+  },
+  {
+    "width": 13,
+    "arguments": [
+      "/home/seith/REDA/target/release/examples/wide_wave",
+      "/tmp/reda-wide-collector-20261003/tests/fixtures/wide13.sv",
+      "wide13",
+      "prune-empty",
+      "short-output"
+    ],
+    "exit_code": 0,
+    "seconds": 2.403935931972228
+  },
+  {
+    "width": 14,
+    "arguments": [
+      "/home/seith/REDA/target/release/examples/wide_wave",
+      "/tmp/reda-wide-collector-20261003/tests/fixtures/wide14.sv",
+      "wide14",
+      "prune-empty",
+      "short-output"
+    ],
+    "exit_code": 0,
+    "seconds": 2.5824521229951642
+  }
+]

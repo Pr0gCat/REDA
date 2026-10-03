@@ -1,0 +1,12 @@
+{
+  "scope": "same wider generator and limits; explicit constant/alias roots, not default optimization against fabricated controls",
+  "files": {
+    "examples/wide_constant_wave.rs": "7cdeb10304c0f3e64e6adc06c1fb2970f044ca698ca4c8c14db13c2633dba26f",
+    "run-constants.py": "f4ace8cee351bc75db1847224a16dc197eca2e9a62d0106b7bea53098977d959",
+    "tests/fixtures/wide_all_high.sv": "0ca6f248f87e9042e8f7b1e72db9af578cefe882ba48e6d7739ee909bf498a9e",
+    "tests/fixtures/wide_rom_binary.sv": "71ccc0b0f27b4116d96bb3bc232fa0dabbe679d649b00d151f6968576c1efe66",
+    "tests/fixtures/wide_rom.sv": "b52dac34f4ea2c24ea016f41e0ddbe56a9b983da892851af34f3a86fd14bad32",
+    "tests/fixtures/wide_mixed.sv": "4c02fdbca5f0a836dd52cad2ffe3b5d44fc3292057d7e09ade4d5457ce20361b",
+    "tests/fixtures/wide_all_low.sv": "75eeacfe89d5439c90bd40da922b2a02fbad1ff493cd2f02e0e88a4310baf63b"
+  }
+}

@@ -83,6 +83,14 @@ each takes is pinned separately, by
 The table above records the historical hybrid switchover. The 2026-09-30
 channel compaction measurements, including native frontend circuits, are in
 [the generator optimization report](docs/generator-optimization-2026-09-30.md).
+
+The default compiler now compares strictly certified shared matrices for four
+inputs and up to sixteen outputs. The qualified ROM16x16 fixture improves
+worst settlement from 100 to 30 game ticks with no retained quality regression;
+three exported/reloaded default worlds have identical complete histories.
+Existing seven-segment and ROM16x7 worlds stay unchanged. See the
+[wider collector evidence](docs/wide-collector-experiment-2026-10-03.md) for
+constants, output occurrences, width boundaries and remaining limits.
 The subsequent shared-track compaction is measured in
 [the track-sharing report](docs/generator-track-sharing-2026-09-30.md).
 Feed-through target refinement and its measured tradeoff are in

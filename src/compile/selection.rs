@@ -614,7 +614,7 @@ pub fn compile_selected_with_refresh_budget(
         }
         // Compare complete retained histories, using only structural boundary
         // recognition. A rejected method leaves the already qualified best.
-        if source.inputs.len() == 4 && (1..=7).contains(&source.outputs.len()) {
+        if source.inputs.len() == 4 && (1..=16).contains(&source.outputs.len()) {
             if let Ok(rewrite) = compile_balanced_torch_matrix(source, 1_000_000) {
                 let matrix = CompiledCircuit::from_certified_rewrite(rewrite);
                 if let Some(measured) = refresh_quality(source, &matrix, true) {

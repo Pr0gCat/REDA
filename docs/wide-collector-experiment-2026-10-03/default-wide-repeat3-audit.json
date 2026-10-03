@@ -1,0 +1,109 @@
+{
+  "premise_replay_passed": true,
+  "phases": 512,
+  "observed_implementation_sites": 445,
+  "all_recorded_primitive_and_intermediate_events_replayed": true,
+  "hidden_extra_transitions": 0,
+  "reference_expanded_certificate": false,
+  "quality": {
+    "setup": {
+      "control": {
+        "worst_settle_ticks": 100,
+        "total_settle_ticks": 21363,
+        "driver_glitches": 825,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 96,
+        "driver_glitch_transitions": 170,
+        "lamp_glitches": 703,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 100,
+        "lamp_glitch_transitions": 169,
+        "driver_total_pulse_ticks": 9704,
+        "driver_worst_pulse_ticks": 50,
+        "lamp_total_pulse_ticks": 8664,
+        "lamp_worst_pulse_ticks": 53
+      },
+      "prototype": {
+        "worst_settle_ticks": 30,
+        "total_settle_ticks": 7170,
+        "driver_glitches": 0,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 26,
+        "driver_glitch_transitions": 0,
+        "lamp_glitches": 0,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 30,
+        "lamp_glitch_transitions": 0
+      },
+      "regressed": [],
+      "improved": [
+        "driver_glitch_transitions",
+        "driver_glitches",
+        "driver_last_change_ticks",
+        "driver_total_pulse_ticks",
+        "driver_worst_pulse_ticks",
+        "lamp_glitch_transitions",
+        "lamp_glitches",
+        "lamp_last_change_ticks",
+        "lamp_total_pulse_ticks",
+        "lamp_worst_pulse_ticks",
+        "total_settle_ticks",
+        "worst_settle_ticks"
+      ]
+    },
+    "target": {
+      "control": {
+        "worst_settle_ticks": 100,
+        "total_settle_ticks": 21452,
+        "driver_glitches": 832,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 96,
+        "driver_glitch_transitions": 171,
+        "lamp_glitches": 710,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 100,
+        "lamp_glitch_transitions": 170,
+        "driver_total_pulse_ticks": 9794,
+        "driver_worst_pulse_ticks": 50,
+        "lamp_total_pulse_ticks": 8730,
+        "lamp_worst_pulse_ticks": 53
+      },
+      "prototype": {
+        "worst_settle_ticks": 30,
+        "total_settle_ticks": 7200,
+        "driver_glitches": 0,
+        "driver_single_input_glitches": 0,
+        "driver_last_change_ticks": 26,
+        "driver_glitch_transitions": 0,
+        "lamp_glitches": 0,
+        "lamp_single_input_glitches": 0,
+        "lamp_last_change_ticks": 30,
+        "lamp_glitch_transitions": 0
+      },
+      "regressed": [],
+      "improved": [
+        "driver_glitch_transitions",
+        "driver_glitches",
+        "driver_last_change_ticks",
+        "driver_total_pulse_ticks",
+        "driver_worst_pulse_ticks",
+        "lamp_glitch_transitions",
+        "lamp_glitches",
+        "lamp_last_change_ticks",
+        "lamp_total_pulse_ticks",
+        "lamp_worst_pulse_ticks",
+        "total_settle_ticks",
+        "worst_settle_ticks"
+      ]
+    }
+  },
+  "public_phase_channel_arrival_regressions": [],
+  "settlement_phase_regressions": [],
+  "certified": false,
+  "release_qualified": false,
+  "historical_quality_compared": true,
+  "all_implemented_gate_events_replayed": true,
+  "implemented_gate_count": 505,
+  "total_observed_sites": 557,
+  "expanded_certificate_claim_requires_bound_executable_and_source": true
+}
