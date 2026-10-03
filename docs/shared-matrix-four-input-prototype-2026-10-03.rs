@@ -156,7 +156,7 @@ fn matrix(words: &[u64], rows: &[usize], outputs: usize, short_output: bool) -> 
 
 fn main() {
     let args: Vec<_> = std::env::args().collect();
-    assert!(args.len() >= 3 && args[3..].iter().all(|arg| arg == "prune-empty" || arg == "short-output"),
+    assert!(args.len() >= 3 && args[3..].iter().all(|arg| arg == "prune-empty" || arg == "short-output" || arg == "separate-input-floor"),
         "source path, top and optional prune-empty/short-output experiments required");
     let text = std::fs::read_to_string(&args[1]).unwrap();
     let source = compile_systemverilog(&[SourceInput { name: &args[2], text: &text }],
@@ -164,10 +164,21 @@ fn main() {
     assert_eq!(source.inputs.len(), 4);
     let words = words(&source);
     let prune_empty = args[3..].iter().any(|arg| arg == "prune-empty");
-    let short_output = args[3..].iter().any(|arg| arg == "short-output");
+    let short_output = args[3..].iter().any(|arg| arg == "short-output" || arg == "separate-input-floor");
     let mut rows: Vec<_> = (0..16).filter(|row| !prune_empty || words[*row] != 0).collect();
     if rows.is_empty() { rows.push(0); }
-    let (world, inputs, drivers, lamps) = matrix(&words, &rows, source.outputs.len(), short_output);
+    let (mut world, mut inputs, drivers, lamps) = matrix(&words, &rows, source.outputs.len(), short_output);
+    // Match the existing typed candidate's exclusive support ownership.
+    // Keep the inverter contact as dust and give each lever its own floor.
+    if args[3..].iter().any(|arg| arg == "separate-input-floor") {
+        for p in &mut inputs {
+            let lever = world.get(p.x, p.y, p.z).clone();
+            world.set(p.x, p.y, p.z, block(BlockKind::RedstoneWire));
+            world.set(p.x, p.y - 1, 0, block(BlockKind::Solid));
+            world.set(p.x, p.y, 0, lever);
+            p.z = 0;
+        }
+    }
     let last_row = 4 + 4 * (rows.len() as i32 - 1);
     let end = last_row + 3;
     let fingerprint = reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&world);

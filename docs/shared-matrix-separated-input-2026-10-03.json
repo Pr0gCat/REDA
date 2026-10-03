@@ -1,0 +1,23 @@
+{
+  "certified": false,
+  "release_qualified": false,
+  "arguments": [
+    "prune-empty",
+    "short-output",
+    "separate-input-floor"
+  ],
+  "families": {
+    "seven": {
+      "world_fingerprint": "0d5a6d4526135416496a3aa74c411068872284f6cdd0f4598a60932d04556ab0",
+      "repeat_count": 3,
+      "all_phase_and_result_records_identical_to_balanced_premise": true
+    },
+    "rom": {
+      "world_fingerprint": "70d6be84d854d474d3ed0f9745f5545e62c230c927b680833c9ce30cbb0b70dd",
+      "repeat_count": 3,
+      "all_phase_and_result_records_identical_to_balanced_premise": true
+    }
+  },
+  "source_sha256": "fc67539ed3f07cc64571a06cfbf2b9c18df583164a4bfd357ed6f7f119b79128",
+  "binary_sha256": "0cb092a21f7f6dc8119fcc72f7fac7ad492613f5bc230b8f24f91ec3250d3a85"
+}
