@@ -1,0 +1,135 @@
+{
+  "artifact": "exact retained frozen v2 world; no new compilation",
+  "optimization_commit": "8c4c03a",
+  "fresh_current_compiler_provenance": false,
+  "world_fingerprint": "a4d7b9d9e82cd4f759b0d3f9d21199b183e8ee7bb5bf98c8c4d4b397e04649ba",
+  "dump_sha256": "0cf163c54f30636476f61bcd05bf0834e1271637cf7445cad74e2271a7007a67",
+  "input_bindings": {
+    "a": [
+      12,
+      1,
+      45
+    ],
+    "b": [
+      26,
+      1,
+      45
+    ],
+    "c": [
+      40,
+      1,
+      45
+    ],
+    "d": [
+      54,
+      1,
+      45
+    ],
+    "e": [
+      68,
+      1,
+      45
+    ],
+    "f": [
+      82,
+      1,
+      45
+    ]
+  },
+  "input_provenance": "typed original primary-input boundaries; source graph identical; every boundary block preserved; every primary-input assignment checked against source gate operands",
+  "ports": [
+    [
+      0,
+      "g2",
+      [
+        28,
+        0,
+        33
+      ],
+      "u"
+    ],
+    [
+      1,
+      "g1",
+      [
+        12,
+        0,
+        14
+      ],
+      "z"
+    ],
+    [
+      2,
+      "g0",
+      [
+        14,
+        0,
+        32
+      ],
+      "o"
+    ],
+    [
+      3,
+      "g3",
+      [
+        40,
+        0,
+        14
+      ],
+      "v"
+    ],
+    [
+      4,
+      "g3",
+      [
+        40,
+        0,
+        14
+      ],
+      "w"
+    ],
+    [
+      5,
+      "g7",
+      [
+        26,
+        0,
+        14
+      ],
+      "x"
+    ],
+    [
+      6,
+      "g4",
+      [
+        56,
+        0,
+        4
+      ],
+      "y"
+    ],
+    [
+      7,
+      "g6",
+      [
+        82,
+        0,
+        14
+      ],
+      "q"
+    ],
+    [
+      8,
+      "g8",
+      [
+        96,
+        0,
+        14
+      ],
+      "r"
+    ]
+  ],
+  "actual_implementation_gates": 15,
+  "occupied_cells": 1094,
+  "construction_policy": "existing game harness inert construction order; initial lit placeholders handled by that unchanged harness"
+}

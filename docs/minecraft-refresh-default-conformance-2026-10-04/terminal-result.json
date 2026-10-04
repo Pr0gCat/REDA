@@ -1,0 +1,13 @@
+{
+  "game_driver_exit_code": 0,
+  "independent_public_private_audit_exit_code": 0,
+  "independent_cleanup_audit_exit_code": 0,
+  "server_restarted": false,
+  "physics_changed": false,
+  "fresh_current_compiler_dump": false,
+  "source_addresses": 64,
+  "public_occurrences": 9,
+  "public_truth_checks": 576,
+  "actual_implementation_gates": 15,
+  "private_gate_truth_checks": 960
+}

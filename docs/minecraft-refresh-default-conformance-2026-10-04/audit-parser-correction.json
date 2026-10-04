@@ -1,0 +1,5 @@
+{
+  "first_audit_failure": "All truth assertions succeeded; cleanup parser expected legacy Removed wording. Minecraft26.2 actually replies Unmarked 45 chunks.",
+  "game_failure": false,
+  "change": "Check exact observed 26.2 release acknowledgement; raw reply preserved."
+}

@@ -1,0 +1,63 @@
+   Compiling syn v3.0.3
+   Compiling serde_core v1.0.229
+   Compiling wasm-bindgen-shared v0.2.126
+   Compiling serde_derive v1.0.229
+   Compiling rustversion v1.0.23
+   Compiling serde v1.0.229
+   Compiling syn v2.0.119
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen-macro-support v0.2.126
+   Compiling wasm-bindgen v0.2.126
+   Compiling wasm-bindgen-macro v0.2.126
+   Compiling once_cell v1.21.4
+   Compiling futures-core v0.3.33
+   Compiling futures-task v0.3.33
+   Compiling slab v0.4.12
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-util v0.3.33
+   Compiling serde_json v1.0.151
+   Compiling js-sys v0.3.103
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling toml_edit v0.22.27
+   Compiling num-traits v0.2.19
+   Compiling serde_bytes v0.11.19
+   Compiling thiserror-impl v2.0.19
+   Compiling fastnbt v2.6.2
+   Compiling thiserror v2.0.19
+   Compiling toml v0.8.23
+   Compiling reda v0.1.0 (/home/seith/REDA)
+warning: method `as_str` is never used
+   --> /home/seith/REDA/src/frontend/ast.rs:293:12
+    |
+292 | impl BinaryOp {
+    | ------------- method in this implementation
+293 |     pub fn as_str(self) -> &'static str {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib) generated 1 warning
+   Compiling wasm-bindgen-futures v0.4.76
+   Compiling serde-wasm-bindgen v0.6.5
+   Compiling wasm-bindgen-test-macro v0.3.76
+   Compiling async-trait v0.1.92
+   Compiling cast v0.3.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling oorandom v11.1.5
+   Compiling wasm-bindgen-test-shared v0.2.126
+   Compiling wasm-bindgen-test v0.3.76
+   Compiling reda-viewer v0.1.0 (/home/seith/REDA/viewer)
+    Finished `test` profile [unoptimized] target(s) in 1m 05s
+     Running tests/frontend_compiler.rs (/tmp/reda-selector-shared-adoption-target/debug/deps/frontend_compiler-91224bdea5fc76a5)
+
+running 3 tests
+test compiler_netlists_and_source_maps_agree_across_targets ... ok
+test compact_channel_world_agrees_across_targets ... ok
+test default_seven_segment_world_and_continuous_events_agree_across_targets has been running for over 60 seconds
+test default_seven_segment_world_and_continuous_events_agree_across_targets ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 90.77s
+

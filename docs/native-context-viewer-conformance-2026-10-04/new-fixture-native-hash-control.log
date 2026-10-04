@@ -1,0 +1,23 @@
+warning: method `as_str` is never used
+   --> /home/seith/REDA/src/frontend/ast.rs:293:12
+    |
+292 | impl BinaryOp {
+    | ------------- method in this implementation
+293 |     pub fn as_str(self) -> &'static str {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib) generated 1 warning
+   Compiling reda-viewer v0.1.0 (/home/seith/REDA/viewer)
+    Finished `test` profile [unoptimized] target(s) in 0.42s
+     Running tests/integral_contexts.rs (/tmp/reda-selector-shared-adoption-target/debug/deps/integral_contexts-5295f4987678cbcc)
+
+running 1 test
+CONTEXT_HASH a|5a2e231e73c9b58b85996afa1e6f277e079066dc558c079a3f9adcc64e4c63d3
+CONTEXT_HASH ~a|fd430c8e86e00912daedfbff474c97c57c33a3996c41a17e52d055c8ef9d6fb0
+CONTEXT_HASH ~a & 8'hff|983214667c8ebd38bcb6a4aa93ece39d8b5b985d3b5c377dcd8da5b2b60c3361
+test signed_context_truth_and_sidecars_survive_native_and_wasm_consumers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

@@ -1,0 +1,19 @@
+{
+  "accepted": true,
+  "source_addresses": 64,
+  "public_occurrences": 9,
+  "public_truth_checks": 576,
+  "actual_implementation_gates": 15,
+  "private_gate_truth_checks": 960,
+  "server": "official Minecraft Java 26.2; existing server; no restart",
+  "world_fingerprint": "a4d7b9d9e82cd4f759b0d3f9d21199b183e8ee7bb5bf98c8c4d4b397e04649ba",
+  "provenance": "exact frozen v2 dump; not fresh current compiler generation",
+  "scope": "stable-state real-game conformance; no intra-tick waveform or generic circuit claim",
+  "cleanup_release_acknowledgements": [
+    {
+      "monotonic_seconds": 517352.032440939,
+      "command": "forceload remove 189992 159992 190114 160057",
+      "response": "Unmarked 45 chunks in minecraft:overworld from [11874, 9999] to [11882, 10003] for force loading"
+    }
+  ]
+}

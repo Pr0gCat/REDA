@@ -1,0 +1,74 @@
+Connecting to 127.0.0.1:25575 ...
+Forceloading region...
+Clearing region...
+Placing 1088 static blocks + 6 levers (all off)...
+Placement issued 613 commands for 1094 blocks in 0.3s
+Settle ceiling for this circuit: 2.2s (floors: 0.5s build / 0.2s vector, polling every 0.25s)
+Checking placement landed and polling until the build settles to the expected all-zero state...
+  000000 -> [o=1/1 q=1/1 r=0/0 u=0/0 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  000001 -> [o=1/1 q=0/0 r=1/1 u=0/0 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  000010 -> [o=1/1 q=0/0 r=0/0 u=0/0 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  000011 -> [o=1/1 q=0/0 r=1/1 u=0/0 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  000100 -> [o=1/1 q=1/1 r=0/0 u=0/0 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  000101 -> [o=1/1 q=0/0 r=1/1 u=0/0 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  000110 -> [o=1/1 q=0/0 r=0/0 u=0/0 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  000111 -> [o=1/1 q=0/0 r=1/1 u=0/0 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  001000 -> [o=1/1 q=1/1 r=0/0 u=0/0 v=0/0 w=0/0 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  001001 -> [o=1/1 q=0/0 r=1/1 u=0/0 v=0/0 w=0/0 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  001010 -> [o=1/1 q=0/0 r=0/0 u=0/0 v=0/0 w=0/0 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  001011 -> [o=1/1 q=0/0 r=1/1 u=0/0 v=0/0 w=0/0 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  001100 -> [o=1/1 q=1/1 r=0/0 u=0/0 v=1/1 w=1/1 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  001101 -> [o=1/1 q=0/0 r=1/1 u=0/0 v=1/1 w=1/1 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  001110 -> [o=1/1 q=0/0 r=0/0 u=0/0 v=1/1 w=1/1 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  001111 -> [o=1/1 q=0/0 r=1/1 u=0/0 v=1/1 w=1/1 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  010000 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  010001 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  010010 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  010011 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  010100 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  010101 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  010110 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  010111 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  011000 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=0/0 w=0/0 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  011001 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  011010 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=0/0 w=0/0 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  011011 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  011100 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=1/1 w=1/1 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  011101 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=1/1 w=1/1 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  011110 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=1/1 w=1/1 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  011111 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=1/1 w=1/1 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  100000 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  100001 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  100010 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  100011 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  100100 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  100101 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  100110 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  100111 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  101000 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=0/0 w=0/0 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  101001 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  101010 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=0/0 w=0/0 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  101011 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  101100 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=1/1 w=1/1 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  101101 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=1/1 w=1/1 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  101110 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=1/1 w=1/1 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  101111 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=1/1 w=1/1 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  110000 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  110001 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  110010 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  110011 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  110100 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  110101 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  110110 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=0/0 w=0/0 x=0/0 y=1/1 z=0/0] (actual/expected) OK
+  110111 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=0/0 y=0/0 z=0/0] (actual/expected) OK
+  111000 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=0/0 w=0/0 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  111001 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  111010 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=0/0 w=0/0 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  111011 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=0/0 w=0/0 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  111100 -> [o=1/1 q=1/1 r=0/0 u=1/1 v=1/1 w=1/1 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+  111101 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=1/1 w=1/1 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  111110 -> [o=1/1 q=0/0 r=0/0 u=1/1 v=1/1 w=1/1 x=1/1 y=1/1 z=0/0] (actual/expected) OK
+  111111 -> [o=1/1 q=0/0 r=1/1 u=1/1 v=1/1 w=1/1 x=1/1 y=0/0 z=0/0] (actual/expected) OK
+Clearing region and releasing forceload...
+
+64 vectors run, 0 mismatched. Wrote docs/minecraft-refresh-default-conformance-2026-10-04/game-report.json

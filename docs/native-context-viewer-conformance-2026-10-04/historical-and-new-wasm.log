@@ -1,0 +1,27 @@
+warning: method `as_str` is never used
+   --> /home/seith/REDA/src/frontend/ast.rs:293:12
+    |
+292 | impl BinaryOp {
+    | ------------- method in this implementation
+293 |     pub fn as_str(self) -> &'static str {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib) generated 1 warning
+   Compiling reda-viewer v0.1.0 (/home/seith/REDA/viewer)
+    Finished `release` profile [optimized] target(s) in 0.90s
+     Running tests/frontend_compiler.rs (/tmp/reda-signed-viewer-wasm-target/wasm32-unknown-unknown/release/deps/frontend_compiler-22904bbee9752bfe.wasm)
+running 3 tests
+test default_seven_segment_world_and_continuous_events_agree_across_targets ... ok
+test compiler_netlists_and_source_maps_agree_across_targets ... ok
+test compact_channel_world_agrees_across_targets ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 filtered out; finished in 8.05s
+
+     Running tests/integral_contexts.rs (/tmp/reda-signed-viewer-wasm-target/wasm32-unknown-unknown/release/deps/integral_contexts-9444a6dc352d06bd.wasm)
+running 1 test
+test signed_context_truth_and_sidecars_survive_native_and_wasm_consumers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 filtered out; finished in 0.03s
+
