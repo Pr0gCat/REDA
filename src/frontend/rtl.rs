@@ -68,6 +68,8 @@ pub struct RtlExpr {
     pub kind: RtlKind,
     pub width: u32,
     pub elab: ElabNodeId,
+    /// Lowest source-expression bit represented by a procedural projection.
+    pub origin_lsb: u32,
     pub synthetic: Option<SyntheticOrigin>,
 }
 
@@ -78,6 +80,7 @@ impl RtlExpr {
             kind,
             width,
             elab,
+            origin_lsb: 0,
             synthetic: None,
         }
     }

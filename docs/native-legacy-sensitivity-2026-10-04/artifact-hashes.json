@@ -1,0 +1,12 @@
+{
+  "README.md": "27107d0e434783fa554ab634d01e5cd0675855dbab135c4817a77ffe3ca06e36",
+  "check.log": "ba68ed011ae8cb7735ac02e410eb55b3e7a00a19350c301ef9a2ac6810942a59",
+  "complete-tests.log": "c4bade8f10cd3ee3d9f739545b6a292f0afae47d9b9cd6da21843a20eb78e811",
+  "fallback-tests.log": "88c95ab21f3fa9b716b021156c7187eb9ef556c1919697bce621a931cd3898a3",
+  "final-tests.log": "6428f3cfaef2ffb3cb43a99b91383070064593c385734404ce4d191cb9e7c881",
+  "offset-check.log": "8c4c2e42420f38f38120c0337cb4aebded2d9856b01cacc1cf48a9ab13f70154",
+  "owned-clean.patch": "487ec3c7cd655af698ddb11fe4d59091b9de9ec50136d04a0a13c707ce73a248",
+  "qualified-tests.log": "d140128200433895068bd87f1f455c8be470b8716014d60460df73895e1cacda",
+  "source-bindings.json": "45c2a9ebbe80c109b563d3f7002cc84767c736a9470697b3d5398a6e5edb0e07",
+  "tests.log": "bb84ec1f0926aa58faa1fe503cf4454fc4af57167ac5e327b2db52a0ce6a02a7"
+}

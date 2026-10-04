@@ -1,0 +1,31 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+    Finished `test` profile [unoptimized] target(s) in 16.35s
+     Running tests/systemverilog_legacy_sensitivity.rs (target/debug/deps/systemverilog_legacy_sensitivity-61502cae7fad785d)
+
+running 9 tests
+test complete_explicit_case_uses_existing_case_lowering_and_literal_truth ... ok
+test incomplete_events_storage_and_conflicting_processes_remain_rejected ... ok
+test projected_temporary_reads_retain_each_source_bit_origin ... ok
+test concatenated_targets_read_one_rhs_snapshot_before_any_target_write ... ok
+test sensitivity_and_read_after_write_use_flattened_alias_classes ... ok
+test explicit_or_comma_and_wildcard_processes_follow_literal_blocking_order ... ok
+test actual_native_and_auto_cli_generate_complete_explicit_lists_without_yosys ... ok
+test ordered_hierarchy_matches_fixed_physical_outputs_for_all_retained_transitions ... ok
+test full_legacy_seven_segment_explicit_events_match_the_original_physical_control has been running for over 60 seconds
+test full_legacy_seven_segment_explicit_events_match_the_original_physical_control ... FAILED
+
+failures:
+
+---- full_legacy_seven_segment_explicit_events_match_the_original_physical_control stdout ----
+
+thread 'full_legacy_seven_segment_explicit_events_match_the_original_physical_control' (845) panicked at tests/systemverilog_legacy_sensitivity.rs:249:58:
+called `Result::unwrap()` on an `Err` value: MissingInput("input0")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    full_legacy_seven_segment_explicit_events_match_the_original_physical_control
+
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 110.40s
+
+error: test failed, to rerun pass `--test systemverilog_legacy_sensitivity`

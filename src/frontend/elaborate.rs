@@ -107,9 +107,19 @@ pub struct SignalAlias {
     pub right: (usize, u32),
 }
 
+/// An ordered, complete blocking process. Its sensitivity and per-bit
+/// temporary values are resolved after hierarchy aliases become known.
+#[derive(Debug, Clone)]
+pub struct CombBlock {
+    pub span: Span,
+    pub assigns: Vec<ElabAssign>,
+    pub sensitivity: Option<Vec<(usize, u32)>>,
+}
+
 /// The elaborated top module with hierarchy aliases still explicit.
 #[derive(Debug, Clone)]
 pub struct Design {
+    pub comb_blocks: Vec<CombBlock>,
     pub aliases: Vec<SignalAlias>,
     pub nodes: Vec<ElabNode>,
     pub signals: Vec<SignalInfo>,
@@ -227,6 +237,7 @@ impl Hierarchy<'_> {
             errors: Vec::new(),
             parameters,
             aliases: Vec::new(),
+            comb_blocks: Vec::new(),
             instance,
         };
         let design = elaborator.module(module, self);
@@ -393,6 +404,7 @@ fn constant_value(
 }
 
 struct Elaborator {
+    comb_blocks: Vec<CombBlock>,
     aliases: Vec<SignalAlias>,
     instance: InstancePathId,
     parameters: HashMap<String, Constant>,
@@ -470,6 +482,7 @@ impl Elaborator {
                 signals: Vec::new(),
                 assigns: Vec::new(),
                 aliases: Vec::new(),
+                comb_blocks: Vec::new(),
             };
         }
 
@@ -534,6 +547,11 @@ impl Elaborator {
                     assigns.extend(self.assignments(assign));
                     continue;
                 }
+                Item::AlwaysComb(always) if always.sensitivity.is_some() || always.body.len() > 1
+                    || matches!(always.body.as_slice(), [Stmt::BlockingAssign(assign)] if matches!(assign.lhs.kind, ExprKind::Concat(_))) => {
+                    self.procedural_comb(always);
+                    None
+                }
                 Item::AlwaysComb(always) => self.always_comb(always),
                 Item::AlwaysFf(always) => self.always_ff(always),
                 Item::Declaration(_) => None,
@@ -565,6 +583,7 @@ impl Elaborator {
 
         Design {
             aliases: std::mem::take(&mut self.aliases),
+            comb_blocks: std::mem::take(&mut self.comb_blocks),
             nodes: std::mem::take(&mut self.nodes),
             signals: std::mem::take(&mut self.signals),
             assigns,
@@ -712,6 +731,17 @@ impl Elaborator {
             left: (alias.left.0 + signal_offset, alias.left.1),
             right: (alias.right.0 + signal_offset, alias.right.1),
         }));
+        for mut block in child.comb_blocks {
+            for assignment in &mut block.assigns {
+                assignment.elab.0 += node_offset;
+                assignment.signal += signal_offset;
+                relocate(&mut assignment.value, signal_offset, node_offset);
+            }
+            if let Some(sensitivity) = &mut block.sensitivity {
+                for (signal, _) in sensitivity { *signal += signal_offset; }
+            }
+            self.comb_blocks.push(block);
+        }
         self.nodes.extend(child.nodes);
         self.signals.extend(child.signals);
         for assignment in &mut child.assigns {
@@ -915,6 +945,7 @@ impl Elaborator {
                         kind: RtlKind::Slice(Box::new(value.clone()), offset),
                         width,
                         elab,
+                        origin_lsb: 0,
                         synthetic: Some(SyntheticOrigin::Passthrough),
                     },
                 }
@@ -946,6 +977,34 @@ impl Elaborator {
             value,
             clock: None,
         })
+    }
+
+    fn procedural_comb(&mut self, always: &AlwaysComb) {
+        let mut assigns = Vec::new();
+        if let [Stmt::Case(case)] = always.body.as_slice() {
+            if let Some(assign) = self.case_assignment(always, case) { assigns.push(assign); }
+        } else {
+            for statement in &always.body {
+                let Stmt::BlockingAssign(assign) = statement else {
+                    self.unsupported(always.span, "ordered combinational blocks support blocking assignments or one complete case, not mixed/nested control flow");
+                    return;
+                };
+                assigns.extend(self.assignments(&Assign {
+                    id: assign.id, span: assign.span, lhs: assign.lhs.clone(), rhs: assign.rhs.clone(),
+                }));
+            }
+        }
+        let sensitivity = if let Some(events) = &always.sensitivity {
+            let mut bits = Vec::new();
+            for event in events {
+                let Some(targets) = self.net_targets(event) else { return; };
+                for (signal, lsb, width) in targets {
+                    bits.extend((lsb..lsb+width).map(|bit| (signal, bit)));
+                }
+            }
+            Some(bits)
+        } else { None };
+        self.comb_blocks.push(CombBlock { span: always.span, assigns, sensitivity });
     }
 
     /// Lower a complete blocking assignment or case into continuous RTL.
@@ -1055,6 +1114,7 @@ impl Elaborator {
                 kind: RtlKind::Equal(Box::new(selector.clone()), Box::new(label)),
                 width: 1,
                 elab: condition_elab,
+                origin_lsb: 0,
                 synthetic: Some(SyntheticOrigin::CaseFold),
             };
             arms.push((item.statement.id, condition, arm_value));
@@ -1131,6 +1191,7 @@ impl Elaborator {
                 },
                 width,
                 elab,
+                origin_lsb: 0,
                 synthetic: Some(SyntheticOrigin::CaseFold),
             }
         } else if matches!(&default.kind, RtlKind::Const(bits) if bits.iter().all(|bit| !bit)) {
@@ -1145,12 +1206,14 @@ impl Elaborator {
                         },
                         width,
                         elab,
+                        origin_lsb: 0,
                         synthetic: Some(SyntheticOrigin::BranchJoin),
                     };
                     RtlExpr {
                         kind: RtlKind::Binary(RtlBinaryOp::Or, Box::new(acc), Box::new(gated)),
                         width,
                         elab,
+                        origin_lsb: 0,
                         synthetic: Some(SyntheticOrigin::BranchJoin),
                     }
                 })
@@ -1167,6 +1230,7 @@ impl Elaborator {
                         },
                         width,
                         elab,
+                        origin_lsb: 0,
                         synthetic: Some(SyntheticOrigin::BranchJoin),
                     }
                 })
@@ -1277,6 +1341,7 @@ impl Elaborator {
                         kind: RtlKind::Signal { signal, lsb },
                         width,
                         elab,
+                        origin_lsb: 0,
                         synthetic: Some(SyntheticOrigin::HoldMux),
                     },
                 };
@@ -1288,6 +1353,7 @@ impl Elaborator {
                     },
                     width,
                     elab,
+                    origin_lsb: 0,
                     synthetic: Some(if branch.when_false.is_some() {
                         SyntheticOrigin::BranchJoin
                     } else {

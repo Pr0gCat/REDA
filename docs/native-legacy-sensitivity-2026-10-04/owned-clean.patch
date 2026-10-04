@@ -1,0 +1,808 @@
+--- a/src/frontend/ast.rs
++++ b/src/frontend/ast.rs
+@@ -173,6 +173,8 @@
+ 
+ #[derive(Debug, Clone)]
+ pub struct AlwaysComb {
++    /// None for implicit/wildcard sensitivity; explicit legacy net events otherwise.
++    pub sensitivity: Option<Vec<Expr>>,
+     pub id: SourceNodeId,
+     pub span: Span,
+     pub body: Vec<Stmt>,
+--- a/src/frontend/parser.rs
++++ b/src/frontend/parser.rs
+@@ -513,6 +513,9 @@
+                     && matches!(self.tokens.get(self.pos + 3).map(|t| &t.kind),
+                         Some(TokenKind::Keyword(Keyword::Posedge | Keyword::Negedge))) {
+                     self.always_ff(items)
++                } else if matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Punct(Punct::At)))
++                    && matches!(self.tokens.get(self.pos + 2).map(|t| &t.kind), Some(TokenKind::Punct(Punct::LParen))) {
++                    self.always_comb(items, true)
+                 } else {
+                     Err(self.unsupported_here(
+                         "legacy `always` requires wildcard sensitivity or a parenthesized clock edge",
+@@ -615,11 +618,22 @@
+ 
+     fn always_comb(&mut self, items: &mut Vec<Item>, legacy: bool) -> Result<(), Diagnostic> {
+         let start = self.advance().span;
++        let mut sensitivity = None;
+         if legacy {
+             self.expect_punct(Punct::At)?;
+             if !self.eat_punct(Punct::Star) {
+                 self.expect_punct(Punct::LParen)?;
+-                self.expect_punct(Punct::Star)?;
++                if !self.eat_punct(Punct::Star) {
++                    let mut events = Vec::new();
++                    loop {
++                        if self.is_keyword(Keyword::Posedge) || self.is_keyword(Keyword::Negedge) {
++                            return Err(self.unsupported_here("mixed edge events in combinational sensitivity lists are not supported"));
++                        }
++                        events.push(self.expr(0)?);
++                        if !(self.eat_punct(Punct::Comma) || self.eat_keyword(Keyword::Or)) { break; }
++                    }
++                    sensitivity = Some(events);
++                }
+                 self.expect_punct(Punct::RParen)?;
+             }
+         }
+@@ -650,7 +664,7 @@
+         };
+         let span = start.join(end);
+         let id = self.node(SourceKind::AlwaysComb, span, None);
+-        items.push(Item::AlwaysComb(AlwaysComb { id, span, body }));
++        items.push(Item::AlwaysComb(AlwaysComb { sensitivity, id, span, body }));
+         Ok(())
+     }
+ 
+@@ -792,7 +806,7 @@
+                 "conditional combinational statements are not supported; use `case` or a ternary expression",
+             )),
+             TokenKind::Keyword(Keyword::Case) => Ok(Stmt::Case(self.case_statement()?)),
+-            TokenKind::Ident(_) => {
++            TokenKind::Ident(_) | TokenKind::Punct(Punct::LBrace) => {
+                 let start = self.peek().span;
+                 let lhs = self.expr(0)?;
+                 if self.is_punct(Punct::LessEqual) {
+--- a/src/frontend/elaborate.rs
++++ b/src/frontend/elaborate.rs
+@@ -107,9 +107,19 @@
+     pub right: (usize, u32),
+ }
+ 
++/// An ordered, complete blocking process. Its sensitivity and per-bit
++/// temporary values are resolved after hierarchy aliases become known.
++#[derive(Debug, Clone)]
++pub struct CombBlock {
++    pub span: Span,
++    pub assigns: Vec<ElabAssign>,
++    pub sensitivity: Option<Vec<(usize, u32)>>,
++}
++
+ /// The elaborated top module with hierarchy aliases still explicit.
+ #[derive(Debug, Clone)]
+ pub struct Design {
++    pub comb_blocks: Vec<CombBlock>,
+     pub aliases: Vec<SignalAlias>,
+     pub nodes: Vec<ElabNode>,
+     pub signals: Vec<SignalInfo>,
+@@ -227,6 +237,7 @@
+             errors: Vec::new(),
+             parameters,
+             aliases: Vec::new(),
++            comb_blocks: Vec::new(),
+             instance,
+         };
+         let design = elaborator.module(module, self);
+@@ -393,6 +404,7 @@
+ }
+ 
+ struct Elaborator {
++    comb_blocks: Vec<CombBlock>,
+     aliases: Vec<SignalAlias>,
+     instance: InstancePathId,
+     parameters: HashMap<String, Constant>,
+@@ -470,6 +482,7 @@
+                 signals: Vec::new(),
+                 assigns: Vec::new(),
+                 aliases: Vec::new(),
++                comb_blocks: Vec::new(),
+             };
+         }
+ 
+@@ -534,6 +547,11 @@
+                     assigns.extend(self.assignments(assign));
+                     continue;
+                 }
++                Item::AlwaysComb(always) if always.sensitivity.is_some() || always.body.len() > 1
++                    || matches!(always.body.as_slice(), [Stmt::BlockingAssign(assign)] if matches!(assign.lhs.kind, ExprKind::Concat(_))) => {
++                    self.procedural_comb(always);
++                    None
++                }
+                 Item::AlwaysComb(always) => self.always_comb(always),
+                 Item::AlwaysFf(always) => self.always_ff(always),
+                 Item::Declaration(_) => None,
+@@ -565,6 +583,7 @@
+ 
+         Design {
+             aliases: std::mem::take(&mut self.aliases),
++            comb_blocks: std::mem::take(&mut self.comb_blocks),
+             nodes: std::mem::take(&mut self.nodes),
+             signals: std::mem::take(&mut self.signals),
+             assigns,
+@@ -712,6 +731,17 @@
+             left: (alias.left.0 + signal_offset, alias.left.1),
+             right: (alias.right.0 + signal_offset, alias.right.1),
+         }));
++        for mut block in child.comb_blocks {
++            for assignment in &mut block.assigns {
++                assignment.elab.0 += node_offset;
++                assignment.signal += signal_offset;
++                relocate(&mut assignment.value, signal_offset, node_offset);
++            }
++            if let Some(sensitivity) = &mut block.sensitivity {
++                for (signal, _) in sensitivity { *signal += signal_offset; }
++            }
++            self.comb_blocks.push(block);
++        }
+         self.nodes.extend(child.nodes);
+         self.signals.extend(child.signals);
+         for assignment in &mut child.assigns {
+@@ -915,6 +945,7 @@
+                         kind: RtlKind::Slice(Box::new(value.clone()), offset),
+                         width,
+                         elab,
++                        origin_lsb: 0,
+                         synthetic: Some(SyntheticOrigin::Passthrough),
+                     },
+                 }
+@@ -946,6 +977,34 @@
+             value,
+             clock: None,
+         })
++    }
++
++    fn procedural_comb(&mut self, always: &AlwaysComb) {
++        let mut assigns = Vec::new();
++        if let [Stmt::Case(case)] = always.body.as_slice() {
++            if let Some(assign) = self.case_assignment(always, case) { assigns.push(assign); }
++        } else {
++            for statement in &always.body {
++                let Stmt::BlockingAssign(assign) = statement else {
++                    self.unsupported(always.span, "ordered combinational blocks support blocking assignments or one complete case, not mixed/nested control flow");
++                    return;
++                };
++                assigns.extend(self.assignments(&Assign {
++                    id: assign.id, span: assign.span, lhs: assign.lhs.clone(), rhs: assign.rhs.clone(),
++                }));
++            }
++        }
++        let sensitivity = if let Some(events) = &always.sensitivity {
++            let mut bits = Vec::new();
++            for event in events {
++                let Some(targets) = self.net_targets(event) else { return; };
++                for (signal, lsb, width) in targets {
++                    bits.extend((lsb..lsb+width).map(|bit| (signal, bit)));
++                }
++            }
++            Some(bits)
++        } else { None };
++        self.comb_blocks.push(CombBlock { span: always.span, assigns, sensitivity });
+     }
+ 
+     /// Lower a complete blocking assignment or case into continuous RTL.
+@@ -1055,6 +1114,7 @@
+                 kind: RtlKind::Equal(Box::new(selector.clone()), Box::new(label)),
+                 width: 1,
+                 elab: condition_elab,
++                origin_lsb: 0,
+                 synthetic: Some(SyntheticOrigin::CaseFold),
+             };
+             arms.push((item.statement.id, condition, arm_value));
+@@ -1131,6 +1191,7 @@
+                 },
+                 width,
+                 elab,
++                origin_lsb: 0,
+                 synthetic: Some(SyntheticOrigin::CaseFold),
+             }
+         } else if matches!(&default.kind, RtlKind::Const(bits) if bits.iter().all(|bit| !bit)) {
+@@ -1145,12 +1206,14 @@
+                         },
+                         width,
+                         elab,
++                        origin_lsb: 0,
+                         synthetic: Some(SyntheticOrigin::BranchJoin),
+                     };
+                     RtlExpr {
+                         kind: RtlKind::Binary(RtlBinaryOp::Or, Box::new(acc), Box::new(gated)),
+                         width,
+                         elab,
++                        origin_lsb: 0,
+                         synthetic: Some(SyntheticOrigin::BranchJoin),
+                     }
+                 })
+@@ -1167,6 +1230,7 @@
+                         },
+                         width,
+                         elab,
++                        origin_lsb: 0,
+                         synthetic: Some(SyntheticOrigin::BranchJoin),
+                     }
+                 })
+@@ -1277,6 +1341,7 @@
+                         kind: RtlKind::Signal { signal, lsb },
+                         width,
+                         elab,
++                        origin_lsb: 0,
+                         synthetic: Some(SyntheticOrigin::HoldMux),
+                     },
+                 };
+@@ -1288,6 +1353,7 @@
+                     },
+                     width,
+                     elab,
++                    origin_lsb: 0,
+                     synthetic: Some(if branch.when_false.is_some() {
+                         SyntheticOrigin::BranchJoin
+                     } else {
+--- a/src/frontend/logic.rs
++++ b/src/frontend/logic.rs
+@@ -14,7 +14,7 @@
+ //! tables additionally use bounded implicant covers and native redstone cells;
+ //! physical quality is gated separately from logical equivalence.
+ //!
+-use std::collections::{HashMap, HashSet};
++use std::collections::{BTreeMap, HashMap, HashSet};
+ 
+ use serde::{Deserialize, Serialize};
+ 
+@@ -620,6 +620,162 @@
+     }
+ }
+ 
++/// Resolve blocking values after all hierarchical net aliases are known.
++/// The ordinary single-statement/wildcard path never enters this pass.
++pub fn resolve_comb_blocks(design: &mut Design) -> Result<(), Vec<Diagnostic>> {
++    if design.comb_blocks.is_empty() {
++        return Ok(());
++    }
++    let aliases = AliasClasses::new(design);
++    let mut errors = Vec::new();
++    let mut resolved = Vec::new();
++    for block in &design.comb_blocks {
++        let written = block.assigns.iter().flat_map(|assign| {
++            (assign.lsb..assign.lsb + assign.width)
++                .map(|bit| aliases.canonical(assign.signal, bit))
++        }).collect();
++        let mut environment = BlockingValues {
++            aliases: &aliases,
++            written,
++            values: HashMap::new(),
++            reads: HashSet::new(),
++            span: block.span,
++        };
++        let mut writers = BTreeMap::new();
++        let mut index = 0;
++        while index < block.assigns.len() {
++            let source = design.nodes[block.assigns[index].elab.0 as usize].source;
++            let mut end = index + 1;
++            while end < block.assigns.len()
++                && design.nodes[block.assigns[end].elab.0 as usize].source == source {
++                end += 1;
++            }
++            // One source assignment may have several concatenated targets.
++            // Evaluate all of their RHS slices before updating any target.
++            let mut values = Vec::new();
++            for assign in &block.assigns[index..end] {
++                environment.span = assign.span;
++                match environment.substitute(&assign.value) {
++                    Ok(value) => values.push(value),
++                    Err(error) => { errors.push(error); break; }
++                }
++            }
++            if values.len() != end - index { break; }
++            for (offset, value) in values.into_iter().enumerate() {
++                let assign = &block.assigns[index + offset];
++                for bit in 0..assign.width {
++                    let key = aliases.canonical(assign.signal, assign.lsb + bit);
++                    let mut value_bit = RtlExpr::new(
++                        RtlKind::Slice(Box::new(value.clone()), bit), 1, assign.elab,
++                    );
++                    value_bit.origin_lsb = bit;
++                    environment.values.insert(key, value_bit);
++                    writers.insert(key, index + offset);
++                }
++            }
++            index = end;
++        }
++        if let Some(sensitivity) = &block.sensitivity {
++            let sensitive: HashSet<_> = sensitivity.iter()
++                .map(|&(signal, bit)| aliases.canonical(signal, bit)).collect();
++            if let Some(&(signal, bit)) = environment.reads.iter()
++                .filter(|read| !sensitive.contains(read)).min() {
++                let info = &design.signals[signal];
++                errors.push(Diagnostic {
++                    kind: super::DiagnosticKind::Unsupported,
++                    severity: Severity::Error,
++                    message: format!("incomplete combinational sensitivity list: `{}` is read without a corresponding net event", bit_name(&info.name, info.width, bit)),
++                    span: block.span,
++                });
++            }
++        }
++        for ((signal, bit), index) in writers {
++            let assign = &block.assigns[index];
++            resolved.push(super::elaborate::ElabAssign {
++                elab: assign.elab,
++                span: assign.span,
++                signal,
++                lsb: bit,
++                width: 1,
++                value: environment.values.remove(&(signal, bit)).expect("last write owns its value"),
++                clock: None,
++            });
++        }
++    }
++    if !errors.is_empty() {
++        errors.sort_by_key(|error| (error.span.file, error.span.start));
++        return Err(errors);
++    }
++    design.assigns.extend(resolved);
++    design.comb_blocks.clear();
++    Ok(())
++}
++
++/// Per-process procedural state. Values are expressions, not stored bits:
++/// a read before this process writes a target would require real storage.
++struct BlockingValues<'a> {
++    aliases: &'a AliasClasses,
++    written: HashSet<(usize, u32)>,
++    values: HashMap<(usize, u32), RtlExpr>,
++    reads: HashSet<(usize, u32)>,
++    span: Span,
++}
++
++impl BlockingValues<'_> {
++    fn substitute(&mut self, expr: &RtlExpr) -> Result<RtlExpr, Diagnostic> {
++        let mut result = expr.clone();
++        result.kind = match &expr.kind {
++            RtlKind::Signal { signal, lsb } => {
++                let mut bits = Vec::new();
++                for bit in *lsb..*lsb + expr.width {
++                    let key = self.aliases.canonical(*signal, bit);
++                    let value = if let Some(value) = self.values.get(&key) {
++                        value.clone()
++                    } else {
++                        if self.written.contains(&key) {
++                            return Err(Diagnostic {
++                                kind: super::DiagnosticKind::Unsupported,
++                                severity: Severity::Error,
++                                message: "read-before-write in ordered combinational block would infer storage".into(),
++                                span: self.span,
++                            });
++                        }
++                        self.reads.insert(key);
++                        let mut value = RtlExpr::new(RtlKind::Signal { signal: *signal, lsb: bit }, 1, expr.elab);
++                        value.origin_lsb = expr.origin_lsb + bit - *lsb;
++                        value
++                    };
++                    bits.push(value);
++                }
++                RtlKind::Slice(Box::new(RtlExpr::new(RtlKind::Concat(bits), expr.width, expr.elab)), 0)
++            }
++            RtlKind::Const(bits) => RtlKind::Const(bits.clone()),
++            RtlKind::Concat(parts) => RtlKind::Concat(parts.iter()
++                .map(|part| self.substitute(part)).collect::<Result<_, _>>()?),
++            RtlKind::Slice(value, bit) => RtlKind::Slice(Box::new(self.substitute(value)?), *bit),
++            RtlKind::Not(value) => RtlKind::Not(Box::new(self.substitute(value)?)),
++            RtlKind::ReduceOr(value) => RtlKind::ReduceOr(Box::new(self.substitute(value)?)),
++            RtlKind::Binary(op, left, right) => RtlKind::Binary(*op,
++                Box::new(self.substitute(left)?), Box::new(self.substitute(right)?)),
++            RtlKind::Equal(left, right) => RtlKind::Equal(
++                Box::new(self.substitute(left)?), Box::new(self.substitute(right)?)),
++            RtlKind::Mux { select, when_true, when_false } => RtlKind::Mux {
++                select: Box::new(self.substitute(select)?),
++                when_true: Box::new(self.substitute(when_true)?),
++                when_false: Box::new(self.substitute(when_false)?),
++            },
++            RtlKind::Table { selector, arms, default } => RtlKind::Table {
++                selector: Box::new(self.substitute(selector)?),
++                arms: arms.iter().map(|(index, condition, value)| Ok((
++                    *index, self.substitute(condition)?, self.substitute(value)?,
++                ))).collect::<Result<_, Diagnostic>>()?,
++                default: Box::new(self.substitute(default)?),
++            },
++        };
++        Ok(result)
++    }
++}
++
+ struct Builder<'d> {
+     design: &'d Design,
+     aliases: AliasClasses,
+@@ -732,7 +888,7 @@
+     fn origin(&self, expr: &RtlExpr, bit: u32) -> LogicOrigin {
+         LogicOrigin {
+             elab: expr.elab,
+-            bit,
++            bit: expr.origin_lsb + bit,
+             synthetic: expr.synthetic,
+         }
+     }
+--- a/src/frontend/mod.rs
++++ b/src/frontend/mod.rs
+@@ -290,7 +290,8 @@
+         .collect();
+ 
+     let set = parser::parse_sources(&files).map_err(|diagnostic| vec![diagnostic])?;
+-    let design = elaborate::elaborate(&set, &options.top)?;
++    let mut design = elaborate::elaborate(&set, &options.top)?;
++    logic::resolve_comb_blocks(&mut design)?;
+     let blasted = logic::build(&design)?;
+     let emitted = netlist::emit(&design, &blasted)?;
+ 
+--- a/src/frontend/rtl.rs
++++ b/src/frontend/rtl.rs
+@@ -68,6 +68,8 @@
+     pub kind: RtlKind,
+     pub width: u32,
+     pub elab: ElabNodeId,
++    /// Lowest source-expression bit represented by a procedural projection.
++    pub origin_lsb: u32,
+     pub synthetic: Option<SyntheticOrigin>,
+ }
+ 
+@@ -78,6 +80,7 @@
+             kind,
+             width,
+             elab,
++            origin_lsb: 0,
+             synthetic: None,
+         }
+     }
+--- a/tests/frontend_selection.rs
++++ b/tests/frontend_selection.rs
+@@ -34,7 +34,7 @@
+         "module m #(parameter logic [64:0] W=65'h1)(input a, output y); assign y = a; endmodule",
+         "module m #(parameter real W=1)(input a,output y); assign y=a; endmodule",
+         "module m #(parameter W=(1==1)?1:2)(input a,output y); assign y=a; endmodule",
+-        "module m(input a, b, output reg y); always @(a or b) y = a & b; endmodule",
++        "module m(input a, b, output reg y); always @(a) y = a & b; endmodule",
+         "module m(input a, output reg y); always @* y <= a; endmodule",
+     ] {
+         let source = SourceInput {
+--- /dev/null
++++ b/tests/systemverilog_legacy_sensitivity.rs
+@@ -0,0 +1,333 @@
++use reda::frontend::evaluate::Evaluator;
++use reda::frontend::{
++    compile_systemverilog, CompileArtifact, CompileOptions, Diagnostic, DiagnosticKind, SourceInput,
++};
++fn result(source: &str) -> Result<CompileArtifact, Vec<Diagnostic>> {
++    compile_systemverilog(
++        &[SourceInput {
++            name: "legacy_sensitivity.v",
++            text: source,
++        }],
++        &CompileOptions::new("m"),
++    )
++}
++fn native(source: &str) -> CompileArtifact {
++    result(source).unwrap_or_else(|errors| panic!("{errors:?}"))
++}
++
++const ORDERED:&str="module worker(input [3:0] a,output reg [3:0] y,z); reg [3:0] t; always @(a) begin t=a ^ 4'h5; y=t; t=~t; z=t; end endmodule module m(input [3:0] a,output [3:0] y,z); worker w(.a(a),.y(y),.z(z)); endmodule";
++const FIXED: &str =
++    "module m(input [3:0] a,output [3:0] y,z); assign y=a ^ 4'h5; assign z=a ^ 4'ha; endmodule";
++
++#[test]
++fn explicit_or_comma_and_wildcard_processes_follow_literal_blocking_order() {
++    // Preserves the original formerly unsupported frontend_selection source.
++    for source in [
++        "module m(input a, b, output reg y); always @(a or b) y = a & b; endmodule",
++        "module m(input a, b, output reg y); always @(a,b) y = a & b; endmodule",
++        "module m(input a,b,output reg y); always @(a or b) begin y=a; y=y ^ b; end endmodule",
++        "module m(input a,b,output reg y); always @* begin y=a; y=y ^ b; end endmodule",
++        "module m(input a,b,output logic y); always_comb begin y=a; y=y ^ b; end endmodule",
++    ] {
++        let artifact = native(source);
++        let evaluator = Evaluator::new(&artifact.netlist).unwrap();
++        for address in 0..4 {
++            let a = address & 1 != 0;
++            let b = address & 2 != 0;
++            let values = evaluator
++                .evaluate(&[("a".to_owned(), a), ("b".to_owned(), b)].into())
++                .unwrap();
++            let expected = if source.contains("y = a & b") {
++                a && b
++            } else {
++                a ^ b
++            };
++            assert_eq!(values[&artifact.output_map()["y"]], expected, "{source}");
++        }
++    }
++    let artifact = native(ORDERED);
++    assert_eq!(artifact.netlist, native(FIXED).netlist);
++    assert_eq!(artifact.netlist, native(ORDERED).netlist);
++    assert_eq!(artifact.debug.to_json(), native(ORDERED).debug.to_json());
++}
++
++#[test]
++fn concatenated_targets_read_one_rhs_snapshot_before_any_target_write() {
++    let simple = native("module m(input a,b,output reg x,y); always @* {x,y}={a,b}; endmodule");
++    assert_eq!(
++        simple.netlist,
++        native("module m(input a,b,output x,y); assign x=a; assign y=b; endmodule").netlist
++    );
++    let source="module m(input a,b,output reg [1:0] y); reg p,q; always @(a,b) begin {p,q}={a,b}; {p,q}={q,p}; y={p,q}; end endmodule";
++    let artifact = native(source);
++    let evaluator = Evaluator::new(&artifact.netlist).unwrap();
++    for address in 0..4 {
++        let a = address & 1 != 0;
++        let b = address & 2 != 0;
++        let values = evaluator
++            .evaluate(&[("a".to_owned(), a), ("b".to_owned(), b)].into())
++            .unwrap();
++        assert_eq!(values[&artifact.output_map()["y[0]"]], a);
++        assert_eq!(values[&artifact.output_map()["y[1]"]], b);
++    }
++}
++
++#[test]
++fn sensitivity_and_read_after_write_use_flattened_alias_classes() {
++    let reader="module r(inout p,q,output reg y); always @(p) y=~q; endmodule module m(input a,output y); r u(.p(a),.q(a),.y(y)); endmodule";
++    let artifact = native(reader);
++    let evaluator = Evaluator::new(&artifact.netlist).unwrap();
++    for a in [false, true] {
++        assert_eq!(
++            evaluator.evaluate(&[("a".to_owned(), a)].into()).unwrap()[&artifact.output_map()["y"]],
++            !a
++        );
++    }
++    let writer="module r(input a,b,inout p,q,output reg y); always @(a,b) begin p=a & b; y=~q; end endmodule module m(input a,b,output y); wire shared; r u(.a(a),.b(b),.p(shared),.q(shared),.y(y)); endmodule";
++    let artifact = native(writer);
++    let evaluator = Evaluator::new(&artifact.netlist).unwrap();
++    for address in 0..4 {
++        let a = address & 1 != 0;
++        let b = address & 2 != 0;
++        assert_eq!(
++            evaluator
++                .evaluate(&[("a".to_owned(), a), ("b".to_owned(), b)].into())
++                .unwrap()[&artifact.output_map()["y"]],
++            !(a && b)
++        );
++    }
++}
++
++#[test]
++fn incomplete_events_storage_and_conflicting_processes_remain_rejected() {
++    for (source, message) in [
++        (
++            "module m(input a,b,output reg y); always @(a) y=a & b; endmodule",
++            "incomplete combinational sensitivity",
++        ),
++        (
++            "module m(input [1:0] a,output reg y); always @(a[0]) y=a[1]; endmodule",
++            "incomplete combinational sensitivity",
++        ),
++        (
++            "module m(input a,output reg y); wire t; assign t=a; always @(a) y=t; endmodule",
++            "incomplete combinational sensitivity",
++        ),
++        (
++            "module m(input a,output reg y); reg t; always @(t) begin t=a; y=t; end endmodule",
++            "incomplete combinational sensitivity",
++        ),
++        (
++            "module m(input a,output reg y); reg t; always @(a) begin y=t; t=a; end endmodule",
++            "read-before-write",
++        ),
++        (
++            "module m(input a,output reg y); always @(a) y=y ^ a; endmodule",
++            "read-before-write",
++        ),
++        (
++            "module m(input a,output reg y); always @(a) y=a; always @(a) y=~a; endmodule",
++            "more than one assignment",
++        ),
++        (
++            "module m(input a,output reg y); always @(a) case(a) 1'b1:y=a; endcase endmodule",
++            "default",
++        ),
++    ] {
++        let errors = result(source).unwrap_err();
++        assert!(
++            errors.iter().any(|e| e.message.contains(message)),
++            "{source}: {errors:?}"
++        );
++    }
++    let errors =
++        result("module m(input a,b,output reg y); always @(a or posedge b) y=a; endmodule")
++            .unwrap_err();
++    assert!(errors
++        .iter()
++        .any(|e| e.kind == DiagnosticKind::Unsupported && e.message.contains("mixed edge")));
++}
++
++#[test]
++fn complete_explicit_case_uses_existing_case_lowering_and_literal_truth() {
++    let source="module m(input a,b,output reg y); always @(a,b) case(a) 1'b0:y=b; default:y=~b; endcase endmodule";
++    let artifact = native(source);
++    let evaluator = Evaluator::new(&artifact.netlist).unwrap();
++    for address in 0..4 {
++        let a = address & 1 != 0;
++        let b = address & 2 != 0;
++        assert_eq!(
++            evaluator
++                .evaluate(&[("a".to_owned(), a), ("b".to_owned(), b)].into())
++                .unwrap()[&artifact.output_map()["y"]],
++            a ^ b
++        );
++    }
++}
++
++#[test]
++fn projected_temporary_reads_retain_each_source_bit_origin() {
++    let source="module m(input [3:0] a,output reg [3:0] y); reg [3:0] t; always @(a) begin t=a ^ 4'h5; y=t; end endmodule";
++    let artifact = native(source);
++    let start = source.find("y=t").unwrap() + 2;
++    let read = artifact
++        .debug
++        .source_nodes
++        .iter()
++        .position(|node| node.span.start as usize == start && node.span.end as usize == start + 1)
++        .unwrap();
++    let mut bits = std::collections::BTreeSet::new();
++    for origin in artifact.debug.logic_origins.iter().chain(
++        artifact
++            .debug
++            .extra_origins
++            .iter()
++            .map(|(_, origin)| origin),
++    ) {
++        if artifact.debug.elab_nodes[origin.elab.0 as usize].source.0 as usize == read {
++            bits.insert(origin.bit);
++        }
++    }
++    assert_eq!(bits, [0, 1, 2, 3].into());
++}
++
++#[test]
++fn ordered_hierarchy_matches_fixed_physical_outputs_for_all_retained_transitions() {
++    check_physical(
++        ORDERED,
++        FIXED,
++        &["a[0]", "a[1]", "a[2]", "a[3]"],
++        |address| {
++            [("y", 5), ("z", 10)]
++                .into_iter()
++                .flat_map(|(port, mask)| {
++                    (0..4).map(move |bit| {
++                        (format!("{port}[{bit}]"), (address ^ mask) & (1 << bit) != 0)
++                    })
++                })
++                .collect()
++        },
++    );
++}
++
++fn check_physical(
++    source: &str,
++    reference: &str,
++    input_names: &[&str],
++    truth: impl Fn(u32) -> std::collections::BTreeMap<String, bool>,
++) {
++    use reda::compile::{compile, lowering::lower_optimised};
++    use reda::redstone::{simulator::Simulator, world::block::BlockKind};
++    let artifact = native(source);
++    let lowered = lower_optimised(&artifact.netlist).unwrap();
++    let fixed = lower_optimised(&native(reference).netlist).unwrap();
++    assert_eq!(lowered, fixed);
++    let physical = compile(&lowered).unwrap();
++    let control = compile(&fixed).unwrap();
++    let fingerprint = reda::compile::fragment_synth::benchmark::canonical_world_fingerprint;
++    assert_eq!(fingerprint(&physical.world), fingerprint(&control.world));
++    physical.validate_rewrite_view(&lowered).unwrap();
++    let implementation = physical.implementation_netlist(&lowered);
++    let evaluator = Evaluator::new(implementation).unwrap();
++    let mut sim = Simulator::new(physical.world.clone());
++    sim.run_until_stable(2000).unwrap();
++    let mut phases = 0;
++    for from in 0..16 {
++        for to in 0..16 {
++            for address in [from, to] {
++                let inputs: std::collections::BTreeMap<String, bool> = input_names
++                    .iter()
++                    .enumerate()
++                    .map(|(bit, name)| ((*name).to_owned(), address & (1 << bit) != 0))
++                    .collect();
++                for (name, at) in &physical.input_positions {
++                    let mut lever = sim.world().get(at.0, at.1, at.2).clone();
++                    lever.lit = inputs[name];
++                    sim.world_mut().set(at.0, at.1, at.2, lever);
++                }
++                sim.run_until_stable(2000).unwrap();
++                // Rewrites retain separate source and implementation ports.
++                // Observe the certified implementation lever bindings; source
++                // names are independently checked by the public truth oracle.
++                let input_positions = physical
++                    .physical_rewrite()
++                    .map_or(&physical.input_positions, |rewrite| {
++                        &rewrite.implemented_observations().input_positions
++                    });
++                let implemented_inputs = input_positions
++                    .iter()
++                    .map(|(name, at)| {
++                        let lever = sim.world().get(at.0, at.1, at.2);
++                        assert_eq!(lever.kind, BlockKind::Lever);
++                        (name.clone(), lever.lit)
++                    })
++                    .collect();
++                let expected = evaluator.settle(&implemented_inputs).unwrap();
++                for gate in &implementation.gates {
++                    let at = physical.gate_output_positions[&gate.output];
++                    let block = sim.world().get(at.0, at.1, at.2);
++                    let actual = match block.kind {
++                        BlockKind::RedstoneWire => block.power > 0,
++                        BlockKind::Torch
++                        | BlockKind::WallTorch
++                        | BlockKind::Repeater
++                        | BlockKind::Comparator => block.lit,
++                        _ => panic!("unreadable {}", gate.output),
++                    };
++                    assert_eq!(
++                        actual, expected[&gate.output],
++                        "phase {phases}: {}",
++                        gate.output
++                    );
++                }
++                for (port, expected) in truth(address) {
++                    let at = physical.output_positions[&artifact.output_map()[&port]];
++                    assert_eq!(
++                        sim.world().get(at.0, at.1, at.2).lit,
++                        expected,
++                        "phase {phases}: {port}"
++                    );
++                }
++                phases += 1;
++            }
++        }
++    }
++    assert_eq!(phases, 512);
++}
++
++#[test]
++fn full_legacy_seven_segment_explicit_events_match_the_original_physical_control() {
++    let control =
++        include_str!("fixtures/seven_segment_legacy.v").replace("module seven_segment", "module m");
++    let source = control.replace("always @(*)", "always @(d3 or d2 or d1 or d0)");
++    check_physical(&source, &control, &["d0", "d1", "d2", "d3"], |digit| {
++        ["a", "b", "c", "d", "e", "f", "g"]
++            .into_iter()
++            .enumerate()
++            .map(|(bit, name)| {
++                let value = reda::circuits::seven_segment::TRUTH_TABLE
++                    .get(digit as usize)
++                    .map_or(false, |row| row[bit] != 0);
++                (name.to_owned(), value)
++            })
++            .collect()
++    });
++}
++
++#[test]
++fn actual_native_and_auto_cli_generate_complete_explicit_lists_without_yosys() {
++    let path = std::env::temp_dir().join(format!("reda-legacy-events-{}.v", std::process::id()));
++    std::fs::write(&path, ORDERED).unwrap();
++    for mode in ["native", "auto"] {
++        let output = std::process::Command::new(env!("CARGO_BIN_EXE_mc_dump"))
++            .args(["verilog", path.to_str().unwrap(), "m", "--frontend", mode])
++            .env("REDA_PYTHON", "/definitely/missing/python")
++            .output()
++            .unwrap();
++        let error = String::from_utf8_lossy(&output.stderr);
++        assert!(output.status.success(), "{mode}: {error}");
++        assert!(error.contains("frontend: native"), "{error}");
++        assert!(!output.stdout.is_empty());
++    }
++    std::fs::remove_file(path).unwrap();
++}

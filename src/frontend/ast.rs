@@ -173,6 +173,8 @@ pub struct Instance {
 
 #[derive(Debug, Clone)]
 pub struct AlwaysComb {
+    /// None for implicit/wildcard sensitivity; explicit legacy net events otherwise.
+    pub sensitivity: Option<Vec<Expr>>,
     pub id: SourceNodeId,
     pub span: Span,
     pub body: Vec<Stmt>,

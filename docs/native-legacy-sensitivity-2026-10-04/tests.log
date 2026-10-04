@@ -1,0 +1,28 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+    Finished `test` profile [unoptimized] target(s) in 33.41s
+     Running tests/systemverilog_legacy_sensitivity.rs (target/debug/deps/systemverilog_legacy_sensitivity-61502cae7fad785d)
+
+running 7 tests
+test concatenated_targets_read_one_rhs_snapshot_before_any_target_write ... FAILED
+test complete_explicit_case_uses_existing_case_lowering_and_literal_truth ... ok
+test projected_temporary_reads_retain_each_source_bit_origin ... ok
+test incomplete_events_storage_and_conflicting_processes_remain_rejected ... ok
+test sensitivity_and_read_after_write_use_flattened_alias_classes ... ok
+test explicit_or_comma_and_wildcard_processes_follow_literal_blocking_order ... ok
+test ordered_hierarchy_matches_fixed_physical_outputs_for_all_retained_transitions ... ok
+
+failures:
+
+---- concatenated_targets_read_one_rhs_snapshot_before_any_target_write stdout ----
+
+thread 'concatenated_targets_read_one_rhs_snapshot_before_any_target_write' (827) panicked at tests/systemverilog_legacy_sensitivity.rs:15:44:
+[Diagnostic { kind: Source, severity: Error, message: "expected a blocking assignment or `case` statement, found `{`", span: Span { file: FileId(0), start: 69, end: 70, expansion: None } }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    concatenated_targets_read_one_rhs_snapshot_before_any_target_write
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.22s
+
+error: test failed, to rerun pass `--test systemverilog_legacy_sensitivity`

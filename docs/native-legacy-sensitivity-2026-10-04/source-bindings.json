@@ -1,0 +1,43 @@
+{
+  "head": "92bf87e8b100ce24a1bf9b0fef381692e61f2a27",
+  "files": {
+    "src/frontend/ast.rs": {
+      "base": "27aacdfde1fa7c52437ce5a9dfcde1419fe9d64990778a771d6bef0d9eb0ce30",
+      "clean": "06aa1e052536ad011cc878729238203bd5cab8f2dcebaa6196359e663693377e",
+      "workspace": "52f4e8ccad1e7b38c033b429a448db43298895cee305bb1af8f0ecd15f63c77a"
+    },
+    "src/frontend/parser.rs": {
+      "base": "0f36d7487d915a929ed8fce23a45f0a3189cb109b051dbba76d7f9ca774ce3d7",
+      "clean": "e7515303693f660f9b7dff9198d4dceef4a861b42c1119b0f984854ddc43743f",
+      "workspace": "b8e5cd06a8d3226b05e362d93d5c50f289f4109ac32c4750859059ac13240329"
+    },
+    "src/frontend/elaborate.rs": {
+      "base": "4a0867b4099eca0257bc1ba7d2d252653038d7999554222caee456d8aa76de95",
+      "clean": "a4862255045f37e330d385975f3afac38771c6e15b47ade1a9dfba2595b3e126",
+      "workspace": "380ea987de2277197e313342a4e56388a256b730fadfee12ebf374772d75e804"
+    },
+    "src/frontend/logic.rs": {
+      "base": "8b9d3ce0e106d6108f20f31972016228dd48421d826a6c41a3d0ac636ee90dcf",
+      "clean": "581fcf55ec570e6c83d8713952a91ee2fae8919f958ee9aab3a899a3b5e8e447",
+      "workspace": "e96cde7bf98779d5afd28c2b6415cd61ca0204fa8dafc7a44fb793b95ce33936"
+    },
+    "src/frontend/mod.rs": {
+      "base": "c8fedb583d7fa8835b13d963d0e3c3823bad4bb0d36ccf8341fbdebd00084406",
+      "clean": "7e839d77d0b5bbd0c41897a1c5b7409112e2243d572ee3cd3c28dce314e37736",
+      "workspace": "7e839d77d0b5bbd0c41897a1c5b7409112e2243d572ee3cd3c28dce314e37736"
+    },
+    "src/frontend/rtl.rs": {
+      "base": "13b3252799464985f6e5981eb690845ccd9ce492ed265e259a4c618063bc9a03",
+      "clean": "4f1b344795b3f2e6e9402b71e805c035f598f3f0bd0d2d63efe3fbe8b609e51b",
+      "workspace": "cc9c8142e4b412a890af4ec2f19883dabd4f825fb0e91a7bae16294309699b2e"
+    },
+    "tests/frontend_selection.rs": {
+      "base": "b37f6d1e04cbb6c9dbcbe13c1a048c390a3eefde2103ff4fddcac5e937b9e1c0",
+      "clean": "310842a061dfee0e65425428bee5706c03d86dcb037691421c085b92986f818c",
+      "workspace": "787894823a23a7ed6c51805f9c2430e7f42002cab1737d8766a1362e899c49c0"
+    },
+    "tests/systemverilog_legacy_sensitivity.rs": {
+      "new": "c0956cfc9c0424faaaf869612647f5e9441a8fa2102f5d3bfd6a38ba2e13274c"
+    }
+  }
+}

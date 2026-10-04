@@ -14,7 +14,7 @@
 //! tables additionally use bounded implicant covers and native redstone cells;
 //! physical quality is gated separately from logical equivalence.
 //!
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -620,6 +620,162 @@ impl AliasClasses {
     }
 }
 
+/// Resolve blocking values after all hierarchical net aliases are known.
+/// The ordinary single-statement/wildcard path never enters this pass.
+pub fn resolve_comb_blocks(design: &mut Design) -> Result<(), Vec<Diagnostic>> {
+    if design.comb_blocks.is_empty() {
+        return Ok(());
+    }
+    let aliases = AliasClasses::new(design);
+    let mut errors = Vec::new();
+    let mut resolved = Vec::new();
+    for block in &design.comb_blocks {
+        let written = block.assigns.iter().flat_map(|assign| {
+            (assign.lsb..assign.lsb + assign.width)
+                .map(|bit| aliases.canonical(assign.signal, bit))
+        }).collect();
+        let mut environment = BlockingValues {
+            aliases: &aliases,
+            written,
+            values: HashMap::new(),
+            reads: HashSet::new(),
+            span: block.span,
+        };
+        let mut writers = BTreeMap::new();
+        let mut index = 0;
+        while index < block.assigns.len() {
+            let source = design.nodes[block.assigns[index].elab.0 as usize].source;
+            let mut end = index + 1;
+            while end < block.assigns.len()
+                && design.nodes[block.assigns[end].elab.0 as usize].source == source {
+                end += 1;
+            }
+            // One source assignment may have several concatenated targets.
+            // Evaluate all of their RHS slices before updating any target.
+            let mut values = Vec::new();
+            for assign in &block.assigns[index..end] {
+                environment.span = assign.span;
+                match environment.substitute(&assign.value) {
+                    Ok(value) => values.push(value),
+                    Err(error) => { errors.push(error); break; }
+                }
+            }
+            if values.len() != end - index { break; }
+            for (offset, value) in values.into_iter().enumerate() {
+                let assign = &block.assigns[index + offset];
+                for bit in 0..assign.width {
+                    let key = aliases.canonical(assign.signal, assign.lsb + bit);
+                    let mut value_bit = RtlExpr::new(
+                        RtlKind::Slice(Box::new(value.clone()), bit), 1, assign.elab,
+                    );
+                    value_bit.origin_lsb = bit;
+                    environment.values.insert(key, value_bit);
+                    writers.insert(key, index + offset);
+                }
+            }
+            index = end;
+        }
+        if let Some(sensitivity) = &block.sensitivity {
+            let sensitive: HashSet<_> = sensitivity.iter()
+                .map(|&(signal, bit)| aliases.canonical(signal, bit)).collect();
+            if let Some(&(signal, bit)) = environment.reads.iter()
+                .filter(|read| !sensitive.contains(read)).min() {
+                let info = &design.signals[signal];
+                errors.push(Diagnostic {
+                    kind: super::DiagnosticKind::Unsupported,
+                    severity: Severity::Error,
+                    message: format!("incomplete combinational sensitivity list: `{}` is read without a corresponding net event", bit_name(&info.name, info.width, bit)),
+                    span: block.span,
+                });
+            }
+        }
+        for ((signal, bit), index) in writers {
+            let assign = &block.assigns[index];
+            resolved.push(super::elaborate::ElabAssign {
+                elab: assign.elab,
+                span: assign.span,
+                signal,
+                lsb: bit,
+                width: 1,
+                value: environment.values.remove(&(signal, bit)).expect("last write owns its value"),
+                clock: None,
+            });
+        }
+    }
+    if !errors.is_empty() {
+        errors.sort_by_key(|error| (error.span.file, error.span.start));
+        return Err(errors);
+    }
+    design.assigns.extend(resolved);
+    design.comb_blocks.clear();
+    Ok(())
+}
+
+/// Per-process procedural state. Values are expressions, not stored bits:
+/// a read before this process writes a target would require real storage.
+struct BlockingValues<'a> {
+    aliases: &'a AliasClasses,
+    written: HashSet<(usize, u32)>,
+    values: HashMap<(usize, u32), RtlExpr>,
+    reads: HashSet<(usize, u32)>,
+    span: Span,
+}
+
+impl BlockingValues<'_> {
+    fn substitute(&mut self, expr: &RtlExpr) -> Result<RtlExpr, Diagnostic> {
+        let mut result = expr.clone();
+        result.kind = match &expr.kind {
+            RtlKind::Signal { signal, lsb } => {
+                let mut bits = Vec::new();
+                for bit in *lsb..*lsb + expr.width {
+                    let key = self.aliases.canonical(*signal, bit);
+                    let value = if let Some(value) = self.values.get(&key) {
+                        value.clone()
+                    } else {
+                        if self.written.contains(&key) {
+                            return Err(Diagnostic {
+                                kind: super::DiagnosticKind::Unsupported,
+                                severity: Severity::Error,
+                                message: "read-before-write in ordered combinational block would infer storage".into(),
+                                span: self.span,
+                            });
+                        }
+                        self.reads.insert(key);
+                        let mut value = RtlExpr::new(RtlKind::Signal { signal: *signal, lsb: bit }, 1, expr.elab);
+                        value.origin_lsb = expr.origin_lsb + bit - *lsb;
+                        value
+                    };
+                    bits.push(value);
+                }
+                RtlKind::Slice(Box::new(RtlExpr::new(RtlKind::Concat(bits), expr.width, expr.elab)), 0)
+            }
+            RtlKind::Const(bits) => RtlKind::Const(bits.clone()),
+            RtlKind::Concat(parts) => RtlKind::Concat(parts.iter()
+                .map(|part| self.substitute(part)).collect::<Result<_, _>>()?),
+            RtlKind::Slice(value, bit) => RtlKind::Slice(Box::new(self.substitute(value)?), *bit),
+            RtlKind::Not(value) => RtlKind::Not(Box::new(self.substitute(value)?)),
+            RtlKind::ReduceOr(value) => RtlKind::ReduceOr(Box::new(self.substitute(value)?)),
+            RtlKind::Binary(op, left, right) => RtlKind::Binary(*op,
+                Box::new(self.substitute(left)?), Box::new(self.substitute(right)?)),
+            RtlKind::Equal(left, right) => RtlKind::Equal(
+                Box::new(self.substitute(left)?), Box::new(self.substitute(right)?)),
+            RtlKind::Mux { select, when_true, when_false } => RtlKind::Mux {
+                select: Box::new(self.substitute(select)?),
+                when_true: Box::new(self.substitute(when_true)?),
+                when_false: Box::new(self.substitute(when_false)?),
+            },
+            RtlKind::Table { selector, arms, default } => RtlKind::Table {
+                selector: Box::new(self.substitute(selector)?),
+                arms: arms.iter().map(|(index, condition, value)| Ok((
+                    *index, self.substitute(condition)?, self.substitute(value)?,
+                ))).collect::<Result<_, Diagnostic>>()?,
+                default: Box::new(self.substitute(default)?),
+            },
+        };
+        Ok(result)
+    }
+}
+
 struct Builder<'d> {
     design: &'d Design,
     aliases: AliasClasses,
@@ -732,7 +888,7 @@ impl Builder<'_> {
     fn origin(&self, expr: &RtlExpr, bit: u32) -> LogicOrigin {
         LogicOrigin {
             elab: expr.elab,
-            bit,
+            bit: expr.origin_lsb + bit,
             synthetic: expr.synthetic,
         }
     }

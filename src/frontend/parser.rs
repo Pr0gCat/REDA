@@ -513,6 +513,9 @@ impl<'n> Parser<'n> {
                     && matches!(self.tokens.get(self.pos + 3).map(|t| &t.kind),
                         Some(TokenKind::Keyword(Keyword::Posedge | Keyword::Negedge))) {
                     self.always_ff(items)
+                } else if matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Punct(Punct::At)))
+                    && matches!(self.tokens.get(self.pos + 2).map(|t| &t.kind), Some(TokenKind::Punct(Punct::LParen))) {
+                    self.always_comb(items, true)
                 } else {
                     Err(self.unsupported_here(
                         "legacy `always` requires wildcard sensitivity or a parenthesized clock edge",
@@ -615,11 +618,22 @@ impl<'n> Parser<'n> {
 
     fn always_comb(&mut self, items: &mut Vec<Item>, legacy: bool) -> Result<(), Diagnostic> {
         let start = self.advance().span;
+        let mut sensitivity = None;
         if legacy {
             self.expect_punct(Punct::At)?;
             if !self.eat_punct(Punct::Star) {
                 self.expect_punct(Punct::LParen)?;
-                self.expect_punct(Punct::Star)?;
+                if !self.eat_punct(Punct::Star) {
+                    let mut events = Vec::new();
+                    loop {
+                        if self.is_keyword(Keyword::Posedge) || self.is_keyword(Keyword::Negedge) {
+                            return Err(self.unsupported_here("mixed edge events in combinational sensitivity lists are not supported"));
+                        }
+                        events.push(self.expr(0)?);
+                        if !(self.eat_punct(Punct::Comma) || self.eat_keyword(Keyword::Or)) { break; }
+                    }
+                    sensitivity = Some(events);
+                }
                 self.expect_punct(Punct::RParen)?;
             }
         }
@@ -650,7 +664,7 @@ impl<'n> Parser<'n> {
         };
         let span = start.join(end);
         let id = self.node(SourceKind::AlwaysComb, span, None);
-        items.push(Item::AlwaysComb(AlwaysComb { id, span, body }));
+        items.push(Item::AlwaysComb(AlwaysComb { sensitivity, id, span, body }));
         Ok(())
     }
 
@@ -792,7 +806,7 @@ impl<'n> Parser<'n> {
                 "conditional combinational statements are not supported; use `case` or a ternary expression",
             )),
             TokenKind::Keyword(Keyword::Case) => Ok(Stmt::Case(self.case_statement()?)),
-            TokenKind::Ident(_) => {
+            TokenKind::Ident(_) | TokenKind::Punct(Punct::LBrace) => {
                 let start = self.peek().span;
                 let lhs = self.expr(0)?;
                 if self.is_punct(Punct::LessEqual) {

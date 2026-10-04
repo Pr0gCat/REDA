@@ -1,0 +1,36 @@
+{
+  "base": "92bf87e8b100ce24a1bf9b0fef381692e61f2a27",
+  "patch_sha256": "487ec3c7cd655af698ddb11fe4d59091b9de9ec50136d04a0a13c707ce73a248",
+  "new_test_sha256": "c0956cfc9c0424faaaf869612647f5e9441a8fa2102f5d3bfd6a38ba2e13274c",
+  "scope": "Committed 92bf87e archive plus owned legacy patch; no user arithmetic or dirty source dependencies",
+  "REDA_PYTHON": "/nonexistent/reda-python",
+  "integration": {
+    "passed": 70,
+    "failed": 0,
+    "ignored": 0,
+    "new_tests": 9
+  },
+  "viewer": {
+    "native_passed": 3,
+    "wasm_node_release_passed": 3,
+    "failed": 0,
+    "ignored": 0,
+    "source_map_fixture_count": 4
+  },
+  "sources": {
+    "src/frontend/ast.rs": "06aa1e052536ad011cc878729238203bd5cab8f2dcebaa6196359e663693377e",
+    "src/frontend/parser.rs": "e7515303693f660f9b7dff9198d4dceef4a861b42c1119b0f984854ddc43743f",
+    "src/frontend/elaborate.rs": "a4862255045f37e330d385975f3afac38771c6e15b47ade1a9dfba2595b3e126",
+    "src/frontend/logic.rs": "581fcf55ec570e6c83d8713952a91ee2fae8919f958ee9aab3a899a3b5e8e447",
+    "src/frontend/mod.rs": "7e839d77d0b5bbd0c41897a1c5b7409112e2243d572ee3cd3c28dce314e37736",
+    "src/frontend/rtl.rs": "4f1b344795b3f2e6e9402b71e805c035f598f3f0bd0d2d63efe3fbe8b609e51b",
+    "tests/frontend_selection.rs": "310842a061dfee0e65425428bee5706c03d86dcb037691421c085b92986f818c",
+    "tests/systemverilog_legacy_sensitivity.rs": "c0956cfc9c0424faaaf869612647f5e9441a8fa2102f5d3bfd6a38ba2e13274c",
+    "viewer/tests/frontend_compiler.rs": "760a547c2d7fb5789d02a3021b4bf35d3338bc0f28d06c574e763af96c7b8f7b"
+  },
+  "logs": {
+    "legacy-viewer-native-tests.log.gz": "b46f75f6428c1144289ff32ef794cb151fe56b16bd3d436e37ee869f741d83b9",
+    "legacy-viewer-wasm-tests.log.gz": "10490b598c5ff0fffedd462da39b5e9727e91d19e35c112c12d661bcccd1b116",
+    "legacy-clean-tests.log.gz": "234dab1b67b853c459e08f809e9b30cd4d75a31a9fe90abee7f7ee9ea332f80f"
+  }
+}

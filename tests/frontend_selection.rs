@@ -34,7 +34,7 @@ fn explicit_unsupported_falls_back_but_native_rejects() {
         "module m #(parameter logic [64:0] W=65'h1)(input a, output y); assign y = a; endmodule",
         "module m #(parameter real W=1)(input a,output y); assign y=a; endmodule",
         "module m #(parameter W=(1==1)?1:2)(input a,output y); assign y=a; endmodule",
-        "module m(input a, b, output reg y); always @(a or b) y = a & b; endmodule",
+        "module m(input a, b, output reg y); always @(a) y = a & b; endmodule",
         "module m(input a, output reg y); always @* y <= a; endmodule",
     ] {
         let source = SourceInput {

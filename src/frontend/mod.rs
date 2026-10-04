@@ -290,7 +290,8 @@ pub fn compile_systemverilog(
         .collect();
 
     let set = parser::parse_sources(&files).map_err(|diagnostic| vec![diagnostic])?;
-    let design = elaborate::elaborate(&set, &options.top)?;
+    let mut design = elaborate::elaborate(&set, &options.top)?;
+    logic::resolve_comb_blocks(&mut design)?;
     let blasted = logic::build(&design)?;
     let emitted = netlist::emit(&design, &blasted)?;
 
