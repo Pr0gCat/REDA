@@ -1,0 +1,86 @@
+--- a/src/compile/resolved_circuit.rs
++++ b/src/compile/resolved_circuit.rs
+@@ -33,6 +33,52 @@
+     pub(crate) expected_value: [i32; 3],
+     pub(crate) external_observed: [i32; 3],
+     pub(crate) external_expected: [i32; 3],
++}
++impl ResolvedPinout {
++    /// Bind loaded metadata and the initial world before installing caller controls.
++    pub(crate) fn validate_loaded(
++        &self,
++        world: &crate::redstone::world::storage::World,
++        expected: &CompiledResolvedCircuit,
++    ) -> Result<(), String> {
++        if self != &expected.pinout {
++            return Err("shared-inout metadata differs from source-owned compiled ports".into());
++        }
++        if super::fragment_synth::benchmark::canonical_world_fingerprint(world)
++            != super::fragment_synth::benchmark::canonical_world_fingerprint(&expected.physical.world)
++        {
++            return Err("shared-inout loaded world differs from compiled world".into());
++        }
++        Ok(())
++    }
++}
++impl ResolvedBusPort {
++    /// Settled checked observation; invalid bus states never become Boolean outputs.
++    pub(crate) fn observe(
++        &self,
++        world: &crate::redstone::world::storage::World,
++    ) -> Result<bool, crate::frontend::resolved::InvalidBus> {
++        use crate::frontend::resolved::InvalidBus;
++        let read = |p: [i32; 3], kind: BlockKind| {
++            let cell = world.get(p[0], p[1], p[2]);
++            if cell.kind != kind { return Err(InvalidBus::ProtocolViolation); }
++            Ok(if kind == BlockKind::RedstoneWire { cell.power > 0 } else { cell.lit })
++        };
++        let value = read(self.readback, BlockKind::RedstoneWire)?;
++        if self.channel.is_empty()
++            || self.channel.iter().any(|p| read(*p, BlockKind::RedstoneWire) != Ok(value))
++            || read(self.expected_value, BlockKind::Lamp)? != value
++            || read(self.external_pad, BlockKind::RedstoneWire)?
++                != read(self.external_expected, BlockKind::Lamp)?
++            || read(self.external_observed, BlockKind::Lamp)?
++                != read(self.external_expected, BlockKind::Lamp)?
++        {
++            return Err(InvalidBus::ProtocolViolation);
++        }
++        if read(self.conflict, BlockKind::Lamp)? { return Err(InvalidBus::Contention); }
++        if read(self.floating, BlockKind::Lamp)? { return Err(InvalidBus::Floating); }
++        Ok(value)
++    }
+ }
+ pub(crate) struct CompiledResolvedCircuit {
+     pub(crate) physical: CompiledCircuit,
+@@ -241,6 +287,21 @@
+         let json = serde_json::to_string(&compiled.pinout).unwrap();
+         let decoded: ResolvedPinout = serde_json::from_str(&json).unwrap();
+         assert_eq!(decoded, compiled.pinout);
++        decoded.validate_loaded(&compiled.physical.world, &compiled).unwrap();
++        let mut wrong = decoded.clone();
++        wrong.inouts[0].source.direction = crate::frontend::PortDirection::Input;
++        assert!(wrong.validate_loaded(&compiled.physical.world, &compiled).is_err());
++        wrong = decoded.clone();
++        wrong.inouts[0].readback = [-1, 0, 0];
++        assert!(wrong.validate_loaded(&compiled.physical.world, &compiled).is_err());
++        wrong = decoded.clone();
++        wrong.inouts[0].channel.pop();
++        assert!(wrong.validate_loaded(&compiled.physical.world, &compiled).is_err());
++        let mut changed = compiled.physical.world.clone();
++        let pad = decoded.inouts[0].external_pad;
++        changed.set(pad[0], pad[1], pad[2], crate::redstone::world::block::BlockState::air());
++        assert!(decoded.validate_loaded(&changed, &compiled).is_err());
++
+         assert_eq!(decoded.inputs.keys().map(String::as_str).collect::<Vec<_>>(),
+                    vec!["d0", "d1", "e0", "e1"]);
+         assert_eq!(decoded.outputs.keys().map(String::as_str).collect::<Vec<_>>(), vec!["y"]);
+@@ -400,6 +461,8 @@
+                 observed.insert(name.clone(), v);
+             }
+             let actual = b.observe(&observed);
++            assert_eq!(physical.pinout.inouts[0].observe(simulator.world()), actual,
++                       "consumer observation state={state},from={before},to={after},phase={phase}");
+             let class = match actual {
+                 Ok(false) => "0",
+                 Ok(true) => "1",
