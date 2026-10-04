@@ -1,0 +1,13 @@
+{
+  "clippy::result_large_err": 75,
+  "clippy::too_many_arguments": 9,
+  "clippy::type_complexity": 1,
+  "clippy::unnecessary_filter_map": 1,
+  "clippy::needless_option_as_deref": 1,
+  "clippy::needless_range_loop": 1,
+  "clippy::filter_map_bool_then": 1,
+  "clippy::obfuscated_if_else": 1,
+  "clippy::unnecessary_get_then_check": 1,
+  "clippy::cloned_ref_to_slice_refs": 2,
+  "clippy::clone_on_copy": 3
+}

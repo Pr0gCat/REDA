@@ -188,28 +188,22 @@ impl ProposalStream<CertifiedCandidate> for FragmentProposalStream<'_> {
 }
 
 fn terminal_for_seed_error(error: &SeedError, work: &mut CapWorkCounters) -> ProposalTerminal {
-    match error {
-        SeedError::Routing(SeedRoutingFailure {
-            work_used: Some(work_used),
-            ..
-        }) => {
-            work.router_expansions = *work_used;
-            ProposalTerminal::RouterCapExhausted
-        }
-        SeedError::PlacementExhausted { .. } => ProposalTerminal::BacktrackCapExhausted,
+    let router_work = match error {
+        SeedError::Routing(failure) => failure.work_used,
         // The repair loop retries router-cap refusals; when it gives up on
         // one, the cap is still what stopped the proposal.
-        SeedError::SeedExhausted {
-            final_refusal:
-                SeedRepairRefusal::Routing(SeedRoutingFailure {
-                    work_used: Some(work_used),
-                    ..
-                }),
-            ..
-        } => {
-            work.router_expansions = *work_used;
-            ProposalTerminal::RouterCapExhausted
-        }
+        SeedError::SeedExhausted { final_refusal, .. } => match final_refusal.as_ref() {
+            SeedRepairRefusal::Routing(failure) => failure.work_used,
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(used) = router_work {
+        work.router_expansions = used;
+        return ProposalTerminal::RouterCapExhausted;
+    }
+    match error {
+        SeedError::PlacementExhausted { .. } => ProposalTerminal::BacktrackCapExhausted,
         SeedError::SeedExhausted { .. } => ProposalTerminal::BacktrackCapExhausted,
         SeedError::Verification(_) => ProposalTerminal::VerificationFailed,
         SeedError::Certification(CandidateCertificationError::Equivalence(

@@ -1,0 +1,5 @@
+{
+  "src/compile/fragment_synth/seed.rs": "4d89c3b13e0a9e97709165bd0bf2bb5caf3695bdb84a0624bd96fa84ccba27ba",
+  "src/compile/fragment_synth/fragment.rs": "4ab6b6b7a92b554d2f22dbefd812964c9b47997e73269ce3b4fc7463b5ed1c43",
+  "src/compile/fragment_synth/packing.rs": "d1c4b51ef5a844872a20dd65c05c04979dd40b8ee5dc23fbfc7e45b37045d336"
+}

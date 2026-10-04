@@ -1,0 +1,18 @@
+{
+  "base_head": "7ff7b34",
+  "scope": "Current worktree with user changes preserved; not an isolated clean checkout or a full-project result. All three changed source files were initially clean.",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "clippy_before_errors": 130,
+  "clippy_after_errors": 96,
+  "large_error_lints_before": 109,
+  "large_error_lints_after": 75,
+  "existing_repair_tests_passed": 2,
+  "existing_fragment_tests_passed": 9,
+  "failures": 0,
+  "ignores_in_selected_tests": 0,
+  "native_library_check_passed": true,
+  "wasm_library_check_passed": true,
+  "full_clippy_passed": false,
+  "unit_test_binary_sha256": "e6b423fdb876d7a8491f2e17229750bba5f8a4040253862331e56f2306b32ac9",
+  "no_simulator_physical_rules_or_routing_policies_changed": true
+}

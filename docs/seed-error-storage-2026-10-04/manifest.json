@@ -1,0 +1,15 @@
+{
+  "adoption.md": "bc74e19154c771d7f16c7ce120cc9f6317c22c2eb4d54e9462932397b47b350b",
+  "after-counts.json": "d1aee8623a592f99326c7cf572a6bc8ed2108adcc9dd878bb27510429b17c70a",
+  "after.jsonl.gz": "153cb96fd2dcb3cc04b6a8dcc4adcc87d95436570c21958c817f2e7a2fd6bbc8",
+  "after.stderr.gz": "2d49b4aabb9773074c419cdeebf7847c51c361232574c664a5c026eb98f483e7",
+  "before-counts.json": "430a78100fcd6107120cff2666d70257e9b6dd252b26961378ff288c8b912616",
+  "before.jsonl.gz": "a9d62e69dc34073d7cebf1bd83d3eece8d83588148c0a3133a812bbe979ce959",
+  "before.stderr.gz": "bc7f1228d47c01ae0d8fec23c35a08d9ea145251f10d593303aaf63428d32ec1",
+  "candidate.patch.gz": "600564ee9811190dc1ea22c5af3a30b5a1c2214958aa9ba50ff8e69821a304df",
+  "fragment-tests.log.gz": "918a1a25e457e91a563336ac9385b5aea78b1d1de6e531d51387a1f0abd0706f",
+  "owned-source-hashes.json": "d43ff47ba90ab6e1308273091fdab569b4060895654d8d6acc9aa6c5ea82dbb8",
+  "qualification.json": "34d363dab60e14047f684be353a2f494a7cfc4d0c67170c23978ef7b11e9cc96",
+  "repair-tests.log.gz": "1d65cc69f8791bd237d054b0335fe12ab1c392c2e63174a135c991e5a044ad81",
+  "wasm-check.log.gz": "b89c16e244611bdb3e8555bd6e335d06567430d79ff36f074324a1f94c9f4c89"
+}

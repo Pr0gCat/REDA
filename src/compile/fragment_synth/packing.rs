@@ -1295,7 +1295,7 @@ fn candidate_translations(
         &artifact.chunk,
     )?;
     let mut candidates = BTreeMap::from([(baseline, 0)]);
-    let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {
+    let offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {
         let entry = candidates.entry(translation).or_insert(band);
         *entry = (*entry).max(band);
     };

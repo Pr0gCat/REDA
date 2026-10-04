@@ -116,15 +116,15 @@ pub(crate) enum SeedError {
         radius: u32,
     },
     #[error("typed route construction failed: {0}")]
-    Routing(#[source] SeedRoutingFailure),
+    Routing(#[source] Box<SeedRoutingFailure>),
     #[error("route schedule construction failed: {0}")]
     RouteSchedule(#[from] RouteScheduleError),
     #[error("repairable seed attempt failed: {0}")]
-    Repairable(#[source] SeedRepairRefusal),
+    Repairable(#[source] Box<SeedRepairRefusal>),
     #[error("seed repair exhausted after {attempts_used} attempts: {final_refusal}")]
     SeedExhausted {
         attempts_used: u64,
-        final_refusal: SeedRepairRefusal,
+        final_refusal: Box<SeedRepairRefusal>,
     },
     #[error("typed route sink set was unexpectedly empty")]
     EmptyRoute,
@@ -791,7 +791,7 @@ impl SparseSeedBuilder {
         ) {
             return match error {
                 SeedError::Routing(failure) => {
-                    Err(SeedError::Repairable(SeedRepairRefusal::Routing(failure)))
+                    Err(SeedError::Repairable(Box::new(SeedRepairRefusal::Routing(*failure))))
                 }
                 other => Err(other),
             };
@@ -802,7 +802,7 @@ impl SparseSeedBuilder {
             &placement_plan.fingerprint,
             placement_plan.frame.forward,
         )? {
-            return Err(SeedError::Repairable(SeedRepairRefusal::Routing(failure)));
+            return Err(SeedError::Repairable(Box::new(SeedRepairRefusal::Routing(failure))));
         }
         if let Some(marks) = phase_marks.as_deref_mut() {
             marks.push(Instant::now());
@@ -824,14 +824,14 @@ impl SparseSeedBuilder {
                         emitted.owner_at(at),
                     );
                 }
-                return Err(SeedError::Repairable(cross_route_connectivity_refusal(
+                return Err(SeedError::Repairable(Box::new(cross_route_connectivity_refusal(
                     &candidate,
                     first,
                     second,
                     at,
                     repairs,
                     placement_plan.frame.forward,
-                )?));
+                )?)));
             }
             Err(ExpandedPhysicalError::CrossRouteCoupling {
                 source_route,
@@ -845,7 +845,7 @@ impl SparseSeedBuilder {
                     &candidate.pin_contracts,
                     repairs,
                 )?;
-                return Err(SeedError::Repairable(
+                return Err(SeedError::Repairable(Box::new(
                     SeedRepairRefusal::CrossRouteCoupling {
                         source_route,
                         foreign,
@@ -855,7 +855,7 @@ impl SparseSeedBuilder {
                         guarded_source,
                         frame_forward: placement_plan.frame.forward,
                     },
-                ));
+                )));
             }
             Err(error) => return Err(SeedError::Verification(error)),
         }
@@ -2796,7 +2796,7 @@ fn route_all(
                             .flatten()
                     })
                     .and_then(|blocker| candidate.routes.get(&blocker).map(|tree| tree.source));
-                return Err(SeedError::Routing(seed_routing_failure(
+                return Err(SeedError::Routing(Box::new(seed_routing_failure(
                     route_index,
                     route,
                     source_id,
@@ -2808,7 +2808,7 @@ fn route_all(
                     &sinks,
                     &failure,
                     &plan.fingerprint,
-                )));
+                ))));
             }
         };
         if let Some((_, sink)) = route_self_overlap(&tree) {
@@ -2818,7 +2818,7 @@ fn route_all(
                 sink: Some(sink),
                 category: RouterRefusalCategory::PhysicalInvariant,
             };
-            return Err(SeedError::Routing(seed_routing_failure(
+            return Err(SeedError::Routing(Box::new(seed_routing_failure(
                 route_index,
                 route,
                 source_id,
@@ -2830,7 +2830,7 @@ fn route_all(
                 &sinks,
                 &failure,
                 &plan.fingerprint,
-            )));
+            ))));
         }
         refresh_exact_route_delays(&mut tree);
 
