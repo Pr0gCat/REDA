@@ -1,0 +1,10 @@
+{
+  "source_base": "92bf87e plus owned-clean legacy sensitivity patch",
+  "binary": "/tmp/reda-native-build-cli-20261004/producer-qualified",
+  "binary_sha256": "d77bfcc91f6edde75f5645723e8599a68d73907ed352aa07ac6e9653105964dc",
+  "legacy_patch_sha256": "487ec3c7cd655af698ddb11fe4d59091b9de9ec50136d04a0a13c707ce73a248",
+  "producer_source_sha256": "730a095bb6891fcea3837a87a7c63107a714adae4be457d6a5691fd8a2541a5a",
+  "initial_run_scope": "Initial successful native/auto artifacts retained but not included in source-bound qualification: shared target executable was subsequently replaced by independent legacy build.",
+  "library_sha256": "8a5c1f0bc19a159ce83a7638b27fb143beef794db4343a49766b6408376f30f3",
+  "library_original_path": "/tmp/reda-parameter-clean-target-20261004/debug/deps/libreda-a12b971a883e3664.rlib"
+}

@@ -1,0 +1,32 @@
+{
+  "scope": "Actual build_circuit native/auto internal single-driver inout entry, with Python unavailable, frozen clean legacy producer",
+  "modes": [
+    "native",
+    "auto"
+  ],
+  "exported_litematic_reload_matches_reference_world": true,
+  "continuous_phases_per_export": 512,
+  "total_phases": 1024,
+  "public_lamps_per_phase": 8,
+  "literal_oracle": "y=a XOR5, z=a XOR10",
+  "settling_cap": 2000,
+  "separate_existing_all_gate_qualification": "docs/native-internal-inout-2026-10-04/clean-runtime.json",
+  "files": {
+    "verified-exports.log": "2f0b9b2b04bd8aedefca04bf6fd1430d123ceec6b1765038fc063f53dec38065",
+    "qualified-binding.json": "32c1b07f26619ccd9720b8aec45f86d93dc147ea2ef973a074c13672ac569722",
+    "initial-wrong-lever-field.log": "99f049706ee9c0974316098fd53831dc2cebe8e0349a133253167d61aa5abde6",
+    "qualified-terminal.json": "e3dbebc35969671200ec4ecfdddb4838ed9131420b230a15291df477ecb7d741",
+    "internal_inout.sv": "21593a7863e2bb335b3d19bd686c91e3c22524050bea3f5aa132897aa7221c34",
+    "verify_exports.rs": "627e4048620cb5673e9b050a3ada92cd6ed96980f2db5571ad5d94dad143a3cf",
+    "native/stdout.log": "dec8da889aa2d241f880d1539154b480819df76d4abb342f4457881bb26cb363",
+    "native/stderr.log": "3d9c59efd3d267cabb9cad0803056560b5d18af3beb79c044920f4bd17069149",
+    "auto/stdout.log": "dec8da889aa2d241f880d1539154b480819df76d4abb342f4457881bb26cb363",
+    "auto/stderr.log": "3d9c59efd3d267cabb9cad0803056560b5d18af3beb79c044920f4bd17069149",
+    "native/output/m.pinout.json": "c78f3435681049edec5952139a56ffba129792e5bc312e214f3854f76ee971fe",
+    "native/output/m.litematic": "fd4b0ac6b41349fab3dadfcc6097d8783954867d434efeb81908961d60d40b59",
+    "native/output/m.blocks.txt": "76ef64736825e809fed5279c60cc0f85214d0796574707a28bc09c67618020ed",
+    "auto/output/m.pinout.json": "c78f3435681049edec5952139a56ffba129792e5bc312e214f3854f76ee971fe",
+    "auto/output/m.litematic": "fd4b0ac6b41349fab3dadfcc6097d8783954867d434efeb81908961d60d40b59",
+    "auto/output/m.blocks.txt": "76ef64736825e809fed5279c60cc0f85214d0796574707a28bc09c67618020ed"
+  }
+}

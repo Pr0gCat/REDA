@@ -1,0 +1,26 @@
+[
+  {
+    "mode": "native",
+    "command": [
+      "/tmp/reda-native-build-cli-20261004/producer-qualified",
+      "verilog",
+      "/tmp/reda-native-build-cli-20261004/internal_inout.sv",
+      "m",
+      "--frontend",
+      "native"
+    ],
+    "exit_code": 0
+  },
+  {
+    "mode": "auto",
+    "command": [
+      "/tmp/reda-native-build-cli-20261004/producer-qualified",
+      "verilog",
+      "/tmp/reda-native-build-cli-20261004/internal_inout.sv",
+      "m",
+      "--frontend",
+      "auto"
+    ],
+    "exit_code": 0
+  }
+]

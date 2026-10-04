@@ -1,0 +1,6 @@
+
+thread 'main' (40) panicked at verify_exports.rs:19:5:
+assertion `left == right` failed: native 0->1 y[0]
+  left: true
+ right: false
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
