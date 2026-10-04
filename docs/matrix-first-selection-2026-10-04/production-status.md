@@ -1,0 +1,9 @@
+# Qualify the shared matrix before local refresh exploration
+
+The default selector previously explored as many as256 flat refresh-removal proposals before comparing a strictly certified shared matrix. It now qualifies that structural matrix against the complete original quality control first. The existing flat seed and local search proceed only if their complete quality profile also dominates the current incumbent. This keeps the existing rule of exploring only from a seed that dominates the incumbent and avoids exploring a dominated method. It does not guarantee globally optimal search.
+
+Production input admission and generator remain unchanged: four inputs, one to sixteen outputs. Zero budget retains the existing flat seed and does not propose a matrix. The256 default budget, routing growth12, negotiation32, certificates, every implementation gate/public output truth check, and all aggregate/per-phase/per-channel quality gates are unchanged. No simulator or physical verifier rule changes.
+
+Clean current HEAD plus only this selector patch passes all10 existing balanced-matrix, flat-refresh and recursive-wide-matrix tests, with zero failures or ignored tests. Original seven-segment, ROM16x7 and ROM16x16 worlds/default selections, constant/alias consumer contracts and the zero-budget regression remain unchanged. The final unused local quality assignment is removed in this qualified source. `production-order-only.patch`, the source hash and retained terminal log bind the exact production change. The initial manifest read raced checkout creation, then succeeded after checkout existed; it was not a Rust test failure.
+
+The separate five-input builder/selector experiment also passes12 tests, but its three clean actual-default ROM32 wave/quality audits remain pending. It is not part of this production change. All eight broad objectives remain open.

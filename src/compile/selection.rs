@@ -627,28 +627,30 @@ pub fn compile_selected_with_refresh_budget(
             return Ok(raw);
         };
         let mut best = raw;
-        if let Ok((flat, moved)) = flat_refresh_from_compiled(source, &best) {
-            if let Some(candidate) = quality_with_ports(source, &flat, true, None, Some(&quality)) {
-                if candidate.dominates(&quality) {
-                    let (improved, measured) =
-                        improve_refreshes(source, flat, candidate.clone(), budget);
-                    if moved > 0 || measured != candidate {
-                        best = improved;
-                        quality = measured;
-                    }
-                }
-            }
-        }
+        let flat_seed = flat_refresh_from_compiled(source, &best);
         // Compare complete retained histories, using only structural boundary
         // recognition. A rejected method leaves the already qualified best.
         // The matrix is a structural candidate, not the flat-refresh seed.
-        // A zero proposal budget must retain that already-qualified seed.
+        // Establish a qualified global bound before exploring local reductions.
+        // Zero retains the existing flat seed behavior.
         if budget > 0 && source.inputs.len() == 4 && (1..=16).contains(&source.outputs.len()) {
             if let Ok(rewrite) = compile_balanced_torch_matrix(source, 1_000_000) {
                 let matrix = CompiledCircuit::from_certified_rewrite(rewrite);
                 if let Some(measured) = quality_with_ports(source, &matrix, true, None, Some(&quality)) {
                     if measured.dominates(&quality) && measured != quality {
                         best = matrix;
+                        quality = measured;
+                    }
+                }
+            }
+        }
+        if let Ok((flat, moved)) = flat_seed {
+            if let Some(candidate) = quality_with_ports(source, &flat, true, None, Some(&quality)) {
+                if candidate.dominates(&quality) {
+                    let (improved, measured) =
+                        improve_refreshes(source, flat, candidate.clone(), budget);
+                    if moved > 0 || measured != candidate {
+                        best = improved;
                     }
                 }
             }

@@ -1,0 +1,17 @@
+{
+  "base_head": "079d1fed72ece5780cc79cb2305b599359c08f4c",
+  "regression_session": 91776,
+  "generator_unchanged": true,
+  "input_admission_unchanged": 4,
+  "selector_sha256": "7e71c9a2bcc6eec8f84f28576054c183a01aa770072c125e528b1783f685985e",
+  "change": "qualify matrix before local refresh search; remove dead final local quality assignment",
+  "production_adopted": false,
+  "initial_manifest_capture_failed_before_checkout_ready": true,
+  "capture_retry_after_source_exists": true,
+  "exit_code": 0,
+  "passed": 10,
+  "failed": 0,
+  "ignored": 0,
+  "log_sha256": "b86effa8aaa2f136ae61e7eb8f63faab1a934eec1a01ac191919d467fe980142",
+  "adoption": "exact qualified selector copied; commit pending"
+}
