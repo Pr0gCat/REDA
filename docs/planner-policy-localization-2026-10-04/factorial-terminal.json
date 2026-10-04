@@ -1,0 +1,26 @@
+{
+  "exit_code": 0,
+  "registered_tests": 1,
+  "cases": 16,
+  "source_sha256": "64e6c54db593feb95d3107064ab6a99cd33add8e26ee5af0422b848440d2dc5f",
+  "binary_sha256": "305a17ba40a9b1f727c27d9039e87df1100aa26b520c2eddf2afe7a3713350af",
+  "profiles": [
+    "POLICY verilog:and4 total=false discount=false automatic=false trace=[8, 5, 5, 0] verification=Ok(Ok(()))",
+    "POLICY full_adder total=false discount=false automatic=false trace=[89, 47, 10, 0] verification=Ok(Err(PhysicalInvariant(TorchMergeViolation { gate: \"g14\", reason: ForeignNetReachesSupport { torch: (64, 1, 87), support: (65, 1, 87), net: \"cin\" } })))",
+    "POLICY verilog:and4 total=false discount=false automatic=true trace=[8, 5, 5, 0] verification=Ok(Ok(()))",
+    "POLICY full_adder total=false discount=false automatic=true trace=[89, 47, 10, 0] verification=Ok(Err(PhysicalInvariant(TorchMergeViolation { gate: \"g1\", reason: ForeignNetReachesSupport { torch: (44, 1, 136), support: (44, 1, 137), net: \"a\" } })))",
+    "POLICY verilog:and4 total=false discount=true automatic=false trace=[8, 5, 6, 0] verification=Ok(Ok(()))",
+    "POLICY full_adder total=false discount=true automatic=false trace=[86, 23, 15, 0] verification=Ok(Err(PhysicalInvariant(TorchMergeViolation { gate: \"g14\", reason: ForeignNetReachesSupport { torch: (64, 1, 87), support: (65, 1, 87), net: \"cin\" } })))",
+    "POLICY verilog:and4 total=false discount=true automatic=true trace=[8, 5, 6, 0] verification=Ok(Ok(()))",
+    "POLICY full_adder total=false discount=true automatic=true trace=[86, 23, 15, 0] verification=Ok(Err(PhysicalInvariant(TorchMergeViolation { gate: \"g1\", reason: ForeignNetReachesSupport { torch: (44, 1, 136), support: (44, 1, 137), net: \"a\" } })))",
+    "POLICY verilog:and4 total=true discount=false automatic=false trace=[8, 5, 5, 0] verification=Ok(Ok(()))",
+    "POLICY full_adder total=true discount=false automatic=false trace=[89, 47, 10, 0] verification=Ok(Ok(()))",
+    "POLICY verilog:and4 total=true discount=false automatic=true trace=[8, 5, 5, 0] verification=Ok(Ok(()))",
+    "POLICY full_adder total=true discount=false automatic=true trace=[89, 47, 10, 0] verification=Ok(Err(PhysicalInvariant(TorchMergeViolation { gate: \"g1\", reason: ForeignNetReachesSupport { torch: (44, 1, 136), support: (44, 1, 137), net: \"a\" } })))",
+    "POLICY verilog:and4 total=true discount=true automatic=false trace=[8, 5, 6, 0] verification=Ok(Ok(()))",
+    "POLICY full_adder total=true discount=true automatic=false trace=[86, 23, 15, 0] verification=Ok(Ok(()))",
+    "POLICY verilog:and4 total=true discount=true automatic=true trace=[8, 5, 6, 0] verification=Ok(Ok(()))",
+    "POLICY full_adder total=true discount=true automatic=true trace=[86, 23, 15, 0] verification=Ok(Err(PhysicalInvariant(TorchMergeViolation { gate: \"g1\", reason: ForeignNetReachesSupport { torch: (44, 1, 136), support: (44, 1, 137), net: \"a\" } })))"
+  ],
+  "adopted": false
+}

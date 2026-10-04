@@ -54,7 +54,11 @@ def compare(control_row, candidate_row):
                     values[g['output']]=not value if g['kind']=='nor' else value
                     pending.remove(g)
             return values
-        previous_internal=evaluate(record['implemented_gates'],record['implemented_inputs'],0)
+        # Graphs are fixed throughout the ordered protocol. Reuse their Boolean
+        # truth values; every recorded state and event is still checked below.
+        source_values_by_address=[evaluate(record['source_gates'],control_row['source_inputs'],address) for address in range(states)]
+        internal_by_address=[evaluate(record['implemented_gates'],record['implemented_inputs'],address) for address in range(states)]
+        previous_internal=internal_by_address[0]
         if 'landing_sites' in record:
             sites=record['landing_sites'];previous_landings=record['initial_landings']
             assert set(sites)==set(previous_landings)
@@ -72,9 +76,9 @@ def compare(control_row, candidate_row):
         previous=record['phases'][0]['expected']
         width=len(previous)
         for p in record['phases']:
-            source_values=evaluate(record['source_gates'],control_row['source_inputs'],p['address'])
+            source_values=source_values_by_address[p['address']]
             assert p['expected']==[source_values[s] for s in control_row['source_outputs']]
-            internal=evaluate(record['implemented_gates'],record['implemented_inputs'],p['address'])
+            internal=internal_by_address[p['address']]
             assert set(p['internal'])=={g['output'] for g in record['implemented_gates']}
             assert all(value==internal[s] for s,value in p['internal'].items())
             if 'internal_events' in p:
