@@ -1,0 +1,46 @@
+{
+  "gates": [
+    {
+      "inputs": [
+        "c"
+      ],
+      "kind": "Nor(1)",
+      "name": "n0",
+      "output": "n0"
+    },
+    {
+      "inputs": [
+        "d"
+      ],
+      "kind": "Nor(1)",
+      "name": "n1",
+      "output": "n1"
+    },
+    {
+      "inputs": [
+        "n0",
+        "n1"
+      ],
+      "kind": "Nor(2)",
+      "name": "g3",
+      "output": "g3"
+    },
+    {
+      "inputs": [
+        "n0"
+      ],
+      "kind": "Nor(1)",
+      "name": "g7",
+      "output": "g7"
+    }
+  ],
+  "inputs": [
+    "c",
+    "d"
+  ],
+  "outputs": [
+    "g3",
+    "g3",
+    "g7"
+  ]
+}

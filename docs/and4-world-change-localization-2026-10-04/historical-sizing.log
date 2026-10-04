@@ -1,0 +1,42 @@
+   Compiling reda v0.1.0 (/tmp/reda-and4-runway-diagnostic-b01ad8e)
+warning: unused import: `SeedRoutingFailure`
+  --> src/compile/fragment_synth/fragment.rs:25:24
+   |
+25 |     SeedRepairRefusal, SeedRoutingFailure, SeedServices, SeedVariant,
+   |                        ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `rank_zero` is never read
+   --> src/compile/fragment_synth/packing.rs:636:9
+    |
+634 |     Exhausted {
+    |     --------- field in this variant
+635 |         attempted: usize,
+636 |         rank_zero: E,
+    |         ^^^^^^^^^
+    |
+    = note: `LayoutSearchError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib test) generated 2 warnings (run `cargo fix --lib -p reda --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 23s
+     Running unittests src/lib.rs (/tmp/reda-and4-diagnostic-target/debug/deps/reda-5d278fcbda4911ca)
+
+running 1 test
+
+thread 'compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped' (59) panicked at src/compile/planner.rs:10990:9:
+assertion `left == right` failed: the grown and4's bounding box
+  left: (68, 6, 62)
+ right: (68, 6, 61)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped ... FAILED
+
+failures:
+
+failures:
+    compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 0.37s
+
+error: test failed, to rerun pass `--lib`

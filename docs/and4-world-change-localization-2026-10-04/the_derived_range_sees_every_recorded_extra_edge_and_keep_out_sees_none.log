@@ -1,0 +1,17 @@
+
+running 1 test
+
+thread 'compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none' (9) panicked at src/compile/planner.rs:25969:9:
+assertion `left == right` failed: every recorded edge is rebuilt and judged
+  left: 40
+ right: 41
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none ... FAILED
+
+failures:
+
+failures:
+    compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 11.02s
+

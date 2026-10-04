@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded' (11) panicked at src/compile/coupling/tests.rs:931:17:
+full_adder / legacy: the measured world is not the one compile() ships
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded ... FAILED
+
+failures:
+
+failures:
+    compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 29.65s
+

@@ -1,0 +1,17 @@
+
+running 1 test
+
+thread 'compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped' (5) panicked at src/compile/planner.rs:10996:9:
+assertion `left == right` failed: the grown and4's bounding box
+  left: (68, 6, 62)
+ right: (68, 6, 61)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped ... FAILED
+
+failures:
+
+failures:
+    compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 0.37s
+

@@ -1,0 +1,21 @@
+{
+  "accepted": true,
+  "independently_recomputed": true,
+  "original_occupied_cells": 1094,
+  "source_gate_ownership_exact_once": 15,
+  "declared_outputs": 9,
+  "full_owned_record_roundtrip_counts": {
+    "placements": 14,
+    "boundaries": 15,
+    "output_boundary_aliases": 1,
+    "connections": 20,
+    "routes": 21,
+    "repeater_handovers": 0,
+    "junctions": 3,
+    "observations": 47
+  },
+  "all_record_payloads_exact_after_inverse_typed_id_and_origin_translation": true,
+  "all_occupied_cell_states_exact": true,
+  "original_union_sealed_world_hash": "4818f3a3af7c2c2f80c973a59e730e5d82697afb6c519b38483e5a9b01cee37f",
+  "quality_optimization": false
+}

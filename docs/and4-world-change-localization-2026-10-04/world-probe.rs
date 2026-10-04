@@ -1,0 +1,2 @@
+use reda::{circuits::and4::build_and4_netlist,compile::{compile_grown,planner::PortPlacements}};
+fn main(){let(n,_)=build_and4_netlist();let c=compile_grown(&n,&PortPlacements::default()).unwrap();println!("{}",serde_json::json!({"size":c.world.size(),"blocks":c.world.cells().iter().enumerate().filter_map(|(i,&p)|{let b=c.world.palette().get(p).unwrap();(b.kind!=reda::redstone::world::block::BlockKind::Air).then(||(c.world.decode(i),b))}).collect::<Vec<_>>() }));}

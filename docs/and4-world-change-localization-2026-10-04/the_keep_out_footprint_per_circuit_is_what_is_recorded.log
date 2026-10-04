@@ -1,0 +1,17 @@
+
+running 1 test
+
+thread 'compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded' (7) panicked at src/compile/planner.rs:26038:13:
+assertion `left == right` failed: and4: the footprint arithmetic moved
+  left: [137, 1644, 1444, 278, 78, 84]
+ right: [134, 1608, 1420, 260, 72, 84]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded ... FAILED
+
+failures:
+
+failures:
+    compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 0.21s
+

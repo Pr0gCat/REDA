@@ -1,0 +1,4352 @@
+{
+  "boundaries": [
+    {
+      "blocks": [
+        {
+          "at": {
+            "x": 4,
+            "y": 0,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 0,
+            "z": 31
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 1,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 1,
+            "z": 31
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": "Floor",
+            "facing": "North",
+            "half": null,
+            "kind": "Lever",
+            "lit": false,
+            "name": "minecraft:lever",
+            "power": 0
+          }
+        }
+      ],
+      "delayed": null,
+      "endpoint": {
+        "PrimaryInput": 0
+      }
+    },
+    {
+      "blocks": [
+        {
+          "at": {
+            "x": 18,
+            "y": 0,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 18,
+            "y": 0,
+            "z": 31
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 18,
+            "y": 1,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 18,
+            "y": 1,
+            "z": 31
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": "Floor",
+            "facing": "North",
+            "half": null,
+            "kind": "Lever",
+            "lit": false,
+            "name": "minecraft:lever",
+            "power": 0
+          }
+        }
+      ],
+      "delayed": null,
+      "endpoint": {
+        "PrimaryInput": 1
+      }
+    },
+    {
+      "blocks": [
+        {
+          "at": {
+            "x": 20,
+            "y": 0,
+            "z": 19
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Lamp",
+            "lit": false,
+            "name": "minecraft:redstone_lamp",
+            "power": 0
+          }
+        }
+      ],
+      "delayed": null,
+      "endpoint": {
+        "DeclaredOutput": 0
+      }
+    },
+    {
+      "blocks": [
+        {
+          "at": {
+            "x": 4,
+            "y": 0,
+            "z": 0
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Lamp",
+            "lit": false,
+            "name": "minecraft:redstone_lamp",
+            "power": 0
+          }
+        }
+      ],
+      "delayed": null,
+      "endpoint": {
+        "DeclaredOutput": 1
+      }
+    },
+    {
+      "blocks": [
+        {
+          "at": {
+            "x": 6,
+            "y": 0,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Lamp",
+            "lit": false,
+            "name": "minecraft:redstone_lamp",
+            "power": 0
+          }
+        }
+      ],
+      "delayed": null,
+      "endpoint": {
+        "DeclaredOutput": 2
+      }
+    }
+  ],
+  "connections": [
+    {
+      "id": {
+        "External": {
+          "input_index": 0,
+          "instance": 1
+        }
+      },
+      "landing": {
+        "Landing": {
+          "External": {
+            "input_index": 0,
+            "instance": 1
+          }
+        }
+      },
+      "route": 2,
+      "sink": {
+        "ordinal": 0,
+        "route": 2
+      },
+      "source": {
+        "PrimitiveOutput": {
+          "instance": 0,
+          "node": 0
+        }
+      }
+    },
+    {
+      "id": {
+        "External": {
+          "input_index": 0,
+          "instance": 2
+        }
+      },
+      "landing": {
+        "Landing": {
+          "External": {
+            "input_index": 0,
+            "instance": 2
+          }
+        }
+      },
+      "route": 0,
+      "sink": {
+        "ordinal": 0,
+        "route": 0
+      },
+      "source": {
+        "PrimaryInput": 0
+      }
+    },
+    {
+      "id": {
+        "External": {
+          "input_index": 1,
+          "instance": 2
+        }
+      },
+      "landing": {
+        "Landing": {
+          "External": {
+            "input_index": 1,
+            "instance": 2
+          }
+        }
+      },
+      "route": 1,
+      "sink": {
+        "ordinal": 0,
+        "route": 1
+      },
+      "source": {
+        "PrimaryInput": 1
+      }
+    }
+  ],
+  "fingerprint": "72aafe9f5215c7ec4074a0d5285061e09fc2bc07fc32924bfafc19f7b02f7ec1",
+  "instances": {
+    "assignments": [
+      {
+        "driver": {
+          "Instance": {
+            "Primitive": {
+              "logical_owner": 0,
+              "terminals": [
+                {
+                  "instance": 0,
+                  "node": 0
+                }
+              ]
+            }
+          }
+        },
+        "signal": {
+          "GateOutput": 0
+        },
+        "sink": {
+          "InstanceInput": {
+            "input_index": 0,
+            "instance": 1
+          }
+        }
+      },
+      {
+        "driver": {
+          "PrimaryInput": 0
+        },
+        "signal": {
+          "PrimaryInput": 0
+        },
+        "sink": {
+          "InstanceInput": {
+            "input_index": 0,
+            "instance": 2
+          }
+        }
+      },
+      {
+        "driver": {
+          "PrimaryInput": 1
+        },
+        "signal": {
+          "PrimaryInput": 1
+        },
+        "sink": {
+          "InstanceInput": {
+            "input_index": 1,
+            "instance": 2
+          }
+        }
+      },
+      {
+        "driver": {
+          "Instance": {
+            "Junction": {
+              "contributors": [
+                {
+                  "Landing": {
+                    "External": {
+                      "input_index": 0,
+                      "instance": 2
+                    }
+                  }
+                },
+                {
+                  "Landing": {
+                    "External": {
+                      "input_index": 1,
+                      "instance": 2
+                    }
+                  }
+                }
+              ],
+              "logical_owner": 2
+            }
+          }
+        },
+        "signal": {
+          "GateOutput": 2
+        },
+        "sink": {
+          "DeclaredOutput": 0
+        }
+      },
+      {
+        "driver": {
+          "Instance": {
+            "Primitive": {
+              "logical_owner": 1,
+              "terminals": [
+                {
+                  "instance": 1,
+                  "node": 0
+                }
+              ]
+            }
+          }
+        },
+        "signal": {
+          "GateOutput": 1
+        },
+        "sink": {
+          "DeclaredOutput": 1
+        }
+      },
+      {
+        "driver": {
+          "Instance": {
+            "Primitive": {
+              "logical_owner": 0,
+              "terminals": [
+                {
+                  "instance": 0,
+                  "node": 0
+                }
+              ]
+            }
+          }
+        },
+        "signal": {
+          "GateOutput": 0
+        },
+        "sink": {
+          "DeclaredOutput": 2
+        }
+      }
+    ],
+    "declared_outputs": [
+      0,
+      1,
+      2
+    ],
+    "instances": [
+      {
+        "expanded": {
+          "implementation": {
+            "Library": {
+              "kind": {
+                "Nor": 0
+              },
+              "ordinal": 0
+            }
+          },
+          "instance": 0,
+          "topology": {
+            "connections": [],
+            "embedding_hints": [],
+            "fingerprint": "15025e665439b427ee79e9f2383d199eb141c46045ce8cfab09967397e6b7aa9",
+            "output": {
+              "Primitive": {
+                "instance": 0,
+                "node": 0
+              }
+            },
+            "primitives": [
+              {
+                "id": {
+                  "instance": 0,
+                  "node": 0
+                },
+                "primitive": "Torch",
+                "role": "Torch"
+              }
+            ]
+          }
+        },
+        "id": 0,
+        "implementation": {
+          "Library": {
+            "kind": {
+              "Nor": 0
+            },
+            "ordinal": 0
+          }
+        },
+        "logical_gate": 0,
+        "role": "Canonical"
+      },
+      {
+        "expanded": {
+          "implementation": {
+            "Library": {
+              "kind": {
+                "Nor": 1
+              },
+              "ordinal": 0
+            }
+          },
+          "instance": 1,
+          "topology": {
+            "connections": [
+              {
+                "id": {
+                  "External": {
+                    "input_index": 0,
+                    "instance": 1
+                  }
+                },
+                "source": {
+                  "ExternalInput": {
+                    "input_index": 0
+                  }
+                },
+                "target": {
+                  "Primitive": {
+                    "instance": 1,
+                    "node": 0
+                  }
+                }
+              }
+            ],
+            "embedding_hints": [],
+            "fingerprint": "cc39a5282fd73a523a57f819fb949f0383d2b340d00e9fe691fdfee6ec050c4e",
+            "output": {
+              "Primitive": {
+                "instance": 1,
+                "node": 0
+              }
+            },
+            "primitives": [
+              {
+                "id": {
+                  "instance": 1,
+                  "node": 0
+                },
+                "primitive": "Torch",
+                "role": "Torch"
+              }
+            ]
+          }
+        },
+        "id": 1,
+        "implementation": {
+          "Library": {
+            "kind": {
+              "Nor": 1
+            },
+            "ordinal": 0
+          }
+        },
+        "logical_gate": 1,
+        "role": "Canonical"
+      },
+      {
+        "expanded": {
+          "implementation": {
+            "Merge": {
+              "isolation_mask": 0
+            }
+          },
+          "instance": 2,
+          "topology": {
+            "connections": [
+              {
+                "id": {
+                  "External": {
+                    "input_index": 0,
+                    "instance": 2
+                  }
+                },
+                "source": {
+                  "ExternalInput": {
+                    "input_index": 0
+                  }
+                },
+                "target": {
+                  "Junction": 2
+                }
+              },
+              {
+                "id": {
+                  "External": {
+                    "input_index": 1,
+                    "instance": 2
+                  }
+                },
+                "source": {
+                  "ExternalInput": {
+                    "input_index": 1
+                  }
+                },
+                "target": {
+                  "Junction": 2
+                }
+              }
+            ],
+            "embedding_hints": [],
+            "fingerprint": "ad4d75ce9bbfe3b12d526629b63a441591e1555d11fe4e807dbe2d23ca9c1e8c",
+            "output": {
+              "Junction": {
+                "contributors": [
+                  {
+                    "Landing": {
+                      "External": {
+                        "input_index": 0,
+                        "instance": 2
+                      }
+                    }
+                  },
+                  {
+                    "Landing": {
+                      "External": {
+                        "input_index": 1,
+                        "instance": 2
+                      }
+                    }
+                  }
+                ],
+                "logical_owner": 2
+              }
+            },
+            "primitives": []
+          }
+        },
+        "id": 2,
+        "implementation": {
+          "Merge": {
+            "isolation_mask": 0
+          }
+        },
+        "logical_gate": 2,
+        "role": "Canonical"
+      }
+    ],
+    "primary_inputs": [
+      0,
+      1
+    ]
+  },
+  "junctions": [
+    {
+      "at": {
+        "x": 20,
+        "y": 1,
+        "z": 20
+      },
+      "cells": [
+        {
+          "at": {
+            "x": 20,
+            "y": 0,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 20,
+            "y": 1,
+            "z": 19
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 20,
+            "y": 1,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        }
+      ],
+      "contributors": [
+        {
+          "Landing": {
+            "External": {
+              "input_index": 0,
+              "instance": 2
+            }
+          }
+        },
+        {
+          "Landing": {
+            "External": {
+              "input_index": 1,
+              "instance": 2
+            }
+          }
+        }
+      ],
+      "facing": "CellFacing(0)",
+      "id": 2
+    }
+  ],
+  "observations": [
+    {
+      "site": {
+        "at": {
+          "x": 4,
+          "y": 1,
+          "z": 31
+        },
+        "display_label": "a",
+        "id": {
+          "PrimaryInput": 0
+        },
+        "logical_owner": null
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": "Floor",
+        "facing": "North",
+        "half": null,
+        "kind": "Lever",
+        "lit": false,
+        "name": "minecraft:lever",
+        "power": 0
+      }
+    },
+    {
+      "site": {
+        "at": {
+          "x": 18,
+          "y": 1,
+          "z": 31
+        },
+        "display_label": "b",
+        "id": {
+          "PrimaryInput": 1
+        },
+        "logical_owner": null
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": "Floor",
+        "facing": "North",
+        "half": null,
+        "kind": "Lever",
+        "lit": false,
+        "name": "minecraft:lever",
+        "power": 0
+      }
+    },
+    {
+      "site": {
+        "at": {
+          "x": 6,
+          "y": 1,
+          "z": 19
+        },
+        "display_label": null,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 0,
+            "node": 0
+          }
+        },
+        "logical_owner": 0
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": "North",
+        "half": null,
+        "kind": "WallTorch",
+        "lit": true,
+        "name": "minecraft:redstone_wall_torch",
+        "power": 0
+      }
+    },
+    {
+      "site": {
+        "at": {
+          "x": 4,
+          "y": 1,
+          "z": 1
+        },
+        "display_label": null,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 1,
+            "node": 0
+          }
+        },
+        "logical_owner": 1
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": "North",
+        "half": null,
+        "kind": "WallTorch",
+        "lit": true,
+        "name": "minecraft:redstone_wall_torch",
+        "power": 0
+      }
+    },
+    {
+      "site": {
+        "at": {
+          "x": 6,
+          "y": 1,
+          "z": 19
+        },
+        "display_label": "g0",
+        "id": {
+          "InstanceOutput": 0
+        },
+        "logical_owner": 0
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": "North",
+        "half": null,
+        "kind": "WallTorch",
+        "lit": true,
+        "name": "minecraft:redstone_wall_torch",
+        "power": 0
+      }
+    },
+    {
+      "site": {
+        "at": {
+          "x": 4,
+          "y": 1,
+          "z": 1
+        },
+        "display_label": "g1",
+        "id": {
+          "InstanceOutput": 1
+        },
+        "logical_owner": 1
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": "North",
+        "half": null,
+        "kind": "WallTorch",
+        "lit": true,
+        "name": "minecraft:redstone_wall_torch",
+        "power": 0
+      }
+    },
+    {
+      "site": {
+        "at": {
+          "x": 20,
+          "y": 1,
+          "z": 20
+        },
+        "display_label": "g2",
+        "id": {
+          "InstanceOutput": 2
+        },
+        "logical_owner": 2
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "RedstoneWire",
+        "lit": false,
+        "name": "minecraft:redstone_wire",
+        "power": 0
+      }
+    },
+    {
+      "site": {
+        "at": {
+          "x": 20,
+          "y": 1,
+          "z": 20
+        },
+        "display_label": "g2",
+        "id": {
+          "JunctionOutput": 2
+        },
+        "logical_owner": 2
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "RedstoneWire",
+        "lit": false,
+        "name": "minecraft:redstone_wire",
+        "power": 0
+      }
+    },
+    {
+      "site": {
+        "at": {
+          "x": 20,
+          "y": 0,
+          "z": 19
+        },
+        "display_label": "g2",
+        "id": {
+          "DeclaredOutput": 0
+        },
+        "logical_owner": 2
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "Lamp",
+        "lit": false,
+        "name": "minecraft:redstone_lamp",
+        "power": 0
+      }
+    },
+    {
+      "site": {
+        "at": {
+          "x": 4,
+          "y": 0,
+          "z": 0
+        },
+        "display_label": "g1",
+        "id": {
+          "DeclaredOutput": 1
+        },
+        "logical_owner": 1
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "Lamp",
+        "lit": false,
+        "name": "minecraft:redstone_lamp",
+        "power": 0
+      }
+    },
+    {
+      "site": {
+        "at": {
+          "x": 6,
+          "y": 0,
+          "z": 18
+        },
+        "display_label": "g0",
+        "id": {
+          "DeclaredOutput": 2
+        },
+        "logical_owner": 0
+      },
+      "state": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "Lamp",
+        "lit": false,
+        "name": "minecraft:redstone_lamp",
+        "power": 0
+      }
+    }
+  ],
+  "output_boundary_aliases": [],
+  "pin_contracts_empty": true,
+  "pin_name_bindings_empty": true,
+  "pins_empty": true,
+  "placements": [
+    {
+      "anchor": {
+        "x": 6,
+        "y": 1,
+        "z": 20
+      },
+      "blocks": [
+        {
+          "at": {
+            "x": 6,
+            "y": 1,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 6,
+            "y": 1,
+            "z": 19
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": "North",
+            "half": null,
+            "kind": "WallTorch",
+            "lit": true,
+            "name": "minecraft:redstone_wall_torch",
+            "power": 0
+          }
+        }
+      ],
+      "delayed": null,
+      "facing": "CellFacing(0)",
+      "id": {
+        "instance": 0,
+        "node": 0
+      },
+      "variant": 0
+    },
+    {
+      "anchor": {
+        "x": 4,
+        "y": 1,
+        "z": 2
+      },
+      "blocks": [
+        {
+          "at": {
+            "x": 4,
+            "y": 1,
+            "z": 2
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 1,
+            "z": 1
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": "North",
+            "half": null,
+            "kind": "WallTorch",
+            "lit": true,
+            "name": "minecraft:redstone_wall_torch",
+            "power": 0
+          }
+        }
+      ],
+      "delayed": null,
+      "facing": "CellFacing(0)",
+      "id": {
+        "instance": 1,
+        "node": 0
+      },
+      "variant": 0
+    }
+  ],
+  "repeater_handovers": [],
+  "routes": [
+    {
+      "branches": [
+        {
+          "path": [
+            {
+              "x": 4,
+              "y": 1,
+              "z": 30
+            },
+            {
+              "x": 4,
+              "y": 1,
+              "z": 29
+            },
+            {
+              "x": 4,
+              "y": 1,
+              "z": 28
+            },
+            {
+              "x": 4,
+              "y": 2,
+              "z": 27
+            },
+            {
+              "x": 4,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 5,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 6,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 7,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 8,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 9,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 10,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 11,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 12,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 13,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 14,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 15,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 16,
+              "y": 3,
+              "z": 26
+            },
+            {
+              "x": 16,
+              "y": 2,
+              "z": 25
+            },
+            {
+              "x": 16,
+              "y": 1,
+              "z": 24
+            },
+            {
+              "x": 16,
+              "y": 1,
+              "z": 23
+            },
+            {
+              "x": 16,
+              "y": 1,
+              "z": 22
+            },
+            {
+              "x": 16,
+              "y": 1,
+              "z": 21
+            },
+            {
+              "x": 16,
+              "y": 1,
+              "z": 20
+            },
+            {
+              "x": 17,
+              "y": 1,
+              "z": 20
+            },
+            {
+              "x": 18,
+              "y": 1,
+              "z": 20
+            },
+            {
+              "x": 19,
+              "y": 1,
+              "z": 20
+            }
+          ],
+          "root": {
+            "x": 4,
+            "y": 1,
+            "z": 30
+          },
+          "sink": {
+            "ordinal": 0,
+            "route": 0
+          },
+          "target": {
+            "Connection": {
+              "External": {
+                "input_index": 0,
+                "instance": 2
+              }
+            }
+          },
+          "terminal": {
+            "at": {
+              "x": 19,
+              "y": 1,
+              "z": 20
+            },
+            "delayed_owner": null,
+            "kind": "BareMergeDust",
+            "repeaters": 1,
+            "sink": {
+              "ordinal": 0,
+              "route": 0
+            },
+            "state": {
+              "delay": 0,
+              "extra_properties": {},
+              "face": null,
+              "facing": null,
+              "half": null,
+              "kind": "RedstoneWire",
+              "lit": false,
+              "name": "minecraft:redstone_wire",
+              "power": 0
+            }
+          }
+        }
+      ],
+      "cells": [
+        {
+          "at": {
+            "x": 4,
+            "y": 2,
+            "z": 27
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 2,
+            "z": 25
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 1,
+            "z": 24
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 1,
+            "z": 29
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 1,
+            "z": 28
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 1,
+            "z": 23
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 1,
+            "z": 22
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 1,
+            "z": 21
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 1,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 17,
+            "y": 1,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 18,
+            "y": 1,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 19,
+            "y": 1,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 5,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 6,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 7,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 8,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 9,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 10,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 11,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 12,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 13,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 14,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 15,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "West",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 3,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        }
+      ],
+      "floors": [
+        {
+          "at": {
+            "x": 4,
+            "y": 1,
+            "z": 27
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 1,
+            "z": 25
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 0,
+            "z": 24
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 0,
+            "z": 29
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 0,
+            "z": 28
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 0,
+            "z": 23
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 0,
+            "z": 22
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 0,
+            "z": 21
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 0,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 17,
+            "y": 0,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 18,
+            "y": 0,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 19,
+            "y": 0,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 5,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 6,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 7,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 8,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 9,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 10,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 11,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 12,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 13,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 14,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 15,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 16,
+            "y": 2,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        }
+      ],
+      "id": 0,
+      "source": {
+        "PrimaryInput": 0
+      }
+    },
+    {
+      "branches": [
+        {
+          "path": [
+            {
+              "x": 18,
+              "y": 1,
+              "z": 30
+            },
+            {
+              "x": 19,
+              "y": 1,
+              "z": 30
+            },
+            {
+              "x": 20,
+              "y": 1,
+              "z": 30
+            },
+            {
+              "x": 21,
+              "y": 1,
+              "z": 30
+            },
+            {
+              "x": 22,
+              "y": 1,
+              "z": 30
+            },
+            {
+              "x": 23,
+              "y": 1,
+              "z": 30
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 30
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 29
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 28
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 27
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 26
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 25
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 24
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 23
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 22
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 21
+            },
+            {
+              "x": 24,
+              "y": 1,
+              "z": 20
+            },
+            {
+              "x": 23,
+              "y": 1,
+              "z": 20
+            },
+            {
+              "x": 22,
+              "y": 1,
+              "z": 20
+            },
+            {
+              "x": 21,
+              "y": 1,
+              "z": 20
+            }
+          ],
+          "root": {
+            "x": 18,
+            "y": 1,
+            "z": 30
+          },
+          "sink": {
+            "ordinal": 0,
+            "route": 1
+          },
+          "target": {
+            "Connection": {
+              "External": {
+                "input_index": 1,
+                "instance": 2
+              }
+            }
+          },
+          "terminal": {
+            "at": {
+              "x": 21,
+              "y": 1,
+              "z": 20
+            },
+            "delayed_owner": null,
+            "kind": "BareMergeDust",
+            "repeaters": 1,
+            "sink": {
+              "ordinal": 0,
+              "route": 1
+            },
+            "state": {
+              "delay": 0,
+              "extra_properties": {},
+              "face": null,
+              "facing": null,
+              "half": null,
+              "kind": "RedstoneWire",
+              "lit": false,
+              "name": "minecraft:redstone_wire",
+              "power": 0
+            }
+          }
+        }
+      ],
+      "cells": [
+        {
+          "at": {
+            "x": 19,
+            "y": 1,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 20,
+            "y": 1,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 21,
+            "y": 1,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 22,
+            "y": 1,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 23,
+            "y": 1,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 29
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 28
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 27
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 25
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 24
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 23
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 22
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 21
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 1,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 23,
+            "y": 1,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 22,
+            "y": 1,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 21,
+            "y": 1,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        }
+      ],
+      "floors": [
+        {
+          "at": {
+            "x": 19,
+            "y": 0,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 20,
+            "y": 0,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 21,
+            "y": 0,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 22,
+            "y": 0,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 23,
+            "y": 0,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 30
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 29
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 28
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 27
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 26
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 25
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 24
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 23
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 22
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 21
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 24,
+            "y": 0,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 23,
+            "y": 0,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 22,
+            "y": 0,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 21,
+            "y": 0,
+            "z": 20
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        }
+      ],
+      "id": 1,
+      "source": {
+        "PrimaryInput": 1
+      }
+    },
+    {
+      "branches": [
+        {
+          "path": [
+            {
+              "x": 6,
+              "y": 1,
+              "z": 18
+            },
+            {
+              "x": 5,
+              "y": 1,
+              "z": 18
+            },
+            {
+              "x": 4,
+              "y": 1,
+              "z": 18
+            },
+            {
+              "x": 3,
+              "y": 1,
+              "z": 18
+            },
+            {
+              "x": 2,
+              "y": 1,
+              "z": 18
+            },
+            {
+              "x": 1,
+              "y": 1,
+              "z": 18
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 18
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 17
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 16
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 15
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 14
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 13
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 12
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 11
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 10
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 9
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 8
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 7
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 6
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 5
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 4
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 3
+            },
+            {
+              "x": 0,
+              "y": 1,
+              "z": 2
+            },
+            {
+              "x": 1,
+              "y": 1,
+              "z": 2
+            },
+            {
+              "x": 2,
+              "y": 1,
+              "z": 2
+            },
+            {
+              "x": 3,
+              "y": 1,
+              "z": 2
+            }
+          ],
+          "root": {
+            "x": 6,
+            "y": 1,
+            "z": 18
+          },
+          "sink": {
+            "ordinal": 0,
+            "route": 2
+          },
+          "target": {
+            "Connection": {
+              "External": {
+                "input_index": 0,
+                "instance": 1
+              }
+            }
+          },
+          "terminal": {
+            "at": {
+              "x": 3,
+              "y": 1,
+              "z": 2
+            },
+            "delayed_owner": null,
+            "kind": "DirectedDustIntoSupport",
+            "repeaters": 1,
+            "sink": {
+              "ordinal": 0,
+              "route": 2
+            },
+            "state": {
+              "delay": 0,
+              "extra_properties": {},
+              "face": null,
+              "facing": null,
+              "half": null,
+              "kind": "RedstoneWire",
+              "lit": false,
+              "name": "minecraft:redstone_wire",
+              "power": 0
+            }
+          }
+        },
+        {
+          "path": [
+            {
+              "x": 6,
+              "y": 1,
+              "z": 18
+            }
+          ],
+          "root": {
+            "x": 6,
+            "y": 1,
+            "z": 18
+          },
+          "sink": {
+            "ordinal": 1,
+            "route": 2
+          },
+          "target": {
+            "DeclaredOutput": 2
+          },
+          "terminal": {
+            "at": {
+              "x": 6,
+              "y": 1,
+              "z": 18
+            },
+            "delayed_owner": null,
+            "kind": "DirectedDustIntoSupport",
+            "repeaters": 0,
+            "sink": {
+              "ordinal": 1,
+              "route": 2
+            },
+            "state": {
+              "delay": 0,
+              "extra_properties": {},
+              "face": null,
+              "facing": null,
+              "half": null,
+              "kind": "RedstoneWire",
+              "lit": false,
+              "name": "minecraft:redstone_wire",
+              "power": 0
+            }
+          }
+        }
+      ],
+      "cells": [
+        {
+          "at": {
+            "x": 6,
+            "y": 1,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 5,
+            "y": 1,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 1,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 3,
+            "y": 1,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 2,
+            "y": 1,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 1,
+            "y": 1,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 17
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 16
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 15
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 14
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 13
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 12
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 11
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 10
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 9
+          },
+          "state": {
+            "delay": 1,
+            "extra_properties": {},
+            "face": null,
+            "facing": "South",
+            "half": null,
+            "kind": "Repeater",
+            "lit": true,
+            "name": "minecraft:repeater",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 8
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 7
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 6
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 5
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 4
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 3
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 1,
+            "z": 2
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 1,
+            "y": 1,
+            "z": 2
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 2,
+            "y": 1,
+            "z": 2
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 3,
+            "y": 1,
+            "z": 2
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        }
+      ],
+      "floors": [
+        {
+          "at": {
+            "x": 5,
+            "y": 0,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 4,
+            "y": 0,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 3,
+            "y": 0,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 2,
+            "y": 0,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 1,
+            "y": 0,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 18
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 17
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 16
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 15
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 14
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 13
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 12
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 11
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 10
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 9
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 8
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 7
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 6
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 5
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 4
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 3
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 0,
+            "y": 0,
+            "z": 2
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 1,
+            "y": 0,
+            "z": 2
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 2,
+            "y": 0,
+            "z": 2
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        },
+        {
+          "at": {
+            "x": 3,
+            "y": 0,
+            "z": 2
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "Solid",
+            "lit": false,
+            "name": "minecraft:stone",
+            "power": 0
+          }
+        }
+      ],
+      "id": 2,
+      "source": {
+        "PrimitiveOutput": {
+          "instance": 0,
+          "node": 0
+        }
+      }
+    },
+    {
+      "branches": [
+        {
+          "path": [
+            {
+              "x": 20,
+              "y": 1,
+              "z": 19
+            }
+          ],
+          "root": {
+            "x": 20,
+            "y": 1,
+            "z": 19
+          },
+          "sink": {
+            "ordinal": 0,
+            "route": 3
+          },
+          "target": {
+            "DeclaredOutput": 0
+          },
+          "terminal": {
+            "at": {
+              "x": 20,
+              "y": 1,
+              "z": 19
+            },
+            "delayed_owner": null,
+            "kind": "DirectedDustIntoSupport",
+            "repeaters": 0,
+            "sink": {
+              "ordinal": 0,
+              "route": 3
+            },
+            "state": {
+              "delay": 0,
+              "extra_properties": {},
+              "face": null,
+              "facing": null,
+              "half": null,
+              "kind": "RedstoneWire",
+              "lit": false,
+              "name": "minecraft:redstone_wire",
+              "power": 0
+            }
+          }
+        }
+      ],
+      "cells": [],
+      "floors": [],
+      "id": 3,
+      "source": {
+        "Junction": 2
+      }
+    },
+    {
+      "branches": [
+        {
+          "path": [
+            {
+              "x": 4,
+              "y": 1,
+              "z": 0
+            }
+          ],
+          "root": {
+            "x": 4,
+            "y": 1,
+            "z": 0
+          },
+          "sink": {
+            "ordinal": 0,
+            "route": 4
+          },
+          "target": {
+            "DeclaredOutput": 1
+          },
+          "terminal": {
+            "at": {
+              "x": 4,
+              "y": 1,
+              "z": 0
+            },
+            "delayed_owner": null,
+            "kind": "DirectedDustIntoSupport",
+            "repeaters": 0,
+            "sink": {
+              "ordinal": 0,
+              "route": 4
+            },
+            "state": {
+              "delay": 0,
+              "extra_properties": {},
+              "face": null,
+              "facing": null,
+              "half": null,
+              "kind": "RedstoneWire",
+              "lit": false,
+              "name": "minecraft:redstone_wire",
+              "power": 0
+            }
+          }
+        }
+      ],
+      "cells": [
+        {
+          "at": {
+            "x": 4,
+            "y": 1,
+            "z": 0
+          },
+          "state": {
+            "delay": 0,
+            "extra_properties": {},
+            "face": null,
+            "facing": null,
+            "half": null,
+            "kind": "RedstoneWire",
+            "lit": false,
+            "name": "minecraft:redstone_wire",
+            "power": 0
+          }
+        }
+      ],
+      "floors": [],
+      "id": 4,
+      "source": {
+        "PrimitiveOutput": {
+          "instance": 1,
+          "node": 0
+        }
+      }
+    }
+  ]
+}

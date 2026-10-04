@@ -1,0 +1,459 @@
+{
+  "accepted": true,
+  "covered_records": {
+    "boundaries:DeclaredOutput(PortId(0))": 1,
+    "boundaries:DeclaredOutput(PortId(1))": 1,
+    "boundaries:DeclaredOutput(PortId(2))": 1,
+    "boundaries:DeclaredOutput(PortId(3))": 1,
+    "boundaries:DeclaredOutput(PortId(4))": 1,
+    "boundaries:DeclaredOutput(PortId(5))": 1,
+    "boundaries:DeclaredOutput(PortId(6))": 1,
+    "boundaries:DeclaredOutput(PortId(7))": 1,
+    "boundaries:DeclaredOutput(PortId(8))": 1,
+    "boundaries:PrimaryInput(PortId(0))": 1,
+    "boundaries:PrimaryInput(PortId(1))": 1,
+    "boundaries:PrimaryInput(PortId(2))": 1,
+    "boundaries:PrimaryInput(PortId(3))": 1,
+    "boundaries:PrimaryInput(PortId(4))": 1,
+    "boundaries:PrimaryInput(PortId(5))": 1,
+    "connections:External { instance: InstanceId(1), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(10), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(10), input_index: 1 }": 1,
+    "connections:External { instance: InstanceId(11), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(11), input_index: 1 }": 1,
+    "connections:External { instance: InstanceId(12), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(13), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(14), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(2), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(2), input_index: 1 }": 1,
+    "connections:External { instance: InstanceId(3), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(4), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(5), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(5), input_index: 1 }": 1,
+    "connections:External { instance: InstanceId(6), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(7), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(8), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(8), input_index: 1 }": 1,
+    "connections:External { instance: InstanceId(9), input_index: 0 }": 1,
+    "connections:External { instance: InstanceId(9), input_index: 1 }": 1,
+    "junctions:InstanceId(10)": 1,
+    "junctions:InstanceId(11)": 1,
+    "junctions:InstanceId(2)": 1,
+    "observations:DeclaredOutput(PortId(0))": 1,
+    "observations:DeclaredOutput(PortId(1))": 1,
+    "observations:DeclaredOutput(PortId(2))": 1,
+    "observations:DeclaredOutput(PortId(3))": 1,
+    "observations:DeclaredOutput(PortId(4))": 1,
+    "observations:DeclaredOutput(PortId(5))": 1,
+    "observations:DeclaredOutput(PortId(6))": 1,
+    "observations:DeclaredOutput(PortId(7))": 1,
+    "observations:DeclaredOutput(PortId(8))": 1,
+    "observations:InstanceOutput(InstanceId(0))": 1,
+    "observations:InstanceOutput(InstanceId(1))": 1,
+    "observations:InstanceOutput(InstanceId(10))": 1,
+    "observations:InstanceOutput(InstanceId(11))": 1,
+    "observations:InstanceOutput(InstanceId(12))": 1,
+    "observations:InstanceOutput(InstanceId(13))": 1,
+    "observations:InstanceOutput(InstanceId(14))": 1,
+    "observations:InstanceOutput(InstanceId(2))": 1,
+    "observations:InstanceOutput(InstanceId(3))": 1,
+    "observations:InstanceOutput(InstanceId(4))": 1,
+    "observations:InstanceOutput(InstanceId(5))": 1,
+    "observations:InstanceOutput(InstanceId(6))": 1,
+    "observations:InstanceOutput(InstanceId(7))": 1,
+    "observations:InstanceOutput(InstanceId(8))": 1,
+    "observations:InstanceOutput(InstanceId(9))": 1,
+    "observations:JunctionOutput(InstanceId(10))": 1,
+    "observations:JunctionOutput(InstanceId(11))": 1,
+    "observations:JunctionOutput(InstanceId(2))": 1,
+    "observations:PrimaryInput(PortId(0))": 1,
+    "observations:PrimaryInput(PortId(1))": 1,
+    "observations:PrimaryInput(PortId(2))": 1,
+    "observations:PrimaryInput(PortId(3))": 1,
+    "observations:PrimaryInput(PortId(4))": 1,
+    "observations:PrimaryInput(PortId(5))": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(0), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(1), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(11), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(11), node: TopologyNodeId(1) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(12), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(13), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(14), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(3), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(4), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(5), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(6), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(7), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(8), node: TopologyNodeId(0) })": 1,
+    "observations:PrimitiveOutput(PrimitiveId { instance: InstanceId(9), node: TopologyNodeId(0) })": 1,
+    "output_boundary_aliases:PortId(4)": 1,
+    "placements:PrimitiveId { instance: InstanceId(0), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(1), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(11), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(11), node: TopologyNodeId(1) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(12), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(13), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(14), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(3), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(4), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(5), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(6), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(7), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(8), node: TopologyNodeId(0) }": 1,
+    "placements:PrimitiveId { instance: InstanceId(9), node: TopologyNodeId(0) }": 1,
+    "routes:RouteId(0)": 1,
+    "routes:RouteId(1)": 1,
+    "routes:RouteId(10)": 1,
+    "routes:RouteId(11)": 1,
+    "routes:RouteId(12)": 1,
+    "routes:RouteId(13)": 1,
+    "routes:RouteId(14)": 1,
+    "routes:RouteId(15)": 1,
+    "routes:RouteId(16)": 1,
+    "routes:RouteId(17)": 1,
+    "routes:RouteId(18)": 1,
+    "routes:RouteId(19)": 1,
+    "routes:RouteId(2)": 1,
+    "routes:RouteId(20)": 1,
+    "routes:RouteId(3)": 1,
+    "routes:RouteId(4)": 1,
+    "routes:RouteId(5)": 1,
+    "routes:RouteId(6)": 1,
+    "routes:RouteId(7)": 1,
+    "routes:RouteId(8)": 1,
+    "routes:RouteId(9)": 1
+  },
+  "declared_outputs": 9,
+  "interfaces_and_implemented_observations_exact": true,
+  "leaves": [
+    {
+      "local_manifest_fingerprint": "72aafe9f5215c7ec4074a0d5285061e09fc2bc07fc32924bfafc19f7b02f7ec1",
+      "local_world_fingerprint": "c4aaa8778c85e39432627472bd0480a9bc878a2cdce92b305b5831b791029923",
+      "mapping_inputs": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "mapping_instances": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "mapping_outputs": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "mapping_routes": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          6,
+          2
+        ],
+        [
+          14,
+          3
+        ],
+        [
+          15,
+          4
+        ]
+      ],
+      "ordinal": 0,
+      "origin": {
+        "x": 8,
+        "y": 0,
+        "z": 14
+      },
+      "size": [
+        25,
+        4,
+        32
+      ],
+      "source_gate_outputs": [
+        "g0",
+        "g1",
+        "g2"
+      ],
+      "source_inputs": [
+        "a",
+        "b"
+      ],
+      "source_outputs": [
+        "g2",
+        "g1",
+        "g0"
+      ]
+    },
+    {
+      "local_manifest_fingerprint": "f4a95f2bc7cfcb695f1cd7cd9e8608c8998074346d7a83eacd38947171ab7bdd",
+      "local_world_fingerprint": "429a973ba235e14e3b17714a242282dbc157f41a045d59e994e698a2111dad44",
+      "mapping_inputs": [
+        [
+          2,
+          0
+        ],
+        [
+          3,
+          1
+        ]
+      ],
+      "mapping_instances": [
+        [
+          3,
+          0
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          2
+        ],
+        [
+          13,
+          3
+        ]
+      ],
+      "mapping_outputs": [
+        [
+          3,
+          0
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          2
+        ]
+      ],
+      "mapping_routes": [
+        [
+          2,
+          0
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          7,
+          2
+        ],
+        [
+          8,
+          3
+        ],
+        [
+          16,
+          4
+        ],
+        [
+          17,
+          5
+        ]
+      ],
+      "ordinal": 1,
+      "origin": {
+        "x": 22,
+        "y": 0,
+        "z": 14
+      },
+      "size": [
+        35,
+        4,
+        32
+      ],
+      "source_gate_outputs": [
+        "n0",
+        "n1",
+        "g3",
+        "g7"
+      ],
+      "source_inputs": [
+        "c",
+        "d"
+      ],
+      "source_outputs": [
+        "g3",
+        "g3",
+        "g7"
+      ]
+    },
+    {
+      "local_manifest_fingerprint": "6bdd9f1f657e85d2322ae0ccd4e61a7001974f883a0e8049b9c16d82bad08575",
+      "local_world_fingerprint": "a3fac959596817b8e1c92e2a3bd9287cc17379fd1427f19102e8b2789d272b6d",
+      "mapping_inputs": [
+        [
+          4,
+          0
+        ],
+        [
+          5,
+          1
+        ]
+      ],
+      "mapping_instances": [
+        [
+          6,
+          0
+        ],
+        [
+          7,
+          1
+        ],
+        [
+          8,
+          2
+        ],
+        [
+          9,
+          3
+        ],
+        [
+          10,
+          4
+        ],
+        [
+          11,
+          5
+        ],
+        [
+          12,
+          6
+        ],
+        [
+          14,
+          7
+        ]
+      ],
+      "mapping_outputs": [
+        [
+          6,
+          0
+        ],
+        [
+          7,
+          1
+        ],
+        [
+          8,
+          2
+        ]
+      ],
+      "mapping_routes": [
+        [
+          4,
+          0
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          9,
+          2
+        ],
+        [
+          10,
+          3
+        ],
+        [
+          11,
+          4
+        ],
+        [
+          12,
+          5
+        ],
+        [
+          13,
+          6
+        ],
+        [
+          18,
+          7
+        ],
+        [
+          19,
+          8
+        ],
+        [
+          20,
+          9
+        ]
+      ],
+      "ordinal": 2,
+      "origin": {
+        "x": 50,
+        "y": 0,
+        "z": 4
+      },
+      "size": [
+        49,
+        4,
+        42
+      ],
+      "source_gate_outputs": [
+        "n2",
+        "n3",
+        "n4",
+        "n5",
+        "g4",
+        "g5",
+        "g6",
+        "g8"
+      ],
+      "source_inputs": [
+        "e",
+        "f"
+      ],
+      "source_outputs": [
+        "g4",
+        "g6",
+        "g8"
+      ]
+    }
+  ],
+  "original_manifest_fingerprint": "cc20503c2bc48d27bc55d647b335b92197812b20c80a037ae49d6b789db2f360",
+  "original_world_fingerprint": "4818f3a3af7c2c2f80c973a59e730e5d82697afb6c519b38483e5a9b01cee37f",
+  "purpose": "original physical-cone identity and exact ownership coverage only",
+  "quality_optimization": false,
+  "sealed_root_manifest_fingerprint": "cc20503c2bc48d27bc55d647b335b92197812b20c80a037ae49d6b789db2f360",
+  "sealed_root_world_fingerprint": "4818f3a3af7c2c2f80c973a59e730e5d82697afb6c519b38483e5a9b01cee37f",
+  "source_gates": 15,
+  "union_world_fingerprint": "4818f3a3af7c2c2f80c973a59e730e5d82697afb6c519b38483e5a9b01cee37f"
+}
