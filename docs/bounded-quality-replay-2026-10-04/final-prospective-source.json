@@ -1,0 +1,12 @@
+{
+  "head": "856dacc",
+  "only_owned_source_overlay": "src/compile/selection.rs",
+  "source_sha256": "7b405976bff79a7395b9424ffefbf4def0a5ffdd8dd33d3efe3fefcacfdfd416",
+  "unit_test_profile": {
+    "release_opt_level": 0,
+    "debug_assertions": "release default",
+    "physics_and_assertions_unchanged": true
+  },
+  "optimized_integration_passes": true,
+  "original_head_zero_budget_failure_reproduced": true
+}

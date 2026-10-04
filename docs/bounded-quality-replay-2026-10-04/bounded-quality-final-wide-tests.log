@@ -1,0 +1,11 @@
+
+running 6 tests
+test compile::selection::tests::fewer_individual_glitches_cannot_hide_more_glitch_transitions ... ok
+test compile::selection::tests::selector_preserves_realisability_cycle_and_driver_errors ... ok
+test compile::selection::tests::unified_backup_retains_an_exact_certifiable_manifest ... ok
+test compile::selection::tests::modified_sealed_views_never_qualify ... ok
+test compile::selection::tests::bounded_wave_replay_keeps_complete_success_and_rejects_real_counterexamples ... ok
+test compile::selection::tests::bounded_replay_preserves_wide_repeated_public_channels ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1256 filtered out; finished in 2.71s
+

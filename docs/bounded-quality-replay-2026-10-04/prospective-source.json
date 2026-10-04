@@ -1,0 +1,7 @@
+{
+  "head": "856dacc6ecd3d194c289c43853786a1b3ac552a5",
+  "exact_source_tree_before_owned_overlay_matches_head": true,
+  "only_owned_source_overlay": "src/compile/selection.rs",
+  "source_sha256": "6408141efc944532aec8068671e51305f3e1c8b177b95f1f1b80953158c6dddf",
+  "user_dirty_foundation_excluded": true
+}

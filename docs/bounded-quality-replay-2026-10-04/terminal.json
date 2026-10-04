@@ -1,0 +1,14 @@
+{
+  "original_head_flat_integration_exit": 101,
+  "budget_fixed_optimized_flat_integration_exit": 0,
+  "worktree_selection_tests_exit": 0,
+  "initial_prospective_selection_tests_exit": 0,
+  "final_prospective_selection_tests_exit": 0,
+  "final_selection_tests": 6,
+  "optimized_integration_tests": 2,
+  "only_post_integration_source_change": "additional cfg(test) wide-channel regression",
+  "reconstructed_optimized_tested_source_hash_matches": true,
+  "final_source_sha256": "7b405976bff79a7395b9424ffefbf4def0a5ffdd8dd33d3efe3fefcacfdfd416",
+  "existing_tests_controls_physics_and_budgets_unchanged": true,
+  "user_dirty_foundation_excluded": true
+}

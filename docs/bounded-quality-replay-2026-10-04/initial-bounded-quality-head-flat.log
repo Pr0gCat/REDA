@@ -1,0 +1,12 @@
+
+running 2 tests
+test qualification_checks_complete_boundaries_and_constant_outputs ... ok
+test staircase_refresh_relocation_makes_the_actual_decoder_manifest_certifiable ... FAILED
+
+failures:
+
+failures:
+    staircase_refresh_relocation_makes_the_actual_decoder_manifest_certifiable
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 48.21s
+

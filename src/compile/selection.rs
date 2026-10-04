@@ -161,6 +161,22 @@ fn qualify_boundary_ports(
     caller_ports: Option<&super::planner::PortPlacements>,
     mut record: impl FnMut(BoundaryPhase<'_>),
 ) -> Option<Quality> {
+    qualify_boundary_ports_while(
+        source, compiled, require_certificate, caller_ports, None,
+        |phase| { record(phase); true },
+    )
+}
+
+// A failed dominance bound is already a complete rejection proof. Only a
+// candidate that reaches the end can return a qualified quality profile.
+fn qualify_boundary_ports_while(
+    source: &Netlist,
+    compiled: &CompiledCircuit,
+    require_certificate: bool,
+    caller_ports: Option<&super::planner::PortPlacements>,
+    upper: Option<&Quality>,
+    mut record: impl FnMut(BoundaryPhase<'_>) -> bool,
+) -> Option<Quality> {
     if require_certificate {
         compiled.physical_rewrite()?;
     }
@@ -345,7 +361,8 @@ fn qualify_boundary_ports(
                         }
                     }
                 }
-                record(BoundaryPhase {
+                if upper.is_some_and(|limit| !quality.dominates(limit))
+                    || !record(BoundaryPhase {
                     from,
                     to,
                     phase,
@@ -366,7 +383,9 @@ fn qualify_boundary_ports(
                         .map(|p| signal(sim.world(), *p).expect("checked lamp"))
                         .collect(),
                     events: sim.observations(),
-                });
+                }) {
+                    return None;
+                }
                 previous_outputs = source
                     .outputs
                     .iter()
@@ -475,7 +494,7 @@ fn refresh_quality(
     compiled: &CompiledCircuit,
     require_certificate: bool,
 ) -> Option<RefreshQuality> {
-    quality_with_ports(source, compiled, require_certificate, None)
+    quality_with_ports(source, compiled, require_certificate, None, None)
 }
 
 /// Measure an already root-certified recursive world with its exact caller ports.
@@ -485,7 +504,7 @@ pub(crate) fn recursive_quality(
     compiled: &CompiledCircuit,
     caller_ports: Option<&super::planner::PortPlacements>,
 ) -> Option<RefreshQuality> {
-    quality_with_ports(source, compiled, false, caller_ports)
+    quality_with_ports(source, compiled, false, caller_ports, None)
 }
 
 fn quality_with_ports(
@@ -493,10 +512,11 @@ fn quality_with_ports(
     compiled: &CompiledCircuit,
     require_certificate: bool,
     caller_ports: Option<&super::planner::PortPlacements>,
+    upper: Option<&RefreshQuality>,
 ) -> Option<RefreshQuality> {
     let mut groups = [0; 4];
     let mut phases = Vec::new();
-    let core = qualify_boundary_ports(source, compiled, require_certificate, caller_ports, |phase| {
+    let core = qualify_boundary_ports_while(source, compiled, require_certificate, caller_ports, upper.map(|limit| &limit.core), |phase| {
         for channel in 0..2 {
             if (0..source.outputs.len()).any(|bit| {
                 let label = format!("boundary{}", channel * source.outputs.len() + bit);
@@ -505,7 +525,7 @@ fn quality_with_ports(
                 groups[phase.phase * 2 + channel] += 1;
             }
         }
-        phases.push(PhaseQuality {
+        let measured = PhaseQuality {
             settlement: phase.ticks,
             arrivals: (0..2 * source.outputs.len())
                 .map(|index| {
@@ -519,13 +539,20 @@ fn quality_with_ports(
                         .unwrap_or(0)
                 })
                 .collect(),
-        });
+        };
+        if let Some(limit) = upper {
+            let Some(previous) = limit.phases.get(phases.len()) else { return false; };
+            if measured.settlement > previous.settlement
+                || measured.arrivals.len() != previous.arrivals.len()
+                || measured.arrivals.iter().zip(&previous.arrivals).any(|(a, b)| a > b)
+                || groups.iter().zip(limit.groups).any(|(a, b)| *a > b)
+            { return false; }
+        }
+        phases.push(measured);
+        true
     })?;
-    Some(RefreshQuality {
-        core,
-        groups,
-        phases,
-    })
+    let measured = RefreshQuality { core, groups, phases };
+    upper.is_none_or(|limit| measured.dominates(limit)).then_some(measured)
 }
 fn improve_refreshes(
     source: &Netlist,
@@ -560,7 +587,7 @@ fn improve_refreshes(
             continue;
         };
         let circuit = CompiledCircuit::from_certified_rewrite(rewrite);
-        let Some(measured) = refresh_quality(source, &circuit, true) else {
+        let Some(measured) = quality_with_ports(source, &circuit, true, None, Some(&quality)) else {
             continue;
         };
         if measured.dominates(&quality) && measured != quality {
@@ -601,7 +628,7 @@ pub fn compile_selected_with_refresh_budget(
         };
         let mut best = raw;
         if let Ok((flat, moved)) = flat_refresh_from_compiled(source, &best) {
-            if let Some(candidate) = refresh_quality(source, &flat, true) {
+            if let Some(candidate) = quality_with_ports(source, &flat, true, None, Some(&quality)) {
                 if candidate.dominates(&quality) {
                     let (improved, measured) =
                         improve_refreshes(source, flat, candidate.clone(), budget);
@@ -614,10 +641,12 @@ pub fn compile_selected_with_refresh_budget(
         }
         // Compare complete retained histories, using only structural boundary
         // recognition. A rejected method leaves the already qualified best.
-        if source.inputs.len() == 4 && (1..=16).contains(&source.outputs.len()) {
+        // The matrix is a structural candidate, not the flat-refresh seed.
+        // A zero proposal budget must retain that already-qualified seed.
+        if budget > 0 && source.inputs.len() == 4 && (1..=16).contains(&source.outputs.len()) {
             if let Ok(rewrite) = compile_balanced_torch_matrix(source, 1_000_000) {
                 let matrix = CompiledCircuit::from_certified_rewrite(rewrite);
-                if let Some(measured) = refresh_quality(source, &matrix, true) {
+                if let Some(measured) = quality_with_ports(source, &matrix, true, None, Some(&quality)) {
                     if measured.dominates(&quality) && measured != quality {
                         best = matrix;
                     }
@@ -692,6 +721,64 @@ mod tests {
         candidate.phases[0].settlement = 11;
         assert!(!candidate.dominates(&control));
     }
+    #[test]
+    fn bounded_wave_replay_keeps_complete_success_and_rejects_real_counterexamples() {
+        let source = source();
+        let compiled = CompiledCircuit::from_certified_rewrite(
+            compile_player_torch_row(&source, 1_000_000).unwrap(),
+        );
+        let complete = refresh_quality(&source, &compiled, true).unwrap();
+        assert_eq!(complete.phases.len(), 32);
+        let bounded = quality_with_ports(&source, &compiled, true, None, Some(&complete)).unwrap();
+        assert!(bounded == complete, "successful bounds retain every phase and metric");
+
+        let mut arrival_limit = complete.clone();
+        let phase = arrival_limit.phases.iter_mut()
+            .find(|phase| phase.arrivals.iter().any(|&tick| tick > 0)).unwrap();
+        *phase.arrivals.iter_mut().find(|tick| **tick > 0).unwrap() = 0;
+        assert!(!complete.dominates(&arrival_limit));
+        assert!(quality_with_ports(&source, &compiled, true, None, Some(&arrival_limit)).is_none());
+
+        let mut settlement_limit = complete.clone();
+        settlement_limit.phases.iter_mut().find(|p| p.settlement > 0).unwrap().settlement = 0;
+        assert!(!complete.dominates(&settlement_limit));
+        assert!(quality_with_ports(&source, &compiled, true, None, Some(&settlement_limit)).is_none());
+
+        let mut observed = 0;
+        assert!(qualify_boundary_ports_while(
+            &source, &compiled, true, None, Some(&Quality::default()),
+            |_| { observed += 1; true },
+        ).is_none());
+        assert!(observed < complete.phases.len(), "a proven regression stops rejected replay");
+        let mut callbacks = 0;
+        assert!(qualify_boundary_ports_while(&source, &compiled, true, None, None,
+            |_| { callbacks += 1; false },
+        ).is_none());
+        assert_eq!(callbacks, 1, "incomplete replay never returns qualification");
+    }
+
+    #[test]
+    fn bounded_replay_preserves_wide_repeated_public_channels() {
+        let source = Netlist {
+            inputs: (0..4).map(|bit| format!("a{bit}")).collect(),
+            outputs: vec!["out".into(); 16],
+            gates: vec![Gate::nor("out", &["a0", "a1", "a2", "a3"])],
+        };
+        let compiled = CompiledCircuit::from_certified_rewrite(
+            compile_balanced_torch_matrix(&source, 1_000_000).unwrap(),
+        );
+        let complete = refresh_quality(&source, &compiled, true).unwrap();
+        assert_eq!(complete.phases.len(), 512);
+        assert!(complete.phases.iter().all(|phase| phase.arrivals.len() == 32));
+        let bounded = quality_with_ports(&source, &compiled, true, None, Some(&complete)).unwrap();
+        assert!(bounded == complete);
+        let mut limit = complete.clone();
+        let phase = limit.phases.iter_mut().find(|phase| phase.arrivals[31] > 0).unwrap();
+        phase.arrivals[31] = 0;
+        assert!(!complete.dominates(&limit));
+        assert!(quality_with_ports(&source, &compiled, true, None, Some(&limit)).is_none());
+    }
+
     #[test]
     fn unified_backup_retains_an_exact_certifiable_manifest() {
         let source = source();

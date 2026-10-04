@@ -1,0 +1,7 @@
+{
+  "base_head": "856dacc",
+  "only_owned_source_overlay": "src/compile/selection.rs",
+  "source_sha256": "244556d36cc4ed863b22f04d09756b1d2a02e237e2a10f23459c578214ff78b4",
+  "initial_failure_preserved": true,
+  "zero_budget_control_not_changed": true
+}
