@@ -1,0 +1,44 @@
+--- a/src/compile/fragment_synth/torch_row/four.rs
++++ b/src/compile/fragment_synth/torch_row/four.rs
+@@ -208,7 +208,7 @@
+     }
+ }
+ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite, TorchRowError> {
+-    if !(4..=5).contains(&source.inputs.len()) || !(1..=16).contains(&source.outputs.len()) {
++    if !(4..=6).contains(&source.inputs.len()) || !(1..=16).contains(&source.outputs.len()) {
+         return Err(TorchRowError::UnsupportedBoundary);
+     }
+     prove_netlist_rewrite(source, source, &source.inputs, &source.outputs, limit)
+--- a/src/compile/selection.rs
++++ b/src/compile/selection.rs
+@@ -633,7 +633,7 @@
+         // The matrix is a structural candidate, not the flat-refresh seed.
+         // Establish a qualified global bound before exploring local reductions.
+         // Zero retains the existing flat seed behavior.
+-        if budget > 0 && (4..=5).contains(&source.inputs.len()) && (1..=16).contains(&source.outputs.len()) {
++        if budget > 0 && (4..=6).contains(&source.inputs.len()) && (1..=16).contains(&source.outputs.len()) {
+             if let Ok(rewrite) = compile_balanced_torch_matrix(source, 1_000_000) {
+                 let matrix = CompiledCircuit::from_certified_rewrite(rewrite);
+                 if let Some(measured) = quality_with_ports(source, &matrix, true, None, Some(&quality)) {
+--- a/src/compile/fragment_synth/api.rs
++++ b/src/compile/fragment_synth/api.rs
+@@ -142,7 +142,7 @@
+     // Composition precedes the bounded decoder rewrite in a fixed order.
+     // A single gate has no structural partition to improve.
+     let choices: &[recursive::StructuralChoice] = if input.lowered.gates.len() > 1
+-        && (4..=5).contains(&input.lowered.inputs.len())
++        && (4..=6).contains(&input.lowered.inputs.len())
+         && (1..=16).contains(&input.lowered.outputs.len())
+         && input.pins.is_none_or(|pins| pins.is_empty())
+     {
+--- a/src/compile/fragment_synth/recursive.rs
++++ b/src/compile/fragment_synth/recursive.rs
+@@ -866,7 +866,7 @@
+     // when this free boundary fits it. Forced composition proposals keep their
+     // own construction path. Any matrix refusal leaves the original solver.
+     if direct_leaf_cutoff > 0 && lowered.gates.len() > direct_leaf_cutoff
+-        && pins.is_none() && (4..=5).contains(&lowered.inputs.len())
++        && pins.is_none() && (4..=6).contains(&lowered.inputs.len())
+         && (1..=16).contains(&lowered.outputs.len())
+     {
+         if let Ok(product) = compile_matrix_root(lowered, pins, search) {

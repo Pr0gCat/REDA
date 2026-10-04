@@ -1,0 +1,18 @@
+{
+  "base": "5564d7f3fa9335ec09fbcd9135c603b3f8d77705",
+  "driver_session": 3770,
+  "original_control_session": 46436,
+  "production_adopted": false,
+  "source_sha256": {
+    "src/compile/fragment_synth/torch_row/four.rs": "6837dbdb32a74637fa797c4a00c7e9117d4aeb8f9a1f6c95f0b3639b43fee033",
+    "src/compile/selection.rs": "d504b5416c8c895e51313a931928ca1517f51beb122103cbcce035457021a8be",
+    "src/compile/fragment_synth/api.rs": "e1b721a515781841ceb0f385b59aaa5a15bd7865b68168dca3700bfd63ddd2a2",
+    "src/compile/fragment_synth/recursive.rs": "661386128810a3c91760ea3d0d2bd6c84e3547d14de6f2c9fa8e419ab9473bd6",
+    "examples/six_default_wave.rs": "f66ba5f77be0512b82ae64f236cc6de2a13c712c36d48ec6fa6db4baecb51ea1",
+    "tests/fixtures/rom64_matrix.sv": "fdcc3cef6b0b19d8b07cd29676f379ca4c74fc00a4df83cce0b072afee237fd4",
+    "default_repeats.py": "48f9ca9eda19455a892ac07dbc9ea7298151a5612be21a67c739359373743313"
+  },
+  "binary_sha256": "8e2edab7b009f79c4746057fec3de5166c976782bb98eedb19f047e3737ba69b",
+  "build_complete": true,
+  "repeat1_status": "live; no completed waveform claimed"
+}

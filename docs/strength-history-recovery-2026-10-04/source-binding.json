@@ -24,5 +24,7 @@
   "positive_failed": 0,
   "existing_ignored": 4,
   "positive_log_sha256": "8e88d72686c25b5e2232416df2e141f06a281e11f9cd9f72559ca0b2fd3ac14f",
-  "original_decay_status": "live session92690; not used as completed evidence"
+  "original_decay_status": "terminal",
+  "original_decay_exit": 0,
+  "original_decay_log_sha256": "474a280309a3773a9ac58a31ed4a70de39cf2712a1e6bcba98dea3a515ee87f7"
 }

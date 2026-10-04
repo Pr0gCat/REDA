@@ -11,3 +11,5 @@ Current clean qualification and original historical decay qualification are runn
 The isolated old-enqueue mutation terminates with exit101 and the original cin/g16 support (57,1,91) signal-strength refusal. The fixture therefore detects the actual historical under-reporting defect rather than merely making a changed-layout assertion green. Production physical rules are unchanged.
 
 Clean qualification3463 terminates exit0: 7 passed, 0 failed, 4 existing ignored,245.76s. Candidate is qualified together with the expected-failing old-enqueue control. Additional historical decay92690 remains live, not evidence of completion. See adoption.md.
+
+Historical original decay92690 now terminates exit0 (1 passed,0 failed,0 ignored,580.96s). It independently validates the original four damage classes on the unchanged historical source. Retained historical-decay.log supersedes the earlier pending status.
