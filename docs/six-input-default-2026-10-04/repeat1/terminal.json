@@ -1,0 +1,45 @@
+{
+  "repeat": 1,
+  "exit_code": 0,
+  "seconds": 17126.31676486699,
+  "source_sha256": "fdcc3cef6b0b19d8b07cd29676f379ca4c74fc00a4df83cce0b072afee237fd4",
+  "binary_sha256": "8e2edab7b009f79c4746057fec3de5166c976782bb98eedb19f047e3737ba69b",
+  "phases": 8192,
+  "world_fingerprint": "f3af4444f9776335f3c51a768a8a7ae3d5e387e66974807feb5009919b459b5a",
+  "world_sha256": "827a0c09dcd4f283ffd41ec33dfb2729322a563e02bfa2bdc2a0a11a48405179",
+  "result": {
+    "certified": false,
+    "phases": 8192,
+    "quality": [
+      [
+        56,
+        225727,
+        0,
+        0,
+        52,
+        0,
+        0,
+        0,
+        0,
+        56,
+        0,
+        0
+      ],
+      [
+        56,
+        225783,
+        0,
+        0,
+        52,
+        0,
+        0,
+        0,
+        0,
+        56,
+        0,
+        0
+      ]
+    ]
+  },
+  "independent_audit_complete": false
+}
