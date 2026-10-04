@@ -1,0 +1,1 @@
+Clean committed58b4366 source confirms strict library clippy still fails with11 findings: nine argument-count findings, one seam-map type-complexity finding, and one copied propagation descriptor. This excludes all dirty user/worktree code. No allow, simulator edit, gate weakening or new skip was made. Library compilation is not full project acceptance.

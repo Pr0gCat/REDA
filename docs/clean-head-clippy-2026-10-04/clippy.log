@@ -1,0 +1,190 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.229
+   Compiling syn v3.0.3
+   Compiling serde v1.0.229
+   Compiling version_check v0.9.5
+   Compiling generic-array v0.14.7
+   Compiling serde_derive v1.0.229
+    Checking typenum v1.20.1
+   Compiling crc32fast v1.5.0
+   Compiling zmij v1.0.23
+    Checking hashbrown v0.17.1
+    Checking equivalent v1.0.2
+    Checking cfg-if v1.0.4
+    Checking indexmap v2.14.0
+    Checking block-buffer v0.10.4
+    Checking crypto-common v0.1.7
+    Checking toml_datetime v0.6.11
+    Checking serde_spanned v0.6.9
+   Compiling serde_json v1.0.151
+    Checking winnow v0.7.15
+   Compiling thiserror v2.0.19
+    Checking adler2 v2.0.1
+    Checking simd-adler32 v0.3.10
+    Checking toml_write v0.1.2
+    Checking toml_edit v0.22.27
+    Checking miniz_oxide v0.8.9
+    Checking digest v0.10.7
+    Checking serde_bytes v0.11.19
+   Compiling thiserror-impl v2.0.19
+    Checking cpufeatures v0.2.17
+    Checking byteorder v1.5.0
+    Checking itoa v1.0.18
+    Checking memchr v2.8.3
+    Checking cesu8 v1.1.0
+    Checking fastnbt v2.6.2
+    Checking sha2 v0.10.9
+    Checking flate2 v1.1.9
+    Checking toml v0.8.23
+    Checking reda v0.1.0 (/tmp/reda-root-head-58b4366)
+error: this function has too many arguments (8/7)
+   --> src/compile/fragment_synth/packed_recursive.rs:276:1
+    |
+276 | / pub(crate) fn synthesise_packed_recursive_pinned<R: PhysicalRouter + Sync>(
+277 | |     netlist: &Netlist,
+278 | |     parent: &ChunkId,
+279 | |     pins: &PortPlacements,
+...   |
+284 | |     pitches: &[i32],
+285 | | ) -> Result<PackedRecursiveProduct, PackedRecursiveError> {
+    | |_________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> src/compile/fragment_synth/parent.rs:2221:20
+     |
+2221 |     let mut seams: BTreeMap<(ChunkId, ChunkId), (i32, Vec<(usize, i32, i32)>)> = BTreeMap::new();
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#type_complexity
+     = note: `-D clippy::type-complexity` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: this function has too many arguments (8/7)
+   --> src/compile/fragment_synth/placement.rs:723:1
+    |
+723 | / fn separate_owners_legalized(
+724 | |     plan: &mut SeedPlacementPlan,
+725 | |     source_owner: LayoutOwner,
+726 | |     sink_owner: LayoutOwner,
+...   |
+731 | |     pitch: i32,
+732 | | ) -> Result<bool, SeedPlacementError> {
+    | |_____________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_arguments
+
+error: this function has too many arguments (8/7)
+   --> src/compile/fragment_synth/rewrite.rs:132:1
+    |
+132 | / pub(crate) fn realise_physical_rewrite_with_size(
+133 | |     source: &Netlist,
+134 | |     implemented: &Netlist,
+135 | |     candidate: &ExpandedPhysicalCandidate,
+...   |
+140 | |     size: Option<(i32, i32, i32)>,
+141 | | ) -> Result<CertifiedPhysicalRewrite, PhysicalRewriteError> {
+    | |___________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_arguments
+
+error: this function has too many arguments (8/7)
+    --> src/compile/fragment_synth/seed.rs:1515:1
+     |
+1515 | / fn place_boundaries(
+1516 | |     candidate: &mut ExpandedPhysicalCandidate,
+1517 | |     netlist: &Netlist,
+1518 | |     plan: &SeedPlacementPlan,
+...    |
+1523 | |     targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
+1524 | | ) -> Result<(), SeedError> {
+     | |__________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_arguments
+
+error: this function has too many arguments (9/7)
+    --> src/compile/fragment_synth/seed.rs:1824:1
+     |
+1824 | / fn place_instances(
+1825 | |     candidate: &mut ExpandedPhysicalCandidate,
+1826 | |     netlist: &Netlist,
+1827 | |     search_config: &SearchConfig,
+...    |
+1833 | |     targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
+1834 | | ) -> Result<(), SeedError> {
+     | |__________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_arguments
+
+error: this function has too many arguments (10/7)
+    --> src/compile/fragment_synth/seed.rs:2469:1
+     |
+2469 | / fn route_all(
+2470 | |     candidate: &mut ExpandedPhysicalCandidate,
+2471 | |     router: &dyn PhysicalRouter,
+2472 | |     config: &SearchConfig,
+...    |
+2479 | |     reservations: &mut PhysicalReservations,
+2480 | | ) -> Result<(), SeedError> {
+     | |__________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_arguments
+
+error: this function has too many arguments (11/7)
+    --> src/compile/fragment_synth/seed.rs:2927:1
+     |
+2927 | / fn seed_routing_failure(
+2928 | |     scheduled_index: usize,
+2929 | |     route: RouteId,
+2930 | |     source: PhysicalEndpointId,
+...    |
+2938 | |     plan_fingerprint: &Fingerprint,
+2939 | | ) -> SeedRoutingFailure {
+     | |_______________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_arguments
+
+error: this function has too many arguments (8/7)
+    --> src/compile/mod.rs:3185:1
+     |
+3185 | / fn lay_track(
+3186 | |     world: &mut World,
+3187 | |     slot: usize,
+3188 | |     origin: (usize, i32, i32),
+...    |
+3193 | |     route: &mut Route,
+3194 | | ) -> BTreeMap<i32, u8> {
+     | |______________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_arguments
+
+error: this function has too many arguments (9/7)
+    --> src/compile/mod.rs:5845:1
+     |
+5845 | / fn resolve_bypass_and_geometry(
+5846 | |     netlist: &Netlist,
+5847 | |     plan: &Floorplan,
+5848 | |     nets: &mut [Net],
+...    |
+5854 | |     tap_only_reserve: bool,
+5855 | | ) -> (Vec<bool>, Vec<i32>, Vec<Vec<i32>>) {
+     | |_________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_arguments
+
+error: using `clone` on type `PropagationSemantics` which implements the `Copy` trait
+   --> src/redstone/simulator/mod.rs:214:22
+    |
+214 |         propagation: propagate::PROPAGATION_SEMANTICS.clone(),
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try removing the `clone` call: `propagate::PROPAGATION_SEMANTICS`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#clone_on_copy
+    = note: `-D clippy::clone-on-copy` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::clone_on_copy)]`
+
+error: could not compile `reda` (lib) due to 11 previous errors
