@@ -1,0 +1,2 @@
+frontend: native
+dumped circuit 'verilog:seven_segment': 4 inputs, 7 outputs, 206 gate outputs (41 of them wired-OR merges)

@@ -1,0 +1,29 @@
+[08:40:25] [ServerMain/INFO]: Environment: Environment[sessionHost=https://sessionserver.mojang.com, servicesHost=https://api.minecraftservices.com, profilesHost=https://api.mojang.com, name=PROD]
+[08:40:26] [Worker-Main-28/INFO]: No existing world data, creating new world
+[08:40:26] [Worker-Main-28/ERROR]: No key layers in MapLike[{}]
+[08:40:26] [ServerMain/INFO]: Loaded 1585 recipes
+[08:40:26] [ServerMain/INFO]: Loaded 1688 advancements
+[08:40:26] [Server thread/INFO]: Starting minecraft server version 26.2
+[08:40:26] [Server thread/INFO]: Loading properties
+[08:40:26] [Server thread/INFO]: Default game type: CREATIVE
+[08:40:26] [Server thread/INFO]: Generating keypair
+[08:40:27] [Server thread/INFO]: Starting Minecraft server on 127.0.0.1:25565
+[08:40:27] [Server thread/INFO]: Preparing level "world"
+[08:40:27] [Server thread/INFO]: Selecting global world spawn...
+[08:40:27] [Server thread/INFO]: Loading 0 persistent chunks...
+[08:40:27] [Server thread/INFO]: Preparing spawn area: 100%
+[08:40:27] [Server thread/INFO]: Time elapsed: 401 ms
+[08:40:27] [Server thread/INFO]: Done (0.531s)! For help, type "help"
+[08:40:27] [Server thread/INFO]: Starting remote control listener
+[08:40:27] [Server thread/INFO]: Thread RCON Listener started
+[08:40:27] [Server thread/INFO]: RCON running on 127.0.0.1:25575
+[08:40:27] [Server thread/INFO]: Saving chunks for level 'ServerLevel[world]'/minecraft:overworld
+[08:40:27] [Server thread/INFO]: Saving chunks for level 'ServerLevel[world]'/minecraft:the_nether
+[08:40:27] [Server thread/INFO]: Saving chunks for level 'ServerLevel[world]'/minecraft:the_end
+[08:40:27] [Server thread/INFO]: ThreadedAnvilChunkStorage (world): All chunks are saved
+[08:40:27] [Server thread/INFO]: ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[08:40:27] [Server thread/INFO]: ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[08:40:27] [Server thread/INFO]: ThreadedAnvilChunkStorage: All dimensions are saved
+[08:41:27] [Server thread/INFO]: Server empty for 60 seconds, pausing
+[08:42:46] [RCON Listener #1/INFO]: Thread RCON Client /127.0.0.1 started
+[08:42:46] [RCON Client /127.0.0.1 #2/INFO]: Thread RCON Client /127.0.0.1 shutting down

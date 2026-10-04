@@ -1,0 +1,69 @@
+{
+  "compiler_base": "aef704769f52b21bd9996771f67517d7be058025",
+  "compiler_library_sha256": "c4cdb8b66e1e5b2d4aff0e76711e689efba27ed4ee9a448e731bf1ddb503bd35",
+  "dump_executable_sha256": "8d3bd663fb6c1d1fb160ecdca0e8ca79fcfd3608b999797ee8b2acb008655cf9",
+  "dump_build_exit": 0,
+  "server": "official Minecraft Java26.2",
+  "server_jar_sha1": "823e2250d24b3ddac457a60c92a6a941943fcd6a",
+  "owner_eula_consent": "user explicitly agreed this turn",
+  "public_server_properties": {
+    "enable-rcon": "true",
+    "gamemode": "creative",
+    "level-type": "minecraft\\:flat",
+    "pause-when-empty-seconds": "0",
+    "rcon.port": "25575",
+    "server-ip": "127.0.0.1",
+    "server-port": "25565",
+    "simulation-distance": "4",
+    "view-distance": "4"
+  },
+  "primitive_probes": {
+    "count": 32,
+    "disagreements": 2,
+    "errors": 0
+  },
+  "and4": {
+    "vectors": 16,
+    "mismatches": 0
+  },
+  "seven_segment": {
+    "independent_rebuilds": 2,
+    "vectors_each": 16,
+    "public_outputs": 7,
+    "implemented_gates": 206,
+    "mismatches": 0,
+    "exact_vector_gate_output_reports_equal": true
+  },
+  "scope": "real-game stable-state conformance; not all-event game waveform or complete gap7",
+  "source_sha256": {
+    "protocol-sources/circuit_conformance.py": "1398d3deb49d7cbc79132dad25a9dfd8b37b14018c2db48f72475d333c8384e1",
+    "protocol-sources/harness.py": "977729f26b91ca5d038c89dc13fe26ef6139310a44d2d5e338a5dcd8cfdbf1cb",
+    "protocol-sources/mc_dump.rs": "7a36205fb1ad84e41b7af18c49c85a51cc04b125133dc32027c7e1596df1c02b",
+    "protocol-sources/probes.py": "c79cec49362ed855b17c84af3027c3f9aa9e9843cfe8c67e5c58cac5f9a1a3cb",
+    "protocol-sources/rcon.py": "34a9cc1c9367679a4cef83870bbf04860d04dc767e261fbfc6d8f623a5b4b4d8",
+    "protocol-sources/run.py": "8551fc72ae4b8c5710576b2f86216d77036ffa4aea45ef46892d63fc84628a72"
+  },
+  "files": {
+    "and4-game.log.gz": "c2965f7e7e6f5c7e7a6c739c79a2ad19e560a64f936ccedefb504d1a73636780",
+    "and4.dump": "a370a647904e39c2de6c992e552ae7c8239b4817f1167e359f7ccdae035386a1",
+    "and4.json": "f5c84940a9fe63f38098a13f69c8b067eb8a7f8784acbaab55a135a22bb746d6",
+    "and4.stderr": "b254c24a9e9e9a146931fe991679a0cf5e231da13ec68b16c1310197f3b4958d",
+    "initial-server.log": "bb34f514cf09c04479ff8c81eb5fd88bea21be667dff308b529df73823159a54",
+    "primitive-rules.json": "e5604aa9bafa8f5d5d209083b1ffcf71fd676e3581d2ac63a4b8dec94ae9e258",
+    "primitive-rules.log.gz": "90725ef710e5fc3880dd9ef6c1fe57e8ac1530e5d5cd68a8486373d603f87139",
+    "protocol-sources/circuit_conformance.py": "1398d3deb49d7cbc79132dad25a9dfd8b37b14018c2db48f72475d333c8384e1",
+    "protocol-sources/harness.py": "977729f26b91ca5d038c89dc13fe26ef6139310a44d2d5e338a5dcd8cfdbf1cb",
+    "protocol-sources/mc_dump.rs": "7a36205fb1ad84e41b7af18c49c85a51cc04b125133dc32027c7e1596df1c02b",
+    "protocol-sources/probes.py": "c79cec49362ed855b17c84af3027c3f9aa9e9843cfe8c67e5c58cac5f9a1a3cb",
+    "protocol-sources/rcon.py": "34a9cc1c9367679a4cef83870bbf04860d04dc767e261fbfc6d8f623a5b4b4d8",
+    "protocol-sources/run.py": "8551fc72ae4b8c5710576b2f86216d77036ffa4aea45ef46892d63fc84628a72",
+    "scope.md": "53ef066530a72616063910235046338fef7bbb6b6cb38c4434f1872d7d7ab3ea",
+    "server-combinational.log.gz": "e75c3a17a3d265d4b2739f5462da76b9d2c07540abcf4d89fb88941fb757fda9",
+    "seven-segment-game.log.gz": "8c6849c866db1a10e458f068b75bc51ad8aaec29195442382c50cfc5b16c3dbd",
+    "seven-segment-repeat2-game.log.gz": "62f0c85cd268a681da751f9b91c2e8dc39c3898916ffda36b744b9e2ce2d58ea",
+    "seven-segment-repeat2.json": "7a979582c267ca69bffc7d965002832a80b56c373c2f0318998ea391b115716c",
+    "seven-segment.json": "a9b4aab5086c3e6563ba4a623c5e1527d8cbee51c75e5ecd066fc810180fb0b6",
+    "seven_segment.dump": "13ffc0c4d74e65a3271ca02b190db5ef1a66cbafe8e192ae620a59502a0d2c79",
+    "seven_segment.stderr": "ba47b542c2bdf89be688e97d4222b410ee18d07cbcfc66e696726cf3087e1776"
+  }
+}
