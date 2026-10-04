@@ -1,0 +1,1 @@
+fn main(){let out=std::env::args().nth(1).unwrap();for c in reda::circuits::verilog::CIRCUITS {let p=std::path::Path::new(&out).join(c.source_path);std::fs::create_dir_all(p.parent().unwrap()).unwrap();std::fs::write(p,c.source).unwrap();}}

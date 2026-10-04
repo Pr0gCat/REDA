@@ -1,0 +1,16 @@
+{
+  "rom32.dump": "92a47ece655ef64feb228d383d3f0a085f6e5faccc6dfe783fd7e743a33f0a61",
+  "rom32-game.log": "5d1cddca3d907c0d247f5d7d9ae1352f0a27022d46339f0088a502afc40e9e85",
+  "rom32-game.json": "de2b5c307a9d964f767977f4fae7d50c425c72a72257f3a75a740dfeebf69091",
+  "root-audit.json": "94f9238d0b648a00132c4e5ec9a11cd5d2c3e03303d6c43594b758c1220b637a",
+  "rom32.stderr": "130b8451a8b8f3a53692ea6555feb9eb6c9281d1ccbf724a7696cd97927834c2",
+  "README.md": "f687d24ac2aac52d70891cba9433285950f6691df7aa392cef52b3aeab47d666",
+  "cleanup-audit.json": "c5254730e82e0bf80a7684d1d478d5a0ba31e9e54c5ff912c79aa63c8d4b4207",
+  "protocol/rom32.dump": "92a47ece655ef64feb228d383d3f0a085f6e5faccc6dfe783fd7e743a33f0a61",
+  "protocol/rcon.py": "34a9cc1c9367679a4cef83870bbf04860d04dc767e261fbfc6d8f623a5b4b4d8",
+  "protocol/rom32_matrix.sv": "c10a4c4fe2fce65b6b51c4f7caffa10e5dd13556531088c5f780736c7a534c36",
+  "protocol/harness.py": "70aec234283b4b33936cda9a75277bc910b85411348684c778a98c095e2fc3f3",
+  "protocol/snapshot.json": "529fc9782d91c11e45de550e6f4fc99444f8377ea09197bb6bf62bed50b5de20",
+  "protocol/circuit_conformance.py": "cf613a4e637befe32034b0965c1318fc26a9aa8b764f9377ca5a35c77c7f1545",
+  "protocol/literal-oracle.json": "a79efeca06b79342e7dae9df079289cdc6d9abdb4888acaaa765969c2c4ac0c0"
+}

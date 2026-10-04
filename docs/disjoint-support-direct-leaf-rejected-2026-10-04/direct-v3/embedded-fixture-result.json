@@ -1,0 +1,10 @@
+{
+  "tests/fixtures/and4.v": {
+    "sha256": "7f4dc983e7135d688b59e3b33477150e5aaf8d86b3a48305d2b1f8b28bed50e9",
+    "producer_library_literal_equals_unchanged_execution_tree_fixture": true
+  },
+  "tests/fixtures/seven_segment.v": {
+    "sha256": "137ca43b1dd5801a046af0f1ce17a909df9ed32dfc66ea29f83659232fffba05",
+    "producer_library_literal_equals_unchanged_execution_tree_fixture": true
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "evidence/direct-v3/embedded-fixture-exporter": {
+    "sha256": "2494efa8c3c775138769f4c13ef40692bc5280a1c863484fe243391e408010be",
+    "bytes": 6186744
+  },
+  "evidence/direct-v3/embedded-fixture-exporter.rs": {
+    "sha256": "18f5c7004e8f0411a97aba18c6320bac22ec9a092bbeadd23c9d89fa90376c78",
+    "bytes": 241
+  },
+  "target/debug/deps/libreda-a12b971a883e3664.rlib": {
+    "sha256": "0bdd2d4122999633dc9dc9b43492116983972b7dd4ef238457ba4044ba221672",
+    "bytes": 113863458
+  },
+  "freeze": {
+    "utc": "2026-10-04T11:49:59.981536+00:00",
+    "before_execution": true,
+    "scope": "supplemental recovery of exact compile-time include_str fixture bytes from the frozen producer library; original pre-phase snapshot omitted these two .v dependencies; not claimed pre-phase snapshot"
+  }
+}

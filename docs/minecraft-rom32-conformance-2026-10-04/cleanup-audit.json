@@ -1,0 +1,989 @@
+{
+  "original_cleanup_forceload_queries": [
+    {
+      "position": [
+        150000,
+        100000
+      ],
+      "response": "Chunk at [9375, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100016
+      ],
+      "response": "Chunk at [9375, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100032
+      ],
+      "response": "Chunk at [9375, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100048
+      ],
+      "response": "Chunk at [9375, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100064
+      ],
+      "response": "Chunk at [9375, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100080
+      ],
+      "response": "Chunk at [9375, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100096
+      ],
+      "response": "Chunk at [9375, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100112
+      ],
+      "response": "Chunk at [9375, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100128
+      ],
+      "response": "Chunk at [9375, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100134
+      ],
+      "response": "Chunk at [9375, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100000
+      ],
+      "response": "Chunk at [9376, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100016
+      ],
+      "response": "Chunk at [9376, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100032
+      ],
+      "response": "Chunk at [9376, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100048
+      ],
+      "response": "Chunk at [9376, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100064
+      ],
+      "response": "Chunk at [9376, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100080
+      ],
+      "response": "Chunk at [9376, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100096
+      ],
+      "response": "Chunk at [9376, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100112
+      ],
+      "response": "Chunk at [9376, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100128
+      ],
+      "response": "Chunk at [9376, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100134
+      ],
+      "response": "Chunk at [9376, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100000
+      ],
+      "response": "Chunk at [9377, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100016
+      ],
+      "response": "Chunk at [9377, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100032
+      ],
+      "response": "Chunk at [9377, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100048
+      ],
+      "response": "Chunk at [9377, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100064
+      ],
+      "response": "Chunk at [9377, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100080
+      ],
+      "response": "Chunk at [9377, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100096
+      ],
+      "response": "Chunk at [9377, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100112
+      ],
+      "response": "Chunk at [9377, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100128
+      ],
+      "response": "Chunk at [9377, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100134
+      ],
+      "response": "Chunk at [9377, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100000
+      ],
+      "response": "Chunk at [9378, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100016
+      ],
+      "response": "Chunk at [9378, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100032
+      ],
+      "response": "Chunk at [9378, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100048
+      ],
+      "response": "Chunk at [9378, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100064
+      ],
+      "response": "Chunk at [9378, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100080
+      ],
+      "response": "Chunk at [9378, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100096
+      ],
+      "response": "Chunk at [9378, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100112
+      ],
+      "response": "Chunk at [9378, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100128
+      ],
+      "response": "Chunk at [9378, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100134
+      ],
+      "response": "Chunk at [9378, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100000
+      ],
+      "response": "Chunk at [9379, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100016
+      ],
+      "response": "Chunk at [9379, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100032
+      ],
+      "response": "Chunk at [9379, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100048
+      ],
+      "response": "Chunk at [9379, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100064
+      ],
+      "response": "Chunk at [9379, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100080
+      ],
+      "response": "Chunk at [9379, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100096
+      ],
+      "response": "Chunk at [9379, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100112
+      ],
+      "response": "Chunk at [9379, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100128
+      ],
+      "response": "Chunk at [9379, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100134
+      ],
+      "response": "Chunk at [9379, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100000
+      ],
+      "response": "Chunk at [9380, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100016
+      ],
+      "response": "Chunk at [9380, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100032
+      ],
+      "response": "Chunk at [9380, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100048
+      ],
+      "response": "Chunk at [9380, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100064
+      ],
+      "response": "Chunk at [9380, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100080
+      ],
+      "response": "Chunk at [9380, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100096
+      ],
+      "response": "Chunk at [9380, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100112
+      ],
+      "response": "Chunk at [9380, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100128
+      ],
+      "response": "Chunk at [9380, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100134
+      ],
+      "response": "Chunk at [9380, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100000
+      ],
+      "response": "Chunk at [9380, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100016
+      ],
+      "response": "Chunk at [9380, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100032
+      ],
+      "response": "Chunk at [9380, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100048
+      ],
+      "response": "Chunk at [9380, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100064
+      ],
+      "response": "Chunk at [9380, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100080
+      ],
+      "response": "Chunk at [9380, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100096
+      ],
+      "response": "Chunk at [9380, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100112
+      ],
+      "response": "Chunk at [9380, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100128
+      ],
+      "response": "Chunk at [9380, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100134
+      ],
+      "response": "Chunk at [9380, 6258] in minecraft:overworld is not marked for force loading"
+    }
+  ],
+  "initial_air_probe": "failed after region unloaded; retained separately; not evidence of remaining blocks",
+  "sampled_air_verified_after_reload": true,
+  "air_sample_count": 140,
+  "audit_cleanup_forceload_queries": [
+    {
+      "position": [
+        150000,
+        100000
+      ],
+      "response": "Chunk at [9375, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100016
+      ],
+      "response": "Chunk at [9375, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100032
+      ],
+      "response": "Chunk at [9375, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100048
+      ],
+      "response": "Chunk at [9375, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100064
+      ],
+      "response": "Chunk at [9375, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100080
+      ],
+      "response": "Chunk at [9375, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100096
+      ],
+      "response": "Chunk at [9375, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100112
+      ],
+      "response": "Chunk at [9375, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100128
+      ],
+      "response": "Chunk at [9375, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150000,
+        100134
+      ],
+      "response": "Chunk at [9375, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100000
+      ],
+      "response": "Chunk at [9376, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100016
+      ],
+      "response": "Chunk at [9376, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100032
+      ],
+      "response": "Chunk at [9376, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100048
+      ],
+      "response": "Chunk at [9376, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100064
+      ],
+      "response": "Chunk at [9376, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100080
+      ],
+      "response": "Chunk at [9376, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100096
+      ],
+      "response": "Chunk at [9376, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100112
+      ],
+      "response": "Chunk at [9376, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100128
+      ],
+      "response": "Chunk at [9376, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150016,
+        100134
+      ],
+      "response": "Chunk at [9376, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100000
+      ],
+      "response": "Chunk at [9377, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100016
+      ],
+      "response": "Chunk at [9377, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100032
+      ],
+      "response": "Chunk at [9377, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100048
+      ],
+      "response": "Chunk at [9377, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100064
+      ],
+      "response": "Chunk at [9377, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100080
+      ],
+      "response": "Chunk at [9377, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100096
+      ],
+      "response": "Chunk at [9377, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100112
+      ],
+      "response": "Chunk at [9377, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100128
+      ],
+      "response": "Chunk at [9377, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150032,
+        100134
+      ],
+      "response": "Chunk at [9377, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100000
+      ],
+      "response": "Chunk at [9378, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100016
+      ],
+      "response": "Chunk at [9378, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100032
+      ],
+      "response": "Chunk at [9378, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100048
+      ],
+      "response": "Chunk at [9378, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100064
+      ],
+      "response": "Chunk at [9378, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100080
+      ],
+      "response": "Chunk at [9378, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100096
+      ],
+      "response": "Chunk at [9378, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100112
+      ],
+      "response": "Chunk at [9378, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100128
+      ],
+      "response": "Chunk at [9378, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150048,
+        100134
+      ],
+      "response": "Chunk at [9378, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100000
+      ],
+      "response": "Chunk at [9379, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100016
+      ],
+      "response": "Chunk at [9379, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100032
+      ],
+      "response": "Chunk at [9379, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100048
+      ],
+      "response": "Chunk at [9379, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100064
+      ],
+      "response": "Chunk at [9379, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100080
+      ],
+      "response": "Chunk at [9379, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100096
+      ],
+      "response": "Chunk at [9379, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100112
+      ],
+      "response": "Chunk at [9379, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100128
+      ],
+      "response": "Chunk at [9379, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150064,
+        100134
+      ],
+      "response": "Chunk at [9379, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100000
+      ],
+      "response": "Chunk at [9380, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100016
+      ],
+      "response": "Chunk at [9380, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100032
+      ],
+      "response": "Chunk at [9380, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100048
+      ],
+      "response": "Chunk at [9380, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100064
+      ],
+      "response": "Chunk at [9380, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100080
+      ],
+      "response": "Chunk at [9380, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100096
+      ],
+      "response": "Chunk at [9380, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100112
+      ],
+      "response": "Chunk at [9380, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100128
+      ],
+      "response": "Chunk at [9380, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150080,
+        100134
+      ],
+      "response": "Chunk at [9380, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100000
+      ],
+      "response": "Chunk at [9380, 6250] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100016
+      ],
+      "response": "Chunk at [9380, 6251] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100032
+      ],
+      "response": "Chunk at [9380, 6252] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100048
+      ],
+      "response": "Chunk at [9380, 6253] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100064
+      ],
+      "response": "Chunk at [9380, 6254] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100080
+      ],
+      "response": "Chunk at [9380, 6255] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100096
+      ],
+      "response": "Chunk at [9380, 6256] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100112
+      ],
+      "response": "Chunk at [9380, 6257] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100128
+      ],
+      "response": "Chunk at [9380, 6258] in minecraft:overworld is not marked for force loading"
+    },
+    {
+      "position": [
+        150084,
+        100134
+      ],
+      "response": "Chunk at [9380, 6258] in minecraft:overworld is not marked for force loading"
+    }
+  ]
+}
