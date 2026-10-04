@@ -100,9 +100,17 @@ pub struct Clock {
     pub edge: ClockEdge,
 }
 
-/// The elaborated top module.
+/// Two bits of one physical net, without inventing a directed assignment.
+#[derive(Debug, Clone)]
+pub struct SignalAlias {
+    pub left: (usize, u32),
+    pub right: (usize, u32),
+}
+
+/// The elaborated top module with hierarchy aliases still explicit.
 #[derive(Debug, Clone)]
 pub struct Design {
+    pub aliases: Vec<SignalAlias>,
     pub nodes: Vec<ElabNode>,
     pub signals: Vec<SignalInfo>,
     pub assigns: Vec<ElabAssign>,
@@ -189,6 +197,12 @@ impl Hierarchy<'_> {
         module: &Module,
         parameters: HashMap<String, Constant>,
     ) -> Result<Design, Vec<Diagnostic>> {
+        if self.active.is_empty() && module.ports.iter().any(|port| port.direction == PortDirection::Inout) {
+            let mut diagnostic = error(module.name.span,
+                "top-level inout needs an external read/drive/enable contract; only internal single-driver net aliases are supported");
+            diagnostic.kind = super::DiagnosticKind::Unsupported;
+            return Err(vec![diagnostic]);
+        }
         if self.active.contains(&module.name.name) {
             return Err(vec![error(
                 module.name.span,
@@ -212,6 +226,7 @@ impl Hierarchy<'_> {
             by_name: HashMap::new(),
             errors: Vec::new(),
             parameters,
+            aliases: Vec::new(),
             instance,
         };
         let design = elaborator.module(module, self);
@@ -378,6 +393,7 @@ fn constant_value(
 }
 
 struct Elaborator {
+    aliases: Vec<SignalAlias>,
     instance: InstancePathId,
     parameters: HashMap<String, Constant>,
     nodes: Vec<ElabNode>,
@@ -453,6 +469,7 @@ impl Elaborator {
                 nodes: std::mem::take(&mut self.nodes),
                 signals: Vec::new(),
                 assigns: Vec::new(),
+                aliases: Vec::new(),
             };
         }
 
@@ -464,6 +481,7 @@ impl Elaborator {
             let kind = match port.direction {
                 PortDirection::Input => ElabKind::Input,
                 PortDirection::Output => ElabKind::Output,
+                PortDirection::Inout => ElabKind::Net,
             };
             let elab = self.node(port.id, kind, width);
             self.declare(SignalInfo {
@@ -532,7 +550,8 @@ impl Elaborator {
         if !self
             .signals
             .iter()
-            .any(|signal| signal.direction == Some(PortDirection::Output))
+            .any(|signal| signal.direction == Some(PortDirection::Output)
+                || (self.instance != ROOT_INSTANCE && signal.direction == Some(PortDirection::Inout)))
         {
             self.unsupported(
                 module.name.span,
@@ -545,6 +564,7 @@ impl Elaborator {
         }
 
         Design {
+            aliases: std::mem::take(&mut self.aliases),
             nodes: std::mem::take(&mut self.nodes),
             signals: std::mem::take(&mut self.signals),
             assigns,
@@ -688,6 +708,10 @@ impl Elaborator {
             signal.elab.0 += node_offset;
             signal.direction = None;
         }
+        self.aliases.extend(child.aliases.into_iter().map(|alias| SignalAlias {
+            left: (alias.left.0 + signal_offset, alias.left.1),
+            right: (alias.right.0 + signal_offset, alias.right.1),
+        }));
         self.nodes.extend(child.nodes);
         self.signals.extend(child.signals);
         for assignment in &mut child.assigns {
@@ -727,6 +751,23 @@ impl Elaborator {
                             value,
                             clock: None,
                         });
+                    }
+                }
+                PortDirection::Inout => {
+                    if let Some(targets) = self.net_targets(connection) {
+                        if targets.iter().map(|target| target.2).sum::<u32>() != width {
+                            self.fail(connection.span, format!("instance inout `{}` width mismatch", port.name.name));
+                            continue;
+                        }
+                        let mut offset = width;
+                        for (target, lsb, target_width) in targets {
+                            offset -= target_width;
+                            for bit in 0..target_width {
+                                self.aliases.push(SignalAlias {
+                                    left: (signal, offset + bit), right: (target, lsb + bit),
+                                });
+                            }
+                        }
                     }
                 }
                 PortDirection::Output => {
@@ -1279,6 +1320,24 @@ impl Elaborator {
 
     /// Resolve an assignment target to `(signal, lsb, width)`.
     fn target(&mut self, expr: &Expr) -> Option<(usize, u32, u32)> {
+        let (base, lsb, width) = self.net_target(expr)?;
+        if self.signals[base].direction == Some(PortDirection::Input) {
+            self.fail(expr.span, format!("`{}` is an input port and cannot be assigned", self.signals[base].name));
+            return None;
+        }
+        Some((base, lsb, width))
+    }
+
+    /// Alias connections may reference primary inputs, but never constants or expressions.
+    fn net_targets(&mut self, expr: &Expr) -> Option<Vec<(usize, u32, u32)>> {
+        if let ExprKind::Concat(parts) = &expr.kind {
+            let mut targets = Vec::new();
+            for part in parts { targets.extend(self.net_targets(part)?); }
+            Some(targets)
+        } else { Some(vec![self.net_target(expr)?]) }
+    }
+
+    fn net_target(&mut self, expr: &Expr) -> Option<(usize, u32, u32)> {
         if let ExprKind::Ident(name) = &expr.kind {
             if self.parameters.contains_key(name) {
                 self.fail(expr.span, format!("parameter `{name}` cannot be assigned"));
@@ -1326,16 +1385,6 @@ impl Elaborator {
             }
         };
 
-        if self.signals[base].direction == Some(PortDirection::Input) {
-            self.fail(
-                expr.span,
-                format!(
-                    "`{}` is an input port and cannot be assigned",
-                    self.signals[base].name
-                ),
-            );
-            return None;
-        }
         Some((base, lsb, width))
     }
 

@@ -1,0 +1,70 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+    Finished `test` profile [unoptimized] target(s) in 2.77s
+     Running tests/systemverilog_compiler.rs (target/debug/deps/systemverilog_compiler-3badd87d66359e07)
+
+running 25 tests
+test a_module_with_nothing_to_compile_is_rejected ... ok
+test a_missing_top_module_names_what_is_there ... ok
+test a_passthrough_output_becomes_a_buffer ... ok
+test an_empty_debug_database_serializes_identically_twice ... ok
+test an_interned_gate_reports_every_expression_that_shares_it ... ok
+test a_source_set_can_hold_more_than_one_file ... ok
+test and2_compiles_to_one_and_gate_whose_four_rows_hold ... ok
+test diagnostics_render_with_file_line_and_column ... ok
+test a_vector_port_is_one_netlist_signal_per_bit ... ok
+test dead_logic_is_recorded_rather_than_forgotten ... ok
+test comments_move_spans_but_not_identities ... ok
+test elaboration_errors_accumulate_in_source_order ... ok
+test and4_compiles_and_matches_the_independent_predicate ... ok
+test and4_agrees_with_the_baked_yosys_netlist_row_for_row ... ok
+test concatenated_targets_preserve_order_slices_and_driver_validation ... ok
+test signal_bits_and_why_missing_explain_what_has_no_gate ... ok
+test procedural_rejection_matrix_has_precise_diagnostics ... ok
+test source_expressions_and_gates_find_each_other_in_both_directions ... ok
+test the_fingerprint_matches_its_own_netlist_and_no_other ... ok
+test compiling_the_same_source_twice_is_byte_identical ... ok
+test the_output_port_resolves_to_the_root_gate ... ok
+test the_rejection_matrix_has_stable_messages_and_spans ... ok
+test legacy_reg_declarations_and_wildcard_blocks_have_independent_truth ... ok
+test the_supported_expression_forms_all_evaluate_correctly ... ok
+test legacy_decoder_keeps_all_outputs_and_literal_truth ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/systemverilog_instances.rs (target/debug/deps/systemverilog_instances-3784372e920d41e2)
+
+running 8 tests
+test unsupported_open_and_implicit_connections_preserve_fallback_classification ... ok
+test independent_instance_clocks_bind_to_their_own_parent_ports ... ok
+test hierarchy_links_modules_across_files_and_concatenated_output_targets ... ok
+test invalid_hierarchy_connections_and_drivers_are_rejected ... ok
+test independent_overrides_preserve_scope_and_instance_provenance ... ok
+test nested_register_clock_aliases_preserve_state_and_single_clock_contract ... ok
+test full_seven_segment_hierarchy_preserves_the_independent_flat_netlist ... ok
+test nested_parameter_instances_reach_all_retained_physical_outputs ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.95s
+
+     Running tests/systemverilog_internal_inout.rs (target/debug/deps/systemverilog_internal_inout-c019fb4dcf954ffa)
+
+running 5 tests
+test top_level_inout_remains_explicitly_unsupported_without_external_drive_contract ... ok
+test alias_class_validation_rejects_writers_cycles_and_undriven_nets ... ok
+test input_driven_aliases_selections_and_concatenations_preserve_bit_order ... ok
+test shared_internal_inout_is_one_driver_and_many_readers_across_scopes ... ok
+test internal_inout_hierarchy_matches_fixed_physical_world_for_all_transitions ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.30s
+
+     Running tests/systemverilog_typed_parameters.rs (target/debug/deps/systemverilog_typed_parameters-72907164a40b4487)
+
+running 6 tests
+test selections_and_unsupported_types_preserve_validation ... ok
+test original_formerly_unsupported_parameter_sources_are_native ... ok
+test overrides_are_coerced_in_child_scope_before_dependent_ranges ... ok
+test integral_arithmetic_uses_common_width_signedness_and_modular_result ... ok
+test sized_inferred_and_explicit_parameters_preserve_width_and_value ... ok
+test typed_hierarchy_matches_fixed_physical_implementation_for_all_transitions ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.38s
+

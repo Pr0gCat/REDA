@@ -1,0 +1,13 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+    Finished `test` profile [unoptimized] target(s) in 27.88s
+     Running tests/systemverilog_internal_inout.rs (target/debug/deps/systemverilog_internal_inout-c019fb4dcf954ffa)
+
+running 5 tests
+test top_level_inout_remains_explicitly_unsupported_without_external_drive_contract ... ok
+test alias_class_validation_rejects_writers_cycles_and_undriven_nets ... ok
+test input_driven_aliases_selections_and_concatenations_preserve_bit_order ... ok
+test shared_internal_inout_is_one_driver_and_many_readers_across_scopes ... ok
+test internal_inout_hierarchy_matches_fixed_physical_world_for_all_transitions ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.36s
+

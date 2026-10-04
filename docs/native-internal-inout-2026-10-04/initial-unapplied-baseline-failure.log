@@ -1,0 +1,60 @@
+   Compiling reda v0.1.0 (/tmp/reda-inout-clean-20261004)
+    Finished `test` profile [unoptimized] target(s) in 39.59s
+     Running tests/systemverilog_internal_inout.rs (/tmp/reda-parameter-clean-target-20261004/debug/deps/systemverilog_internal_inout-c019fb4dcf954ffa)
+
+running 6 tests
+test internal_inout_hierarchy_matches_fixed_physical_world_for_all_transitions ... FAILED
+test input_driven_aliases_selections_and_concatenations_preserve_bit_order ... FAILED
+test alias_class_validation_rejects_writers_cycles_and_undriven_nets ... FAILED
+test shared_internal_inout_is_one_driver_and_many_readers_across_scopes ... FAILED
+test top_level_inout_remains_explicitly_unsupported_without_external_drive_contract ... FAILED
+test native_and_auto_cli_generate_internal_inout_and_typed_parameters_without_yosys ... FAILED
+
+failures:
+
+---- internal_inout_hierarchy_matches_fixed_physical_world_for_all_transitions stdout ----
+
+thread 'internal_inout_hierarchy_matches_fixed_physical_world_for_all_transitions' (792) panicked at tests/systemverilog_internal_inout.rs:16:44:
+[Diagnostic { kind: Unsupported, severity: Error, message: "`input` or `output`: `inout` ports are not supported", span: Span { file: FileId(0), start: 28, end: 33, expansion: None } }]
+
+---- input_driven_aliases_selections_and_concatenations_preserve_bit_order stdout ----
+
+thread 'input_driven_aliases_selections_and_concatenations_preserve_bit_order' (791) panicked at tests/systemverilog_internal_inout.rs:16:44:
+[Diagnostic { kind: Unsupported, severity: Error, message: "`input` or `output`: `inout` ports are not supported", span: Span { file: FileId(0), start: 14, end: 19, expansion: None } }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- alias_class_validation_rejects_writers_cycles_and_undriven_nets stdout ----
+
+thread 'alias_class_validation_rejects_writers_cycles_and_undriven_nets' (790) panicked at tests/systemverilog_internal_inout.rs:80:9:
+module d(input a,inout b); assign b=a; endmodule module m(input a,c,output y); wire b; d x(.a(a),.b(b)); d z(.a(c),.b(b)); assign y=b; endmodule: [Diagnostic { kind: Unsupported, severity: Error, message: "`input` or `output`: `inout` ports are not supported", span: Span { file: FileId(0), start: 17, end: 22, expansion: None } }]
+
+---- shared_internal_inout_is_one_driver_and_many_readers_across_scopes stdout ----
+
+thread 'shared_internal_inout_is_one_driver_and_many_readers_across_scopes' (794) panicked at tests/systemverilog_internal_inout.rs:16:44:
+[Diagnostic { kind: Unsupported, severity: Error, message: "`input` or `output`: `inout` ports are not supported", span: Span { file: FileId(0), start: 28, end: 33, expansion: None } }]
+
+---- top_level_inout_remains_explicitly_unsupported_without_external_drive_contract stdout ----
+
+thread 'top_level_inout_remains_explicitly_unsupported_without_external_drive_contract' (795) panicked at tests/systemverilog_internal_inout.rs:87:5:
+assertion failed: errors.iter().any(|error|
+        error.kind == DiagnosticKind::Unsupported &&
+            error.message.contains("external read/drive/enable contract"))
+
+---- native_and_auto_cli_generate_internal_inout_and_typed_parameters_without_yosys stdout ----
+
+thread 'native_and_auto_cli_generate_internal_inout_and_typed_parameters_without_yosys' (793) panicked at tests/systemverilog_internal_inout.rs:172:13:
+native: could not synthesize /tmp/reda-inout-native-789.sv (m): /tmp/reda-inout-native-789.sv:1:29: `input` or `output`: `inout` ports are not supported
+
+
+
+failures:
+    alias_class_validation_rejects_writers_cycles_and_undriven_nets
+    input_driven_aliases_selections_and_concatenations_preserve_bit_order
+    internal_inout_hierarchy_matches_fixed_physical_world_for_all_transitions
+    native_and_auto_cli_generate_internal_inout_and_typed_parameters_without_yosys
+    shared_internal_inout_is_one_driver_and_many_readers_across_scopes
+    top_level_inout_remains_explicitly_unsupported_without_external_drive_contract
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test systemverilog_internal_inout`

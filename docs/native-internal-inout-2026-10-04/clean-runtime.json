@@ -1,0 +1,29 @@
+{
+  "base": "702c57e",
+  "patch": "owned-702c57e.patch",
+  "command": "cargo test --locked --offline --test systemverilog_internal_inout",
+  "exit_code": 0,
+  "passed": 6,
+  "failed": 0,
+  "ignored": 0,
+  "REDA_PYTHON": "/nonexistent/reda-python",
+  "scope": "Clean base plus owned internal inout patch; no user arithmetic or legacy sensitivity edits",
+  "sources": {
+    "src/frontend/ast.rs": "27aacdfde1fa7c52437ce5a9dfcde1419fe9d64990778a771d6bef0d9eb0ce30",
+    "src/frontend/parser.rs": "0f36d7487d915a929ed8fce23a45f0a3189cb109b051dbba76d7f9ca774ce3d7",
+    "src/frontend/elaborate.rs": "4a0867b4099eca0257bc1ba7d2d252653038d7999554222caee456d8aa76de95",
+    "src/frontend/logic.rs": "8b9d3ce0e106d6108f20f31972016228dd48421d826a6c41a3d0ac636ee90dcf",
+    "tests/systemverilog_internal_inout.rs": "133288a196e24d688181453ba5df5eb5a1db71cbf7f2b498fa8aef02bd4df415"
+  },
+  "owned-702c57e.patch_sha256": "a604eeaa5bc8d974258a5d456bd46ecd2c7db3a54d14815855824630411d0dd5",
+  "clean-702c57e-tests.log_sha256": "5daf340845b317bf29b1bea2c46dd35c6ef1defb86f218ed12b3f77db150fb64",
+  "initial-unapplied-baseline-failure.log_sha256": "f68b6d5dafc43c0c1a00f037ef51016c32412994470a6ad0fdb5e31d68a9a26f",
+  "regression": {
+    "command": "cargo test --locked --offline --test systemverilog_compiler --test systemverilog_instances --test systemverilog_typed_parameters --test systemverilog_dff --test systemverilog_reset",
+    "exit_code": 0,
+    "passed": 55,
+    "failed": 0,
+    "ignored": 0,
+    "log_sha256": "9251e8322aac47be5cac8b35eb4d1ba945289828dbeee2d72b2f8e4988fe4487"
+  }
+}

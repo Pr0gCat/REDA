@@ -1,0 +1,43 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+    Finished `test` profile [unoptimized] target(s) in 2.58s
+     Running tests/systemverilog_internal_inout.rs (target/debug/deps/systemverilog_internal_inout-c019fb4dcf954ffa)
+
+running 6 tests
+test top_level_inout_remains_explicitly_unsupported_without_external_drive_contract ... ok
+test alias_class_validation_rejects_writers_cycles_and_undriven_nets ... ok
+test input_driven_aliases_selections_and_concatenations_preserve_bit_order ... ok
+test shared_internal_inout_is_one_driver_and_many_readers_across_scopes ... ok
+test internal_inout_hierarchy_matches_fixed_physical_world_for_all_transitions ... ok
+test native_and_auto_cli_generate_internal_inout_and_typed_parameters_without_yosys ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.60s
+
+     Running tests/systemverilog_parameter_minimum.rs (target/debug/deps/systemverilog_parameter_minimum-56aac469e8dde597)
+
+running 2 tests
+test minimum_literal_does_not_admit_out_of_range_positive_or_negated_values ... ok
+test minimum_integer_survives_dependencies_overrides_and_physical_switching ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.70s
+
+     Running tests/systemverilog_parameters.rs (target/debug/deps/systemverilog_parameters-567e64312ca21512)
+
+running 3 tests
+test invalid_constant_dependencies_ranges_and_writes_are_not_admitted ... ok
+test constant_dependencies_are_scoped_and_arithmetic_has_correct_precedence ... ok
+test parameter_widths_indices_and_values_reach_retained_physical_outputs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.90s
+
+     Running tests/systemverilog_typed_parameters.rs (target/debug/deps/systemverilog_typed_parameters-72907164a40b4487)
+
+running 6 tests
+test selections_and_unsupported_types_preserve_validation ... ok
+test original_formerly_unsupported_parameter_sources_are_native ... ok
+test overrides_are_coerced_in_child_scope_before_dependent_ranges ... ok
+test sized_inferred_and_explicit_parameters_preserve_width_and_value ... ok
+test integral_arithmetic_uses_common_width_signedness_and_modular_result ... ok
+test typed_hierarchy_matches_fixed_physical_implementation_for_all_transitions ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.34s
+

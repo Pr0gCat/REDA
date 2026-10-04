@@ -1,0 +1,282 @@
+--- a/src/frontend/ast.rs
++++ b/src/frontend/ast.rs
+@@ -62,6 +62,7 @@
+ pub enum PortDirection {
+     Input,
+     Output,
++    Inout,
+ }
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+--- a/src/frontend/parser.rs
++++ b/src/frontend/parser.rs
+@@ -245,9 +245,8 @@
+                 Some(PortDirection::Output)
+             }
+             TokenKind::Keyword(Keyword::Inout) => {
+-                return Err(
+-                    self.unsupported_here("`input` or `output`: `inout` ports are not supported")
+-                );
++                self.advance();
++                Some(PortDirection::Inout)
+             }
+             _ => None,
+         };
+--- a/src/frontend/elaborate.rs
++++ b/src/frontend/elaborate.rs
+@@ -100,9 +100,17 @@
+     pub edge: ClockEdge,
+ }
+ 
+-/// The elaborated top module.
++/// Two bits of one physical net, without inventing a directed assignment.
++#[derive(Debug, Clone)]
++pub struct SignalAlias {
++    pub left: (usize, u32),
++    pub right: (usize, u32),
++}
++
++/// The elaborated top module with hierarchy aliases still explicit.
+ #[derive(Debug, Clone)]
+ pub struct Design {
++    pub aliases: Vec<SignalAlias>,
+     pub nodes: Vec<ElabNode>,
+     pub signals: Vec<SignalInfo>,
+     pub assigns: Vec<ElabAssign>,
+@@ -189,6 +197,12 @@
+         module: &Module,
+         parameters: HashMap<String, Constant>,
+     ) -> Result<Design, Vec<Diagnostic>> {
++        if self.active.is_empty() && module.ports.iter().any(|port| port.direction == PortDirection::Inout) {
++            let mut diagnostic = error(module.name.span,
++                "top-level inout needs an external read/drive/enable contract; only internal single-driver net aliases are supported");
++            diagnostic.kind = super::DiagnosticKind::Unsupported;
++            return Err(vec![diagnostic]);
++        }
+         if self.active.contains(&module.name.name) {
+             return Err(vec![error(
+                 module.name.span,
+@@ -212,6 +226,7 @@
+             by_name: HashMap::new(),
+             errors: Vec::new(),
+             parameters,
++            aliases: Vec::new(),
+             instance,
+         };
+         let design = elaborator.module(module, self);
+@@ -378,6 +393,7 @@
+ }
+ 
+ struct Elaborator {
++    aliases: Vec<SignalAlias>,
+     instance: InstancePathId,
+     parameters: HashMap<String, Constant>,
+     nodes: Vec<ElabNode>,
+@@ -453,6 +469,7 @@
+                 nodes: std::mem::take(&mut self.nodes),
+                 signals: Vec::new(),
+                 assigns: Vec::new(),
++                aliases: Vec::new(),
+             };
+         }
+ 
+@@ -464,6 +481,7 @@
+             let kind = match port.direction {
+                 PortDirection::Input => ElabKind::Input,
+                 PortDirection::Output => ElabKind::Output,
++                PortDirection::Inout => ElabKind::Net,
+             };
+             let elab = self.node(port.id, kind, width);
+             self.declare(SignalInfo {
+@@ -532,7 +550,8 @@
+         if !self
+             .signals
+             .iter()
+-            .any(|signal| signal.direction == Some(PortDirection::Output))
++            .any(|signal| signal.direction == Some(PortDirection::Output)
++                || (self.instance != ROOT_INSTANCE && signal.direction == Some(PortDirection::Inout)))
+         {
+             self.unsupported(
+                 module.name.span,
+@@ -545,6 +564,7 @@
+         }
+ 
+         Design {
++            aliases: std::mem::take(&mut self.aliases),
+             nodes: std::mem::take(&mut self.nodes),
+             signals: std::mem::take(&mut self.signals),
+             assigns,
+@@ -688,6 +708,10 @@
+             signal.elab.0 += node_offset;
+             signal.direction = None;
+         }
++        self.aliases.extend(child.aliases.into_iter().map(|alias| SignalAlias {
++            left: (alias.left.0 + signal_offset, alias.left.1),
++            right: (alias.right.0 + signal_offset, alias.right.1),
++        }));
+         self.nodes.extend(child.nodes);
+         self.signals.extend(child.signals);
+         for assignment in &mut child.assigns {
+@@ -727,6 +751,23 @@
+                             value,
+                             clock: None,
+                         });
++                    }
++                }
++                PortDirection::Inout => {
++                    if let Some(targets) = self.net_targets(connection) {
++                        if targets.iter().map(|target| target.2).sum::<u32>() != width {
++                            self.fail(connection.span, format!("instance inout `{}` width mismatch", port.name.name));
++                            continue;
++                        }
++                        let mut offset = width;
++                        for (target, lsb, target_width) in targets {
++                            offset -= target_width;
++                            for bit in 0..target_width {
++                                self.aliases.push(SignalAlias {
++                                    left: (signal, offset + bit), right: (target, lsb + bit),
++                                });
++                            }
++                        }
+                     }
+                 }
+                 PortDirection::Output => {
+@@ -1279,6 +1320,24 @@
+ 
+     /// Resolve an assignment target to `(signal, lsb, width)`.
+     fn target(&mut self, expr: &Expr) -> Option<(usize, u32, u32)> {
++        let (base, lsb, width) = self.net_target(expr)?;
++        if self.signals[base].direction == Some(PortDirection::Input) {
++            self.fail(expr.span, format!("`{}` is an input port and cannot be assigned", self.signals[base].name));
++            return None;
++        }
++        Some((base, lsb, width))
++    }
++
++    /// Alias connections may reference primary inputs, but never constants or expressions.
++    fn net_targets(&mut self, expr: &Expr) -> Option<Vec<(usize, u32, u32)>> {
++        if let ExprKind::Concat(parts) = &expr.kind {
++            let mut targets = Vec::new();
++            for part in parts { targets.extend(self.net_targets(part)?); }
++            Some(targets)
++        } else { Some(vec![self.net_target(expr)?]) }
++    }
++
++    fn net_target(&mut self, expr: &Expr) -> Option<(usize, u32, u32)> {
+         if let ExprKind::Ident(name) = &expr.kind {
+             if self.parameters.contains_key(name) {
+                 self.fail(expr.span, format!("parameter `{name}` cannot be assigned"));
+@@ -1326,16 +1385,6 @@
+             }
+         };
+ 
+-        if self.signals[base].direction == Some(PortDirection::Input) {
+-            self.fail(
+-                expr.span,
+-                format!(
+-                    "`{}` is an input port and cannot be assigned",
+-                    self.signals[base].name
+-                ),
+-            );
+-            return None;
+-        }
+         Some((base, lsb, width))
+     }
+ 
+--- a/src/frontend/logic.rs
++++ b/src/frontend/logic.rs
+@@ -492,6 +492,7 @@
+             .map(|signal| vec![BitState::Undriven; signal.width as usize])
+             .collect(),
+         drivers: HashMap::new(),
++        aliases: AliasClasses::new(design),
+         errors: Vec::new(),
+     };
+@@ -506,14 +507,23 @@
+                 synthetic: None,
+             };
+             let node = builder.graph.input(name, origin);
+-            builder.bits[index][bit as usize] = BitState::Ready(node);
++            let (canonical, canonical_bit) = builder.aliases.canonical(index, bit);
++            if matches!(builder.bits[canonical][canonical_bit as usize], BitState::Ready(_)) {
++                builder.fail(signal.span, "aliased net is driven by more than one primary input");
++            } else {
++                builder.bits[canonical][canonical_bit as usize] = BitState::Ready(node);
++            }
+         }
+     }
+ 
+     // One driver per target bit; a second one is a dual-writer error.
+     for (index, assign) in design.assigns.iter().enumerate() {
+         for bit in assign.lsb..assign.lsb + assign.width {
+-            let key = (assign.signal, bit);
++            let key = builder.aliases.canonical(assign.signal, bit);
++            if matches!(builder.bits[key.0][key.1 as usize], BitState::Ready(_)) {
++                builder.fail(assign.span, "aliased net is driven by both a primary input and an assignment");
++                continue;
++            }
+             if let Some(&(previous, _)) = builder.drivers.get(&key) {
+                 let earlier: &super::elaborate::ElabAssign = &design.assigns[previous];
+                 builder.errors.push(Diagnostic {
+@@ -572,8 +582,47 @@
+     Ok(Blasted { graph, signal_bits })
+ }
+ 
++/// Deterministic connected components for undirected hierarchy net aliases.
++/// The smallest flattened bit is the representative; path compression keeps
++/// deeply nested aliases independent of hierarchy traversal depth.
++struct AliasClasses {
++    bits: Vec<Vec<(usize, u32)>>,
++}
++impl AliasClasses {
++    fn new(design: &Design) -> Self {
++        if design.aliases.is_empty() { return Self { bits: Vec::new() }; }
++        let mut offsets = vec![0];
++        let mut identities = Vec::new();
++        for (signal, info) in design.signals.iter().enumerate() {
++            identities.extend((0..info.width).map(|bit| (signal, bit)));
++            offsets.push(identities.len());
++        }
++        let mut roots: Vec<_> = (0..identities.len()).collect();
++        fn find(roots: &mut [usize], mut bit: usize) -> usize {
++            while roots[bit] != bit {
++                roots[bit] = roots[roots[bit]];
++                bit = roots[bit];
++            }
++            bit
++        }
++        for alias in &design.aliases {
++            let left = find(&mut roots, offsets[alias.left.0] + alias.left.1 as usize);
++            let right = find(&mut roots, offsets[alias.right.0] + alias.right.1 as usize);
++            roots[left.max(right)] = left.min(right);
++        }
++        let bits = design.signals.iter().enumerate().map(|(signal, info)| {
++            (0..info.width).map(|bit| identities[find(&mut roots, offsets[signal] + bit as usize)]).collect()
++        }).collect();
++        Self { bits }
++    }
++    fn canonical(&self, signal: usize, bit: u32) -> (usize, u32) {
++        if self.bits.is_empty() { (signal, bit) } else { self.bits[signal][bit as usize] }
++    }
++}
++
+ struct Builder<'d> {
+     design: &'d Design,
++    aliases: AliasClasses,
+     graph: LogicGraph,
+     bits: Vec<Vec<BitState>>,
+     /// `(signal, bit) -> (assignment index, bit within that assignment)`.
+@@ -606,6 +655,13 @@
+     }
+ 
+     fn resolve(&mut self, signal: usize, bit: u32) -> LogicNodeId {
++        let (canonical, canonical_bit) = self.aliases.canonical(signal, bit);
++        if (canonical, canonical_bit) != (signal, bit) {
++            let node = self.resolve(canonical, canonical_bit);
++            self.bits[signal][bit as usize] = BitState::Ready(node);
++            self.graph.note_origin(node, LogicOrigin { elab: self.design.signal(signal).elab, bit, synthetic: None });
++            return node;
++        }
+         match self.bits[signal][bit as usize] {
+             BitState::Ready(node) => return node,
+             BitState::InProgress => {

@@ -62,6 +62,7 @@ pub struct SourceSet {
 pub enum PortDirection {
     Input,
     Output,
+    Inout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

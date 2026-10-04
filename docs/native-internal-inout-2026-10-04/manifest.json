@@ -1,0 +1,35 @@
+{
+  "scope": "current mixed worktree, internal single-driver inout and parameter integration; no full project or clean runtime claim",
+  "sources": {
+    "src/frontend/ast.rs": "3baabe837c6b30728fdfee6326e35e8c28ad22e69f04c48019273c5bf22d7dce",
+    "src/frontend/parser.rs": "1ada3fc6ee9612c9b65a246e3ba51fc796c8d0946f839e55c136acad29d07166",
+    "src/frontend/elaborate.rs": "87b46a4a7b3fabd7049a97907d4fe5beec18837c0835a2f67a25fa91b358e2a8",
+    "src/frontend/logic.rs": "d1e1225ebc6bf1bc17f873daa4f8ee7270728d4c391e4630ea38519cdee4b76f",
+    "src/frontend/lexer.rs": "135ceaa4069631fcb56c987a3fc2c2fedbd8a110baca44323cd2918054ec869c",
+    "src/frontend/rtl.rs": "b2aed0f59c27507d9c22d84b586e69fe90fd3ce548558b24e6d03f73eb820133",
+    "tests/systemverilog_internal_inout.rs": "133288a196e24d688181453ba5df5eb5a1db71cbf7f2b498fa8aef02bd4df415",
+    "tests/systemverilog_typed_parameters.rs": "cd78efaf8ce0b73d9165ab565dc4cb17e6c20c876a4af0db99c437332a72befa"
+  },
+  "before_inout_owned_edit": {
+    "src/frontend/ast.rs": "4e1e17dfdf0b9ee86e64fb0973a8bb8f1daf0364d9743d8952f453c9b0c5cebf",
+    "src/frontend/parser.rs": "a2f48b64df03d9c2bf203a2fa6a2bd270411d58fa7e6b9ac66641de10c4c0542",
+    "src/frontend/elaborate.rs": "869cd25a88017c6e2ee97b4d3cff03493543b126557628667977557ec9335a29",
+    "src/frontend/logic.rs": "fd24af82f635c62e6a368e67bca90beff4ffac30600b9b53e00d08ab9a8d2db0"
+  },
+  "owned_patch_sha256": "1c4abbfa94a7922e3a4a71e6b15a906b8d6aa79a84a061448b063956a4fcd4ef",
+  "environment": {
+    "REDA_PYTHON": "/definitely/missing/python",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "RUST_MIN_STACK": "268435456",
+    "CARGO_BUILD_JOBS": "1"
+  },
+  "logs": {
+    "complete-tests.log": "4cbecf86f76a18355b13a18d4ff70163975feb1e7aec837484b8a435f0076153",
+    "regression-tests.log": "1c3b1ef0b044abebace88b1d7430287226b20daef85c84c0ec7ebcddcf8011cc",
+    "final-native-tests.log": "a50ec173b22a82fc9533bb5273b62359e7c64b51ed4575e21d93712fe1a372bc",
+    "tests.log": "b8dc02dae1a2fcda2dd13c4cdc4702235b5bb5095812ff0c8027079a88965050",
+    "check.log": "4786b9c654b937d5d0a131277aa046b14aa96fc868ac4c587a7c95c522e2fff1",
+    "sequential-regression-tests.log": "ab014e2371017675ba9f7ba3fdb7d8eb5cbb121dda263d3cc99bb4b9ed7ce9ed"
+  }
+}

@@ -493,6 +493,7 @@ pub fn build(design: &Design) -> Result<Blasted, Vec<Diagnostic>> {
             .map(|signal| vec![BitState::Undriven; signal.width as usize])
             .collect(),
         drivers: HashMap::new(),
+        aliases: AliasClasses::new(design),
         errors: Vec::new(),
     };
 
@@ -506,14 +507,23 @@ pub fn build(design: &Design) -> Result<Blasted, Vec<Diagnostic>> {
                 synthetic: None,
             };
             let node = builder.graph.input(name, origin);
-            builder.bits[index][bit as usize] = BitState::Ready(node);
+            let (canonical, canonical_bit) = builder.aliases.canonical(index, bit);
+            if matches!(builder.bits[canonical][canonical_bit as usize], BitState::Ready(_)) {
+                builder.fail(signal.span, "aliased net is driven by more than one primary input");
+            } else {
+                builder.bits[canonical][canonical_bit as usize] = BitState::Ready(node);
+            }
         }
     }
 
     // One driver per target bit; a second one is a dual-writer error.
     for (index, assign) in design.assigns.iter().enumerate() {
         for bit in assign.lsb..assign.lsb + assign.width {
-            let key = (assign.signal, bit);
+            let key = builder.aliases.canonical(assign.signal, bit);
+            if matches!(builder.bits[key.0][key.1 as usize], BitState::Ready(_)) {
+                builder.fail(assign.span, "aliased net is driven by both a primary input and an assignment");
+                continue;
+            }
             if let Some(&(previous, _)) = builder.drivers.get(&key) {
                 let earlier: &super::elaborate::ElabAssign = &design.assigns[previous];
                 builder.errors.push(Diagnostic {
@@ -572,8 +582,47 @@ pub fn build(design: &Design) -> Result<Blasted, Vec<Diagnostic>> {
     Ok(Blasted { graph, signal_bits })
 }
 
+/// Deterministic connected components for undirected hierarchy net aliases.
+/// The smallest flattened bit is the representative; path compression keeps
+/// deeply nested aliases independent of hierarchy traversal depth.
+struct AliasClasses {
+    bits: Vec<Vec<(usize, u32)>>,
+}
+impl AliasClasses {
+    fn new(design: &Design) -> Self {
+        if design.aliases.is_empty() { return Self { bits: Vec::new() }; }
+        let mut offsets = vec![0];
+        let mut identities = Vec::new();
+        for (signal, info) in design.signals.iter().enumerate() {
+            identities.extend((0..info.width).map(|bit| (signal, bit)));
+            offsets.push(identities.len());
+        }
+        let mut roots: Vec<_> = (0..identities.len()).collect();
+        fn find(roots: &mut [usize], mut bit: usize) -> usize {
+            while roots[bit] != bit {
+                roots[bit] = roots[roots[bit]];
+                bit = roots[bit];
+            }
+            bit
+        }
+        for alias in &design.aliases {
+            let left = find(&mut roots, offsets[alias.left.0] + alias.left.1 as usize);
+            let right = find(&mut roots, offsets[alias.right.0] + alias.right.1 as usize);
+            roots[left.max(right)] = left.min(right);
+        }
+        let bits = design.signals.iter().enumerate().map(|(signal, info)| {
+            (0..info.width).map(|bit| identities[find(&mut roots, offsets[signal] + bit as usize)]).collect()
+        }).collect();
+        Self { bits }
+    }
+    fn canonical(&self, signal: usize, bit: u32) -> (usize, u32) {
+        if self.bits.is_empty() { (signal, bit) } else { self.bits[signal][bit as usize] }
+    }
+}
+
 struct Builder<'d> {
     design: &'d Design,
+    aliases: AliasClasses,
     graph: LogicGraph,
     bits: Vec<Vec<BitState>>,
     /// `(signal, bit) -> (assignment index, bit within that assignment)`.
@@ -602,6 +651,13 @@ impl Builder<'_> {
     }
 
     fn resolve(&mut self, signal: usize, bit: u32) -> LogicNodeId {
+        let (canonical, canonical_bit) = self.aliases.canonical(signal, bit);
+        if (canonical, canonical_bit) != (signal, bit) {
+            let node = self.resolve(canonical, canonical_bit);
+            self.bits[signal][bit as usize] = BitState::Ready(node);
+            self.graph.note_origin(node, LogicOrigin { elab: self.design.signal(signal).elab, bit, synthetic: None });
+            return node;
+        }
         match self.bits[signal][bit as usize] {
             BitState::Ready(node) => return node,
             BitState::InProgress => {

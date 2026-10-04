@@ -244,9 +244,8 @@ impl<'n> Parser<'n> {
                 Some(PortDirection::Output)
             }
             TokenKind::Keyword(Keyword::Inout) => {
-                return Err(
-                    self.unsupported_here("`input` or `output`: `inout` ports are not supported")
-                );
+                self.advance();
+                Some(PortDirection::Inout)
             }
             _ => None,
         };

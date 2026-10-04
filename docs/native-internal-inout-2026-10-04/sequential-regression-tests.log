@@ -1,0 +1,30 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+    Finished `test` profile [unoptimized] target(s) in 2.65s
+     Running tests/systemverilog_dff.rs (target/debug/deps/systemverilog_dff-bcc063c3e2aa72ee)
+
+running 12 tests
+test clock_rejections_keep_the_operator_or_expression_span ... ok
+test captures_only_on_rising_edges_and_holds_elsewhere ... ok
+test captures_on_enabled_rising_edges_and_holds_otherwise ... ok
+test emits_one_posedge_dff_gated_by_a_hold_mux_with_d_then_clock_pins ... ok
+test emits_one_posedge_dff_with_d_then_clock_pins ... ok
+test dff_compile_is_deterministic_and_provenance_reaches_the_gate ... ok
+test hold_mux_is_queryable_in_the_debug_database_with_its_source_span ... ok
+test nonblocking_assign_source_node_keeps_its_statement_span ... ok
+test rejects_every_form_outside_the_feed_forward_slice ... ok
+test enable_form_compile_is_deterministic ... ok
+test legacy_clocked_blocks_follow_an_independent_state_machine ... ok
+test rejects_every_enable_form_outside_the_slice ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/systemverilog_reset.rs (target/debug/deps/systemverilog_reset-0fa0325be44f8ade)
+
+running 4 tests
+test conditional_branches_validate_targets_widths_and_nonblocking_writes ... ok
+test dangling_else_binds_to_nearest_if_and_missing_outer_branch_holds ... ok
+test statement_reset_reuses_existing_next_state_netlists ... ok
+test conditional_reset_priority_and_hold_follow_literal_edges ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

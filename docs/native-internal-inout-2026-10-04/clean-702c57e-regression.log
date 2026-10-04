@@ -1,0 +1,87 @@
+   Compiling reda v0.1.0 (/tmp/reda-inout-clean-20261004)
+    Finished `test` profile [unoptimized] target(s) in 4.49s
+     Running tests/systemverilog_compiler.rs (/tmp/reda-parameter-clean-target-20261004/debug/deps/systemverilog_compiler-3badd87d66359e07)
+
+running 25 tests
+test a_module_with_nothing_to_compile_is_rejected ... ok
+test a_missing_top_module_names_what_is_there ... ok
+test a_passthrough_output_becomes_a_buffer ... ok
+test an_empty_debug_database_serializes_identically_twice ... ok
+test a_source_set_can_hold_more_than_one_file ... ok
+test an_interned_gate_reports_every_expression_that_shares_it ... ok
+test and2_compiles_to_one_and_gate_whose_four_rows_hold ... ok
+test comments_move_spans_but_not_identities ... ok
+test dead_logic_is_recorded_rather_than_forgotten ... ok
+test diagnostics_render_with_file_line_and_column ... ok
+test a_vector_port_is_one_netlist_signal_per_bit ... ok
+test compiling_the_same_source_twice_is_byte_identical ... ok
+test elaboration_errors_accumulate_in_source_order ... ok
+test procedural_rejection_matrix_has_precise_diagnostics ... ok
+test and4_agrees_with_the_baked_yosys_netlist_row_for_row ... ok
+test and4_compiles_and_matches_the_independent_predicate ... ok
+test signal_bits_and_why_missing_explain_what_has_no_gate ... ok
+test source_expressions_and_gates_find_each_other_in_both_directions ... ok
+test the_output_port_resolves_to_the_root_gate ... ok
+test concatenated_targets_preserve_order_slices_and_driver_validation ... ok
+test the_fingerprint_matches_its_own_netlist_and_no_other ... ok
+test the_rejection_matrix_has_stable_messages_and_spans ... ok
+test legacy_reg_declarations_and_wildcard_blocks_have_independent_truth ... ok
+test the_supported_expression_forms_all_evaluate_correctly ... ok
+test legacy_decoder_keeps_all_outputs_and_literal_truth ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/systemverilog_dff.rs (/tmp/reda-parameter-clean-target-20261004/debug/deps/systemverilog_dff-bcc063c3e2aa72ee)
+
+running 12 tests
+test clock_rejections_keep_the_operator_or_expression_span ... ok
+test captures_only_on_rising_edges_and_holds_elsewhere ... ok
+test captures_on_enabled_rising_edges_and_holds_otherwise ... ok
+test emits_one_posedge_dff_with_d_then_clock_pins ... ok
+test emits_one_posedge_dff_gated_by_a_hold_mux_with_d_then_clock_pins ... ok
+test hold_mux_is_queryable_in_the_debug_database_with_its_source_span ... ok
+test nonblocking_assign_source_node_keeps_its_statement_span ... ok
+test dff_compile_is_deterministic_and_provenance_reaches_the_gate ... ok
+test enable_form_compile_is_deterministic ... ok
+test rejects_every_form_outside_the_feed_forward_slice ... ok
+test legacy_clocked_blocks_follow_an_independent_state_machine ... ok
+test rejects_every_enable_form_outside_the_slice ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/systemverilog_instances.rs (/tmp/reda-parameter-clean-target-20261004/debug/deps/systemverilog_instances-3784372e920d41e2)
+
+running 8 tests
+test independent_instance_clocks_bind_to_their_own_parent_ports ... ok
+test hierarchy_links_modules_across_files_and_concatenated_output_targets ... ok
+test unsupported_open_and_implicit_connections_preserve_fallback_classification ... ok
+test invalid_hierarchy_connections_and_drivers_are_rejected ... ok
+test independent_overrides_preserve_scope_and_instance_provenance ... ok
+test nested_register_clock_aliases_preserve_state_and_single_clock_contract ... ok
+test full_seven_segment_hierarchy_preserves_the_independent_flat_netlist ... ok
+test nested_parameter_instances_reach_all_retained_physical_outputs ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.97s
+
+     Running tests/systemverilog_reset.rs (/tmp/reda-parameter-clean-target-20261004/debug/deps/systemverilog_reset-0fa0325be44f8ade)
+
+running 4 tests
+test conditional_branches_validate_targets_widths_and_nonblocking_writes ... ok
+test dangling_else_binds_to_nearest_if_and_missing_outer_branch_holds ... ok
+test statement_reset_reuses_existing_next_state_netlists ... ok
+test conditional_reset_priority_and_hold_follow_literal_edges ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/systemverilog_typed_parameters.rs (/tmp/reda-parameter-clean-target-20261004/debug/deps/systemverilog_typed_parameters-72907164a40b4487)
+
+running 6 tests
+test selections_and_unsupported_types_preserve_validation ... ok
+test original_formerly_unsupported_parameter_sources_are_native ... ok
+test overrides_are_coerced_in_child_scope_before_dependent_ranges ... ok
+test sized_inferred_and_explicit_parameters_preserve_width_and_value ... ok
+test integral_arithmetic_uses_common_width_signedness_and_modular_result ... ok
+test typed_hierarchy_matches_fixed_physical_implementation_for_all_transitions ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.39s
+
