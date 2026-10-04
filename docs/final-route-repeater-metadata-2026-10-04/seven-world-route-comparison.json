@@ -1,0 +1,728 @@
+[
+  {
+    "case": "feedback_counter",
+    "world_blocks_and_all_non_count_metadata_identical": true,
+    "changed_counts": [
+      {
+        "owner": "n5",
+        "sink": "n6",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n5",
+        "sink": "n9",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n3",
+        "sink": "n9",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n2",
+        "sink": "n3",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g5",
+        "sink": "n0",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g5",
+        "sink": "n1",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "en",
+        "sink": "n7",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g0",
+        "sink": "g1",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g1",
+        "sink": "n1",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g1",
+        "sink": "n7",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n0",
+        "sink": "n2",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n0",
+        "sink": "n10",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n1",
+        "sink": "n3",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n10",
+        "sink": "n11",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n11",
+        "sink": "g8",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n12",
+        "sink": "g4",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "n12",
+        "sink": "g8",
+        "before": 3,
+        "after": 4
+      },
+      {
+        "owner": "n6",
+        "sink": "n8",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n8",
+        "sink": "g4",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n9",
+        "sink": "n11",
+        "before": 0,
+        "after": 1
+      }
+    ]
+  },
+  {
+    "case": "feedback_fsm",
+    "world_blocks_and_all_non_count_metadata_identical": true,
+    "changed_counts": [
+      {
+        "owner": "n5",
+        "sink": "g12",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g2",
+        "sink": "g14",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g2",
+        "sink": "g4",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g7",
+        "sink": "g8",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g0",
+        "sink": "g3",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g0",
+        "sink": "g14",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "g0",
+        "sink": "g8",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g10",
+        "sink": "g16",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g10",
+        "sink": "n4",
+        "before": 4,
+        "after": 5
+      },
+      {
+        "owner": "g11",
+        "sink": "g12",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g17",
+        "sink": "g18",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g3",
+        "sink": "g4",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n0",
+        "sink": "g16",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n2",
+        "sink": "g17",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n3",
+        "sink": "n4",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "n3",
+        "sink": "g17",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "n6",
+        "sink": "g13",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "n7",
+        "sink": "g19",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n8",
+        "sink": "g19",
+        "before": 1,
+        "after": 2
+      }
+    ]
+  },
+  {
+    "case": "feedback_state_enable",
+    "world_blocks_and_all_non_count_metadata_identical": true,
+    "changed_counts": [
+      {
+        "owner": "g1",
+        "sink": "n4",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "en",
+        "sink": "g1",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g0",
+        "sink": "g1",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g0",
+        "sink": "n3",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n1",
+        "sink": "n2",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n2",
+        "sink": "g2",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n3",
+        "sink": "n4",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n4",
+        "sink": "g2",
+        "before": 1,
+        "after": 2
+      }
+    ]
+  },
+  {
+    "case": "reset_counter",
+    "world_blocks_and_all_non_count_metadata_identical": true,
+    "changed_counts": [
+      {
+        "owner": "n5",
+        "sink": "n6",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n5",
+        "sink": "n9",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n3",
+        "sink": "n9",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n2",
+        "sink": "n3",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g5",
+        "sink": "n0",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g5",
+        "sink": "n1",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "en",
+        "sink": "n7",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g0",
+        "sink": "g1",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g1",
+        "sink": "n1",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g1",
+        "sink": "n7",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n0",
+        "sink": "n2",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n0",
+        "sink": "n10",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n1",
+        "sink": "n3",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n10",
+        "sink": "n11",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n11",
+        "sink": "g8",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n12",
+        "sink": "g4",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "n12",
+        "sink": "g8",
+        "before": 3,
+        "after": 4
+      },
+      {
+        "owner": "n6",
+        "sink": "n8",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n8",
+        "sink": "g4",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n9",
+        "sink": "n11",
+        "before": 0,
+        "after": 1
+      }
+    ]
+  },
+  {
+    "case": "hierarchy_reset_counter",
+    "world_blocks_and_all_non_count_metadata_identical": true,
+    "changed_counts": [
+      {
+        "owner": "n5",
+        "sink": "n6",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n5",
+        "sink": "n9",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n3",
+        "sink": "n9",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n2",
+        "sink": "n3",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g5",
+        "sink": "n0",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g5",
+        "sink": "n1",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "en",
+        "sink": "n7",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g0",
+        "sink": "g1",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g1",
+        "sink": "n1",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g1",
+        "sink": "n7",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n0",
+        "sink": "n2",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n0",
+        "sink": "n10",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n1",
+        "sink": "n3",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n10",
+        "sink": "n11",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n11",
+        "sink": "g8",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n12",
+        "sink": "g4",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "n12",
+        "sink": "g8",
+        "before": 3,
+        "after": 4
+      },
+      {
+        "owner": "n6",
+        "sink": "n8",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n8",
+        "sink": "g4",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n9",
+        "sink": "n11",
+        "before": 0,
+        "after": 1
+      }
+    ]
+  },
+  {
+    "case": "reset_fsm",
+    "world_blocks_and_all_non_count_metadata_identical": true,
+    "changed_counts": [
+      {
+        "owner": "n5",
+        "sink": "g12",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g2",
+        "sink": "g14",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g2",
+        "sink": "g4",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g7",
+        "sink": "g8",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g0",
+        "sink": "g3",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g0",
+        "sink": "g14",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "g0",
+        "sink": "g8",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g10",
+        "sink": "g16",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g10",
+        "sink": "n4",
+        "before": 4,
+        "after": 5
+      },
+      {
+        "owner": "g11",
+        "sink": "g12",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g17",
+        "sink": "g18",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g3",
+        "sink": "g4",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n0",
+        "sink": "g16",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n2",
+        "sink": "g17",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n3",
+        "sink": "n4",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "n3",
+        "sink": "g17",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "n6",
+        "sink": "g13",
+        "before": 2,
+        "after": 3
+      },
+      {
+        "owner": "n7",
+        "sink": "g19",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n8",
+        "sink": "g19",
+        "before": 1,
+        "after": 2
+      }
+    ]
+  },
+  {
+    "case": "conditional_state_enable",
+    "world_blocks_and_all_non_count_metadata_identical": true,
+    "changed_counts": [
+      {
+        "owner": "g1",
+        "sink": "n4",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "en",
+        "sink": "g1",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "g0",
+        "sink": "g1",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "g0",
+        "sink": "n3",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n1",
+        "sink": "n2",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n2",
+        "sink": "g2",
+        "before": 0,
+        "after": 1
+      },
+      {
+        "owner": "n3",
+        "sink": "n4",
+        "before": 1,
+        "after": 2
+      },
+      {
+        "owner": "n4",
+        "sink": "g2",
+        "before": 1,
+        "after": 2
+      }
+    ]
+  }
+]

@@ -1,0 +1,30 @@
+{
+  "owned_source_before_sha256": "6f94e27a0bbc9a6d63a6563a080a99fe71f36eb69f762539a4016fa823f3591b",
+  "owned_source_after_sha256": "fe6e0a1bb95611daa05cf12da1c9bb6fe5b7df09a9c2f8e834b24df33510897d",
+  "unit_test_binary_sha256": "9453a6ec015baac34f8e4e099cf7202f160820d89239f398d171b0fd3573a78a",
+  "candidate_library_sha256": "ed7c958c060cf734fc6ea330d34b5601da5bdbf17957927aa9be89682bf0bf96",
+  "baseline_library_sha256": "2d315e1a3aae1f15fe8c69b294a432dd209862d9ab05af17c6c8c4ab921802ce",
+  "source_scope": "Production backend unchanged apart from final counting. Candidate source snapshot /tmp/reda-planner-policy-20261004; baseline backend-bound snapshot /tmp/reda-prefallback-backend-bound-20261004; frontend drift listed in its source-binding.json. Unit binary includes final prescribed-path fixture; candidate production library was built before cfg(test)-only fanout fixture correction.",
+  "artifacts": {
+    "public-fixture-candidate.jsonl.gz": "c2527ace970f60f084346033de0c51d1c0b740db8c666399845e844107fe3254",
+    "compare-seven.py": "410728b9163e61874d1f8e2df9abdbdbc402ba522d40517d598f07a12af68acc",
+    "public-fixture-baseline.jsonl.gz": "398c625a0a942b440cd3ab6136207b263042671c54b9c7e1f9f93c5a9f105c7c",
+    "scope.md": "ce626e173ba963e68e9c5b27f22b92380008ca867894ff6aea16f4053e8c3690",
+    "seven-world-route-dump.rs.gz": "f08e356b028b73358ab544b5f8f49184d746252ec1c8681bf1f2145c50efc7fe",
+    "terminal-fixture-retry.log.gz": "96b81a915d4179123fc432184a890ec2d86e44995a36a5f2b32f4d76c9d4cfcd",
+    "seven-world-route-comparison.json": "befa1d759ba6c8207f69d3edca5b9ea4bc3bc790d155bd1d003e0147a1983a47",
+    "public-fixture-control.rs.gz": "c27a12efd00f51acac1ed4ce5c701b9ea053e6409f64069f42e71aa761835f92",
+    "baseline-routing.rs.gz": "569bb0f85216d2bf5eddccdfd7bf2f7205314c8ca698eb39a19e621c85eedc0e",
+    "fanout-fixture.log.gz": "58196c5d307abe367caae9a2e000c13f6983f98861c6b52f03c1929f1fa0e309",
+    "routing-controls-final.log.gz": "d358566ebbf358014370aa9402a441c98b3700e86cc4991f8f804f356fe904b1",
+    "routing-owned.patch": "d0ace1913222d1da472f363a69ac9aaabcdc50b8abbe2ac27a156571a9055f37",
+    "seven-quality.json": "44369d3a5def53206daae470df12d8c3e36cad14dd663253d60186a224ebc0c4",
+    "seven-world-route-baseline.jsonl.gz": "49cb5a002cb6fd43381590898312f02bfcb91716da4df80f55bd03a8e3a52b43",
+    "consumer-controls.log.gz": "c2e2f70f3676d0b2b87f48adccfbc70696babb771eb9a2990bc3f067132cf8c0",
+    "candidate-routing.rs.gz": "f8ccc364059921dab533a88966cc1bb1cd36d28e8466d0a0da719adc1eead773",
+    "seven-candidate.log.gz": "e275f15f1e27249544239efbe4517e9007ea2b238b416d84cf260853b7a090b8",
+    "seven-world-route-candidate.jsonl.gz": "e056defd4cb2e86cc9bcd86aa01756a1655205e05152a8cbc21e4c751020f18c",
+    "source-binding.json": "6cb255d207a37e8f541332d6d330cacc7a7eb96ab94c80ce01fe417eb7ba37e0",
+    "public-fixture-comparison.json": "f578964ccef42684b4ff8ef48ac22bbfe1b73621b71dea40fa498ba63ffcdfa6"
+  }
+}

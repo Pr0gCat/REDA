@@ -1,0 +1,57 @@
+[
+  {
+    "case": "forced_terminal",
+    "before": [
+      0
+    ],
+    "after": [
+      1
+    ],
+    "actual": [
+      1
+    ],
+    "all_other_tree_fields_identical": true
+  },
+  {
+    "case": "already_planned_terminal",
+    "before": [
+      1
+    ],
+    "after": [
+      1
+    ],
+    "actual": [
+      1
+    ],
+    "all_other_tree_fields_identical": true
+  },
+  {
+    "case": "body_plus_forced_terminal",
+    "before": [
+      1
+    ],
+    "after": [
+      2
+    ],
+    "actual": [
+      2
+    ],
+    "all_other_tree_fields_identical": true
+  },
+  {
+    "case": "retained_prefix",
+    "before": [
+      1,
+      1
+    ],
+    "after": [
+      2,
+      2
+    ],
+    "actual": [
+      2,
+      2
+    ],
+    "all_other_tree_fields_identical": true
+  }
+]

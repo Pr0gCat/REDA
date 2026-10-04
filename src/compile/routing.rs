@@ -2105,6 +2105,14 @@ where
         }
     }
 
+    // Terminal contracts can replace the planned tail, and later branches
+    // can refresh retained trunks. Count the accepted final states exactly once.
+    for branch in &mut branches {
+        branch.terminal.repeaters = branch.path.iter()
+            .filter(|cell| cell_states[cell].kind == BlockKind::Repeater)
+            .count() as u64;
+    }
+
     for (at, owner, kind) in staged_claims {
         claim(at, owner, kind);
     }
@@ -5743,6 +5751,128 @@ mod tests {
             },
         }
     }
+
+    fn merge_metadata_tree(terminals: &[Anchor]) -> RealisedRouteTree {
+        merge_metadata_tree_with_paths(terminals, &[])
+    }
+
+    fn merge_metadata_tree_with_paths(terminals: &[Anchor], planned: &[PlannedBranch]) -> RealisedRouteTree {
+        let id = RouteId(992);
+        let mut source = endpoint(id);
+        source.anchor = at(4, 1, 4);
+        let sinks = NonEmptyRouteSinks::new(
+            terminals
+                .iter()
+                .enumerate()
+                .map(|(ordinal, &terminal)| {
+                    let mut receiver = sink(id, ordinal as u16, terminal);
+                    if let TerminalContract::Sink { requirement, .. } = &mut receiver.terminal {
+                        *requirement = TerminalRequirement::Exact(RouteTerminalKind::BareMergeRepeater);
+                    }
+                    receiver
+                })
+                .collect(),
+        )
+        .unwrap();
+        route_with_local_policy(
+            RouteRequest {
+                id,
+                source,
+                sinks: &sinks,
+                reservations: &PhysicalReservations::new(),
+                limits: RouterLimits {
+                    max_node_expansions: 20_000,
+                    max_queue_entries: 80_000,
+                },
+            },
+            RoutingJoinPolicy::Off,
+            false,
+            false,
+            ReservePolicy::TerminalStairs,
+            |_| 0,
+            |_, _, _| {},
+            None, ForcedTerminalRunways::default(), planned, SearchModel::DistanceOnly,
+        )
+        .unwrap()
+    }
+
+    fn assert_merge_metadata_matches_powered_world(tree: &RealisedRouteTree) {
+        let mut world = crate::redstone::world::storage::World::new(60, 8, 20);
+        world.set(3, 1, 4, crate::compile::redstone_block());
+        world.set(3, 0, 4, stone());
+        for block in tree.owned_blocks() {
+            world.set(block.at.x, block.at.y, block.at.z, block.state);
+        }
+        let mut simulator = crate::redstone::simulator::Simulator::new(world);
+        simulator
+            .run_until_stable(2000)
+            .expect("merge fanout settles at its original cap");
+        for branch in &tree.branches {
+            let actual = branch
+                .path
+                .iter()
+                .filter(|cell| {
+                    let state = simulator.world().get(cell.x, cell.y, cell.z);
+                    if state.kind == BlockKind::Repeater {
+                        assert!(state.lit, "every counted refresh must receive actual power");
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .count() as u64;
+            assert_eq!(
+                branch.terminal.repeaters, actual,
+                "count the final world including the terminal"
+            );
+            assert_eq!(branch.terminal.kind, RouteTerminalKind::BareMergeRepeater);
+        }
+    }
+
+    #[test]
+    fn forced_merge_terminal_metadata_counts_the_final_terminal_and_body() {
+        for (terminal, expected) in [(at(12, 1, 4), 1), (at(24, 1, 4), 2)] {
+            let tree = merge_metadata_tree(&[terminal]);
+            assert_merge_metadata_matches_powered_world(&tree);
+            assert_eq!(tree.branches[0].terminal.repeaters, expected);
+        }
+    }
+
+    #[test]
+    fn an_already_realised_merge_terminal_is_not_counted_twice() {
+        let tree = merge_metadata_tree(&[at(18, 1, 4)]);
+        assert_merge_metadata_matches_powered_world(&tree);
+        assert_eq!(tree.branches[0].terminal.repeaters, 1);
+    }
+
+    #[test]
+    fn merge_fanout_metadata_includes_retained_prefix_refreshes() {
+        let first = (4..=24).map(|x| at(x, 1, 4)).collect::<Vec<_>>();
+        let second = (4..=20).map(|x| at(x, 1, 4))
+            .chain((5..=8).map(|z| at(20, 1, z)))
+            .chain((21..=24).map(|x| at(x, 1, 8))).collect();
+        let tree = merge_metadata_tree_with_paths(&[at(24, 1, 4), at(24, 1, 8)], &[
+            PlannedBranch { path: first, free_ends: false },
+            PlannedBranch { path: second, free_ends: false },
+        ]);
+        assert_merge_metadata_matches_powered_world(&tree);
+        let shared_refreshes = tree
+            .cells
+            .iter()
+            .filter(|block| {
+                block.state.kind == BlockKind::Repeater
+                    && tree
+                        .branches
+                        .iter()
+                        .all(|branch| branch.path.contains(&block.at))
+            })
+            .count();
+        assert!(
+            shared_refreshes > 0,
+            "the fixture must reuse a real retained body refresh"
+        );
+    }
+
 
     #[test]
     fn track_guidance_charges_each_outside_route_cell_once() {

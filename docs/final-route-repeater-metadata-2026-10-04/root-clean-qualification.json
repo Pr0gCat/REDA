@@ -1,0 +1,11 @@
+{
+  "scope": "Independent committed legacy tree plus precise public occurrence core and DFF tool patches, then only owned final repeater metadata patch; no original dirty routing additions",
+  "command": "cargo test --locked --offline --lib compile::routing::tests::",
+  "passed": 72,
+  "failed": 0,
+  "ignored": 0,
+  "log_sha256": "58fa6c9cc8e16b3e0a965cd586a02d6d918793d8a3772095320fd4803391847e",
+  "routing_source_sha256": "ec8881daa313d3d4f69c742b617329d7ad2b82d0df0f68b7157a201a300925da",
+  "host_RUST_MIN_STACK": 536870912,
+  "electrical_or_search_limits_changed": false
+}

@@ -1,0 +1,7107 @@
+{
+  "candidate_audit": {
+    "cases": 7,
+    "retained_phases_per_case": 256,
+    "literal_state_oracle": true,
+    "all_gate_and_hidden_cell_events_replayed": true
+  },
+  "versus_pre_fallback_current": {
+    "cases": 7,
+    "qualified": true,
+    "regressions": []
+  },
+  "versus_retained_original": {
+    "cases": 7,
+    "qualified": false,
+    "regressions": [
+      {
+        "case": "native-reset_fsm",
+        "phase": 1,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 1,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 1,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 1,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 3,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 3,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 3,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 3,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 5,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 5,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 5,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 5,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 5,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 5,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 5,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 5,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 5,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 5,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 7,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 7,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 7,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 7,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 9,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 9,
+        "after": 11
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 11,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 11,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 11,
+        "channel": "cell:g2:MData",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 11,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 11,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 34,
+        "after": 36
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 28,
+        "after": 30
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 13,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 15,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 15,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 15,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 15,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 17,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 17,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 17,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 17,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 17,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 17,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 17,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 17,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 17,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 17,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 19,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 19,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 19,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 19,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 21,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 21,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 21,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 21,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 23,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 23,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 23,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 23,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 25,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 25,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 25,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 25,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 25,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 25,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 25,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 25,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 25,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 27,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 27,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 27,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 27,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 29,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 29,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 29,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 29,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 29,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 29,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 29,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 29,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 29,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 29,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 31,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 31,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 31,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 31,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 33,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 33,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 33,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 33,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 33,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 33,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 35,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 35,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 35,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 35,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 37,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 37,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 37,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 37,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 37,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 37,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 37,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 37,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 37,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 37,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 39,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 39,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 39,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 39,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 41,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 9,
+        "after": 11
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 43,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 43,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 43,
+        "channel": "cell:g2:MData",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 43,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 43,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 34,
+        "after": 36
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 28,
+        "after": 30
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 45,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 47,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 47,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 47,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 47,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 49,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 49,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 49,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 49,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 49,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 49,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 49,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 49,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 49,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 49,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 51,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 51,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 51,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 51,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 53,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 53,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 53,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 53,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 55,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 55,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 55,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 55,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 57,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 57,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 57,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 57,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 57,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 57,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 57,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 57,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 57,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 59,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 59,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 59,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 59,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 61,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 61,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 61,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 61,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 61,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 61,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 61,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 61,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 61,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 61,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 63,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 63,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 63,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 63,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 65,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 65,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 65,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 65,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 65,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 65,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 67,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 67,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 67,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 67,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 69,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 69,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 69,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 69,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 69,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 69,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 69,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 69,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 69,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 69,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 71,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 71,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 71,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 71,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 73,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 9,
+        "after": 11
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 75,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 75,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 75,
+        "channel": "cell:g2:MData",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 75,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 75,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 34,
+        "after": 36
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 28,
+        "after": 30
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 77,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 79,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 79,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 79,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 79,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 81,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 81,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 81,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 81,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 81,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 81,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 81,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 81,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 81,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 81,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 83,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 83,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 83,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 83,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 85,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 85,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 85,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 85,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 87,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 87,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 87,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 87,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 89,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 89,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 89,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 89,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 89,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 89,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 89,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 89,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 89,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 91,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 91,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 91,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 91,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 93,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 93,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 93,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 93,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 93,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 93,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 93,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 93,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 93,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 93,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 95,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 95,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 95,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 95,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 97,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 97,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 97,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 97,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 97,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 97,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 99,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 99,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 99,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 99,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 101,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 101,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 101,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 101,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 101,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 101,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 101,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 101,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 101,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 101,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 103,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 103,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 103,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 103,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 105,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 9,
+        "after": 11
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 107,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 107,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 107,
+        "channel": "cell:g2:MData",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 107,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 107,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 34,
+        "after": 36
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 28,
+        "after": 30
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 109,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 111,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 111,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 111,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 111,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 113,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 113,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 113,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 113,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 113,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 113,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 113,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 113,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 113,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 113,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 115,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 115,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 115,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 115,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 117,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 117,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 117,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 117,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 119,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 119,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 119,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 119,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 121,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 121,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 121,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 121,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 121,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 121,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 121,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 121,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 121,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 123,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 123,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 123,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 123,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 125,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 125,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 125,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 125,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 125,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 125,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 125,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 125,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 125,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 125,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 127,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 127,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 127,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 127,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 129,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 129,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 129,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 129,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 129,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 129,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 131,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 131,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 131,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 131,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 133,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 133,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 133,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 133,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 133,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 133,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 133,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 133,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 133,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 133,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 135,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 135,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 135,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 135,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 137,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 9,
+        "after": 11
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 139,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 139,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 139,
+        "channel": "cell:g2:MData",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 139,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 139,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 34,
+        "after": 36
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 28,
+        "after": 30
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 141,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 143,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 143,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 143,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 143,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 145,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 145,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 145,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 145,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 145,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 145,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 145,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 145,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 145,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 145,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 147,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 147,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 147,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 147,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 149,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 149,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 149,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 149,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 151,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 151,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 151,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 151,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 153,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 153,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 153,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 153,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 153,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 153,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 153,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 153,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 153,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 155,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 155,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 155,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 155,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 157,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 157,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 157,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 157,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 157,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 157,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 157,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 157,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 157,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 157,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 159,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 159,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 159,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 159,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 161,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 161,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 161,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 161,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 161,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 161,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 163,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 163,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 163,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 163,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 165,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 165,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 165,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 165,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 165,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 165,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 165,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 165,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 165,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 165,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 167,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 167,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 167,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 167,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 169,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 9,
+        "after": 11
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 171,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 171,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 171,
+        "channel": "cell:g2:MData",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 171,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 171,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 34,
+        "after": 36
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 28,
+        "after": 30
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 173,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 175,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 175,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 175,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 175,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 177,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 177,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 177,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 177,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 177,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 177,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 177,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 177,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 177,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 177,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 179,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 179,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 179,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 179,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 181,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 181,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 181,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 181,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 183,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 183,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 183,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 183,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 185,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 185,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 185,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 185,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 185,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 185,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 185,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 185,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 185,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 187,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 187,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 187,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 187,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 189,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 189,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 189,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 189,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 189,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 189,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 189,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 189,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 189,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 189,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 191,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 191,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 191,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 191,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 193,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 193,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 193,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 193,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 193,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 193,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 195,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 195,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 195,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 195,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 197,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 197,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 197,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 197,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 197,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 197,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 197,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 197,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 197,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 197,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 199,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 199,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 199,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 199,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 201,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 9,
+        "after": 11
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 203,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 203,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 203,
+        "channel": "cell:g2:MData",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 203,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 203,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 34,
+        "after": 36
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 28,
+        "after": 30
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 205,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 207,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 207,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 207,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 207,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 209,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 209,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 209,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 209,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 209,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 209,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 209,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 209,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 209,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 209,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 211,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 211,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 211,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 211,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 213,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 213,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 213,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 213,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 215,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 215,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 215,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 215,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 217,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 217,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 217,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 217,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 217,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 217,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 217,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 217,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 217,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 219,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 219,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 219,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 219,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 221,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 221,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 221,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 221,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 221,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 221,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 221,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 221,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 221,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 221,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 223,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 223,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 223,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 223,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 225,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 225,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 225,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 225,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 225,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 225,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 227,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 227,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 227,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 227,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 229,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 229,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 229,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 229,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 229,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 229,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 229,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 229,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 229,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 229,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 231,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 231,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 231,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 231,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 233,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 9,
+        "after": 11
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 235,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 235,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 235,
+        "channel": "cell:g2:MData",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 235,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 235,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "cell:g2:SData",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 34,
+        "after": 36
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:g2",
+        "metric": "last_arrival_ticks",
+        "before": 8,
+        "after": 10
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:g7",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:g8",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:g9",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 18,
+        "after": 20
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:n1",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 28,
+        "after": 30
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 237,
+        "channel": "lamp:q[1]",
+        "metric": "last_arrival_ticks",
+        "before": 12,
+        "after": 14
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 239,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 239,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 239,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 239,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 241,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 241,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 241,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 241,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 241,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 241,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 241,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 241,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 241,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 241,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 243,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 243,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 243,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 243,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 245,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 245,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 245,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 245,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 247,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 247,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 247,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 247,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 249,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 249,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 249,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 249,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 249,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 249,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 249,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 249,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 249,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 251,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 251,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 251,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 251,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 253,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 253,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 253,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 253,
+        "channel": "gate:g14",
+        "metric": "last_arrival_ticks",
+        "before": 10,
+        "after": 12
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 253,
+        "channel": "gate:g15",
+        "metric": "last_arrival_ticks",
+        "before": 14,
+        "after": 16
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 253,
+        "channel": "gate:g16",
+        "metric": "last_arrival_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 253,
+        "channel": "gate:g18",
+        "metric": "last_arrival_ticks",
+        "before": 24,
+        "after": 26
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 253,
+        "channel": "gate:g19",
+        "metric": "last_arrival_ticks",
+        "before": 32,
+        "after": 34
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 253,
+        "channel": "gate:n0",
+        "metric": "last_arrival_ticks",
+        "before": 16,
+        "after": 18
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 253,
+        "channel": "gate:n8",
+        "metric": "last_arrival_ticks",
+        "before": 26,
+        "after": 28
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 255,
+        "metric": "settlement_ticks",
+        "before": 22,
+        "after": 24
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 255,
+        "channel": "cell:g2:InvC",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 255,
+        "channel": "cell:g2:MLock",
+        "metric": "last_arrival_ticks",
+        "before": 4,
+        "after": 6
+      },
+      {
+        "case": "native-reset_fsm",
+        "phase": 255,
+        "channel": "cell:g2:SLock",
+        "metric": "last_arrival_ticks",
+        "before": 6,
+        "after": 8
+      }
+    ]
+  },
+  "exact_trace_matches": {
+    "native-feedback_counter": true,
+    "native-feedback_fsm": true,
+    "native-feedback_state_enable": true,
+    "native-reset_counter": true,
+    "native-hierarchy_reset_counter": true,
+    "native-reset_fsm": true,
+    "native-conditional_state_enable": true
+  }
+}
