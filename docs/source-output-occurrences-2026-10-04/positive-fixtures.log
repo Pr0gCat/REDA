@@ -1,0 +1,23 @@
+    Blocking waiting for file lock on build directory
+   Compiling reda v0.1.0 (/tmp/reda-output-occurrences-20261004)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 45.27s
+     Running tests/output_occurrences.rs (/tmp/reda-output-occurrence-target-20261004/debug/deps/output_occurrences-85a98d1153283637)
+
+running 2 tests
+test rewrite_occurrences_keep_sealed_distinct_alias_lamps_and_truth ... ok
+test raw_occurrences_follow_source_order_instead_of_map_order ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/physical_rewrite_views.rs (/tmp/reda-output-occurrence-target-20261004/debug/deps/physical_rewrite_views-2fc86c437549f959)
+
+running 6 tests
+test primary_output_aliases_keep_distinct_terminals_and_one_honest_observation_label ... ok
+test certified_flat_graph_keeps_selected_comparators_and_merge_contributors ... ok
+test rewritten_compiled_views_measure_actual_nets_without_source_name_collisions ... ok
+test rewrite_equivalence_and_partition_require_the_exact_sealed_view ... ok
+test compiled_and_flat_views_follow_proved_permuted_port_bindings ... ok
+test flat_projection_covers_qualified_generation_techniques_and_constants ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+

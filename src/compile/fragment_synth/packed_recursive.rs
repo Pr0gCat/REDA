@@ -644,6 +644,7 @@ pub(crate) fn adapt_packed_root(
 
     let mut input_positions = BTreeMap::new();
     let mut output_positions = BTreeMap::new();
+    let mut output_occurrences = Vec::new();
     let mut world = product.node.world.clone();
     for (role, signals, positions) in [
         (PortRole::Input, &lowered.inputs, &mut input_positions),
@@ -677,6 +678,9 @@ pub(crate) fn adapt_packed_root(
                     signal: signal.clone(),
                     role,
                 });
+            }
+            if role == PortRole::Output {
+                output_occurrences.push((signal.clone(), (at.x, at.y, at.z)));
             }
             match role {
                 _ if caller_pinned(signal) => {}
@@ -762,6 +766,7 @@ pub(crate) fn adapt_packed_root(
             trunks: &product.node.trunks,
             input_positions,
             output_positions,
+            output_occurrences,
             gate_output_positions,
             gate_facings,
             depth: product.depth,

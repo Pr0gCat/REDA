@@ -1,0 +1,15 @@
+{
+  "base": "4d21915",
+  "clean_tree": "/tmp/reda-cli-occurrence-clean-20261004",
+  "patches": [
+    "source-output-occurrence metadata owned.patch",
+    "owned.patch"
+  ],
+  "test_count": 14,
+  "source_sha256": {
+    "src/bin/build_circuit.rs": "45a6d238b0fd6d188b430d6941b67bdc4b0dc0230178cea38c468ef063c34ca8",
+    "src/bin/mc_dump.rs": "91d3897a1e151bca5425784d53e3a8c5985a4aa6fe7c17e2756261bc2f2a53db",
+    "/tmp/reda-output-occurrence-owned-20261004/owned.patch": "1d893f428f324b2b468462052c7c39273d6c49b21af27bc8bb4f2adb7498334b"
+  },
+  "broad_gap_complete": false
+}

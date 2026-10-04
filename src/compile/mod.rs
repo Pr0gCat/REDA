@@ -1814,6 +1814,7 @@ pub struct CompiledCircuit {
     /// map retains the last occurrence. physical_rewrite() retains every
     /// occurrence's distinct terminal in source declaration order.
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
+    output_occurrences: Vec<(String, (i32, i32, i32))>,
     /// Actual implementation gate outputs, keyed by implementation signal name.
     /// Removed source gates never receive fabricated positions.
     ///
@@ -1879,16 +1880,18 @@ impl CompiledCircuit {
             .cloned()
             .zip(rewrite.source_input_positions().iter().copied())
             .collect();
-        let output_positions = source
+        let output_occurrences: Vec<_> = source
             .outputs
             .iter()
             .cloned()
             .zip(rewrite.source_output_positions().iter().copied())
             .collect();
+        let output_positions = output_occurrences.iter().cloned().collect();
         Self {
             world: rewrite.physical().world().clone(),
             input_positions,
             output_positions,
+            output_occurrences,
             gate_output_positions: rewrite
                 .implemented_observations()
                 .gate_output_positions
@@ -1900,6 +1903,13 @@ impl CompiledCircuit {
             physical_rewrite: Some(rewrite),
             physical_candidate: None,
         }
+    }
+
+    /// Actual reading points in source output declaration order, including aliases.
+    /// Raw aliases can share one lamp; certified rewrites retain their sealed
+    /// occurrence positions. Names are source signals, not frontend port labels.
+    pub fn output_occurrences(&self) -> &[(String, (i32, i32, i32))] {
+        &self.output_occurrences
     }
 
     /// Sealed source-to-implementation mapping, when a physical rewrite was used.
@@ -1928,6 +1938,7 @@ impl CompiledCircuit {
         let expected = Self::from_certified_rewrite(rewrite.clone());
         if self.input_positions != expected.input_positions
             || self.output_positions != expected.output_positions
+            || self.output_occurrences != expected.output_occurrences
             || self.gate_output_positions != expected.gate_output_positions
             || self.gate_facings != expected.gate_facings
             || self.observations != expected.observations
@@ -8312,6 +8323,7 @@ fn compile_channelled_with_reserve(
         observations,
         world: realised.world,
         input_positions: realised.ports.input_positions,
+        output_occurrences: realised.ports.output_occurrences,
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
         gate_facings: vec![geometry::CellFacing::NORTH; netlist.gates.len()],
@@ -8411,6 +8423,7 @@ pub fn compile_grown(
         observations,
         world: realised.world,
         input_positions: realised.ports.input_positions,
+        output_occurrences: realised.ports.output_occurrences,
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
         gate_facings,
@@ -8452,6 +8465,7 @@ fn compile_planned_within(
         observations,
         world: realised.world,
         input_positions: realised.ports.input_positions,
+        output_occurrences: realised.ports.output_occurrences,
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
         gate_facings,

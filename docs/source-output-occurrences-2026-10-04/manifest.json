@@ -1,0 +1,19 @@
+{
+  "files": {
+    "src/compile/mod.rs": "31fd547f00e33d9489ae948b3a766a5e90f58972f8301e845d34f5a3ac67e739",
+    "src/compile/planner.rs": "9e34baf6f1c6adba6514edc028b15b907bf3377442cd5fb85ceb91e263094045",
+    "src/compile/fragment_synth/candidate.rs": "ef883cc442698982337e093cbd839e47bd0cfa9498f20abc884bd16174a84b52",
+    "src/compile/fragment_synth/api.rs": "568ab18f624d59e85516217d6a8bc8ff9b1ea34666fd0a49486fe88f9eeab940",
+    "src/compile/fragment_synth/recursive.rs": "08454aaaec6652defdd56abc6c87a448b37f08cfb165bc8cdc7b7300a0b9d639",
+    "src/compile/fragment_synth/packed_recursive.rs": "f502f27254f4049ee902e625c4075bb7834077b924c2b7cf505c53eaa1d8561c",
+    "src/compile/strength_differential/tests.rs": "a21e62cb1a0bd1568ee83681773363754585d865ca93b524c659ec9c4bee4f59",
+    "tests/output_occurrences.rs": "d31fddd71cee0099ad9fa48cd0bb6d2c785b1cd41c42789a45eda8a0d6f678c0"
+  },
+  "tests": {
+    "dedicated": 2,
+    "physical_rewrite_views": 6,
+    "lib_test_build": "pass"
+  },
+  "owned_patch": "owned.patch",
+  "raw_duplicate_alias_support": "pending independent repair"
+}

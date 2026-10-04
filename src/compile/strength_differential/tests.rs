@@ -160,6 +160,9 @@ fn historical_case(name: &'static str, netlist: Netlist) -> HistoricalCase {
             Net::for_verification(source, net.sinks)
         })
         .collect();
+    let output_occurrences = netlist.outputs.iter().map(|name| {
+        (name.clone(), recorded.output_positions[name])
+    }).collect();
     HistoricalCase {
         name,
         netlist,
@@ -168,6 +171,7 @@ fn historical_case(name: &'static str, netlist: Netlist) -> HistoricalCase {
                 world,
                 ports: planner::CandidatePorts {
                     input_positions: recorded.input_positions,
+                    output_occurrences,
                     output_positions: recorded.output_positions,
                     gate_output_positions: recorded.gate_output_positions,
                 },

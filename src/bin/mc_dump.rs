@@ -359,29 +359,27 @@ fn circuit_records(
         }
         compiled.implementation_signal_label(name)
     };
-    if let Some(rewrite) = compiled.physical_rewrite() {
-        let mut remaining_labels: Vec<_> = labels.iter().collect();
-        for (ordinal, ((name, binding), &(x, y, z))) in source
-            .outputs
+    let occurrences = compiled.output_occurrences();
+    assert_eq!(occurrences.len(), source.outputs.len(), "dump output occurrence count");
+    let mut remaining_labels: Vec<_> = labels.iter().collect();
+    for (ordinal, (name, &(x, y, z))) in occurrences
+        .iter()
+        .map(|(name, position)| (name, position))
+        .enumerate()
+    {
+        assert_eq!(name, &source.outputs[ordinal], "dump output occurrence order");
+        let binding = compiled.physical_rewrite()
+            .map(|rewrite| &rewrite.rewrite_certificate().rewritten_outputs_in_source_order()[ordinal])
+            .unwrap_or(name);
+        let label = remaining_labels
             .iter()
-            .zip(
-                rewrite
-                    .rewrite_certificate()
-                    .rewritten_outputs_in_source_order(),
-            )
-            .zip(rewrite.source_output_positions())
-            .enumerate()
-        {
-            let label = remaining_labels
-                .iter()
-                .position(|(_, internal)| internal == name)
-                .map(|index| remaining_labels.remove(index).0.as_str())
-                .unwrap_or(name);
-            records.push(format!(
-                "OUTPUTPORT {ordinal} {name} {} {x} {y} {z} {label}",
-                signal(binding)
-            ));
-        }
+            .position(|(_, internal)| internal == name)
+            .map(|index| remaining_labels.remove(index).0.as_str())
+            .unwrap_or(name);
+        records.push(format!(
+            "OUTPUTPORT {ordinal} {name} {} {x} {y} {z} {label}",
+            signal(binding)
+        ));
     }
     for (name, &(x, y, z)) in &compiled.gate_output_positions {
         let component = if compiled.physical_rewrite().is_some()

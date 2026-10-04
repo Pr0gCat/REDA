@@ -654,6 +654,7 @@ impl std::fmt::Display for PlannerError {
 #[derive(Debug, Default, Clone)]
 pub struct CandidatePorts {
     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
+    pub(crate) output_occurrences: Vec<(String, (i32, i32, i32))>,
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
 }
@@ -1091,7 +1092,8 @@ pub fn emit_primitives(
     // lamp at all -- its reading point is the caller's own cell, which the
     // loop above recorded and deliberately left empty.
     for output in &netlist.outputs {
-        if ports.output_positions.contains_key(output) {
+        if let Some(&at) = ports.output_positions.get(output) {
+            ports.output_occurrences.push((output.clone(), at));
             continue;
         }
         let gate = netlist
@@ -1107,6 +1109,7 @@ pub fn emit_primitives(
         ports
             .output_positions
             .insert(output.clone(), (lamp.x, lamp.y, lamp.z));
+        ports.output_occurrences.push((output.clone(), (lamp.x, lamp.y, lamp.z)));
     }
 
     Ok(RealisedCandidate { world, ports })
@@ -11792,6 +11795,7 @@ mod tests {
                             observations: compile::CircuitObservations::default(),
                             world: realised.world,
                             input_positions: realised.ports.input_positions,
+                            output_occurrences: realised.ports.output_occurrences,
                             output_positions: realised.ports.output_positions,
                             gate_output_positions: realised.ports.gate_output_positions,
                             gate_facings: (0..netlist.gates.len())
@@ -26580,6 +26584,7 @@ mod tests {
                                 observations: compile::CircuitObservations::default(),
                                 world: realised.world,
                                 input_positions: realised.ports.input_positions,
+                                output_occurrences: realised.ports.output_occurrences,
                                 output_positions: realised.ports.output_positions,
                                 gate_output_positions: realised.ports.gate_output_positions,
                                 gate_facings: (0..netlist.gates.len())
@@ -26721,6 +26726,7 @@ mod tests {
             observations: compile::CircuitObservations::default(),
             world: realised.world,
             input_positions: realised.ports.input_positions,
+            output_occurrences: realised.ports.output_occurrences,
             output_positions: realised.ports.output_positions,
             gate_output_positions: realised.ports.gate_output_positions,
             gate_facings: (0..netlist.gates.len())
@@ -28312,6 +28318,7 @@ mod tests {
             observations: compile::CircuitObservations::default(),
             world: realised.world.clone(),
             input_positions: realised.ports.input_positions.clone(),
+            output_occurrences: realised.ports.output_occurrences.clone(),
             output_positions: realised.ports.output_positions.clone(),
             gate_output_positions: realised.ports.gate_output_positions.clone(),
             gate_facings: (0..netlist.gates.len())
@@ -29232,6 +29239,7 @@ mod tests {
             observations: compile::CircuitObservations::default(),
             world: realised.world.clone(),
             input_positions: realised.ports.input_positions.clone(),
+            output_occurrences: realised.ports.output_occurrences.clone(),
             output_positions: realised.ports.output_positions.clone(),
             gate_output_positions: realised.ports.gate_output_positions.clone(),
             gate_facings: (0..netlist.gates.len())
@@ -29814,6 +29822,7 @@ mod tests {
                 observations: compile::CircuitObservations::default(),
                 world: realised.world.clone(),
                 input_positions: realised.ports.input_positions.clone(),
+                output_occurrences: realised.ports.output_occurrences.clone(),
                 output_positions: realised.ports.output_positions.clone(),
                 gate_output_positions: realised.ports.gate_output_positions.clone(),
                 gate_facings: (0..case.netlist.gates.len())

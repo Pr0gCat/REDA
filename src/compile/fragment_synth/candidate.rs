@@ -200,6 +200,7 @@ pub struct ExpandedPhysicalCandidate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompatibilityViews {
     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
+    pub(crate) output_occurrences: Vec<(String, (i32, i32, i32))>,
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
     pub gate_facings: Vec<CellFacing>,
@@ -1315,6 +1316,7 @@ impl ExpandedPhysicalCandidate {
         }
 
         let mut output_positions = BTreeMap::new();
+        let mut output_occurrences = Vec::with_capacity(netlist.outputs.len());
         for (index, name) in netlist.outputs.iter().enumerate() {
             let observation = ObservationId::DeclaredOutput(PortId(
                 u32::try_from(index).map_err(|_| CandidateError::IdentityOverflow)?,
@@ -1326,6 +1328,7 @@ impl ExpandedPhysicalCandidate {
                 .site
                 .at;
             output_positions.insert(name.clone(), (at.x, at.y, at.z));
+            output_occurrences.push((name.clone(), (at.x, at.y, at.z)));
         }
 
         let mut gate_output_positions = BTreeMap::new();
@@ -1371,6 +1374,7 @@ impl ExpandedPhysicalCandidate {
         Ok(CompatibilityViews {
             input_positions,
             output_positions,
+            output_occurrences,
             gate_output_positions,
             gate_facings,
         })

@@ -81,6 +81,7 @@ pub(crate) struct RecursiveProduct {
     pub world: World,
     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
+    pub output_occurrences: Vec<(String, (i32, i32, i32))>,
     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
     pub gate_facings: Vec<CellFacing>,
     pub metrics: CandidateMetrics,
@@ -515,6 +516,7 @@ fn compile_root_leaf(
     let mut world = realised.world;
     let mut input_positions = BTreeMap::new();
     let mut output_positions = BTreeMap::new();
+    let mut output_occurrences = Vec::new();
     let mut root_ports = Vec::with_capacity(lowered.inputs.len() + lowered.outputs.len());
     // Declared order, inputs then outputs: what `validate_root_ports` compares
     // against, and what a transition's bits are zipped with.
@@ -548,6 +550,7 @@ fn compile_root_leaf(
             .get(signal)
             .ok_or_else(|| RecursiveError::MissingGate(signal.clone()))?;
         output_positions.insert(signal.clone(), at);
+        output_occurrences.push((signal.clone(), at));
         // An output the caller did not pin has the caller-facing receiver in
         // its cell, not the planner's own hardware -- the same lamp the
         // composed shape hangs there, and the convention the acceptance
@@ -583,6 +586,7 @@ fn compile_root_leaf(
             trunks: &[],
             input_positions,
             output_positions,
+            output_occurrences,
             gate_output_positions,
             gate_facings,
             depth: 1,
@@ -603,6 +607,7 @@ pub(crate) struct RootAssembly<'a> {
     pub trunks: &'a [RealisedRouteTree],
     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
+    pub output_occurrences: Vec<(String, (i32, i32, i32))>,
     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
     pub gate_facings: Vec<CellFacing>,
     pub depth: usize,
@@ -627,6 +632,7 @@ pub(crate) fn assemble_product(
         trunks,
         input_positions,
         output_positions,
+        output_occurrences,
         gate_output_positions,
         gate_facings,
         depth,
@@ -683,6 +689,7 @@ pub(crate) fn assemble_product(
         world,
         input_positions,
         output_positions,
+        output_occurrences,
         gate_output_positions,
         gate_facings,
         metrics,
@@ -768,6 +775,7 @@ fn compile_matrix_root(
         physical_rewrite: compiled.physical_rewrite,
         world: compiled.world,
         input_positions: compiled.input_positions,
+        output_occurrences: compiled.output_occurrences,
         output_positions: compiled.output_positions,
         gate_output_positions: compiled.gate_output_positions,
         gate_facings: compiled.gate_facings,
@@ -1011,6 +1019,7 @@ fn compile_with_layout(
     let mut world = composed.world;
     let mut input_positions = BTreeMap::new();
     let mut output_positions = BTreeMap::new();
+    let mut output_occurrences = Vec::new();
     for port in &plan.root_ports {
         let at = (port.pin.at.x, port.pin.at.y, port.pin.at.z);
         // A cell the caller pinned is the caller's and ships empty; one this
@@ -1025,6 +1034,7 @@ fn compile_with_layout(
             }
             PortRole::Output => {
                 output_positions.insert(port.signal.clone(), at);
+                output_occurrences.push((port.signal.clone(), at));
                 if !caller.caller_pinned(&port.signal) {
                     world.set(at.0, at.1, at.2, compile::lamp());
                 }
@@ -1080,6 +1090,7 @@ fn compile_with_layout(
             trunks: &composed.trunks,
             input_positions,
             output_positions,
+            output_occurrences,
             gate_output_positions: gate_metadata,
             gate_facings,
             depth,

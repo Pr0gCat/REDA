@@ -1,0 +1,191 @@
+diff --git a/src/bin/build_circuit.rs b/src/bin/build_circuit.rs
+index 3134778..19cc1e5 100644
+--- a/src/bin/build_circuit.rs
++++ b/src/bin/build_circuit.rs
+@@ -308,6 +308,16 @@ fn resolve_pins(
+     pins: &PinsFile,
+     output_labels: &[(String, String)],
+ ) -> Result<PortPlacements, String> {
++    for (label, _) in &pins.outputs {
++        if let Some((_, signal)) = output_labels.iter().find(|(name, _)| name == label) {
++            if output_labels.iter().filter(|(_, driver)| driver == signal).count() > 1 {
++                return Err(format!("output pin {label:?} has an aliased driver; occurrence-specific pins are not supported"));
++            }
++            if pins.inputs.iter().any(|(name, _)| name == signal) {
++                return Err(format!("output pin {label:?} conflicts with input pin {signal:?}"));
++            }
++        }
++    }
+     let mut placements = PortPlacements::default();
+     for (name, pin) in &pins.inputs {
+         placements.pin(name.clone(), pin.at, pin.toward);
+@@ -508,6 +518,24 @@ fn count_non_air(world: &World) -> usize {
+ /// should not have to redo the derivation -- and a reported cell that
+ /// disagrees with the shipped world is a bug this line makes visible. An
+ /// unpinned run prints exactly what it always did.
++fn output_pinout<'a>(
++    compiled: &'a CompiledCircuit,
++    labels: &'a [(String, String)],
++) -> Result<Vec<(&'a str, &'a str, (i32, i32, i32))>, String> {
++    let mut remaining: Vec<_> = labels.iter().collect();
++    let mut entries = Vec::new();
++    for (signal, position) in compiled.output_occurrences() {
++        let index = remaining.iter().position(|(_, driver)| driver == signal)
++            .ok_or_else(|| format!("output occurrence {signal:?} has no public label"))?;
++        let (label, _) = remaining.remove(index);
++        entries.push((label.as_str(), signal.as_str(), *position));
++    }
++    if !remaining.is_empty() {
++        return Err("public output labels have no physical occurrences".into());
++    }
++    Ok(entries)
++}
++
+ fn print_pinout(
+     compiled: &CompiledCircuit,
+     output_labels: &[(String, String)],
+@@ -542,8 +570,9 @@ fn print_pinout(
+         );
+     }
+     println!("  outputs (lamp, unless pinned):");
+-    for (label, signal) in output_labels {
+-        let (x, y, z) = compiled.output_positions[signal];
++    for (label, signal, (x, y, z)) in output_pinout(compiled, output_labels)
++        .expect("pinout must bind every public output")
++    {
+         println!(
+             "    {label:<12} ({x}, {y}, {z}){}",
+             annotate(label, (x, y, z), placements.get(signal), PortRole::Output)
+@@ -935,22 +964,13 @@ fn main() {
+             .map(|(name, &position)| entry(name, position, placements.get(name), PortRole::Input))
+             .collect::<Vec<_>>()
+             .join(",");
+-        let label_of: std::collections::BTreeMap<&str, &str> = output_labels
+-            .iter()
+-            .map(|(label, signal)| (signal.as_str(), label.as_str()))
+-            .collect();
+-        let outputs = compiled
+-            .output_positions
+-            .iter()
+-            .map(|(signal, &position)| {
++        let outputs = output_pinout(&compiled, &output_labels)
++            .expect("pinout must bind every public output")
++            .into_iter()
++            .map(|(label, signal, position)| {
+                 let pin = placements.get(signal);
+-                let key = match pin {
+-                    Some(_) => label_of
+-                        .get(signal.as_str())
+-                        .copied()
+-                        .unwrap_or(signal.as_str()),
+-                    None => signal.as_str(),
+-                };
++                let aliased = output_labels.iter().filter(|(_, driver)| driver == signal).count() > 1;
++                let key = if pin.is_some() || aliased { label } else { signal };
+                 entry(key, position, pin, PortRole::Output)
+             })
+             .collect::<Vec<_>>()
+@@ -976,6 +996,29 @@ fn main() {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn pinout_preserves_each_certified_alias_position_and_label() {
++        use reda::compile::fragment_synth::torch_row::compile_player_torch_row;
++        let source = Netlist {
++            inputs: vec!["a".into(), "b".into()],
++            outputs: vec!["a".into(), "a".into(), "b".into()],
++            gates: vec![],
++        };
++        let compiled = CompiledCircuit::from_certified_rewrite(
++            compile_player_torch_row(&source, 1_000_000).unwrap(),
++        );
++        let labels = vec![("y[1]".into(), "a".into()), ("z".into(), "a".into()), ("y[0]".into(), "b".into())];
++        let entries = output_pinout(&compiled, &labels).unwrap();
++        assert_eq!(entries.iter().map(|entry| entry.0).collect::<Vec<_>>(), ["y[1]", "z", "y[0]"]);
++        assert_eq!(entries.iter().map(|entry| entry.2).collect::<Vec<_>>(),
++            compiled.physical_rewrite().unwrap().source_output_positions());
++        assert_ne!(entries[0].2, entries[1].2);
++        assert!(output_pinout(&compiled, &labels[..2]).is_err());
++        let mut extra = labels.clone();
++        extra.push(("missing".into(), "a".into()));
++        assert!(output_pinout(&compiled, &extra).is_err());
++    }
++
+     #[test]
+     fn evaluation_format_is_explicit_and_preserves_circuit_arguments() {
+         let mut args = vec![
+@@ -1170,6 +1213,19 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn output_pins_refuse_ambiguous_occurrences_and_input_collisions() {
++        let pins = parse_pins_file(
++            r#"{"outputs":{"y":{"at":[5,1,2],"toward":"north"}}}"#,
++        ).unwrap();
++        let labels = vec![("y".into(), "g6".into()), ("z".into(), "g6".into())];
++        assert!(resolve_pins(&pins, &labels).unwrap_err().contains("aliased driver"));
++        let pins = parse_pins_file(
++            r#"{"inputs":{"g6":{"at":[3,1,20],"toward":"south"}},"outputs":{"y":{"at":[5,1,2],"toward":"north"}}}"#,
++        ).unwrap();
++        assert!(resolve_pins(&pins, &labels[..1]).unwrap_err().contains("conflicts with input"));
++    }
++
+     /// A world holding exactly one repeater, so the two predicates behind
+     /// `handover_in_the_world` have something real to find. `facing` is stored
+     /// the way the compiler stores it, which is the field that tells a
+diff --git a/src/bin/mc_dump.rs b/src/bin/mc_dump.rs
+index 1e8467f..387eda6 100644
+--- a/src/bin/mc_dump.rs
++++ b/src/bin/mc_dump.rs
+@@ -359,29 +359,27 @@ fn circuit_records(
+         }
+         compiled.implementation_signal_label(name)
+     };
+-    if let Some(rewrite) = compiled.physical_rewrite() {
+-        let mut remaining_labels: Vec<_> = labels.iter().collect();
+-        for (ordinal, ((name, binding), &(x, y, z))) in source
+-            .outputs
++    let occurrences = compiled.output_occurrences();
++    assert_eq!(occurrences.len(), source.outputs.len(), "dump output occurrence count");
++    let mut remaining_labels: Vec<_> = labels.iter().collect();
++    for (ordinal, (name, &(x, y, z))) in occurrences
++        .iter()
++        .map(|(name, position)| (name, position))
++        .enumerate()
++    {
++        assert_eq!(name, &source.outputs[ordinal], "dump output occurrence order");
++        let binding = compiled.physical_rewrite()
++            .map(|rewrite| &rewrite.rewrite_certificate().rewritten_outputs_in_source_order()[ordinal])
++            .unwrap_or(name);
++        let label = remaining_labels
+             .iter()
+-            .zip(
+-                rewrite
+-                    .rewrite_certificate()
+-                    .rewritten_outputs_in_source_order(),
+-            )
+-            .zip(rewrite.source_output_positions())
+-            .enumerate()
+-        {
+-            let label = remaining_labels
+-                .iter()
+-                .position(|(_, internal)| internal == name)
+-                .map(|index| remaining_labels.remove(index).0.as_str())
+-                .unwrap_or(name);
+-            records.push(format!(
+-                "OUTPUTPORT {ordinal} {name} {} {x} {y} {z} {label}",
+-                signal(binding)
+-            ));
+-        }
++            .position(|(_, internal)| internal == name)
++            .map(|index| remaining_labels.remove(index).0.as_str())
++            .unwrap_or(name);
++        records.push(format!(
++            "OUTPUTPORT {ordinal} {name} {} {x} {y} {z} {label}",
++            signal(binding)
++        ));
+     }
+     for (name, &(x, y, z)) in &compiled.gate_output_positions {
+         let component = if compiled.physical_rewrite().is_some()

@@ -218,6 +218,7 @@ fn result_from_product(
         CompiledCircuit {
             world: product.world,
             input_positions: product.input_positions,
+            output_occurrences: product.output_occurrences,
             output_positions: product.output_positions,
             gate_output_positions: product.gate_output_positions,
             gate_facings: product.gate_facings,
@@ -499,6 +500,7 @@ mod tests {
         let compiled = CompiledCircuit {
             world: best.world().clone(),
             input_positions: views.input_positions,
+            output_occurrences: views.output_occurrences,
             output_positions: views.output_positions,
             gate_output_positions: views.gate_output_positions,
             gate_facings: views.gate_facings,

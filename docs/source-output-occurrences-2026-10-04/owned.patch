@@ -1,0 +1,342 @@
+--- a/src/compile/mod.rs
++++ b/src/compile/mod.rs
+@@ -1814,6 +1814,7 @@
+     /// map retains the last occurrence. physical_rewrite() retains every
+     /// occurrence's distinct terminal in source declaration order.
+     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
++    output_occurrences: Vec<(String, (i32, i32, i32))>,
+     /// Actual implementation gate outputs, keyed by implementation signal name.
+     /// Removed source gates never receive fabricated positions.
+     ///
+@@ -1879,16 +1880,18 @@
+             .cloned()
+             .zip(rewrite.source_input_positions().iter().copied())
+             .collect();
+-        let output_positions = source
++        let output_occurrences: Vec<_> = source
+             .outputs
+             .iter()
+             .cloned()
+             .zip(rewrite.source_output_positions().iter().copied())
+             .collect();
++        let output_positions = output_occurrences.iter().cloned().collect();
+         Self {
+             world: rewrite.physical().world().clone(),
+             input_positions,
+             output_positions,
++            output_occurrences,
+             gate_output_positions: rewrite
+                 .implemented_observations()
+                 .gate_output_positions
+@@ -1902,6 +1905,13 @@
+         }
+     }
+ 
++    /// Actual reading points in source output declaration order, including aliases.
++    /// Raw aliases can share one lamp; certified rewrites retain their sealed
++    /// occurrence positions. Names are source signals, not frontend port labels.
++    pub fn output_occurrences(&self) -> &[(String, (i32, i32, i32))] {
++        &self.output_occurrences
++    }
++
+     /// Sealed source-to-implementation mapping, when a physical rewrite was used.
+     pub fn physical_rewrite(&self) -> Option<&fragment_synth::rewrite::CertifiedPhysicalRewrite> {
+         self.physical_rewrite.as_ref()
+@@ -1928,6 +1938,7 @@
+         let expected = Self::from_certified_rewrite(rewrite.clone());
+         if self.input_positions != expected.input_positions
+             || self.output_positions != expected.output_positions
++            || self.output_occurrences != expected.output_occurrences
+             || self.gate_output_positions != expected.gate_output_positions
+             || self.gate_facings != expected.gate_facings
+             || self.observations != expected.observations
+@@ -8313,6 +8324,7 @@
+         observations,
+         world: realised.world,
+         input_positions: realised.ports.input_positions,
++        output_occurrences: realised.ports.output_occurrences,
+         output_positions: realised.ports.output_positions,
+         gate_output_positions: realised.ports.gate_output_positions,
+         gate_facings: vec![geometry::CellFacing::NORTH; netlist.gates.len()],
+@@ -8412,6 +8424,7 @@
+         observations,
+         world: realised.world,
+         input_positions: realised.ports.input_positions,
++        output_occurrences: realised.ports.output_occurrences,
+         output_positions: realised.ports.output_positions,
+         gate_output_positions: realised.ports.gate_output_positions,
+         gate_facings,
+@@ -8453,6 +8466,7 @@
+         observations,
+         world: realised.world,
+         input_positions: realised.ports.input_positions,
++        output_occurrences: realised.ports.output_occurrences,
+         output_positions: realised.ports.output_positions,
+         gate_output_positions: realised.ports.gate_output_positions,
+         gate_facings,
+--- a/src/compile/planner.rs
++++ b/src/compile/planner.rs
+@@ -654,6 +654,7 @@
+ #[derive(Debug, Default, Clone)]
+ pub struct CandidatePorts {
+     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
++    pub(crate) output_occurrences: Vec<(String, (i32, i32, i32))>,
+     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
+     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+ }
+@@ -1090,7 +1091,8 @@
+     // lamp at all -- its reading point is the caller's own cell, which the
+     // loop above recorded and deliberately left empty.
+     for output in &netlist.outputs {
+-        if ports.output_positions.contains_key(output) {
++        if let Some(&at) = ports.output_positions.get(output) {
++            ports.output_occurrences.push((output.clone(), at));
+             continue;
+         }
+         let gate = netlist
+@@ -1106,6 +1108,7 @@
+         ports
+             .output_positions
+             .insert(output.clone(), (lamp.x, lamp.y, lamp.z));
++        ports.output_occurrences.push((output.clone(), (lamp.x, lamp.y, lamp.z)));
+     }
+ 
+     Ok(RealisedCandidate { world, ports })
+@@ -11797,6 +11800,7 @@
+                             observations: compile::CircuitObservations::default(),
+                             world: realised.world,
+                             input_positions: realised.ports.input_positions,
++                            output_occurrences: realised.ports.output_occurrences,
+                             output_positions: realised.ports.output_positions,
+                             gate_output_positions: realised.ports.gate_output_positions,
+                             gate_facings: (0..netlist.gates.len())
+@@ -26585,6 +26589,7 @@
+                                 observations: compile::CircuitObservations::default(),
+                                 world: realised.world,
+                                 input_positions: realised.ports.input_positions,
++                                output_occurrences: realised.ports.output_occurrences,
+                                 output_positions: realised.ports.output_positions,
+                                 gate_output_positions: realised.ports.gate_output_positions,
+                                 gate_facings: (0..netlist.gates.len())
+@@ -26726,6 +26731,7 @@
+             observations: compile::CircuitObservations::default(),
+             world: realised.world,
+             input_positions: realised.ports.input_positions,
++            output_occurrences: realised.ports.output_occurrences,
+             output_positions: realised.ports.output_positions,
+             gate_output_positions: realised.ports.gate_output_positions,
+             gate_facings: (0..netlist.gates.len())
+@@ -28317,6 +28323,7 @@
+             observations: compile::CircuitObservations::default(),
+             world: realised.world.clone(),
+             input_positions: realised.ports.input_positions.clone(),
++            output_occurrences: realised.ports.output_occurrences.clone(),
+             output_positions: realised.ports.output_positions.clone(),
+             gate_output_positions: realised.ports.gate_output_positions.clone(),
+             gate_facings: (0..netlist.gates.len())
+@@ -29237,6 +29244,7 @@
+             observations: compile::CircuitObservations::default(),
+             world: realised.world.clone(),
+             input_positions: realised.ports.input_positions.clone(),
++            output_occurrences: realised.ports.output_occurrences.clone(),
+             output_positions: realised.ports.output_positions.clone(),
+             gate_output_positions: realised.ports.gate_output_positions.clone(),
+             gate_facings: (0..netlist.gates.len())
+@@ -29819,6 +29827,7 @@
+                 observations: compile::CircuitObservations::default(),
+                 world: realised.world.clone(),
+                 input_positions: realised.ports.input_positions.clone(),
++                output_occurrences: realised.ports.output_occurrences.clone(),
+                 output_positions: realised.ports.output_positions.clone(),
+                 gate_output_positions: realised.ports.gate_output_positions.clone(),
+                 gate_facings: (0..case.netlist.gates.len())
+--- a/src/compile/strength_differential/tests.rs
++++ b/src/compile/strength_differential/tests.rs
+@@ -160,6 +160,9 @@
+             Net::for_verification(source, net.sinks)
+         })
+         .collect();
++    let output_occurrences = netlist.outputs.iter().map(|name| {
++        (name.clone(), recorded.output_positions[name])
++    }).collect();
+     HistoricalCase {
+         name,
+         netlist,
+@@ -168,6 +171,7 @@
+                 world,
+                 ports: planner::CandidatePorts {
+                     input_positions: recorded.input_positions,
++                    output_occurrences,
+                     output_positions: recorded.output_positions,
+                     gate_output_positions: recorded.gate_output_positions,
+                 },
+--- a/src/compile/fragment_synth/candidate.rs
++++ b/src/compile/fragment_synth/candidate.rs
+@@ -200,6 +200,7 @@
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct CompatibilityViews {
+     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
++    pub(crate) output_occurrences: Vec<(String, (i32, i32, i32))>,
+     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
+     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+     pub gate_facings: Vec<CellFacing>,
+@@ -1315,6 +1316,7 @@
+         }
+ 
+         let mut output_positions = BTreeMap::new();
++        let mut output_occurrences = Vec::with_capacity(netlist.outputs.len());
+         for (index, name) in netlist.outputs.iter().enumerate() {
+             let observation = ObservationId::DeclaredOutput(PortId(
+                 u32::try_from(index).map_err(|_| CandidateError::IdentityOverflow)?,
+@@ -1326,6 +1328,7 @@
+                 .site
+                 .at;
+             output_positions.insert(name.clone(), (at.x, at.y, at.z));
++            output_occurrences.push((name.clone(), (at.x, at.y, at.z)));
+         }
+ 
+         let mut gate_output_positions = BTreeMap::new();
+@@ -1371,6 +1374,7 @@
+         Ok(CompatibilityViews {
+             input_positions,
+             output_positions,
++            output_occurrences,
+             gate_output_positions,
+             gate_facings,
+         })
+--- a/src/compile/fragment_synth/api.rs
++++ b/src/compile/fragment_synth/api.rs
+@@ -222,6 +222,7 @@
+         CompiledCircuit {
+             world: product.world,
+             input_positions: product.input_positions,
++            output_occurrences: product.output_occurrences,
+             output_positions: product.output_positions,
+             gate_output_positions: product.gate_output_positions,
+             gate_facings: product.gate_facings,
+@@ -503,6 +504,7 @@
+         let compiled = CompiledCircuit {
+             world: best.world().clone(),
+             input_positions: views.input_positions,
++            output_occurrences: views.output_occurrences,
+             output_positions: views.output_positions,
+             gate_output_positions: views.gate_output_positions,
+             gate_facings: views.gate_facings,
+--- a/src/compile/fragment_synth/packed_recursive.rs
++++ b/src/compile/fragment_synth/packed_recursive.rs
+@@ -644,6 +644,7 @@
+ 
+     let mut input_positions = BTreeMap::new();
+     let mut output_positions = BTreeMap::new();
++    let mut output_occurrences = Vec::new();
+     let mut world = product.node.world.clone();
+     for (role, signals, positions) in [
+         (PortRole::Input, &lowered.inputs, &mut input_positions),
+@@ -678,6 +679,9 @@
+                     role,
+                 });
+             }
++            if role == PortRole::Output {
++                output_occurrences.push((signal.clone(), (at.x, at.y, at.z)));
++            }
+             match role {
+                 _ if caller_pinned(signal) => {}
+                 PortRole::Input => install_lever(&mut world, signal, at)?,
+@@ -762,6 +766,7 @@
+             trunks: &product.node.trunks,
+             input_positions,
+             output_positions,
++            output_occurrences,
+             gate_output_positions,
+             gate_facings,
+             depth: product.depth,
+--- a/src/compile/fragment_synth/recursive.rs
++++ b/src/compile/fragment_synth/recursive.rs
+@@ -81,6 +81,7 @@
+     pub world: World,
+     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
+     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
++    pub output_occurrences: Vec<(String, (i32, i32, i32))>,
+     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+     pub gate_facings: Vec<CellFacing>,
+     pub metrics: CandidateMetrics,
+@@ -515,6 +516,7 @@
+     let mut world = realised.world;
+     let mut input_positions = BTreeMap::new();
+     let mut output_positions = BTreeMap::new();
++    let mut output_occurrences = Vec::new();
+     let mut root_ports = Vec::with_capacity(lowered.inputs.len() + lowered.outputs.len());
+     // Declared order, inputs then outputs: what `validate_root_ports` compares
+     // against, and what a transition's bits are zipped with.
+@@ -548,6 +550,7 @@
+             .get(signal)
+             .ok_or_else(|| RecursiveError::MissingGate(signal.clone()))?;
+         output_positions.insert(signal.clone(), at);
++        output_occurrences.push((signal.clone(), at));
+         // An output the caller did not pin has the caller-facing receiver in
+         // its cell, not the planner's own hardware -- the same lamp the
+         // composed shape hangs there, and the convention the acceptance
+@@ -583,6 +586,7 @@
+             trunks: &[],
+             input_positions,
+             output_positions,
++            output_occurrences,
+             gate_output_positions,
+             gate_facings,
+             depth: 1,
+@@ -603,6 +607,7 @@
+     pub trunks: &'a [RealisedRouteTree],
+     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
+     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
++    pub output_occurrences: Vec<(String, (i32, i32, i32))>,
+     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+     pub gate_facings: Vec<CellFacing>,
+     pub depth: usize,
+@@ -627,6 +632,7 @@
+         trunks,
+         input_positions,
+         output_positions,
++        output_occurrences,
+         gate_output_positions,
+         gate_facings,
+         depth,
+@@ -683,6 +689,7 @@
+         world,
+         input_positions,
+         output_positions,
++        output_occurrences,
+         gate_output_positions,
+         gate_facings,
+         metrics,
+@@ -790,6 +797,7 @@
+         physical_rewrite: compiled.physical_rewrite,
+         world: compiled.world,
+         input_positions: compiled.input_positions,
++        output_occurrences: compiled.output_occurrences,
+         output_positions: compiled.output_positions,
+         gate_output_positions: compiled.gate_output_positions,
+         gate_facings: compiled.gate_facings,
+@@ -1034,6 +1042,7 @@
+     let mut world = composed.world;
+     let mut input_positions = BTreeMap::new();
+     let mut output_positions = BTreeMap::new();
++    let mut output_occurrences = Vec::new();
+     for port in &plan.root_ports {
+         let at = (port.pin.at.x, port.pin.at.y, port.pin.at.z);
+         // A cell the caller pinned is the caller's and ships empty; one this
+@@ -1048,6 +1057,7 @@
+             }
+             PortRole::Output => {
+                 output_positions.insert(port.signal.clone(), at);
++                output_occurrences.push((port.signal.clone(), at));
+                 if !caller.caller_pinned(&port.signal) {
+                     world.set(at.0, at.1, at.2, compile::lamp());
+                 }
+@@ -1103,6 +1113,7 @@
+             trunks: &composed.trunks,
+             input_positions,
+             output_positions,
++            output_occurrences,
+             gate_output_positions: gate_metadata,
+             gate_facings,
+             depth,
