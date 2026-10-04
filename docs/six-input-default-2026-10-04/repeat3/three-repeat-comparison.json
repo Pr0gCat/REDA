@@ -1,0 +1,8 @@
+{
+  "independent_processes": 3,
+  "phases_per_process": 8192,
+  "all_phase_records_identical": true,
+  "header_difference_only": "artifact path",
+  "source_binary_world_and_quality_identical": true,
+  "canonical_phase_records_sha256": "528de058c5985bad640dd629e8882aa5d7f5d607737120a11c63b996748dce02"
+}

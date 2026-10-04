@@ -1,0 +1,7 @@
+{
+  "compressed_record_equals_audited_input": true,
+  "uncompressed_wave_sha256": "1fefbf606f0322addff5498310739744c6af8113553310633a3474bd91e9949d",
+  "audit_exit_code": 0,
+  "audit_stderr_empty": true,
+  "source_world_verified": true
+}
