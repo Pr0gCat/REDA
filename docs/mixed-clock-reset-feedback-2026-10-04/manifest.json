@@ -1,0 +1,16 @@
+{
+  "base_commit": "aef704769f52b21bd9996771f67517d7be058025",
+  "scope": "isolated clean HEAD archive plus two new test files, debug build",
+  "REDA_PYTHON": "/nonexistent/reda-python",
+  "sha256": {
+    "tests/mixed_clock_reset_feedback.rs": "5ac9be42155aa447c1b0627d4adbacf13055b8971c2d83cf968377ae2b120eeb",
+    "tests/fixtures/mixed_clock_reset_feedback.sv": "b162be13cd2416041928823186bfe2b45d46ceb7e2dc28c5d9778dbf1023698a",
+    "tools/audit_mixed_clock_reset_feedback.py": "ca197f53bac66d4152a7b01c158633c744c7f3848e83382011a6e8254af4369d",
+    "/tmp/reda-sequential-head-target-20261004/debug/deps/mixed_clock_reset_feedback-da037e16e94b18b9": "3893bbe77775abc21f080bad4f5209921f685829c075ca3ad2cb3a95c92da856"
+  },
+  "log_sha256": {
+    "repeat1.log.gz": "3f879db5b84449d1d519de246ff2a0e9dbaeb47676fb574f2a8c53a9065b206e",
+    "repeat3.log.gz": "71a68401c2feb770fddc33a55b30afbdf91fc56b7916d07bb1a8ff0cd6c99b1d",
+    "repeat2.log.gz": "c259fdfafe0c8222c1b5a3b4c3265f824121e01e8eec0dd4459b59658676b443"
+  }
+}

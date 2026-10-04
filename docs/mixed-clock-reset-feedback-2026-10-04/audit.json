@@ -1,0 +1,39 @@
+{
+  "repeats": [
+    {
+      "phases": 264,
+      "sites": 27,
+      "events": 1999,
+      "worst_phase_ticks_including_existing_16_tick_dwell": 50,
+      "public_extra_transitions": 0,
+      "state_driver_extra_transitions": 0,
+      "source_states_all_gates_cells_lamps_and_event_replay": "pass"
+    },
+    {
+      "phases": 264,
+      "sites": 27,
+      "events": 1999,
+      "worst_phase_ticks_including_existing_16_tick_dwell": 50,
+      "public_extra_transitions": 0,
+      "state_driver_extra_transitions": 0,
+      "source_states_all_gates_cells_lamps_and_event_replay": "pass"
+    },
+    {
+      "phases": 264,
+      "sites": 27,
+      "events": 1999,
+      "worst_phase_ticks_including_existing_16_tick_dwell": 50,
+      "public_extra_transitions": 0,
+      "state_driver_extra_transitions": 0,
+      "source_states_all_gates_cells_lamps_and_event_replay": "pass"
+    }
+  ],
+  "exact_parsed_trace_equality": true,
+  "world_fingerprint": "c7ed58d596d8e0afb0dd8e88a3bdfbc478b11ed9fdc21d0c48f110f040a556c7",
+  "corruption_controls": {
+    "state": "rejected",
+    "cell": "rejected",
+    "missing_event": "rejected",
+    "duplicate_event": "rejected"
+  }
+}
