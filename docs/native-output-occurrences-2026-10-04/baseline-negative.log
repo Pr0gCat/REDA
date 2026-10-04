@@ -1,0 +1,7 @@
+native baseline declared_output_bits=5 netlist_output_occurrences=2 gates=2
+
+thread 'main' (38) panicked at /tmp/reda-native-output-occurrences-baseline-20261004.rs:5:1:
+assertion `left == right` failed: every declared source output bit must survive
+  left: 2
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

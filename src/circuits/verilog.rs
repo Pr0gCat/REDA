@@ -853,5 +853,5 @@ pub fn synthesize_with_frontend(
     if let Some(reason) = selected.fallback_reason {
         eprintln!("fallback reason: {reason}");
     }
-    Ok((selected.netlist, sorted_output_labels(selected.outputs)))
+    Ok((selected.netlist, selected.output_bindings))
 }

@@ -1,0 +1,13 @@
+# Native public-output occurrences
+
+The native mapper previously kept every public name in its port bindings but deduplicated netlist.outputs by shared driver. A retained baseline probe declares five output bits and produces only two netlist output occurrences, even though its two logic gates are correct. That loses physical public terminals before either CLI receives the netlist.
+
+The mapper now preserves one output occurrence and one ordered PortBinding per declared output bit. Source declaration order and bit order remain aligned. CompileArtifact keeps its existing sorted ports and output_map compatibility API; ordered_output_ports carries the public occurrences separately. SelectedFrontend.output_bindings transports the ordered name/signal pairs to the existing circuit adapter Vec interface. The adapter never collapses them back into a map. Yosys retains its existing lexicographic label order.
+
+Aliases share their original logic gate. No alias buffers are invented; the existing legitimate primary-input passthrough buffer remains cached and shared. The physical compiler's existing occurrence boundary owns distinct lamps; actual mc_dump/build_circuit CLI and pinout integration is owned by the root agent and is not claimed by this core-only evidence.
+
+Qualification uses a clean archive of 1b8eed4 plus only owned-core.patch, owned-interned-test.patch, and the new integration test. All 73 existing frontend integration cases, three new source-order/alias/vector-bit cases, and three selection unit cases pass without Python. The existing complete legacy seven-segment physical control also runs to completion. Initial regression failure is retained: the old interning test explicitly expected the deduplication being repaired. Its exact output contract is strengthened to two occurrences of the same driver plus source-ordered names y,z; the single gate and every original origin/debug assertion remain intact. No world or fingerprint golden is changed.
+
+Source hashes, exact patches, baseline negative evidence, and raw compressed test logs are retained here. This is a bounded frontend transport repair, not full native HDL or real Minecraft acceptance.
+
+The root independently applies both exact patches to its committed-source legacy/DFF tools tree. All 25 existing compiler tests and three new public-occurrence tests pass with unavailable Python. Exact source hashes and output are retained in `root-clean-qualification.json`. The interned-gate test preserves one physical logic gate and both expression origins, and now additionally requires both public output occurrences and their ordered labels; this repairs the tested output contract rather than changing a world golden. CLI pinout/occurrence metadata integration remains pending.

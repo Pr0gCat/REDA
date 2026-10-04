@@ -1,0 +1,16 @@
+{
+  "scope": "Independent committed legacy tree plus committed DFF producer/parser and precise native occurrence patches; no dirty user code",
+  "passed": 28,
+  "failed": 0,
+  "ignored": 0,
+  "REDA_PYTHON": "/nonexistent/reda-python",
+  "log_sha256": "96279b15ce24140c5fdfc40f7ca57aea20dbc3bacf69611a3bf477fbf2fced89",
+  "sources": {
+    "src/frontend/netlist.rs": "fd7d2277fcf4318b9b790381cceaa7b73773cb9e41362ba66d90196997c313dd",
+    "src/frontend/mod.rs": "3e10b00e2ad22233b60a3fa7759a6ed0f72ed1edb86d34686053db68888e6d0d",
+    "src/frontend/selection.rs": "5fceeb0c5ce66750f1eb57489900b479fe30b297e3040bf78a5c2b2eda1fabac",
+    "src/circuits/verilog.rs": "61db3a27c2f1fa11708eaadaaca30fbce2212033ace2949d00bf8eacbb56ba8b",
+    "tests/systemverilog_compiler.rs": "93d22b3173e6104c7c0646361194eb8ed8eff4a3101ed00d422d8f0fb8e5e805",
+    "tests/systemverilog_output_occurrences.rs": "451ca8a30cd24b2ecf87794c131f7f80f7afa91c63894d077575f215b1a5e0d2"
+  }
+}

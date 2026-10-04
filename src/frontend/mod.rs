@@ -242,6 +242,9 @@ pub struct CompileArtifact {
     pub netlist: Netlist,
     /// Every port bit, sorted by name for deterministic transport.
     pub ports: Vec<PortBinding>,
+    /// One binding per declared output bit in source order, aligned with
+    /// `netlist.outputs`. Shared drivers retain distinct public occurrences.
+    pub ordered_output_ports: Vec<PortBinding>,
     pub debug: DebugDatabase,
 }
 
@@ -332,6 +335,7 @@ pub fn compile_systemverilog(
     Ok(CompileArtifact {
         netlist: emitted.netlist,
         ports: emitted.ports,
+        ordered_output_ports: emitted.ordered_output_ports,
         debug,
     })
 }

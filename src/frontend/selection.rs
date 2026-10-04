@@ -42,6 +42,8 @@ impl FrontendMode {
 pub struct SelectedFrontend {
     pub netlist: Netlist,
     pub outputs: HashMap<String, String>,
+    /// Native source-order public occurrences; legacy Yosys labels stay sorted.
+    pub output_bindings: Vec<(String, String)>,
     pub frontend: FrontendMode,
     pub fallback_reason: Option<String>,
 }
@@ -65,9 +67,12 @@ fn select_with(
         match compile_systemverilog(std::slice::from_ref(&source), &CompileOptions::new(top)) {
             Ok(artifact) => {
                 let outputs = artifact.output_map();
+                let output_bindings = artifact.ordered_output_ports.iter()
+                    .map(|port| (port.name.clone(),port.signal.clone())).collect();
                 return Ok(SelectedFrontend {
                     netlist: artifact.netlist,
                     outputs,
+                    output_bindings,
                     frontend: FrontendMode::Native,
                     fallback_reason,
                 });
@@ -91,9 +96,13 @@ fn select_with(
         }
         None => error.to_string(),
     })?;
+    let mut output_bindings: Vec<_> = outputs.iter()
+        .map(|(label,signal)| (label.clone(),signal.clone())).collect();
+    output_bindings.sort();
     Ok(SelectedFrontend {
         netlist,
         outputs,
+        output_bindings,
         frontend: FrontendMode::Yosys,
         fallback_reason,
     })
@@ -109,6 +118,14 @@ fn allows_fallback(diagnostics: &[super::Diagnostic]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn yosys_selection_keeps_legacy_sorted_labels() {
+        let selected=select_with(SourceInput{name:"unused",text:"unused"},"m",FrontendMode::Yosys,
+            |_,_| Ok((Netlist{inputs:vec![],outputs:vec!["g0".into(),"g0".into()],gates:vec![]},
+                HashMap::from([("z".into(),"g0".into()),("a".into(),"g0".into())])))).unwrap();
+        assert_eq!(selected.output_bindings,vec![("a".into(),"g0".into()),("z".into(),"g0".into())]);
+        assert_eq!(selected.netlist.outputs,vec!["g0","g0"]);
+    }
     #[test]
     fn errors_and_verification_failures_never_allow_fallback() {
         for kind in [DiagnosticKind::Source, DiagnosticKind::Internal] {

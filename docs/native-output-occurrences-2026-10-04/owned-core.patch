@@ -1,0 +1,130 @@
+--- a/src/frontend/netlist.rs
++++ b/src/frontend/netlist.rs
+@@ -34,6 +34,7 @@
+     /// Every emitted gate by netlist index.
+     pub gates: Vec<GateRef>,
+     pub ports: Vec<PortBinding>,
++    pub ordered_output_ports: Vec<PortBinding>,
+     /// Indexed by [`LogicNodeId`].
+     pub realisations: Vec<Realisation>,
+     pub transformations: Vec<Transformation>,
+@@ -129,6 +130,7 @@
+     // Yosys bridge synthesizes for `assign y = a;`.
+     let mut outputs: Vec<String> = Vec::new();
+     let mut ports: Vec<PortBinding> = Vec::new();
++    let mut ordered_output_ports = Vec::new();
+     let mut buffer_of: Vec<Option<String>> = vec![None; graph.nodes.len()];
+ 
+     for (_, signal) in design.inputs() {
+@@ -173,16 +175,16 @@
+                 driver
+             };
+ 
+-            if !outputs.contains(&output) {
+-                outputs.push(output.clone());
+-            }
+-            ports.push(PortBinding {
++            outputs.push(output.clone());
++            let binding = PortBinding {
+                 name,
+                 direction: PortDirection::Output,
+                 signal: output,
+                 elab: signal.elab,
+                 bit,
+-            });
++            };
++            ordered_output_ports.push(binding.clone());
++            ports.push(binding);
+         }
+     }
+ 
+@@ -255,6 +257,7 @@
+         netlist,
+         gates,
+         ports,
++        ordered_output_ports,
+         realisations,
+         transformations,
+         signals,
+--- a/src/frontend/mod.rs
++++ b/src/frontend/mod.rs
+@@ -242,6 +242,9 @@
+     pub netlist: Netlist,
+     /// Every port bit, sorted by name for deterministic transport.
+     pub ports: Vec<PortBinding>,
++    /// One binding per declared output bit in source order, aligned with
++    /// `netlist.outputs`. Shared drivers retain distinct public occurrences.
++    pub ordered_output_ports: Vec<PortBinding>,
+     pub debug: DebugDatabase,
+ }
+ 
+@@ -332,6 +335,7 @@
+     Ok(CompileArtifact {
+         netlist: emitted.netlist,
+         ports: emitted.ports,
++        ordered_output_ports: emitted.ordered_output_ports,
+         debug,
+     })
+ }
+--- a/src/frontend/selection.rs
++++ b/src/frontend/selection.rs
+@@ -42,6 +42,8 @@
+ pub struct SelectedFrontend {
+     pub netlist: Netlist,
+     pub outputs: HashMap<String, String>,
++    /// Native source-order public occurrences; legacy Yosys labels stay sorted.
++    pub output_bindings: Vec<(String, String)>,
+     pub frontend: FrontendMode,
+     pub fallback_reason: Option<String>,
+ }
+@@ -65,9 +67,12 @@
+         match compile_systemverilog(std::slice::from_ref(&source), &CompileOptions::new(top)) {
+             Ok(artifact) => {
+                 let outputs = artifact.output_map();
++                let output_bindings = artifact.ordered_output_ports.iter()
++                    .map(|port| (port.name.clone(),port.signal.clone())).collect();
+                 return Ok(SelectedFrontend {
+                     netlist: artifact.netlist,
+                     outputs,
++                    output_bindings,
+                     frontend: FrontendMode::Native,
+                     fallback_reason,
+                 });
+@@ -91,9 +96,13 @@
+         }
+         None => error.to_string(),
+     })?;
++    let mut output_bindings: Vec<_> = outputs.iter()
++        .map(|(label,signal)| (label.clone(),signal.clone())).collect();
++    output_bindings.sort();
+     Ok(SelectedFrontend {
+         netlist,
+         outputs,
++        output_bindings,
+         frontend: FrontendMode::Yosys,
+         fallback_reason,
+     })
+@@ -109,6 +118,14 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn yosys_selection_keeps_legacy_sorted_labels() {
++        let selected=select_with(SourceInput{name:"unused",text:"unused"},"m",FrontendMode::Yosys,
++            |_,_| Ok((Netlist{inputs:vec![],outputs:vec!["g0".into(),"g0".into()],gates:vec![]},
++                HashMap::from([("z".into(),"g0".into()),("a".into(),"g0".into())])))).unwrap();
++        assert_eq!(selected.output_bindings,vec![("a".into(),"g0".into()),("z".into(),"g0".into())]);
++        assert_eq!(selected.netlist.outputs,vec!["g0","g0"]);
++    }
+     #[test]
+     fn errors_and_verification_failures_never_allow_fallback() {
+         for kind in [DiagnosticKind::Source, DiagnosticKind::Internal] {
+--- a/src/circuits/verilog.rs
++++ b/src/circuits/verilog.rs
+@@ -853,5 +853,5 @@
+     if let Some(reason) = selected.fallback_reason {
+         eprintln!("fallback reason: {reason}");
+     }
+-    Ok((selected.netlist, sorted_output_labels(selected.outputs)))
++    Ok((selected.netlist, selected.output_bindings))
+ }

@@ -34,6 +34,7 @@ pub struct Emitted {
     /// Every emitted gate by netlist index.
     pub gates: Vec<GateRef>,
     pub ports: Vec<PortBinding>,
+    pub ordered_output_ports: Vec<PortBinding>,
     /// Indexed by [`LogicNodeId`].
     pub realisations: Vec<Realisation>,
     pub transformations: Vec<Transformation>,
@@ -129,6 +130,7 @@ pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnosti
     // Yosys bridge synthesizes for `assign y = a;`.
     let mut outputs: Vec<String> = Vec::new();
     let mut ports: Vec<PortBinding> = Vec::new();
+    let mut ordered_output_ports = Vec::new();
     let mut buffer_of: Vec<Option<String>> = vec![None; graph.nodes.len()];
 
     for (_, signal) in design.inputs() {
@@ -173,16 +175,16 @@ pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnosti
                 driver
             };
 
-            if !outputs.contains(&output) {
-                outputs.push(output.clone());
-            }
-            ports.push(PortBinding {
+            outputs.push(output.clone());
+            let binding = PortBinding {
                 name,
                 direction: PortDirection::Output,
                 signal: output,
                 elab: signal.elab,
                 bit,
-            });
+            };
+            ordered_output_ports.push(binding.clone());
+            ports.push(binding);
         }
     }
 
@@ -255,6 +257,7 @@ pub fn emit(design: &Design, blasted: &Blasted) -> Result<Emitted, Vec<Diagnosti
         netlist,
         gates,
         ports,
+        ordered_output_ports,
         realisations,
         transformations,
         signals,

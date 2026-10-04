@@ -1,0 +1,21 @@
+--- a/tests/systemverilog_compiler.rs
++++ b/tests/systemverilog_compiler.rs
+@@ -312,10 +312,15 @@
+     let artifact = compile(text, "m");
+ 
+     // Commutative operands are ordered before interning, so `a & b` and
+-    // `b & a` are one gate -- and therefore one netlist output signal with
+-    // two port names.
++    // `b & a` are one gate. Both declared output occurrences keep that
++    // shared driver, with their public names in source order.
+     assert_eq!(artifact.netlist.gates.len(), 1);
+-    assert_eq!(artifact.netlist.outputs.len(), 1);
++    let driver = artifact.netlist.gates[0].output.clone();
++    assert_eq!(artifact.netlist.outputs, [driver.clone(), driver]);
++    assert_eq!(
++        artifact.ordered_output_ports.iter().map(|port| port.name.as_str()).collect::<Vec<_>>(),
++        ["y", "z"]
++    );
+     assert_eq!(
+         artifact.port("y").unwrap().signal,
+         artifact.port("z").unwrap().signal
