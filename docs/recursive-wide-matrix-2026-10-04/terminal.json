@@ -1,0 +1,9 @@
+{
+  "worktree_new_regression_exit_code": 0,
+  "prospective_new_regression_exit_code": 0,
+  "prospective_existing_constant_alias_regression_exit_code": 0,
+  "world_fingerprint": "aa0306b55c3c97bf45e6da212218ebcbb2eb7e69c3f81243ff11225ca1d5bcaa",
+  "zero_evaluation_repetitions": 2,
+  "source_hashes_match_production_owned_files": true,
+  "user_dirty_foundation_excluded": true
+}

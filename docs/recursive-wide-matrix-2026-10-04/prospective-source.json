@@ -1,0 +1,14 @@
+{
+  "head": "12c4142e070f74107eebf657b799baa0c0adacfa",
+  "only_owned_files_overlaid": [
+    "src/compile/fragment_synth/api.rs",
+    "src/compile/fragment_synth/recursive.rs",
+    "tests/recursive_wide_matrix.rs"
+  ],
+  "user_dirty_foundation_excluded": true,
+  "hashes": {
+    "src/compile/fragment_synth/api.rs": "a585569f83c75043fb11d9e0b19e77f4021c9af05723b00b1d00fa76a76f2ed9",
+    "src/compile/fragment_synth/recursive.rs": "aedb02accd013c30ac844bf8613a8ec1610c4fa5f2b52a63b1020bc551aacfe2",
+    "tests/recursive_wide_matrix.rs": "2252508dc83ec54cba2327e29548a53e8582add6c899cbc09fbbedf28f1a5994"
+  }
+}

@@ -865,7 +865,7 @@ fn compile_with_layout(
     // own construction path. Any matrix refusal leaves the original solver.
     if direct_leaf_cutoff > 0 && lowered.gates.len() > direct_leaf_cutoff
         && pins.is_none() && lowered.inputs.len() == 4
-        && (1..=7).contains(&lowered.outputs.len())
+        && (1..=16).contains(&lowered.outputs.len())
     {
         if let Ok(product) = compile_matrix_root(lowered, pins, search) {
             return Ok(product);

@@ -143,7 +143,7 @@ fn compile_recursive_contract(
     // A single gate has no structural partition to improve.
     let choices: &[recursive::StructuralChoice] = if input.lowered.gates.len() > 1
         && input.lowered.inputs.len() == 4
-        && (1..=7).contains(&input.lowered.outputs.len())
+        && (1..=16).contains(&input.lowered.outputs.len())
         && input.pins.is_none_or(|pins| pins.is_empty())
     {
         &[PackedDense, PackedStandard, BalancedMatrix]
