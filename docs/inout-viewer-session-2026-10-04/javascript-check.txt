@@ -1,0 +1,2 @@
+node --check target/qualification/gap5-revalidation/viewer-module.mjs
+exit=0

@@ -1,0 +1,302 @@
+--- a/viewer/src/lib.rs
++++ b/viewer/src/lib.rs
+@@ -990,6 +990,7 @@
+     /// `seven_segment`'s `a` before `b`, etc).
+     output_positions: Vec<(String, (i32, i32, i32))>,
+     pinned_outputs: Vec<(i32, i32, i32)>,
++    shared_ports: Vec<reda::frontend::ResolvedBusPort>,
+     /// The primitive-topology expansion of this circuit's own netlist --
+     /// connectivity only, no positions (see this module's "Primitive
+     /// topology" section and `compile::primitive_graph`'s own doc comment).
+@@ -1120,6 +1121,62 @@
+ }
+ 
+ impl Session {
++    fn build_native_baked(
++        source: &str, top: &str, bytes: &[u8], pinout: reda::frontend::ResolvedPinout,
++    ) -> Result<Session, String> {
++        let compiled = reda::frontend::compile_systemverilog_physical(
++            &[reda::frontend::SourceInput { name: "viewer.sv", text: source }],
++            &reda::frontend::CompileOptions::new(top),
++        )?;
++        let mut world = reda::formats::litematic::load_bytes(bytes).map_err(|e| e.to_string())?;
++        pinout.validate_loaded(&world, &compiled)?;
++        for bus in &pinout.inouts {
++            let [x,y,z] = bus.external_entry;
++            if world.get(x,y,z).kind != BlockKind::Air { return Err("external entry is occupied".into()); }
++            let mut floor = BlockState::air();
++            floor.kind = BlockKind::Solid; floor.name = "minecraft:stone".into();
++            world.set(x,y-1,z,floor);
++            let mut lever = BlockState::air();
++            lever.kind = BlockKind::Lever; lever.name = "minecraft:lever".into();
++            lever.face = Some(Face::Floor); lever.facing = Some(Facing::North);
++            world.set(x,y,z,lever);
++        }
++        // Shared-source topology is the explicit generated implementation graph.
++        let source_netlist = compiled.implementation_netlist().clone();
++        let (lowered, provenance) = lower_with_provenance(&source_netlist).map_err(|e| e.to_string())?;
++        let terminals = source_terminals_by_declared_output(&source_netlist, &lowered, &provenance);
++        let (primitive_graph, gate_meta, cell_meta) = topology_views(
++            &source_netlist, &lowered, &provenance, &terminals, None);
++        let input_positions: BTreeMap<_,_> = pinout.inputs.iter()
++            .map(|(n,p)| (n.clone(),(p[0],p[1],p[2]))).collect();
++        let input_controls = input_positions.keys().map(|n| (n.clone(),InputControl::Lever)).collect();
++        let output_positions = pinout.outputs.iter().map(|(n,p)| (n.clone(),(p[0],p[1],p[2]))).collect();
++        let mut simulator = Simulator::new(world);
++        simulator.run_until_stable(MAX_GAME_TICKS).map_err(|e| format!("{e:?}"))?;
++        let initial_world = simulator.world().clone();
++        Ok(Session {
++            circuit_name: top.into(), simulator, initial_world,
++            input_positions, input_controls, output_positions, pinned_outputs: Vec::new(),
++            shared_ports: pinout.inouts, primitive_graph, gate_meta, source_netlist, cell_meta,
++            boundary_rewritten: true,
++        })
++    }
++    fn drive_shared_port(&mut self, name: &str, present: bool, value: bool) -> Result<(), String> {
++        let bus = self.shared_ports.iter().find(|b| b.source.name == name)
++            .ok_or_else(|| format!("no shared inout named {name}"))?;
++        for (p,_) in [(bus.external_present,present),(bus.external_value,value),
++                       (bus.external_entry,present && value)] {
++            if self.simulator.world().get(p[0],p[1],p[2]).kind != BlockKind::Lever {
++                return Err("shared inout control is not a lever".into());
++            }
++        }
++        for (p,on) in [(bus.external_present,present),(bus.external_value,value),
++                       (bus.external_entry,present && value)] {
++            let mut cell = self.simulator.world().get(p[0],p[1],p[2]).clone();
++            cell.lit = on; self.simulator.world_mut().set(p[0],p[1],p[2],cell);
++        }
++        Ok(())
++    }
+     /// Build a session initially: look up the circuit's generator, compile it,
+     /// and settle the simulator once so a caller sees a self-consistent world
+     /// before ever calling `step`.
+@@ -1307,6 +1364,7 @@
+             input_controls,
+             output_positions,
+             pinned_outputs,
++            shared_ports: Vec::new(),
+             primitive_graph,
+             gate_meta,
+             source_netlist,
+@@ -1439,6 +1497,25 @@
+         Session::build(circuit_name).map_err(|error| JsValue::from_str(&error))
+     }
+ 
++    /// Load a native source-bound world with shared inout controls.
++    pub fn from_native_baked(source: &str, top: &str, bytes: &[u8], pinout: JsValue) -> Result<Session, JsValue> {
++        let pinout = serde_wasm_bindgen::from_value(pinout)
++            .map_err(|e| JsValue::from_str(&format!("bad native pinout: {e}")))?;
++        Self::build_native_baked(source,top,bytes,pinout).map_err(|e| JsValue::from_str(&e))
++    }
++    pub fn set_inout(&mut self, name: &str, present: bool, value: bool) -> Result<(), JsValue> {
++        self.drive_shared_port(name,present,value).map_err(|e| JsValue::from_str(&e))
++    }
++    pub fn inout_names(&self) -> Vec<String> {
++        self.shared_ports.iter().map(|b| b.source.name.clone()).collect()
++    }
++    /// 0/1 for valid settled states; X/Z and protocol mismatch remain errors.
++    pub fn read_inout(&self, name: &str) -> Result<bool, JsValue> {
++        let bus = self.shared_ports.iter().find(|b| b.source.name == name)
++            .ok_or_else(|| JsValue::from_str("unknown shared inout"))?;
++        bus.observe(self.simulator.world()).map_err(|e| JsValue::from_str(&format!("{e:?}")))
++    }
++
+     /// Build a session from a pre-baked circuit: the gzip `.litematic` bytes
+     /// `build_circuit --synth` wrote, and its `.pinout.json`. Each input or
+     /// output value is either the legacy unpinned `[x,y,z]`, or the structured
+@@ -1482,6 +1559,7 @@
+             input_controls: BTreeMap::new(),
+             output_positions: Vec::new(),
+             pinned_outputs: Vec::new(),
++            shared_ports: Vec::new(),
+             primitive_graph,
+             gate_meta: Vec::new(),
+             source_netlist,
+@@ -2296,6 +2374,7 @@
+             input_controls: BTreeMap::new(),
+             output_positions: Vec::new(),
+             pinned_outputs: Vec::new(),
++            shared_ports: Vec::new(),
+             primitive_graph,
+             gate_meta: Vec::new(),
+             source_netlist: empty_netlist,
+@@ -2840,6 +2919,7 @@
+                 .collect(),
+             output_positions: compiled.output_positions.into_iter().collect(),
+             pinned_outputs: Vec::new(),
++            shared_ports: Vec::new(),
+             primitive_graph: graph,
+             gate_meta: gates,
+             source_netlist: source,
+@@ -2856,3 +2936,39 @@
+         assert!(session.boundary_rewritten);
+     }
+ }
++
++#[cfg(test)]
++mod native_inout_tests {
++    use super::*;
++    #[test]
++    fn source_bound_shared_session_controls_and_checks_all_64_states() {
++        let source = include_str!("../../tests/fixtures/resolved-inout.sv");
++        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
++            .join("../target/qualification/native-inout-cli/native/output");
++        let bytes = std::fs::read(directory.join("top.litematic")).unwrap();
++        let pinout: reda::frontend::ResolvedPinout = serde_json::from_slice(
++            &std::fs::read(directory.join("top.pinout.json")).unwrap()).unwrap();
++        let mut session = Session::build_native_baked(source,"top",&bytes,pinout.clone()).unwrap();
++        assert_eq!(session.input_positions.len(),4);
++        for state in 0usize..64 {
++            for (name,bit) in [("e0",0),("d0",1),("e1",2),("d1",3)] {
++                let p = session.input_positions[name];
++                let mut cell = session.simulator.world().get(p.0,p.1,p.2).clone();
++                cell.lit = state & (1<<bit) != 0;
++                session.simulator.world_mut().set(p.0,p.1,p.2,cell);
++            }
++            session.drive_shared_port("bus",state&16!=0,state&32!=0).unwrap();
++            session.simulator.run_until_stable(MAX_GAME_TICKS).unwrap();
++            let active: Vec<_> = [(0,1),(2,3),(4,5)].into_iter()
++                .filter(|(e,_)| state & (1<<e)!=0).map(|(_,d)| state & (1<<d)!=0).collect();
++            let expected = if active.is_empty() { Err(reda::frontend::InvalidBus::Floating) }
++                else if active.iter().any(|v| *v!=active[0]) { Err(reda::frontend::InvalidBus::Contention) }
++                else { Ok(active[0]) };
++            assert_eq!(session.shared_ports[0].observe(session.simulator.world()),expected,"state={state}");
++        }
++        assert!(session.drive_shared_port("missing",true,true).is_err());
++        let mut wrong = pinout;
++        wrong.inouts[0].readback=[-1,0,0];
++        assert!(Session::build_native_baked(source,"top",&bytes,wrong).is_err());
++    }
++}
+--- a/viewer/index.html
++++ b/viewer/index.html
+@@ -237,6 +237,15 @@
+       <h2>Circuit</h2>
+       <label for="circuit-select">Circuit</label>
+       <select id="circuit-select"></select>
++      <details>
++        <summary>Load native source and exported circuit</summary>
++        <label for="native-source">SystemVerilog source</label><input id="native-source" type="file" accept=".sv,.v">
++        <label for="native-top">Top module</label><input id="native-top" value="top">
++        <label for="native-world">Litematic</label><input id="native-world" type="file" accept=".litematic">
++        <label for="native-pinout">Pinout</label><input id="native-pinout" type="file" accept=".json">
++        <button id="native-load">Load exported circuit</button>
++      </details>
++      <div id="shared-controls"></div>
+     </div>
+ 
+     <div class="panel" data-view="2d">
+@@ -850,7 +859,12 @@
+     setStatus(`Failed to build ${name}: ${e}`, true);
+     return;
+   }
+-  refreshVerilog(name);
++  initializeSession(name);
++}
++
++function initializeSession(name, source = null) {
++  if (source === null) refreshVerilog(name);
++  else { verilogCaption.textContent = `Verilog — ${name}`; verilogCode.value = source; }
+   size = Array.from(session.size());
+ 
+   const rawPinout = session.pinout();
+@@ -866,6 +880,7 @@
+   outputSliceCache.clear();
+ 
+   buildLeverUI();
++  buildSharedControls();
+   buildOutputUI();
+   buildLegendUI();
+ 
+@@ -877,6 +892,63 @@
+   resetSignalHistory();
+   build3DGeometry(true);
+   buildTopology();
++}
++
++document.getElementById('native-load').addEventListener('click', async () => {
++  try {
++    const file = id => {
++      const selected = document.getElementById(id).files[0];
++      if (!selected) throw new Error('Select source, litematic and pinout files.');
++      return selected;
++    };
++    const top = document.getElementById('native-top').value.trim();
++    if (!top) throw new Error('Enter the top module.');
++    const [source, bytes, metadata] = await Promise.all([
++      file('native-source').text(), file('native-world').arrayBuffer(), file('native-pinout').text()
++    ]);
++    setStatus('Validating source and exported world…');
++    const loaded = Session.from_native_baked(source, top, new Uint8Array(bytes), JSON.parse(metadata));
++    session = loaded;
++    initializeSession(top, source);
++  } catch (error) { setStatus(`Native circuit load failed: ${error}`, true); }
++});
++
++function buildSharedControls() {
++  const panel = document.getElementById('shared-controls');
++  panel.replaceChildren();
++  for (const name of session.inout_names()) {
++    const row = document.createElement('div');
++    const title = document.createElement('span'); title.textContent = `${name} external driver `;
++    const present = document.createElement('input'); present.type = 'checkbox';
++    const value = document.createElement('input'); value.type = 'checkbox';
++    const presentLabel = document.createElement('label'); presentLabel.append(present, 'Drive');
++    const valueLabel = document.createElement('label'); valueLabel.append(value, 'High');
++    const reading = document.createElement('span'); reading.dataset.inoutName = name;
++    row.append(title, presentLabel, valueLabel, reading); panel.append(row);
++    const change = () => {
++      try {
++        session.set_inout(name, present.checked, value.checked);
++        recordSettle(session.run_until_stable());
++        updateTickCount(); refreshSlice(); refreshOutputs(); recordSignalSample(); update3DStrengths();
++      } catch (error) { setStatus(`Shared port ${name}: ${error}`, true); }
++    };
++    present.addEventListener('change', change); value.addEventListener('change', change);
++  }
++}
++
++function sharedPortError() {
++  let invalid = null;
++  for (const name of session.inout_names()) {
++    let text;
++    try { text = session.read_inout(name) ? '1' : '0'; }
++    catch (error) {
++      text = String(error) === 'Floating' ? 'Z' : String(error) === 'Contention' ? 'X' : 'Invalid';
++      invalid = text;
++    }
++    const reading = document.querySelector(`[data-inout-name="${CSS.escape(name)}"]`);
++    if (reading) reading.textContent = ` Bus: ${text}`;
++  }
++  return invalid;
+ }
+ 
+ function updateTickCount() {
+@@ -1034,6 +1106,7 @@
+ }
+ 
+ function refreshOutputs() {
++  const invalid = sharedPortError();
+   outputSliceCache.clear();
+   for (const pin of pinout.outputs) {
+     const { strength } = readCell(pin.x, pin.y, pin.z);
+@@ -1041,8 +1114,8 @@
+     const row = outputList.querySelector(`[data-pin-name="${CSS.escape(pin.name)}"]`);
+     if (!row) continue;
+     const badge = row.querySelector('.output-badge');
+-    badge.dataset.on = String(on);
+-    badge.textContent = on ? 'ON' : 'OFF';
++    badge.dataset.on = String(!invalid && on);
++    badge.textContent = invalid || (on ? 'ON' : 'OFF');
+   }
+ }
+ 
+@@ -4041,6 +4114,7 @@
+     return;
+   }
+   leverState = new Map(pinout.inputs.map((p) => [p.name, false]));
++  buildSharedControls();
+   buildLeverUI();
+   setStatus('Reset.', false);
+   updateTickCount();

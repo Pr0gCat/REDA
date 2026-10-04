@@ -1,0 +1,97 @@
+warning: field `diode` is never read
+  --> /home/seith/REDA/target/qualification/gap5-tool-source-recovery/stitched/src/compile/resolved_port.rs:12:16
+   |
+ 9 | pub(crate) struct DriverInjection {
+   |                   --------------- field in this struct
+...
+12 |     pub(crate) diode: Anchor,
+   |                ^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `original_bit`, `read_tap`, `external_value_signal`, `external_present_signal`, and `reserved_air` are never read
+  --> /home/seith/REDA/target/qualification/gap5-tool-source-recovery/stitched/src/compile/resolved_port.rs:16:16
+   |
+15 | pub(crate) struct SharedBusTerminal {
+   |                   ----------------- fields in this struct
+16 |     pub(crate) original_bit: String,
+   |                ^^^^^^^^^^^^
+...
+19 |     pub(crate) read_tap: Anchor,
+   |                ^^^^^^^^
+...
+25 |     pub(crate) external_value_signal: String,
+   |                ^^^^^^^^^^^^^^^^^^^^^
+26 |     pub(crate) external_present_signal: String,
+   |                ^^^^^^^^^^^^^^^^^^^^^^^
+27 |     pub(crate) reserved_air: Vec<Anchor>,
+   |                ^^^^^^^^^^^^
+
+warning: fields `terminals`, `source_inputs`, `protocol_inputs`, and `source_outputs` are never read
+  --> /home/seith/REDA/target/qualification/gap5-tool-source-recovery/stitched/src/compile/resolved_circuit.rs:95:16
+   |
+93 | pub struct CompiledResolvedCircuit {
+   |            ----------------------- fields in this struct
+94 |     pub physical: CompiledCircuit,
+95 |     pub(crate) terminals: Vec<SharedBusTerminal>,
+   |                ^^^^^^^^^
+96 |     pub(crate) source_inputs: BTreeMap<String, (i32, i32, i32)>,
+   |                ^^^^^^^^^^^^^
+97 |     pub(crate) protocol_inputs: BTreeMap<String, (i32, i32, i32)>,
+   |                ^^^^^^^^^^^^^^^
+98 |     pub(crate) source_outputs: BTreeMap<String, (i32, i32, i32)>,
+   |                ^^^^^^^^^^^^^^
+
+warning: field `origin` is never read
+  --> /home/seith/REDA/target/qualification/gap5-tool-source-recovery/stitched/src/frontend/resolved.rs:19:16
+   |
+15 | pub(crate) struct DriveContribution {
+   |                   ----------------- field in this struct
+...
+19 |     pub(crate) origin: super::ElabNodeId,
+   |                ^^^^^^
+   |
+   = note: `DriveContribution` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `debug` is never read
+  --> /home/seith/REDA/target/qualification/gap5-tool-source-recovery/stitched/src/frontend/resolved.rs:40:16
+   |
+36 | pub(crate) struct SemanticArtifact {
+   |                   ---------------- field in this struct
+...
+40 |     pub(crate) debug: super::DebugDatabase,
+   |                ^^^^^
+
+warning: method `observe` is never used
+  --> /home/seith/REDA/target/qualification/gap5-tool-source-recovery/stitched/src/frontend/resolved.rs:49:19
+   |
+48 | impl InoutBoundary {
+   | ------------------ method in this implementation
+49 |     pub(crate) fn observe(&self, values: &BTreeMap<String, bool>) -> Result<bool, InvalidBus> {
+   |                   ^^^^^^^
+
+warning: `reda` (lib) generated 6 warnings
+    Finished `test` profile [unoptimized] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/reda_viewer-fd0bb81fa67eb113)
+
+running 25 tests
+test baked_pinout_format_tests::absent_world_handover_names_role_port_at_expected_and_absence ... ok
+test baked_pinout_format_tests::invalid_facing_names_role_port_at_and_received_value ... ok
+test baked_pinout_format_tests::legacy_coordinate_arrays_deserialize_as_unpinned_ports ... ok
+test baked_pinout_format_tests::structured_entries_deserialize_as_pinned_ports ... ok
+test baked_pinout_format_tests::world_handover_mismatch_names_role_port_at_expected_and_actual_cells ... ok
+test baked_pinout_format_tests::wrong_handover_names_reported_and_role_derived_cells_without_claiming_world ... ok
+test gate_level_tests::a_hand_written_circuits_gate_level_is_already_realisable ... 
+thread 'gate_level_tests::a_hand_written_circuits_gate_level_is_already_realisable' (30669) panicked at src/lib.rs:2300:9:
+assertion `left == right` failed: lowering is the identity on a hand-written circuit
+  left: 84
+ right: 206
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test gate_level_tests::a_shared_inverter_is_reported_as_an_edge_out_of_the_cell_that_built_it ... 
+thread 'gate_level_tests::a_shared_inverter_is_reported_as_an_edge_out_of_the_cell_that_built_it' (32444) panicked at src/lib.rs:2170:9:
+this circuit really does share inverters
+FAILED
+test gate_level_tests::and4_shares_nothing_so_each_cell_owns_its_whole_expansion ... ok
+test gate_level_tests::and4s_gate_level_is_three_ands_with_the_optimised_physical_realisation ... ok
+test gate_level_tests::every_lowered_gate_belongs_to_exactly_one_cell ... 

@@ -1,0 +1,11 @@
+--- a/src/compile/resolved_circuit.rs
++++ b/src/compile/resolved_circuit.rs
+@@ -100,6 +100,8 @@
+     pub pinout: ResolvedPinout,
+ }
+ impl CompiledResolvedCircuit {
++    pub fn implementation_netlist(&self) -> &super::Netlist { &self.implementation }
++
+     pub fn save_bundle(&self, path: &std::path::Path) -> Result<(), String> {
+         let bytes = serde_json::to_vec_pretty(&self.pinout).map_err(|e| e.to_string())?;
+         crate::formats::litematic::save(path, &self.physical.world, "shared-inout")
