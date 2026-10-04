@@ -129,7 +129,7 @@ def main() -> int:
     finally:
         print("Releasing forceload and clearing the region...")
         clear_region(client, len(probes))
-        forceload_release(client)
+        forceload_release(client, len(probes))
         client.close()
 
     out_path = Path(args.out)

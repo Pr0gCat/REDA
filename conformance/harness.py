@@ -233,8 +233,9 @@ def forceload_region(client: RconClient, num_slots: int) -> None:
     client.command(f"forceload add {lo_x} {lo_z} {hi_x} {hi_z}")
 
 
-def forceload_release(client: RconClient) -> None:
-    client.command("forceload remove all")
+def forceload_release(client: RconClient, num_slots: int) -> None:
+    lo_x, lo_z, hi_x, hi_z = region_bounds(num_slots)
+    client.command(f"forceload remove {lo_x} {lo_z} {hi_x} {hi_z}")
 
 
 def clear_region(client: RconClient, num_slots: int) -> None:
