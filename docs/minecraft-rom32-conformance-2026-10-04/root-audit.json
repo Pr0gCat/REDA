@@ -1,0 +1,10 @@
+{
+  "terminal_exit": 0,
+  "vectors": 32,
+  "public_bit_checks": 512,
+  "implementation_gate_checks": 34592,
+  "source_literal_words_match": true,
+  "dump_gate_coverage_complete": true,
+  "source_generation_provenance": "pending recovery; retained exact dump is authoritative for this game run",
+  "cleanup": "driver log records cleanup; independent acknowledgment pending"
+}

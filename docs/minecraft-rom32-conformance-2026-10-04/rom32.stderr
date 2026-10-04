@@ -1,0 +1,2 @@
+frontend: native
+dumped circuit 'verilog tests/fixtures/rom32_matrix.sv:rom32': 5 inputs, 16 outputs, 1081 gate outputs (240 of them wired-OR merges)

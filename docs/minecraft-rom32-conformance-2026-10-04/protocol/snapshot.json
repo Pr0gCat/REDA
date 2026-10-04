@@ -1,0 +1,10 @@
+{
+  "files": {
+    "conformance/circuit_conformance.py": "cf613a4e637befe32034b0965c1318fc26a9aa8b764f9377ca5a35c77c7f1545",
+    "conformance/rcon.py": "34a9cc1c9367679a4cef83870bbf04860d04dc767e261fbfc6d8f623a5b4b4d8",
+    "conformance/harness.py": "70aec234283b4b33936cda9a75277bc910b85411348684c778a98c095e2fc3f3",
+    "/tmp/reda-minecraft-conformance-20261004/rom32.dump": "92a47ece655ef64feb228d383d3f0a085f6e5faccc6dfe783fd7e743a33f0a61"
+  },
+  "scope": "snapshot while game execution is live; generation source provenance still requires separate recovery",
+  "game_session": 52594
+}

@@ -1,0 +1,8 @@
+6bebfb06b3e7e3e29496176dba7170c29bd7e9f858848983a45f1519fad49b5e  docs/materialized-reference-repeater-oracle-2026-10-04/clean-measurement-oracle.log
+ccd20886c7fb2bcaac9f80a6965c9f795694e9cd70cba9573dc61808c1f6d0ce  docs/materialized-reference-repeater-oracle-2026-10-04/executable.sha256
+347ea3dbbb14618de084cf6a129933b4a05a6c5935574e6ecc750faf4f5870eb  docs/materialized-reference-repeater-oracle-2026-10-04/frozen-legacy-reference-generator.rs
+ab6682ec9cad9bad269ff156b2d4f8d743418cff5892191f33a86dbd0bab3ddb  docs/materialized-reference-repeater-oracle-2026-10-04/original-failure.log
+ab718649c66b8ca6c91f333320a4a4e8360d773118d9562f8f227881abfab839  docs/materialized-reference-repeater-oracle-2026-10-04/owned.patch
+0abe404ac34a618c6cea9f7a43de7059587e87f9a818f4a632231103194fe212  docs/materialized-reference-repeater-oracle-2026-10-04/proposal.md
+fd034406fcf59cfabfd98d4908afaa561053440fb6bb37a193e511618bfb2d56  docs/materialized-reference-repeater-oracle-2026-10-04/source-bindings.sha256
+9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  docs/materialized-reference-repeater-oracle-2026-10-04/terminal.exit

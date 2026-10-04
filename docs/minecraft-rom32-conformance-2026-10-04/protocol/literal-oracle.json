@@ -1,0 +1,167 @@
+{
+  "source_sha256": "c10a4c4fe2fce65b6b51c4f7caffa10e5dd13556531088c5f780736c7a534c36",
+  "dump_sha256": "92a47ece655ef64feb228d383d3f0a085f6e5faccc6dfe783fd7e743a33f0a61",
+  "rows": [
+    {
+      "address": 0,
+      "literal_word": 38483,
+      "dump_word": 38483
+    },
+    {
+      "address": 1,
+      "literal_word": 10964,
+      "dump_word": 10964
+    },
+    {
+      "address": 2,
+      "literal_word": 49464,
+      "dump_word": 49464
+    },
+    {
+      "address": 3,
+      "literal_word": 29665,
+      "dump_word": 29665
+    },
+    {
+      "address": 4,
+      "literal_word": 19241,
+      "dump_word": 19241
+    },
+    {
+      "address": 5,
+      "literal_word": 58770,
+      "dump_word": 58770
+    },
+    {
+      "address": 6,
+      "literal_word": 6271,
+      "dump_word": 6271
+    },
+    {
+      "address": 7,
+      "literal_word": 43876,
+      "dump_word": 43876
+    },
+    {
+      "address": 8,
+      "literal_word": 28035,
+      "dump_word": 28035
+    },
+    {
+      "address": 9,
+      "literal_word": 61514,
+      "dump_word": 61514
+    },
+    {
+      "address": 10,
+      "literal_word": 13756,
+      "dump_word": 13756
+    },
+    {
+      "address": 11,
+      "literal_word": 33495,
+      "dump_word": 33495
+    },
+    {
+      "address": 12,
+      "literal_word": 23016,
+      "dump_word": 23016
+    },
+    {
+      "address": 13,
+      "literal_word": 53542,
+      "dump_word": 53542
+    },
+    {
+      "address": 14,
+      "literal_word": 2043,
+      "dump_word": 2043
+    },
+    {
+      "address": 15,
+      "literal_word": 48709,
+      "dump_word": 48709
+    },
+    {
+      "address": 16,
+      "literal_word": 5031,
+      "dump_word": 5031
+    },
+    {
+      "address": 17,
+      "literal_word": 60577,
+      "dump_word": 60577
+    },
+    {
+      "address": 18,
+      "literal_word": 19846,
+      "dump_word": 19846
+    },
+    {
+      "address": 19,
+      "literal_word": 45151,
+      "dump_word": 45151
+    },
+    {
+      "address": 20,
+      "literal_word": 30770,
+      "dump_word": 30770
+    },
+    {
+      "address": 21,
+      "literal_word": 39501,
+      "dump_word": 39501
+    },
+    {
+      "address": 22,
+      "literal_word": 638,
+      "dump_word": 638
+    },
+    {
+      "address": 23,
+      "literal_word": 64793,
+      "dump_word": 64793
+    },
+    {
+      "address": 24,
+      "literal_word": 26036,
+      "dump_word": 26036
+    },
+    {
+      "address": 25,
+      "literal_word": 15506,
+      "dump_word": 15506
+    },
+    {
+      "address": 26,
+      "literal_word": 43121,
+      "dump_word": 43121
+    },
+    {
+      "address": 27,
+      "literal_word": 22300,
+      "dump_word": 22300
+    },
+    {
+      "address": 28,
+      "literal_word": 53990,
+      "dump_word": 53990
+    },
+    {
+      "address": 29,
+      "literal_word": 2883,
+      "dump_word": 2883
+    },
+    {
+      "address": 30,
+      "literal_word": 36645,
+      "dump_word": 36645
+    },
+    {
+      "address": 31,
+      "literal_word": 50842,
+      "dump_word": 50842
+    }
+  ],
+  "scope": "independent source literal table versus dumped actual graph; actual game observations pending"
+}

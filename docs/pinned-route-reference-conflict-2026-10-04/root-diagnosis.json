@@ -1,0 +1,27 @@
+{
+  "status": "unresolved_oracle_contract_conflict",
+  "source_revision": "b01ad8e",
+  "test": "compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact",
+  "route": "g21",
+  "only_debug_field_difference": {
+    "repeaters": {
+      "actual": 2,
+      "frozen_reference": 1
+    }
+  },
+  "all_other_route_fields_identical": true,
+  "reference_retained": true,
+  "assertion_unchanged": true,
+  "physics_unchanged": true,
+  "original_failure_sha256": "ab6682ec9cad9bad269ff156b2d4f8d743418cff5892191f33a86dbd0bab3ddb",
+  "scope": "Independent textual field comparison of the retained failing route records; not full-project qualification.",
+  "independent_reference_materialized_states": {
+    "path_cells": 17,
+    "repeater_indices": [
+      14,
+      16
+    ],
+    "total": 2,
+    "frozen_metadata": 1
+  }
+}

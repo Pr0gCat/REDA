@@ -1,0 +1,56 @@
+warning: unused import: `SeedRoutingFailure`
+  --> src/compile/fragment_synth/fragment.rs:25:24
+   |
+25 |     SeedRepairRefusal, SeedRoutingFailure, SeedServices, SeedVariant,
+   |                        ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `rank_zero` is never read
+   --> src/compile/fragment_synth/packing.rs:636:9
+    |
+634 |     Exhausted {
+    |     --------- field in this variant
+635 |         attempted: usize,
+636 |         rank_zero: E,
+    |         ^^^^^^^^^
+    |
+    = note: `LayoutSearchError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib test) generated 2 warnings (run `cargo fix --lib -p reda --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (/tmp/reda-measured-route-parity-target-b01ad8e/debug/deps/reda-5d278fcbda4911ca)
+
+running 1 test
+FROZEN_COUNT_OMISSION route=g21 branch=0 old=1 materialised=2 actual=2
+
+thread 'compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact' (15) panicked at src/compile/planner.rs:8983:17:
+assertion `left == right` failed: g21 branch 0 exact materialised repeater count
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FROZEN_COUNT_NEGATIVE route=g21 branch=0 mutated=1 rejected=true
+
+thread 'compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact' (15) panicked at src/compile/planner.rs:8983:17:
+assertion `left == right` failed: g21 branch 0 exact materialised repeater count
+  left: 0
+ right: 2
+FROZEN_COUNT_NEGATIVE route=g21 branch=0 mutated=0 rejected=true
+FROZEN_COUNT_OMISSION route=g7 branch=0 old=3 materialised=4 actual=4
+
+thread 'compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact' (15) panicked at src/compile/planner.rs:8983:17:
+assertion `left == right` failed: g7 branch 0 exact materialised repeater count
+  left: 3
+ right: 4
+FROZEN_COUNT_NEGATIVE route=g7 branch=0 mutated=3 rejected=true
+
+thread 'compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact' (15) panicked at src/compile/planner.rs:8983:17:
+assertion `left == right` failed: g7 branch 0 exact materialised repeater count
+  left: 0
+ right: 4
+FROZEN_COUNT_NEGATIVE route=g7 branch=0 mutated=0 rejected=true
+test compile::planner::tests::legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 3.63s
+

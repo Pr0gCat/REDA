@@ -1,0 +1,1 @@
+CARGO_INCREMENTAL=0 RUST_MIN_STACK=536870912 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/reda-full-lib-target-b01ad8e cargo test --lib -- --test-threads=4

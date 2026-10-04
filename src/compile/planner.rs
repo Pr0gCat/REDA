@@ -8953,9 +8953,60 @@ mod tests {
         let actual = route_every_net_with_reference(candidate, &netlist, true)
             .unwrap_or_else(|error| panic!("typed adapter routes: {error}"));
 
-        for (expected, actual) in expected.routes.iter().zip(&actual.routes) {
-            assert_eq!(actual, expected, "{} exact route parity", expected.id);
+        // The frozen reference preserves its historical planned counts. Its
+        // materialised cells independently witness every actual repeater, so
+        // it remains a geometry oracle without propagating that old omission.
+        fn measured_repeaters(reference: &Route, ordinal: usize) -> u64 {
+            assert_eq!(reference.anchors.len(), reference.realisation.len());
+            assert_eq!(reference.branch_paths.len(), reference.terminals.len());
+            let states: BTreeMap<_, _> = reference.anchors.iter()
+                .copied().zip(&reference.realisation).collect();
+            assert_eq!(states.len(), reference.anchors.len(), "reference cells have unique owners");
+            let mut visited = BTreeSet::new();
+            reference.branch_paths[ordinal].iter().map(|at| {
+                assert!(visited.insert(*at), "reference branch revisits a physical cell");
+                u64::from(states.get(at).expect("reference path has a materialised cell").kind
+                    == crate::redstone::world::block::BlockKind::Repeater)
+            }).sum()
         }
+        fn assert_measured_parity(reference: &Route, actual: &Route) {
+            assert_eq!(actual.id, reference.id);
+            assert_eq!(actual.anchors, reference.anchors);
+            assert_eq!(actual.owner, reference.owner);
+            assert_eq!(actual.realisation, reference.realisation);
+            assert_eq!(actual.floors, reference.floors);
+            assert_eq!(actual.branch_paths, reference.branch_paths);
+            assert_eq!(actual.terminals.len(), reference.terminals.len());
+            for (ordinal, (a, r)) in actual.terminals.iter().zip(&reference.terminals).enumerate() {
+                assert_eq!(a.sink, r.sink);
+                assert_eq!(a.kind, r.kind);
+                assert_eq!(a.repeaters, measured_repeaters(reference, ordinal),
+                    "{} branch {ordinal} exact materialised repeater count", reference.id);
+            }
+        }
+        assert_eq!(expected.routes.len(), actual.routes.len());
+        let mut historical_omissions = 0;
+        for (reference, actual) in expected.routes.iter().zip(&actual.routes) {
+            assert_measured_parity(reference, actual);
+            for (ordinal, terminal) in reference.terminals.iter().enumerate() {
+                let measured = measured_repeaters(reference, ordinal);
+                if terminal.repeaters == measured { continue; }
+                historical_omissions += 1;
+                eprintln!("FROZEN_COUNT_OMISSION route={} branch={} old={} materialised={} actual={}",
+                    reference.id, ordinal, terminal.repeaters, measured,
+                    actual.terminals[ordinal].repeaters);
+                for wrong in [terminal.repeaters, 0] {
+                    assert_ne!(wrong, measured, "the retained negative count must be wrong");
+                    let mut broken = actual.clone();
+                    broken.terminals[ordinal].repeaters = wrong;
+                    assert!(std::panic::catch_unwind(|| assert_measured_parity(reference, &broken)).is_err(),
+                        "the independent oracle accepted count {wrong}");
+                    eprintln!("FROZEN_COUNT_NEGATIVE route={} branch={} mutated={} rejected=true",
+                        reference.id, ordinal, wrong);
+                }
+            }
+        }
+        assert!(historical_omissions > 0, "retain the forced-terminal undercount counterexample");
     }
 
     fn negotiate_once_with_reference(

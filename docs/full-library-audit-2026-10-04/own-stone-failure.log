@@ -1,0 +1,18 @@
+
+running 1 test
+dust of route g11 at Anchor { x: 58, y: 1, z: 98 } sits on committed stone of g11
+
+thread 'compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone' (7) panicked at src/compile/planner.rs:14915:9:
+assertion `left == right` failed: full_adder lays dust on committed stone at exactly three cells;              this moved, so read the list above rather than re-pinning the number
+  left: 1
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone ... FAILED
+
+failures:
+
+failures:
+    compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 1.25s
+
