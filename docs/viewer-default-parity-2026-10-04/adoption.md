@@ -1,0 +1,9 @@
+# Viewer frontend native/WASM acceptance
+
+The historical channel-world test now explicitly uses `compile_without_rewrite`, the entry that owns its unchanged Legacy planner and world control. A separate test exercises the actual default `compile` entry, requires FragmentSynth and a validated sealed rewrite, and compares against the already existing balanced-matrix world fingerprint. No historical expected value is changed.
+
+The new default test observes every implemented gate terminal, seven public drivers and seven public lamps for 512 continuous phases without simulator resets. Public values use the independent seven-segment truth table; implementation values use the Boolean evaluator. Every terminal ends correctly, every observed signal has at most one transition per phase, and worst settlement is the existing 22-game-tick control. The existing 2000-tick ceiling is unchanged.
+
+All three tests in `frontend_compiler` pass with zero failures, ignores or filtered tests: native debug (75.56 seconds), native release (4.28 seconds), and Node/WASM release (6.18 seconds). All use `REDA_PYTHON=/definitely-missing-reda-python`. The installed wasm-bindgen test runner is version 0.2.126. Native release command: `cargo test --locked --offline --manifest-path viewer/Cargo.toml --release --test frontend_compiler`. WASM uses the same test target from viewer with `--target wasm32-unknown-unknown`, Node-only runner and the retained /tmp target directory.
+
+Logs, owned patch and source/executable hashes are retained. Two setup failures are retained: wrong manifest/test target and an initially incorrect Position import. These were corrected before the successful runs. This qualifies only this test file in the shared current worktree, not a clean whole-project build, browser runtime, all physical sites or the eight broad requirements.

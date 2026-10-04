@@ -55,7 +55,7 @@ fn compiler_netlists_and_source_maps_agree_across_targets() {
     }
 }
 
-/// Check the actual emitted channel world, beyond frontend netlist parity.
+/// Retain the original channel world as a control, beyond frontend parity.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn compact_channel_world_agrees_across_targets() {
@@ -68,11 +68,139 @@ fn compact_channel_world_agrees_across_targets() {
     )
     .unwrap();
     let lowered = reda::compile::lowering::lower_optimised(&artifact.netlist).unwrap();
-    let compiled = reda::compile::compile(&lowered).unwrap();
+    let compiled = reda::compile::compile_without_rewrite(&lowered).unwrap();
     assert_eq!(compiled.planner_kind(), reda::compile::PlannerKind::Legacy);
     assert_eq!(
         reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&compiled.world)
             .as_str(),
         "7c6c51d831ca72e249d590fd11b7306bdddd1c1f8f76c73bac13ada0e6cb39d4"
     );
+}
+
+/// Exercise the actual default separately from the immutable channel control.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn default_seven_segment_world_and_continuous_events_agree_across_targets() {
+    use std::collections::BTreeMap;
+
+    use reda::circuits::seven_segment::{INPUT_NAMES, TRUTH_TABLE};
+    use reda::frontend::evaluate::Evaluator;
+    use reda::redstone::simulator::Simulator;
+    use reda::redstone::world::block::BlockKind;
+    use reda::redstone::simulator::position::Position;
+    use reda::timing::measure_transition;
+
+    let artifact = compile_systemverilog(
+        &[SourceInput {
+            name: "seven_segment.sv",
+            text: include_str!("../../tests/fixtures/seven_segment.sv"),
+        }],
+        &CompileOptions::new("seven_segment"),
+    )
+    .unwrap();
+    let lowered = reda::compile::lowering::lower_optimised(&artifact.netlist).unwrap();
+    assert_eq!(
+        lowered
+            .inputs
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        INPUT_NAMES
+    );
+    let compiled = reda::compile::compile(&lowered).unwrap();
+    assert_eq!(
+        compiled.planner_kind(),
+        reda::compile::PlannerKind::FragmentSynth
+    );
+    compiled.validate_rewrite_view(&lowered).unwrap();
+    let rewrite = compiled
+        .physical_rewrite()
+        .expect("default is strictly certified");
+    // The existing balanced-matrix control implements the same decoder with
+    // the same ordered boundary; this is not a newly measured golden hash.
+    assert_eq!(
+        reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&compiled.world)
+            .as_str(),
+        "a8b17f9c38cbc8b363d326f8dd1633162489f6dc421e0c624d296c68485f07f7"
+    );
+    assert_eq!(rewrite.source_output_positions().len(), 7);
+    assert_eq!(rewrite.source_output_driver_positions().len(), 7);
+    assert_eq!(
+        compiled.gate_output_positions.len(),
+        rewrite.implemented().gates.len()
+    );
+    let implementation = Evaluator::new(rewrite.implemented()).unwrap();
+    let position = |(x, y, z)| Position::new(x, y, z);
+    let drivers = rewrite.source_output_driver_positions().to_vec();
+    let lamps = rewrite.source_output_positions().to_vec();
+    let mut watched = compiled
+        .gate_output_positions
+        .iter()
+        .map(|(name, &at)| (position(at), format!("implemented:{name}")))
+        .collect::<Vec<_>>();
+    for (kind, sites) in [("driver", &drivers), ("lamp", &lamps)] {
+        watched.extend(
+            sites
+                .iter()
+                .enumerate()
+                .map(|(bit, &at)| (position(at), format!("{kind}:{bit}"))),
+        );
+    }
+    let signal = |sim: &Simulator, (x, y, z)| {
+        let state = sim.world().get(x, y, z);
+        match state.kind {
+            BlockKind::RedstoneWire => state.power > 0,
+            BlockKind::Torch
+            | BlockKind::WallTorch
+            | BlockKind::Repeater
+            | BlockKind::Comparator
+            | BlockKind::Lever
+            | BlockKind::Lamp => state.lit,
+            other => panic!("observation is not a signal: {other:?}"),
+        }
+    };
+    let mut sim = Simulator::new(compiled.world.clone());
+    sim.run_until_stable(2000).unwrap();
+    sim.attach_observer(watched);
+    let mut worst = 0;
+    let mut phases = 0;
+    for from in 0..16 {
+        for to in 0..16 {
+            for value in [from, to] {
+                let measured = measure_transition(&mut sim, 2000, |sim| {
+                    for (bit, name) in INPUT_NAMES.iter().enumerate() {
+                        let (x, y, z) = compiled.input_positions[*name];
+                        let mut state = sim.world().get(x, y, z).clone();
+                        state.lit = value & (1 << (3 - bit)) != 0;
+                        sim.world_mut().set(x, y, z, state);
+                    }
+                })
+                .unwrap();
+                worst = worst.max(measured.settle_game_ticks);
+                phases += 1;
+                let inputs = rewrite
+                    .rewrite_certificate()
+                    .rewritten_inputs_in_source_order()
+                    .iter()
+                    .enumerate()
+                    .map(|(bit, name)| (name.clone(), value & (1 << (3 - bit)) != 0))
+                    .collect::<BTreeMap<_, _>>();
+                let ideal = implementation.settle(&inputs).unwrap();
+                for (name, &at) in &compiled.gate_output_positions {
+                    assert_eq!(signal(&sim, at), ideal[name], "{from}/{to}/{value}: {name}");
+                }
+                let expected = TRUTH_TABLE.get(value).copied().unwrap_or([0; 7]);
+                for (bit, &level) in expected.iter().enumerate() {
+                    assert_eq!(signal(&sim, drivers[bit]), level != 0);
+                    assert_eq!(signal(&sim, lamps[bit]), level != 0);
+                }
+                assert!(
+                    measured.nets.values().all(|net| net.change_count() <= 1),
+                    "public or implemented-gate extra transitions at {from}/{to}/{value}"
+                );
+            }
+        }
+    }
+    assert_eq!(phases, 512);
+    assert_eq!(worst, 22, "existing complete-history settlement control");
 }
