@@ -79,3 +79,6 @@ Native logical operand self-determination is repaired ([retained evidence](../na
 
 
 Optional Yosys host-temp path handling is repaired ([evidence](../optional-yosys-host-path-repair-2026-10-04/README.md)): configured original forced-Yosys test changes from inability to open its log to terminal0; five unchanged selection controls pass. YoWASP private `/tmp` shadows host paths, so the existing driver uses host-relative paths. The separate long legacy physical CLI control remains pending. No native support or broad gap completion is inferred.
+
+
+Six-input actual-default repeat2 has complete8192 phases and successful independent all2208-gate/2294-site replay ([scope](../six-input-default-2026-10-04/repeat2/scope.md)). Every retained public setup/target component and phase/channel arrival/settlement is nonregressing. The compressed raw input and world SHA256 are independently verified. Original driver3770 continues repeat3; the audit does not independently issue an expanded physical certificate. Larger-family production admission and broad requirements remain open.

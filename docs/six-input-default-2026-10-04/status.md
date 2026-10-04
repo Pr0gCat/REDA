@@ -7,3 +7,5 @@ Driver3770 is live, building the probe before running the fixed three-repeat seq
 Probe build completes successfully in2m52s. Driver3770 remains live and repeat1 has started under its own retained-artifact directory. Binary SHA256 is now bound in pending-manifest.json. No completed phase/quality result is inferred.
 
 First actual-default repeat is now terminal exit0 with complete8192 phases and independent all-event/original-control comparison passed. See [first-repeat evidence](repeat1/scope.md). Repeat2 is live on driver3770; repeat3 remains pending. No six-input production adoption is claimed.
+
+Second actual-default repeat is terminal exit0 with8192 phases. Root independently replays all2208 implementation gates/2294 sites and verifies every setup/target public quality component, phase/channel arrival and phase settlement nonregressing against the original control. Retained gzip equals the audited raw record, and retained world hash matches the immutable terminal. See [second-repeat scope](repeat2/scope.md). Third repeat remains on original live driver3770; no production admission is claimed.
