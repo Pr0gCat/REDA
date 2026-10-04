@@ -11,6 +11,13 @@ use crate::compile::equivalence::{
 use crate::compile::topology::Library;
 use crate::compile::Netlist;
 
+/// These boundaries need retained source-port occurrences, not name-keyed maps.
+pub(crate) fn needs_occurrence_preserving_boundary(source: &Netlist) -> bool {
+    source.outputs.iter().any(|output| source.inputs.contains(output))
+        || source.outputs.iter().collect::<std::collections::BTreeSet<_>>().len()
+            != source.outputs.len()
+}
+
 #[derive(Debug)]
 pub enum PhysicalRewriteError {
     Rewrite(NetlistRewriteError),

@@ -1,0 +1,95 @@
+--- a/src/compile/mod.rs
++++ b/src/compile/mod.rs
+@@ -8026,6 +8026,18 @@
+ /// exists **is** the acyclicity check, and `build_floorplan` needs the order
+ /// itself.
+ fn checked_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileError> {
++    checked_topological_order_impl(netlist, false)
++}
++
++/// A certified boundary rewrite can expose a driven primary input as an output.
++fn checked_rewrite_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileError> {
++    checked_topological_order_impl(netlist, true)
++}
++
++fn checked_topological_order_impl(
++    netlist: &Netlist,
++    input_outputs: bool,
++) -> Result<Vec<usize>, CompileError> {
+     let library = topology::Library::default_library();
+     for gate in &netlist.gates {
+         let supported_stateful = gate.kind.is_sequential()
+@@ -8053,7 +8065,9 @@
+         }
+     }
+     for output in &netlist.outputs {
+-        if !netlist.gates.iter().any(|gate| &gate.output == output) {
++        if !netlist.gates.iter().any(|gate| &gate.output == output)
++            && !(input_outputs && netlist.inputs.contains(output))
++        {
+             return Err(CompileError::UndrivenSignal(output.clone()));
+         }
+     }
+--- a/src/compile/selection.rs
++++ b/src/compile/selection.rs
+@@ -611,7 +611,30 @@
+     source: &Netlist,
+     budget: usize,
+ ) -> Result<CompiledCircuit, CompileError> {
+-    super::checked_topological_order(source)?;
++    let occurrence_boundary = (4..=5).contains(&source.inputs.len())
++        && (1..=16).contains(&source.outputs.len())
++        && !source.gates.iter().any(|gate| gate.kind.is_sequential())
++        && super::fragment_synth::rewrite::needs_occurrence_preserving_boundary(source);
++    if occurrence_boundary {
++        super::checked_rewrite_topological_order(source)?;
++    } else {
++        super::checked_topological_order(source)?;
++    }
++    // This is a baseline boundary obligation, not an optional search proposal.
++    // Raw name-keyed outputs cannot represent these public port occurrences.
++    if occurrence_boundary {
++        let rewrite = compile_balanced_torch_matrix(source, 1_000_000)
++            .map_err(|error| CompileError::CandidateMetadataViolation {
++                item: "source output boundary".into(), reason: format!("{error:?}"),
++            })?;
++        let compiled = CompiledCircuit::from_certified_rewrite(rewrite);
++        qualify_boundary(source, &compiled)
++            .ok_or_else(|| CompileError::CandidateMetadataViolation {
++                item: "source output boundary".into(),
++                reason: "occurrence-preserving boundary failed complete retained-history qualification".into(),
++            })?;
++        return Ok(compiled);
++    }
+     if source.inputs.len() != 2
+         || source.outputs.len() != 3
+         || source.gates.iter().any(|g| g.kind.is_sequential())
+--- a/src/compile/fragment_synth/rewrite.rs
++++ b/src/compile/fragment_synth/rewrite.rs
+@@ -10,6 +10,13 @@
+ };
+ use crate::compile::topology::Library;
+ use crate::compile::Netlist;
++
++/// These boundaries need retained source-port occurrences, not name-keyed maps.
++pub(crate) fn needs_occurrence_preserving_boundary(source: &Netlist) -> bool {
++    source.outputs.iter().any(|output| source.inputs.contains(output))
++        || source.outputs.iter().collect::<std::collections::BTreeSet<_>>().len()
++            != source.outputs.len()
++}
+ 
+ #[derive(Debug)]
+ pub enum PhysicalRewriteError {
+--- a/src/compile/fragment_synth/recursive.rs
++++ b/src/compile/fragment_synth/recursive.rs
+@@ -833,9 +833,7 @@
+     // the legacy emitter cannot retain every output occurrence. Keep
+     // the source unchanged and use the existing bounded truth-table owner.
+     // Unsupported boundaries and caller pins retain a typed refusal.
+-    if lowered.outputs.iter().any(|output| lowered.inputs.contains(output))
+-        || lowered.outputs.iter().collect::<BTreeSet<_>>().len() != lowered.outputs.len()
+-    {
++    if super::rewrite::needs_occurrence_preserving_boundary(lowered) {
+         if direct_leaf_cutoff == 0 {
+             return Err(RecursiveError::Matrix("output aliases require a certified boundary rewrite".into()));
+         }

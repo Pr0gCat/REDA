@@ -8026,6 +8026,18 @@ fn planner_can_express(netlist: &Netlist) -> bool {
 /// exists **is** the acyclicity check, and `build_floorplan` needs the order
 /// itself.
 fn checked_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileError> {
+    checked_topological_order_impl(netlist, false)
+}
+
+/// A certified boundary rewrite can expose a driven primary input as an output.
+fn checked_rewrite_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileError> {
+    checked_topological_order_impl(netlist, true)
+}
+
+fn checked_topological_order_impl(
+    netlist: &Netlist,
+    input_outputs: bool,
+) -> Result<Vec<usize>, CompileError> {
     let library = topology::Library::default_library();
     for gate in &netlist.gates {
         let supported_stateful = gate.kind.is_sequential()
@@ -8053,7 +8065,9 @@ fn checked_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileErr
         }
     }
     for output in &netlist.outputs {
-        if !netlist.gates.iter().any(|gate| &gate.output == output) {
+        if !netlist.gates.iter().any(|gate| &gate.output == output)
+            && !(input_outputs && netlist.inputs.contains(output))
+        {
             return Err(CompileError::UndrivenSignal(output.clone()));
         }
     }

@@ -1,0 +1,53 @@
+   Compiling reda v0.1.0 (/tmp/reda-default-occurrences-20261004)
+warning: variable does not need to be mutable
+    --> src/compile/fragment_synth/packing.rs:1298:9
+     |
+1298 |     let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib) generated 1 warning (run `cargo fix --lib -p reda` to apply 1 suggestion)
+    Finished `release` profile [unoptimized] target(s) in 31.86s
+     Running tests/balanced_torch_matrix.rs (/tmp/reda-stale-current-target/release/deps/balanced_torch_matrix-847555b65131227d)
+
+running 7 tests
+test full_source_boundaries_are_certified_without_name_selection ... ok
+test invalid_stateful_and_out_of_range_boundaries_fail_closed ... ok
+test all_low_high_and_mixed_constants_preserve_every_declared_output ... ok
+test collector_end_repeater_and_output_aliases_have_distinct_landings ... ok
+test recursive_matrix_root_retains_constant_and_repeated_boundary_occurrences ... ok
+test public_default_selects_the_complete_quality_checked_matrix has been running for over 60 seconds
+test wider_rom_keeps_strict_observations_and_the_public_default_world has been running for over 60 seconds
+test wider_rom_keeps_strict_observations_and_the_public_default_world ... ok
+test public_default_selects_the_complete_quality_checked_matrix ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 350.22s
+
+     Running tests/default_output_occurrences.rs (/tmp/reda-stale-current-target/release/deps/default_output_occurrences-c8fe3cbc5d7a7783)
+
+running 1 test
+test default_boundary_preserves_primary_repeated_and_constant_occurrences_at_zero_and_positive_budget has been running for over 60 seconds
+test default_boundary_preserves_primary_repeated_and_constant_occurrences_at_zero_and_positive_budget ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1015.31s
+
+     Running tests/flat_refresh.rs (/tmp/reda-stale-current-target/release/deps/flat_refresh-06998a2cedd6229c)
+
+running 2 tests
+test qualification_checks_complete_boundaries_and_constant_outputs ... ok
+test staircase_refresh_relocation_makes_the_actual_decoder_manifest_certifiable has been running for over 60 seconds
+test staircase_refresh_relocation_makes_the_actual_decoder_manifest_certifiable ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 209.22s
+
+     Running tests/recursive_five_input_constants.rs (/tmp/reda-stale-current-target/release/deps/recursive_five_input_constants-91f108872d400284)
+
+running 1 test
+test recursive_five_input_constants_and_aliases_preserve_every_public_occurrence has been running for over 60 seconds
+test recursive_five_input_constants_and_aliases_preserve_every_public_occurrence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 525.19s
+

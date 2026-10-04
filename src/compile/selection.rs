@@ -611,7 +611,30 @@ pub fn compile_selected_with_refresh_budget(
     source: &Netlist,
     budget: usize,
 ) -> Result<CompiledCircuit, CompileError> {
-    super::checked_topological_order(source)?;
+    let occurrence_boundary = (4..=5).contains(&source.inputs.len())
+        && (1..=16).contains(&source.outputs.len())
+        && !source.gates.iter().any(|gate| gate.kind.is_sequential())
+        && super::fragment_synth::rewrite::needs_occurrence_preserving_boundary(source);
+    if occurrence_boundary {
+        super::checked_rewrite_topological_order(source)?;
+    } else {
+        super::checked_topological_order(source)?;
+    }
+    // This is a baseline boundary obligation, not an optional search proposal.
+    // Raw name-keyed outputs cannot represent these public port occurrences.
+    if occurrence_boundary {
+        let rewrite = compile_balanced_torch_matrix(source, 1_000_000)
+            .map_err(|error| CompileError::CandidateMetadataViolation {
+                item: "source output boundary".into(), reason: format!("{error:?}"),
+            })?;
+        let compiled = CompiledCircuit::from_certified_rewrite(rewrite);
+        qualify_boundary(source, &compiled)
+            .ok_or_else(|| CompileError::CandidateMetadataViolation {
+                item: "source output boundary".into(),
+                reason: "occurrence-preserving boundary failed complete retained-history qualification".into(),
+            })?;
+        return Ok(compiled);
+    }
     if source.inputs.len() != 2
         || source.outputs.len() != 3
         || source.gates.iter().any(|g| g.kind.is_sequential())

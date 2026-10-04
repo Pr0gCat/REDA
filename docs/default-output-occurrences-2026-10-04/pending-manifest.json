@@ -1,0 +1,25 @@
+{
+  "base": "4e37e44263e192c929f8472026f4b5920d44b84a",
+  "suite_session": 75618,
+  "original_control_exit": 101,
+  "source_errors_exit": 0,
+  "source_sha256": {
+    "src/compile/mod.rs": "19e1a99a9ecb7dd1ec10145d281f02df05c17a9a06d387457ec7b27f46292e95",
+    "src/compile/selection.rs": "081aa20bb4f69f395d9d260d5beb4b408837ba641d988aba6774b467fd56a8e3",
+    "src/compile/fragment_synth/rewrite.rs": "99bc2e03c4af6fa9bf48fd45d5766f75200c1c128bd53fd9d8cc832b5a19fd2a",
+    "src/compile/fragment_synth/recursive.rs": "317eebaefbc26d2b5fc89048258c4a20763c82c5d996cd728fe79f95dd9755e9",
+    "tests/default_output_occurrences.rs": "433063aa64d6b19dc7a6d265d5cc68b051490275afe0ae71938d689ad416ce46",
+    "tests/default_output_errors.rs": "376a90c54a377fa258a1a726236678b25a7482adc2be1b18170545fd7b84d9d9"
+  },
+  "adopted": false,
+  "physics_changed": false,
+  "independent_occurrence_session": 25268,
+  "independent_occurrence_exit": 0,
+  "independent_occurrence_log_sha256": "84e59c5a0a4cf8e75d46774a817b6f43e5e173e2fbba4861d72919822c812ca5",
+  "explicit_continuous_phases_per_complete_test": 5120,
+  "generated_worlds_per_complete_test": 8,
+  "main_completed_unique_tests": 10,
+  "source_errors_unique_tests": 1,
+  "remaining_main_test": "recursive_five_input_constants",
+  "main_status": "live75618; not terminal"
+}

@@ -833,9 +833,7 @@ fn compile_with_layout(
     // the legacy emitter cannot retain every output occurrence. Keep
     // the source unchanged and use the existing bounded truth-table owner.
     // Unsupported boundaries and caller pins retain a typed refusal.
-    if lowered.outputs.iter().any(|output| lowered.inputs.contains(output))
-        || lowered.outputs.iter().collect::<BTreeSet<_>>().len() != lowered.outputs.len()
-    {
+    if super::rewrite::needs_occurrence_preserving_boundary(lowered) {
         if direct_leaf_cutoff == 0 {
             return Err(RecursiveError::Matrix("output aliases require a certified boundary rewrite".into()));
         }
