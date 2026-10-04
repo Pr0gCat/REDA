@@ -1,0 +1,19 @@
+{
+  "base": "f517a03a8e0cb7b3dbb229cd574948d6555c864a",
+  "qualified_exit": 0,
+  "original_control_exit": 101,
+  "passed": 13,
+  "failed": 0,
+  "ignored": 0,
+  "continuous_phases": 512,
+  "REDA_PYTHON": "/tmp/reda-no-yosys-interpreter",
+  "interpreter_exists": false,
+  "source_sha256": "379d6916907ccc9bb99b87ef954e4cc41162bd2841decf6bf7d082aeb061417a",
+  "test_sha256": "0e97e9be055906ddeb3bad98a4ffb762918c3f641ae1d26fb4a90bed53e59797",
+  "logs": {
+    "harness-type-error.log": "55907b8aca38555bfc908f7696cc24a01ed2901e828e47f3471d8943a96c0f83",
+    "qualification.log": "58774a266a8b86dc1f5998c4174c54c77dcfcc9aa6b8707b4ef52e22ae0af83e",
+    "original-control.log": "164c40a811ec3968745bf148d1b0bfed192ef2c2735512bc42d541f6f6a9d932",
+    "harness-import-error.log": "d2f3285d671b25895914c8c8e51cbfc9105c9a48905b8606c3664bc12cc82677"
+  }
+}

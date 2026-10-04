@@ -1,0 +1,18 @@
+--- a/src/frontend/elaborate.rs
++++ b/src/frontend/elaborate.rs
+@@ -297,7 +297,14 @@
+             }
+             return result;
+         }
+-        ConstKind::Neg(value) => constant_value(value, definitions, values, active)?.checked_neg(),
++        ConstKind::Neg(value) => match &value.kind {
++            // The magnitude of i32::MIN is not itself a positive i32.
++            // Apply the sign before checking this literal's representability.
++            ConstKind::Integer(magnitude) if *magnitude == i32::MIN.unsigned_abs() as u64 => {
++                Some(i32::MIN)
++            }
++            _ => constant_value(value, definitions, values, active)?.checked_neg(),
++        },
+         ConstKind::Binary(op, left, right) => {
+             let left = constant_value(left, definitions, values, active)?;
+             let right = constant_value(right, definitions, values, active)?;

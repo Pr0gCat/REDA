@@ -1,0 +1,48 @@
+   Compiling reda v0.1.0 (/tmp/reda-parameter-minimum-20261004)
+warning: variable does not need to be mutable
+    --> src/compile/fragment_synth/packing.rs:1298:9
+     |
+1298 |     let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib) generated 1 warning (run `cargo fix --lib -p reda` to apply 1 suggestion)
+error[E0425]: cannot find function `canonical_world_fingerprint` in module `reda::compile::metrics`
+  --> tests/systemverilog_parameter_minimum.rs:30:33
+   |
+30 |         reda::compile::metrics::canonical_world_fingerprint(&physical.world),
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+  ::: src/compile/metrics.rs:43:1
+   |
+43 | pub fn canonical_fingerprint(bytes: &[u8]) -> Fingerprint {
+   | --------------------------------------------------------- similarly named function `canonical_fingerprint` defined here
+   |
+help: a function with a similar name exists
+   |
+30 -         reda::compile::metrics::canonical_world_fingerprint(&physical.world),
+30 +         reda::compile::metrics::canonical_fingerprint(&physical.world),
+   |
+
+error[E0425]: cannot find function `canonical_world_fingerprint` in module `reda::compile::metrics`
+  --> tests/systemverilog_parameter_minimum.rs:31:33
+   |
+31 |         reda::compile::metrics::canonical_world_fingerprint(&again.world)
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+  ::: src/compile/metrics.rs:43:1
+   |
+43 | pub fn canonical_fingerprint(bytes: &[u8]) -> Fingerprint {
+   | --------------------------------------------------------- similarly named function `canonical_fingerprint` defined here
+   |
+help: a function with a similar name exists
+   |
+31 -         reda::compile::metrics::canonical_world_fingerprint(&again.world)
+31 +         reda::compile::metrics::canonical_fingerprint(&again.world)
+   |
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `reda` (test "systemverilog_parameter_minimum") due to 2 previous errors
