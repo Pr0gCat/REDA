@@ -1622,10 +1622,18 @@ impl Elaborator {
     fn binary(&mut self, expr: &Expr, op: BinaryOp, left: &Expr, right: &Expr) -> Option<RtlExpr> {
         let left = self.expr(left)?;
         let right = self.expr(right)?;
-        let common_width = left.width.max(right.width);
+        // Logical operands are self-determined: widening a bitwise inversion
+        // before truth reduction can turn a false one-bit value into true.
         let signed = left.signed && right.signed;
-        let left = left.in_integral_context(common_width, signed);
-        let right = right.in_integral_context(common_width, signed);
+        let (left, right) = if matches!(op, BinaryOp::LogicalAnd | BinaryOp::LogicalOr) {
+            (left, right)
+        } else {
+            let common_width = left.width.max(right.width);
+            (
+                left.in_integral_context(common_width, signed),
+                right.in_integral_context(common_width, signed),
+            )
+        };
 
 
         let bitwise = |op| match op {

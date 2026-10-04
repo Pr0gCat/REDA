@@ -72,3 +72,14 @@ fn reset_assignment_extension_preserves_both_edge_state_trajectories() {
  }}
  }
 }
+
+#[test]
+fn logical_operands_keep_their_own_width_before_truth_reduction() {
+ use reda::frontend::evaluate::Evaluator;
+ for (body,expected) in [("2'b01 && ~1'b1",false),("2'b00 || ~1'b1",false),("2'b11 && ~1'b0",true),("2'b00 || ~1'b0",true)] {
+ let text=format!("module m(output [7:0] y); assign y={body}; endmodule");
+ let a=compile_systemverilog(&[SourceInput{name:"logical-width.sv",text:&text}],&CompileOptions::new("m")).unwrap();
+ let values=Evaluator::new(&a.netlist).unwrap().evaluate(&Default::default()).unwrap();
+ for bit in 0..8 {assert_eq!(values[&a.output_map()[&format!("y[{bit}]")]],bit==0&&expected,"{body}, bit{bit}");}
+ }
+}

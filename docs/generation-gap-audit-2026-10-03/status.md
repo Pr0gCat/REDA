@@ -73,3 +73,6 @@ Native integral assignment contexts are production-qualified ([owned adoption](.
 
 
 New refresh-selected exact world has actual Minecraft26.2 stable-state conformance ([game evidence](../minecraft-refresh-default-conformance-2026-10-04/README.md)):64 addresses/576 public/960 implemented-gate truths; root recomputation validates all1094 original occupied sites Air and90 before/after chunk queries. It is the exact frozen v2 dump, not fresh current-HEAD compiler provenance or intra-tick QoR proof. Native signed context viewer controls pass all3 historical fixtures native and Node/WASM, plus1 new context truth/sidecar fixture with matching new native hashes ([portability](../native-context-viewer-conformance-2026-10-04/README.md)). No historical goldens are repinned. All broad rows remain open.
+
+
+Native logical operand self-determination is repaired ([retained evidence](../native-logical-context-repair-2026-10-04/README.md)): the unchanged independent fuzz suite passes all4 tests, including10,000 expression cases;36 assignment-context/compiler controls pass. The original case73 failure is retained. Only logical AND/OR operand context changes; user arithmetic remains unstaged. Typed parameter initializer context and broad native/whole-project requirements remain open.
