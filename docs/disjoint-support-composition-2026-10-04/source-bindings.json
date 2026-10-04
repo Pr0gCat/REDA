@@ -1,0 +1,31 @@
+{
+  "head": "1b8eed4ddb115d4b62498e39de8887db21c21721",
+  "files": {
+    "src/compile/fragment_synth/api.rs": {
+      "base": "2180ddd1e34460afddc2deb733ebcee3967ba9babc7064526e9114ea38f8cafa",
+      "clean": "ebe557f1fc7ac881464c2a6a95f364fa53a1f30be16425ba8118ed540fa7b8e2",
+      "workspace": "ebe557f1fc7ac881464c2a6a95f364fa53a1f30be16425ba8118ed540fa7b8e2"
+    },
+    "src/compile/fragment_synth/recursive.rs": {
+      "base": "317eebaefbc26d2b5fc89048258c4a20763c82c5d996cd728fe79f95dd9755e9",
+      "clean": "a1ef27d2387994ecc5253d83561a7367fd16393a9cd90fc7103318fb52a307e8",
+      "workspace": "a1ef27d2387994ecc5253d83561a7367fd16393a9cd90fc7103318fb52a307e8"
+    },
+    "src/compile/fragment_synth/torch_row.rs": {
+      "base": "7d59fed455955527cc73d92e88b25c1af9bb145cd3d4f94964e242a1072e0341",
+      "clean": "29736a308ed9e142860ce3d0f394fd401e448bc73548a133af6c0171c4a43303",
+      "workspace": "29736a308ed9e142860ce3d0f394fd401e448bc73548a133af6c0171c4a43303"
+    },
+    "src/compile/fragment_synth/mod.rs": {
+      "base": "f484127f34d906c1c39f6c3dca8306e78847c8f66fc67af230ab46cc773a9d80",
+      "clean": "2c9b4d557106360497e391490d50c96869d4b8502f130589dab58a339a9a0975",
+      "workspace": "2c9b4d557106360497e391490d50c96869d4b8502f130589dab58a339a9a0975"
+    },
+    "src/compile/fragment_synth/support_composition.rs": {
+      "new": "d618718f1bf0700fe9e84c79c68e831cd431549bf111a2cf76a30aa8f54835a5"
+    },
+    "tests/disjoint_support_composition.rs": {
+      "new": "12785f8ca17161702311a4ec495c24e36bd6256d66551182b5ba18ea55b46d1e"
+    }
+  }
+}

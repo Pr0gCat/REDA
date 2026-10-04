@@ -1,0 +1,26 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+    Finished `test` profile [unoptimized] target(s) in 10.38s
+     Running tests/disjoint_support_composition.rs (target/debug/deps/disjoint_support_composition-4744835e62da9b74)
+
+running 4 tests
+test public_positive_budget_observes_a_certified_structural_candidate ... FAILED
+test declaration_and_identifier_changes_preserve_the_composed_world ... ok
+test six_inputs_constants_direct_aliases_and_repeated_function_compose ... ok
+test public_alias_occurrences_keep_distinct_lamps_through_all_8192_retained_phases has been running for over 60 seconds
+test public_alias_occurrences_keep_distinct_lamps_through_all_8192_retained_phases ... ok
+
+failures:
+
+---- public_positive_budget_observes_a_certified_structural_candidate stdout ----
+
+thread 'public_positive_budget_observes_a_certified_structural_candidate' (821) panicked at tests/disjoint_support_composition.rs:195:85:
+called `Result::unwrap()` on an `Err` value: RecursiveContract("child 0 (ChunkId(Fingerprint(\"b102b6434c84446fbd3fdb234360b33d2fe87b9448741eafc49926971173bbc1\"))) failed: planner refused the chunk: cannot realise node netlist: gate `g3` is a And, which has no redstone realisation of its own -- run                  `compile::lowering::lower` on this netlist first")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    public_positive_budget_observes_a_certified_structural_candidate
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 63.49s
+
+error: test failed, to rerun pass `--test disjoint_support_composition`

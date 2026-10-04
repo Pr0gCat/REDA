@@ -1,0 +1,560 @@
+--- a/src/compile/fragment_synth/api.rs
++++ b/src/compile/fragment_synth/api.rs
+@@ -138,7 +138,7 @@
+     let mut best_quality = crate::compile::selection::recursive_quality(
+         input.lowered, &result.compiled, input.pins,
+     );
+-    use recursive::StructuralChoice::{BalancedMatrix, PackedDense, PackedStandard};
++    use recursive::StructuralChoice::{BalancedMatrix, DisjointSupport, PackedDense, PackedStandard};
+     // Composition precedes the bounded decoder rewrite in a fixed order.
+     // A single gate has no structural partition to improve.
+     let choices: &[recursive::StructuralChoice] = if input.lowered.gates.len() > 1
+@@ -146,7 +146,9 @@
+         && (1..=16).contains(&input.lowered.outputs.len())
+         && input.pins.is_none_or(|pins| pins.is_empty())
+     {
+-        &[PackedDense, PackedStandard, BalancedMatrix]
++        &[PackedDense, PackedStandard, BalancedMatrix, DisjointSupport]
++    } else if input.lowered.gates.len() > 1 && input.pins.is_none_or(|pins| pins.is_empty()) {
++        &[PackedDense, PackedStandard, DisjointSupport]
+     } else if input.lowered.gates.len() > 1 {
+         &[PackedDense, PackedStandard]
+     } else {
+--- a/src/compile/fragment_synth/recursive.rs
++++ b/src/compile/fragment_synth/recursive.rs
+@@ -746,6 +746,7 @@
+     PackedDense,
+     PackedStandard,
+     BalancedMatrix,
++    DisjointSupport,
+ }
+ 
+ fn compile_matrix_root(
+@@ -761,6 +762,27 @@
+     } else {
+         super::torch_row::compile_balanced_torch_matrix(lowered, search.max_equivalence_proof_steps)
+     }.map_err(|error| RecursiveError::Matrix(format!("{error:?}")))?;
++    certified_rewrite_product(rewrite, search)
++}
++
++fn compile_support_root(
++    lowered: &Netlist,
++    pins: Option<&PortPlacements>,
++    search: &SearchConfig,
++) -> Result<RecursiveProduct, RecursiveError> {
++    if pins.is_some_and(|pins| !pins.is_empty()) {
++        return Err(RecursiveError::Matrix("caller pins require composition".into()));
++    }
++    let rewrite = super::support_composition::compile_disjoint_support(
++        lowered, search.max_equivalence_proof_steps,
++    ).map_err(|error| RecursiveError::Matrix(format!("{error:?}")))?;
++    certified_rewrite_product(rewrite, search)
++}
++
++fn certified_rewrite_product(
++    rewrite: super::rewrite::CertifiedPhysicalRewrite,
++    search: &SearchConfig,
++) -> Result<RecursiveProduct, RecursiveError> {
+     let certificate = rewrite.certify_runtime(&CertificationConfig::from_search(search))?;
+     let metrics = certificate.metrics().clone();
+     let compiled = compile::CompiledCircuit::from_certified_rewrite(rewrite);
+@@ -787,6 +809,7 @@
+ ) -> Result<RecursiveProduct, RecursiveError> {
+     let pitches: &[i32] = match choice {
+         StructuralChoice::BalancedMatrix => return compile_matrix_root(lowered, pins, search),
++        StructuralChoice::DisjointSupport => return compile_support_root(lowered, pins, search),
+         StructuralChoice::PackedDense => &LEAF_PITCHES,
+         StructuralChoice::PackedStandard => &[STANDARD_PITCH],
+     };
+--- a/src/compile/fragment_synth/torch_row.rs
++++ b/src/compile/fragment_synth/torch_row.rs
+@@ -358,7 +358,7 @@
+     )
+ }
+ 
+-fn typed_matrix_library() -> crate::compile::topology::Library {
++pub(super) fn typed_matrix_library() -> crate::compile::topology::Library {
+     use crate::compile::topology::{
+         GateKind, Library, LibraryEntry, Primitive, Template, TemplateNode,
+     };
+@@ -585,7 +585,7 @@
+     )
+ }
+ 
+-fn typed_world_candidate_with_library(
++pub(super) fn typed_world_candidate_with_library(
+     netlist: Netlist,
+     world: World,
+     inputs: Vec<Position>,
+--- a/src/compile/fragment_synth/mod.rs
++++ b/src/compile/fragment_synth/mod.rs
+@@ -36,6 +36,7 @@
+ pub mod timing_graph;
+ pub mod topology;
+ pub mod torch_row;
++pub mod support_composition;
+ pub mod verify;
+ 
+ pub use api::{
+--- /dev/null
++++ b/src/compile/fragment_synth/support_composition.rs
+@@ -0,0 +1,249 @@
++//! Compose independently certified bounded leaves whose actual input supports
++//! are disjoint. Shared-support groups remain one leaf and fail closed if large.
++use std::collections::{BTreeMap, BTreeSet};
++
++use super::{
++    rewrite::{CertifiedPhysicalRewrite, PhysicalRewriteError},
++    torch_row,
++};
++use crate::compile::{equivalence::prove_netlist_rewrite, Netlist};
++use crate::redstone::{
++    simulator::position::Position,
++    world::{block::BlockKind, storage::World},
++};
++
++#[derive(Debug)]
++pub enum SupportCompositionError {
++    UnsupportedBoundary,
++    Leaf(torch_row::TorchRowError),
++    UnsupportedLeaf { inputs: usize, outputs: usize },
++    Rewrite(PhysicalRewriteError),
++}
++
++/// Structural output-cone decomposition; names only identify graph edges.
++fn groups(source: &Netlist) -> Option<Vec<(Vec<usize>, BTreeSet<String>, BTreeSet<usize>)>> {
++    let order = source.combinational_order()?;
++    let mut supports: BTreeMap<String, BTreeSet<String>> = source
++        .inputs
++        .iter()
++        .map(|s| (s.clone(), BTreeSet::from([s.clone()])))
++        .collect();
++    let mut cones: BTreeMap<String, BTreeSet<usize>> = source
++        .inputs
++        .iter()
++        .map(|s| (s.clone(), BTreeSet::new()))
++        .collect();
++    for index in order {
++        let gate = &source.gates[index];
++        let mut support = BTreeSet::new();
++        let mut cone = BTreeSet::from([index]);
++        for input in &gate.inputs {
++            support.extend(supports.get(input)?.iter().cloned());
++            cone.extend(cones.get(input)?.iter().copied());
++        }
++        supports.insert(gate.output.clone(), support);
++        cones.insert(gate.output.clone(), cone);
++    }
++    let mut groups: Vec<(Vec<usize>, BTreeSet<String>, BTreeSet<usize>)> = vec![];
++    for (ordinal, output) in source.outputs.iter().enumerate() {
++        let mut support = supports.get(output)?.clone();
++        let mut cone = cones.get(output)?.clone();
++        let mut outputs = vec![ordinal];
++        let mut index = 0;
++        while index < groups.len() {
++            if !groups[index].1.is_disjoint(&support) {
++                let (o, s, c) = groups.remove(index);
++                outputs.extend(o);
++                support.extend(s);
++                cone.extend(c);
++                index = 0;
++            } else {
++                index += 1;
++            }
++        }
++        groups.push((outputs, support, cone));
++    }
++    let mut constants = vec![];
++    let mut constant_cones = BTreeSet::new();
++    groups.retain(|g| {
++        if g.1.is_empty() {
++            constants.extend(g.0.iter().copied());
++            constant_cones.extend(g.2.iter().copied());
++            false
++        } else {
++            true
++        }
++    });
++    if !constants.is_empty() {
++        let first = groups
++            .iter_mut()
++            .min_by_key(|g| (g.0.len(), *g.0.iter().min().unwrap()))?;
++        first.0.extend(constants);
++        first.2.extend(constant_cones);
++    }
++    for group in &mut groups {
++        group.0.sort_unstable();
++    }
++    groups.sort_by_key(|g| g.0[0]);
++    Some(groups)
++}
++
++pub fn compile_disjoint_support(
++    source: &Netlist,
++    proof_work_limit: u64,
++) -> Result<CertifiedPhysicalRewrite, SupportCompositionError> {
++    use SupportCompositionError::*;
++    prove_netlist_rewrite(
++        source,
++        source,
++        &source.inputs,
++        &source.outputs,
++        proof_work_limit,
++    )
++    .map_err(|e| Rewrite(PhysicalRewriteError::Rewrite(e)))?;
++    let groups = groups(source).ok_or(UnsupportedBoundary)?;
++    if groups.len() < 2 {
++        return Err(UnsupportedBoundary);
++    }
++    let covered: BTreeSet<_> = groups.iter().flat_map(|g| g.1.iter().cloned()).collect();
++    if covered.len() != source.inputs.len() {
++        return Err(UnsupportedBoundary);
++    }
++    let mut leaves = vec![];
++    for (outputs, support, cone) in &groups {
++        let leaf = Netlist {
++            inputs: source
++                .inputs
++                .iter()
++                .filter(|s| support.contains(*s))
++                .cloned()
++                .collect(),
++            outputs: outputs.iter().map(|&i| source.outputs[i].clone()).collect(),
++            gates: source
++                .gates
++                .iter()
++                .enumerate()
++                .filter(|(i, _)| cone.contains(i))
++                .map(|(_, g)| g.clone())
++                .collect(),
++        };
++        if !((leaf.inputs.len() == 2 && leaf.outputs.len() == 3)
++            || ((4..=5).contains(&leaf.inputs.len()) && (1..=16).contains(&leaf.outputs.len())))
++        {
++            return Err(UnsupportedLeaf {
++                inputs: leaf.inputs.len(),
++                outputs: leaf.outputs.len(),
++            });
++        }
++        let rewrite = if leaf.inputs.len() == 2 && leaf.outputs.len() == 3 {
++            torch_row::compile_torch_row(&leaf, proof_work_limit)
++        } else {
++            torch_row::compile_balanced_torch_matrix(&leaf, proof_work_limit)
++        }
++        .map_err(Leaf)?;
++        leaves.push(rewrite);
++    }
++    // Eight air cells separate occupied extents: no coupling or parent routes
++    // can be introduced by translation of independent supports.
++    let width = leaves
++        .iter()
++        .map(|l| l.physical().world().size().0 + 8)
++        .sum::<i32>();
++    let height = leaves
++        .iter()
++        .map(|l| l.physical().world().size().1)
++        .max()
++        .unwrap();
++    let depth = leaves
++        .iter()
++        .map(|l| l.physical().world().size().2)
++        .max()
++        .unwrap();
++    let mut world = World::new(width, height, depth);
++    let mut implemented = Netlist {
++        inputs: source.inputs.clone(),
++        outputs: vec![String::new(); source.outputs.len()],
++        gates: vec![],
++    };
++    let mut inputs = BTreeMap::new();
++    let mut lamps = vec![Position::new(0, 0, 0); source.outputs.len()];
++    let mut positions = BTreeMap::new();
++    let mut offset = 0;
++    for (ordinal, ((outputs, support, _), leaf)) in groups.iter().zip(&leaves).enumerate() {
++        let child = leaf.implemented();
++        let source_inputs: Vec<_> = source
++            .inputs
++            .iter()
++            .filter(|s| support.contains(*s))
++            .collect();
++        let rename = |name: &String| -> String {
++            child.inputs.iter().position(|s| s == name).map_or_else(
++                || format!("component{ordinal}_{name}"),
++                |i| source_inputs[i].clone(),
++            )
++        };
++        let shifted = |p: (i32, i32, i32)| Position::new(p.0 + offset, p.1, p.2);
++        let old = leaf.physical().world();
++        let (x, y, z) = old.size();
++        for iy in 0..y {
++            for iz in 0..z {
++                for ix in 0..x {
++                    let state = old.get(ix, iy, iz);
++                    if state.kind != BlockKind::Air {
++                        world.set(ix + offset, iy, iz, state.clone());
++                    }
++                }
++            }
++        }
++        for (name, at) in child.inputs.iter().zip(leaf.source_input_positions()) {
++            inputs.insert(rename(name), shifted(*at));
++        }
++        for (local, &root) in outputs.iter().enumerate() {
++            implemented.outputs[root] = rename(&child.outputs[local]);
++            lamps[root] = shifted(leaf.source_output_positions()[local]);
++        }
++        for gate in &child.gates {
++            let mut gate = gate.clone();
++            gate.name = format!("component{ordinal}_{}", gate.name);
++            gate.inputs = gate.inputs.iter().map(&rename).collect();
++            let original_output = gate.output.clone();
++            gate.output = rename(&original_output);
++            positions.insert(
++                gate.output.clone(),
++                shifted(leaf.implemented_observations().gate_output_positions[&original_output]),
++            );
++            implemented.gates.push(gate);
++        }
++        offset += x + 8;
++    }
++    let library = torch_row::typed_matrix_library();
++    let size = world.size();
++    let expected_world = super::benchmark::canonical_world_fingerprint(&world);
++    let input_positions = implemented.inputs.iter().map(|s| inputs[s]).collect();
++    let (implemented, _, candidate) = torch_row::typed_world_candidate_with_library(
++        implemented,
++        world,
++        input_positions,
++        lamps,
++        positions,
++        true,
++        &library,
++    );
++    let result = super::rewrite::realise_physical_rewrite_with_size(
++        source,
++        &implemented,
++        &candidate,
++        &library,
++        &implemented.inputs,
++        &implemented.outputs,
++        proof_work_limit,
++        Some(size),
++    )
++    .map_err(Rewrite)?;
++    assert_eq!(
++        expected_world,
++        super::benchmark::canonical_world_fingerprint(result.physical().world()),
++        "sealing must preserve all composed leaf cells"
++    );
++    Ok(result)
++}
+--- /dev/null
++++ b/tests/disjoint_support_composition.rs
+@@ -0,0 +1,207 @@
++use reda::compile::fragment_synth::support_composition::compile_disjoint_support;
++use reda::frontend::{compile_systemverilog, CompileOptions, SourceInput};
++
++const SOURCE: &str = "module m(input a,b,c,d,e,f, output u,z,o,v,w,x,y,q,r); assign u=a|b; assign z=1'b0; assign o=1'b1; assign v=c&d; assign w=~(c&d); assign x=c; assign y=e^f; assign q=~(e|f); assign r=f; endmodule";
++
++#[test]
++fn six_inputs_constants_direct_aliases_and_repeated_function_compose() {
++    let artifact = compile_systemverilog(
++        &[SourceInput {
++            name: "support.sv",
++            text: SOURCE,
++        }],
++        &CompileOptions::new("m"),
++    )
++    .unwrap();
++    let source = &artifact.netlist;
++    assert_eq!(source.inputs.len(), 6);
++    let result = compile_disjoint_support(source, 1_000_000).unwrap();
++    let certificate = result
++        .certify_runtime(
++            &reda::compile::fragment_synth::config::CertificationConfig::from_search(
++                &reda::compile::fragment_synth::config::SearchConfig::checked_defaults(),
++            ),
++        )
++        .unwrap();
++    assert!(certificate.metrics().transition_count > 0);
++    assert_eq!(result.source(), source);
++    assert_eq!(result.implemented().inputs.len(), 6);
++    assert_eq!(result.source_output_positions().len(), 9);
++    assert_eq!(
++        result
++            .implemented_observations()
++            .gate_output_positions
++            .len(),
++        result.implemented().gates.len()
++    );
++}
++
++#[test]
++fn public_alias_occurrences_keep_distinct_lamps_through_all_8192_retained_phases() {
++    use reda::frontend::{evaluate::Evaluator, PortDirection};
++    use reda::redstone::{simulator::Simulator, world::block::BlockKind};
++    use std::collections::{BTreeMap, BTreeSet};
++    let original = SOURCE.replace("assign w=~(c&d);", "assign w=c&d;");
++    let artifact = compile_systemverilog(
++        &[SourceInput {
++            name: "aliases.sv",
++            text: &original,
++        }],
++        &CompileOptions::new("m"),
++    )
++    .unwrap();
++    let public: Vec<_> = artifact
++        .ports
++        .iter()
++        .filter(|p| p.direction == PortDirection::Output)
++        .collect();
++    // Preserve the observed frontend transport gap instead of deleting alias coverage.
++    assert_eq!(artifact.netlist.outputs.len(), 8);
++    assert_eq!(public.len(), 9);
++    assert_eq!(
++        artifact.port("v").unwrap().signal,
++        artifact.port("w").unwrap().signal
++    );
++    let mut source = artifact.netlist.clone();
++    source.outputs = public.iter().map(|p| p.signal.clone()).collect();
++    let rewrite = compile_disjoint_support(&source, 1_000_000).unwrap();
++    assert_eq!(
++        rewrite
++            .source_output_positions()
++            .iter()
++            .collect::<BTreeSet<_>>()
++            .len(),
++        9
++    );
++    let compiled = reda::compile::CompiledCircuit::from_certified_rewrite(rewrite.clone());
++    compiled.validate_rewrite_view(&source).unwrap();
++    let evaluator = Evaluator::new(rewrite.implemented()).unwrap();
++    let mut simulator = Simulator::new(compiled.world.clone());
++    simulator.run_until_stable(2000).unwrap();
++    let mut phases = 0;
++    for from in 0..64u32 {
++        for to in 0..64u32 {
++            for address in [from, to] {
++                let values: BTreeMap<_, _> = ["a", "b", "c", "d", "e", "f"]
++                    .iter()
++                    .enumerate()
++                    .map(|(bit, name)| (name.to_string(), address & (1 << bit) != 0))
++                    .collect();
++                for (index, name) in source.inputs.iter().enumerate() {
++                    let at = rewrite.source_input_positions()[index];
++                    let mut lever = simulator.world().get(at.0, at.1, at.2).clone();
++                    lever.lit = values[name];
++                    simulator.world_mut().set(at.0, at.1, at.2, lever);
++                }
++                simulator.run_until_stable(2000).unwrap();
++                let expected = evaluator.settle(&values).unwrap();
++                for gate in &rewrite.implemented().gates {
++                    let at = rewrite.implemented_observations().gate_output_positions[&gate.output];
++                    let state = simulator.world().get(at.0, at.1, at.2);
++                    let actual = match state.kind {
++                        BlockKind::RedstoneWire => state.power > 0,
++                        BlockKind::Torch
++                        | BlockKind::WallTorch
++                        | BlockKind::Repeater
++                        | BlockKind::Comparator => state.lit,
++                        _ => panic!("unreadable {}", gate.output),
++                    };
++                    assert_eq!(
++                        actual, expected[&gate.output],
++                        "phase {phases}: {}",
++                        gate.output
++                    );
++                }
++                let a = values["a"];
++                let b = values["b"];
++                let c = values["c"];
++                let d = values["d"];
++                let e = values["e"];
++                let f = values["f"];
++                let truth = BTreeMap::from([
++                    ("u", a | b),
++                    ("z", false),
++                    ("o", true),
++                    ("v", c & d),
++                    ("w", c & d),
++                    ("x", c),
++                    ("y", e ^ f),
++                    ("q", !(e | f)),
++                    ("r", f),
++                ]);
++                for (index, port) in public.iter().enumerate() {
++                    let at = rewrite.source_output_positions()[index];
++                    assert_eq!(
++                        simulator.world().get(at.0, at.1, at.2).lit,
++                        truth[port.name.as_str()],
++                        "phase {phases}: {}",
++                        port.name
++                    );
++                }
++                phases += 1;
++            }
++        }
++    }
++    assert_eq!(phases, 8192);
++}
++
++#[test]
++fn declaration_and_identifier_changes_preserve_the_composed_world() {
++    use reda::compile::fragment_synth::benchmark::canonical_world_fingerprint;
++    let artifact = compile_systemverilog(
++        &[SourceInput {
++            name: "original.sv",
++            text: SOURCE,
++        }],
++        &CompileOptions::new("m"),
++    )
++    .unwrap();
++    let first = compile_disjoint_support(&artifact.netlist, 1_000_000).unwrap();
++    let mut changed = artifact.netlist.clone();
++    changed.gates.reverse();
++    for gate in &mut changed.gates {
++        gate.name = format!("renamed_{}", gate.name);
++        gate.output = format!("renamed_{}", gate.output);
++        for input in &mut gate.inputs {
++            *input = format!("renamed_{input}");
++        }
++    }
++    for name in changed.inputs.iter_mut().chain(&mut changed.outputs) {
++        *name = format!("renamed_{name}");
++    }
++    let second = compile_disjoint_support(&changed, 1_000_000).unwrap();
++    assert_eq!(
++        canonical_world_fingerprint(first.physical().world()),
++        canonical_world_fingerprint(second.physical().world())
++    );
++}
++
++#[test]
++fn public_positive_budget_observes_a_certified_structural_candidate() {
++    use reda::compile::fragment_synth::{compile_fragment_synth, SynthesisBudget, SynthesisInput};
++    let artifact = compile_systemverilog(
++        &[SourceInput {
++            name: "consumer.sv",
++            text: SOURCE,
++        }],
++        &CompileOptions::new("m"),
++    )
++    .unwrap();
++    let lowered = reda::compile::lowering::lower_optimised(&artifact.netlist).unwrap();
++    let input = || SynthesisInput {
++        lowered: &lowered,
++        source_provenance: None,
++        pins: None,
++    };
++    let baseline = compile_fragment_synth(input(), SynthesisBudget::Evaluations(0)).unwrap();
++    let searched = compile_fragment_synth(input(), SynthesisBudget::Evaluations(3)).unwrap();
++    assert_eq!(baseline.evaluations_used, 0);
++    assert!(baseline.trace.is_empty());
++    assert_eq!(searched.trace.len(), 3);
++    assert!(
++        searched.trace[2].certified_quality.is_some(),
++        "{:?}",
++        searched.trace[2]
++    );
++    searched.compiled.validate_rewrite_view(&lowered).unwrap();
++}

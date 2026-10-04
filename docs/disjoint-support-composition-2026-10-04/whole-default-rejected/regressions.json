@@ -1,0 +1,137 @@
+{
+  "regression_phase_component_counts": {
+    "ticks": 2392,
+    "processed_queue_events": 2880,
+    "cell_boolean_events": 800,
+    "driver:u:last_arrival": 3071,
+    "lamp:u:last_arrival": 3071,
+    "driver:v:last_arrival": 1535,
+    "driver:w:last_arrival": 1535,
+    "lamp:v:last_arrival": 1535,
+    "lamp:w:last_arrival": 1535,
+    "driver:q:last_arrival": 3071,
+    "lamp:q:last_arrival": 3071,
+    "driver:r:last_arrival": 4095,
+    "lamp:r:last_arrival": 4095,
+    "driver:y:last_arrival": 1024,
+    "lamp:y:last_arrival": 1024
+  },
+  "max_increase": {
+    "ticks": 8,
+    "processed_queue_events": 8,
+    "cell_boolean_events": 34,
+    "driver:u:last_arrival": 8,
+    "lamp:u:last_arrival": 8,
+    "driver:v:last_arrival": 2,
+    "driver:w:last_arrival": 2,
+    "lamp:v:last_arrival": 2,
+    "lamp:w:last_arrival": 2,
+    "driver:q:last_arrival": 2,
+    "lamp:q:last_arrival": 2,
+    "driver:r:last_arrival": 2,
+    "lamp:r:last_arrival": 2,
+    "driver:y:last_arrival": 2,
+    "lamp:y:last_arrival": 2
+  },
+  "first_violations": [
+    {
+      "from": 0,
+      "to": 1,
+      "phase": 1,
+      "metric": "ticks",
+      "baseline": 3,
+      "candidate": 11
+    },
+    {
+      "from": 0,
+      "to": 1,
+      "phase": 1,
+      "metric": "processed_queue_events",
+      "baseline": 2,
+      "candidate": 5
+    },
+    {
+      "from": 0,
+      "to": 1,
+      "phase": 1,
+      "metric": "cell_boolean_events",
+      "baseline": 34,
+      "candidate": 43
+    },
+    {
+      "from": 0,
+      "to": 1,
+      "phase": 1,
+      "metric": "driver:u:last_arrival",
+      "baseline": 2,
+      "candidate": 10
+    },
+    {
+      "from": 0,
+      "to": 1,
+      "phase": 1,
+      "metric": "lamp:u:last_arrival",
+      "baseline": 3,
+      "candidate": 11
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "phase": 0,
+      "metric": "ticks",
+      "baseline": 6,
+      "candidate": 14
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "phase": 0,
+      "metric": "processed_queue_events",
+      "baseline": 2,
+      "candidate": 5
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "phase": 0,
+      "metric": "cell_boolean_events",
+      "baseline": 34,
+      "candidate": 43
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "phase": 0,
+      "metric": "driver:u:last_arrival",
+      "baseline": 2,
+      "candidate": 10
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "phase": 0,
+      "metric": "lamp:u:last_arrival",
+      "baseline": 6,
+      "candidate": 14
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "phase": 1,
+      "metric": "ticks",
+      "baseline": 3,
+      "candidate": 11
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "phase": 1,
+      "metric": "processed_queue_events",
+      "baseline": 2,
+      "candidate": 5
+    }
+  ],
+  "baseline_phases": 8192,
+  "candidate_phases": 8192,
+  "accepted": false
+}

@@ -1,0 +1,64 @@
+{
+  "src/compile/fragment_synth/support_composition.rs": {
+    "sha256": "f824e8ae89215538c7c90939283cbd0da236d1e72f077610240b290597348970",
+    "verified_from": "docs/disjoint-support-composition-2026-10-04/experimental-sources/support_composition.rs"
+  },
+  "src/compile/fragment_synth/api.rs": {
+    "sha256": "568ab18f624d59e85516217d6a8bc8ff9b1ea34666fd0a49486fe88f9eeab940",
+    "verified_from": "docs/disjoint-support-composition-2026-10-04/experimental-sources/api.rs.pre-rollback"
+  },
+  "src/compile/fragment_synth/recursive.rs": {
+    "sha256": "08454aaaec6652defdd56abc6c87a448b37f08cfb165bc8cdc7b7300a0b9d639",
+    "verified_from": "docs/disjoint-support-composition-2026-10-04/experimental-sources/recursive.rs.pre-rollback"
+  },
+  "src/compile/fragment_synth/torch_row.rs": {
+    "sha256": "29736a308ed9e142860ce3d0f394fd401e448bc73548a133af6c0171c4a43303",
+    "verified_from": "docs/disjoint-support-composition-2026-10-04/experimental-sources/torch_row.rs.pre-rollback"
+  },
+  "src/compile/fragment_synth/legacy_adapter.rs": {
+    "sha256": "e6f7f3c7eddc1f46fe11c40f56bb6b428f36390acadae9da0be8bc80fcab08ba",
+    "verified_from": "src/compile/fragment_synth/legacy_adapter.rs"
+  },
+  "src/compile/mod.rs": {
+    "sha256": "31fd547f00e33d9489ae948b3a766a5e90f58972f8301e845d34f5a3ac67e739",
+    "verified_from": "src/compile/mod.rs"
+  },
+  "src/compile/selection.rs": {
+    "sha256": "f599ab26f704264f6fb84627d5cb51c6910af20ca39e736dd76487a63fee3c0e",
+    "verified_from": "src/compile/selection.rs"
+  },
+  "src/frontend/netlist.rs": {
+    "sha256": "fd7d2277fcf4318b9b790381cceaa7b73773cb9e41362ba66d90196997c313dd",
+    "verified_from": "src/frontend/netlist.rs"
+  },
+  "src/frontend/mod.rs": {
+    "sha256": "3e10b00e2ad22233b60a3fa7759a6ed0f72ed1edb86d34686053db68888e6d0d",
+    "verified_from": "src/frontend/mod.rs"
+  },
+  "examples/disjoint_support_quality.rs": {
+    "sha256": "7922e1b9dc8ab11485205cb07483f98c09bc7378670362f75cc1f5ada9931c84",
+    "verified_from": "docs/disjoint-support-composition-2026-10-04/experimental-sources/disjoint_support_quality.rs"
+  },
+  "tests/disjoint_support_waveform.rs": {
+    "sha256": "48635507fb14585975b8cfbed802fabe73a6f096a920aef843c77359a23dd5c0",
+    "verified_from": "docs/disjoint-support-composition-2026-10-04/experimental-sources/disjoint_support_waveform.rs"
+  },
+  "target/debug/examples/disjoint_support_quality": {
+    "sha256": "216e3ac2bd53ac2a4aa5b061aede37d0d0f5d4b8a70078f1ed4b6f1251f8d788",
+    "bytes": 22634776,
+    "note": "Retained producer build from 10:48 UTC; execution command and completion retained in run.log.",
+    "mtime_utc": "2026-10-04T10:48:04.621341+00:00"
+  },
+  "target/debug/examples/disjoint_support_quality.d": {
+    "sha256": "7bb7a97b4582cb96df88ecdd4dd312b488880db7f40a5d89d87c7c3d2c3c4f7b",
+    "bytes": 5409,
+    "note": "Retained producer build from 10:48 UTC; execution command and completion retained in run.log.",
+    "mtime_utc": "2026-10-04T10:48:04.678340+00:00"
+  },
+  "target/debug/deps/libreda-a12b971a883e3664.rlib": {
+    "sha256": "98c9f8579fa4cf34638a51f6a0db76cb9496b712c818c76a5ee2b9554a117405",
+    "bytes": 113511442,
+    "note": "Retained producer build from 10:48 UTC; execution command and completion retained in run.log.",
+    "mtime_utc": "2026-10-04T10:48:03.580370+00:00"
+  }
+}

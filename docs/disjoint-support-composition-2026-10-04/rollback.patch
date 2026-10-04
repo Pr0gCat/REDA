@@ -1,0 +1,100 @@
+--- src/compile/fragment_synth/api.rs
++++ src/compile/fragment_synth/api.rs
+@@ -138,19 +138,15 @@
+     let mut best_quality = crate::compile::selection::recursive_quality(
+         input.lowered, &result.compiled, input.pins,
+     );
+-    use recursive::StructuralChoice::{BalancedMatrix, DisjointSupport, PackedDense, PackedStandard};
++    use recursive::StructuralChoice::{BalancedMatrix, PackedDense, PackedStandard};
+     // Composition precedes the bounded decoder rewrite in a fixed order.
+     // A single gate has no structural partition to improve.
+-    let support_eligible = super::support_composition::eligible(input.lowered);
+     let choices: &[recursive::StructuralChoice] = if input.lowered.gates.len() > 1
+         && (4..=5).contains(&input.lowered.inputs.len())
+         && (1..=16).contains(&input.lowered.outputs.len())
+         && input.pins.is_none_or(|pins| pins.is_empty())
+     {
+-        if support_eligible { &[PackedDense, PackedStandard, BalancedMatrix, DisjointSupport] }
+-        else { &[PackedDense, PackedStandard, BalancedMatrix] }
+-    } else if input.lowered.gates.len() > 1 && support_eligible && input.pins.is_none_or(|pins| pins.is_empty()) {
+-        &[PackedDense, PackedStandard, DisjointSupport]
++        &[PackedDense, PackedStandard, BalancedMatrix]
+     } else if input.lowered.gates.len() > 1 {
+         &[PackedDense, PackedStandard]
+     } else {
+--- src/compile/fragment_synth/recursive.rs
++++ src/compile/fragment_synth/recursive.rs
+@@ -753,7 +753,6 @@
+     PackedDense,
+     PackedStandard,
+     BalancedMatrix,
+-    DisjointSupport,
+ }
+ 
+ fn compile_matrix_root(
+@@ -769,27 +768,6 @@
+     } else {
+         super::torch_row::compile_balanced_torch_matrix(lowered, search.max_equivalence_proof_steps)
+     }.map_err(|error| RecursiveError::Matrix(format!("{error:?}")))?;
+-    certified_rewrite_product(rewrite, search)
+-}
+-
+-fn compile_support_root(
+-    lowered: &Netlist,
+-    pins: Option<&PortPlacements>,
+-    search: &SearchConfig,
+-) -> Result<RecursiveProduct, RecursiveError> {
+-    if pins.is_some_and(|pins| !pins.is_empty()) {
+-        return Err(RecursiveError::Matrix("caller pins require composition".into()));
+-    }
+-    let rewrite = super::support_composition::compile_disjoint_support(
+-        lowered, search.max_equivalence_proof_steps,
+-    ).map_err(|error| RecursiveError::Matrix(format!("{error:?}")))?;
+-    certified_rewrite_product(rewrite, search)
+-}
+-
+-fn certified_rewrite_product(
+-    rewrite: super::rewrite::CertifiedPhysicalRewrite,
+-    search: &SearchConfig,
+-) -> Result<RecursiveProduct, RecursiveError> {
+     let certificate = rewrite.certify_runtime(&CertificationConfig::from_search(search))?;
+     let metrics = certificate.metrics().clone();
+     let compiled = compile::CompiledCircuit::from_certified_rewrite(rewrite);
+@@ -817,7 +795,6 @@
+ ) -> Result<RecursiveProduct, RecursiveError> {
+     let pitches: &[i32] = match choice {
+         StructuralChoice::BalancedMatrix => return compile_matrix_root(lowered, pins, search),
+-        StructuralChoice::DisjointSupport => return compile_support_root(lowered, pins, search),
+         StructuralChoice::PackedDense => &LEAF_PITCHES,
+         StructuralChoice::PackedStandard => &[STANDARD_PITCH],
+     };
+--- src/compile/fragment_synth/mod.rs
++++ src/compile/fragment_synth/mod.rs
+@@ -36,7 +36,6 @@
+ pub mod timing_graph;
+ pub mod topology;
+ pub mod torch_row;
+-pub mod support_composition;
+ pub mod verify;
+ 
+ pub use api::{
+--- src/compile/fragment_synth/torch_row.rs
++++ src/compile/fragment_synth/torch_row.rs
+@@ -358,7 +358,7 @@
+     )
+ }
+ 
+-pub(super) fn typed_matrix_library() -> crate::compile::topology::Library {
++fn typed_matrix_library() -> crate::compile::topology::Library {
+     use crate::compile::topology::{
+         GateKind, Library, LibraryEntry, Primitive, Template, TemplateNode,
+     };
+@@ -585,7 +585,7 @@
+     )
+ }
+ 
+-pub(super) fn typed_world_candidate_with_library(
++fn typed_world_candidate_with_library(
+     netlist: Netlist,
+     world: World,
+     inputs: Vec<Position>,

@@ -1,0 +1,42 @@
+{
+  "status": "independent_rejection_confirmed",
+  "phase_pairs": 8192,
+  "channels": 18,
+  "all_retained_hashes_verified": true,
+  "phase_grid_complete": true,
+  "regression_phase_component_counts": {
+    "ticks": 2392,
+    "processed_queue_events": 2880,
+    "cell_boolean_events": 800,
+    "driver:u:last_arrival": 3071,
+    "lamp:u:last_arrival": 3071,
+    "driver:v:last_arrival": 1535,
+    "driver:w:last_arrival": 1535,
+    "lamp:v:last_arrival": 1535,
+    "lamp:w:last_arrival": 1535,
+    "driver:q:last_arrival": 3071,
+    "lamp:q:last_arrival": 3071,
+    "driver:r:last_arrival": 4095,
+    "lamp:r:last_arrival": 4095,
+    "driver:y:last_arrival": 1024,
+    "lamp:y:last_arrival": 1024
+  },
+  "max_increase": {
+    "ticks": 8,
+    "processed_queue_events": 8,
+    "cell_boolean_events": 34,
+    "driver:u:last_arrival": 8,
+    "lamp:u:last_arrival": 8,
+    "driver:v:last_arrival": 2,
+    "driver:w:last_arrival": 2,
+    "lamp:v:last_arrival": 2,
+    "lamp:w:last_arrival": 2,
+    "driver:q:last_arrival": 2,
+    "lamp:q:last_arrival": 2,
+    "driver:r:last_arrival": 2,
+    "lamp:r:last_arrival": 2,
+    "driver:y:last_arrival": 2,
+    "lamp:y:last_arrival": 2
+  },
+  "scope": "Recomputed quality from retained phase summaries; does not independently revalidate raw simulator truth or full event replay."
+}

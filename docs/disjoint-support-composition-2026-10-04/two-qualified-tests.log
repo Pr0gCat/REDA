@@ -1,0 +1,11 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+    Finished `test` profile [unoptimized] target(s) in 16.68s
+     Running tests/disjoint_support_composition.rs (target/debug/deps/disjoint_support_composition-4744835e62da9b74)
+
+running 2 tests
+test six_inputs_constants_direct_aliases_and_repeated_function_compose ... ok
+test public_alias_occurrences_keep_distinct_lamps_through_all_8192_retained_phases has been running for over 60 seconds
+test public_alias_occurrences_keep_distinct_lamps_through_all_8192_retained_phases ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 63.43s
+
