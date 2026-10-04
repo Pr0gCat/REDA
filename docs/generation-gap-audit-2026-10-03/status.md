@@ -17,7 +17,7 @@ Snapshot: production HEAD5564d7f, 2026-10-04. **0 of8 broad requirements are com
 
 *3770: clean base5564d7f plus only six-input admission proposal; building the actual-default probe before three separately retained8192-phase processes. [Source-bound protocol](../six-input-default-2026-10-04/status.md). Each successful runtime needs independent all-event audit and original-control comparison before adoption.
 *46436: original ROM64 quality control remains live on its original handle, no terminal waveform result yet. Do not restart for an observation timeout.
-*97159: earlier pre-reordering ROM32 repeat driver remains live. Later adopted clean three-repeat evidence already establishes five-input acceptance; this old driver remains preserved, not substituted for a missing gate.
+*97159: terminal exit0. All three pre-reordering ROM32 default repeats complete2048 phases each; independent full audits and every header except artifact /phase/result comparison match the adopted matrix-first runs. Existing retained gzip logs match terminal SHA256; original source/executable bindings are reverified. No newly captured independent old worlds are claimed. See [completed comparison](../rom32-clean-adoption-2026-10-04/completed-old-default-comparison.json).
 
 Original historical decay92690 now terminates successfully:1 pass,0 failures,0 ignored,580.96s. This supplements the strength recovery; it does not establish full-project success. Source binding and terminal log are retained beside that recovery.
 

@@ -1,0 +1,54 @@
+{
+  "old_driver_session": 97159,
+  "exit_code": 0,
+  "comparisons": [
+    {
+      "repeat": 1,
+      "original_terminal": {
+        "repeat": 1,
+        "exit_code": 0,
+        "seconds": 2734.3557558059692,
+        "log_sha256": "b390d9740a8e0777be4196163f6de3fc6e0056fa6aa6845f586914c208077191",
+        "stderr_sha256": "8415277bfa497e288035425e1150370613741a81b63c28ef6c8069c56111fdb4"
+      },
+      "phases": 2048,
+      "records": 2050,
+      "all_headers_except_artifact_and_all_phase_result_records_identical": true,
+      "audit_sha256": "07c03c7a5087334bedf5704022923a8280887b3984f3aa0d503a6d109a4d8b4e",
+      "source_bound_world_claim": "No new independently captured old world is claimed; original driver did not retain worlds immediately."
+    },
+    {
+      "repeat": 2,
+      "original_terminal": {
+        "repeat": 2,
+        "exit_code": 0,
+        "seconds": 2745.214709997177,
+        "log_sha256": "94b3f7fc5445369de6b44e96fdd2842767f8537c1b1dca622796fd9fa7d04277",
+        "stderr_sha256": "8415277bfa497e288035425e1150370613741a81b63c28ef6c8069c56111fdb4"
+      },
+      "phases": 2048,
+      "records": 2050,
+      "all_headers_except_artifact_and_all_phase_result_records_identical": true,
+      "audit_sha256": "07c03c7a5087334bedf5704022923a8280887b3984f3aa0d503a6d109a4d8b4e",
+      "source_bound_world_claim": "No new independently captured old world is claimed; original driver did not retain worlds immediately."
+    },
+    {
+      "repeat": 3,
+      "original_terminal": {
+        "repeat": 3,
+        "exit_code": 0,
+        "seconds": 2730.551566362381,
+        "log_sha256": "8fcf65bc24011d3bfa83d3fb423bc4ce98b3a8a94b142899421d54592b079399",
+        "stderr_sha256": "8415277bfa497e288035425e1150370613741a81b63c28ef6c8069c56111fdb4"
+      },
+      "phases": 2048,
+      "records": 2050,
+      "all_headers_except_artifact_and_all_phase_result_records_identical": true,
+      "audit_sha256": "07c03c7a5087334bedf5704022923a8280887b3984f3aa0d503a6d109a4d8b4e",
+      "source_bound_world_claim": "No new independently captured old world is claimed; original driver did not retain worlds immediately."
+    }
+  ],
+  "production_change": false,
+  "retained_compressed_logs_match_terminal_hashes": true,
+  "original_source_and_executable_bindings_reverified": true
+}
