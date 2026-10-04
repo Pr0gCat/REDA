@@ -85,3 +85,6 @@ Six-input actual-default repeat2 has complete8192 phases and successful independ
 
 
 Native typed parameter initializer destination context is repaired ([adoption](../native-parameter-context-adoption-2026-10-04/adoption.md)): clean agent20/20, root clean29/29 and shared29/29 pass without Yosys, including unchanged independent fuzz and physical controls. Typed default f+1 becomes16 before truncation, while parent override f+1 remains0. Named declarations retain their own cache type. Exact source patch excludes user arithmetic. Top-level inout and broad native/optional-Yosys/full-project requirements remain open.
+
+
+Optional Yosys public-port transport now refuses unsupported directions before publishing a partial artifact ([adoption](../yosys-public-port-preservation-2026-10-04/adoption.md)): independently synthesized original inout source previously succeeds in forced/Auto but drops bus; isolated and root bridge9/9 controls pass, and original actual calls now name the unsupported bus/inout contract. This prevents false success; it does not support top-level inout. Broad rows remain open.

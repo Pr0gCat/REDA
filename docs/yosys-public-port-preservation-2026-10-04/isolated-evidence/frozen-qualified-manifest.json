@@ -1,0 +1,7 @@
+{
+  "src/frontend/yosys_json.rs": "15ab7c50e1c8c64f866316377ed916e427dcf4c3bfc6242fa38f3855dc4073d9",
+  "src/frontend/synth.py": "80d52cf97345b522808ccb252d9d3076c2311b54a3e84b4fc50d35c68d679b3c",
+  "examples/inout_bridge_observe.rs": "e489e74b9c3d9059fff728f19d76df186a2bf9711471e43ebecc52b86722d78c",
+  "/tmp/reda-native-parameter-context-20261004/target/debug/deps/reda-458c9562cc1aa2a5": "51611a0d141a4c414922e04b38576312061db7a1e2a426f800c17f8a718bccf2",
+  "/tmp/reda-native-parameter-context-20261004/target/debug/examples/inout_bridge_observe": "94da442df6cbdfa49d4555d2e915c03d09d6f48119a17fc16d131c7ca338765a"
+}

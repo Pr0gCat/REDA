@@ -1,0 +1,47 @@
+{
+  "source": "inout_original.sv",
+  "original_public_ports": [
+    "a",
+    "bus",
+    "y"
+  ],
+  "forced_yosys": {
+    "frontend": "Yosys",
+    "inputs": [
+      "a"
+    ],
+    "outputs": [
+      "g0"
+    ],
+    "output_bindings": [
+      [
+        "y",
+        "g0"
+      ]
+    ],
+    "output_map": {
+      "y": "g0"
+    }
+  },
+  "auto": {
+    "frontend": "Yosys",
+    "inputs": [
+      "a"
+    ],
+    "outputs": [
+      "g0"
+    ],
+    "output_bindings": [
+      [
+        "y",
+        "g0"
+      ]
+    ],
+    "output_map": {
+      "y": "g0"
+    },
+    "fallback_reason": "top-level inout needs an external read/drive/enable contract; only internal single-driver net aliases are supported"
+  },
+  "missing_public_port": "bus",
+  "evidence": "forced-auto-baseline.log"
+}

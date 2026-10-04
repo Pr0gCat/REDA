@@ -421,6 +421,20 @@ pub(super) fn netlist_from_json(
             .ok_or_else(|| unsupported("module has no `ports` key"))?,
         "`ports`",
     )?;
+    // Every public port must survive transport. Inout needs a resolved
+    // external drive contract, which this Boolean bridge does not provide.
+    for (name, port) in ports {
+        let direction = as_str(
+            port.get("direction")
+                .ok_or_else(|| unsupported(format!("port `{name}` has no `direction`")))?,
+            "port direction",
+        )?;
+        if !matches!(direction, "input" | "output") {
+            return Err(unsupported(format!(
+                "port `{name}` direction `{direction}` is unsupported by the Boolean input/output bridge"
+            )));
+        }
+    }
     let cells = as_object(
         module
             .get("cells")
@@ -670,6 +684,24 @@ mod tests {
                 topology::gate_kind_for_yosys_cell(normalized).is_some(),
                 "{cell_type} has pin names but no GateKind"
             );
+        }
+    }
+
+    #[test]
+    fn public_inout_and_unknown_directions_are_not_silently_dropped() {
+        for direction in ["inout", "unknown"] {
+            // The original independently synthesized inout source aliases
+            // a, bus and y to net 2; ordinary outputs previously survived
+            // while its public bus port disappeared from transport.
+            let json = json!({"modules":{"m":{
+                "ports":{
+                    "a":{"direction":"input","bits":[2]},
+                    "bus":{"direction":direction,"bits":[2]},
+                    "y":{"direction":"output","bits":[2]}
+                },"cells":{}
+            }}});
+            let error = netlist_from_json(&json,"m").unwrap_err().to_string();
+            assert!(error.contains("bus") && error.contains(direction), "{error}");
         }
     }
 

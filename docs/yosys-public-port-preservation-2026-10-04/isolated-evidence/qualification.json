@@ -1,0 +1,7 @@
+{
+  "unit_tests_passed": 9,
+  "ignored": 0,
+  "actual_yosys_calls": 2,
+  "source_binary_drift": [],
+  "fix_scope": "fail closed public port transport; not top-level inout support"
+}
