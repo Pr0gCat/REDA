@@ -71,6 +71,16 @@ def main() -> int:
         # the script language's own escaping rules on Windows paths.
         return '"' + path.replace("\\", "/") + '"'
 
+    # YoWASP mounts its private scratch directory at /tmp, hiding host /tmp
+    # files. Relative paths use the host working-directory mounts instead.
+    # Different Windows drives cannot be made relative; their absolute
+    # drive mounts do not conflict with the scratch mount.
+    try:
+        verilog_file = os.path.relpath(verilog_file).replace("\\", "/")
+        output_json = os.path.relpath(output_json).replace("\\", "/")
+    except ValueError:  # Different Windows drives.
+        pass
+
     # Unmap synchronous reset and enable into data logic plus plain DFFs,
     # preserving their priority without special state cells in the bridge.
     script = f"""

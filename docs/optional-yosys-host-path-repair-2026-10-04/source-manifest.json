@@ -1,0 +1,10 @@
+{
+  "baseline": "0e8ef26",
+  "scope": "Shared integration run; existing user arithmetic remains unstaged. Only synthesis driver path handling is adopted.",
+  "driver_sha256": "80d52cf97345b522808ccb252d9d3076c2311b54a3e84b4fc50d35c68d679b3c",
+  "evidence": {
+    "selection-five-pass.log.gz": "11c792ae76dfff0fb3090193855d3b6abf2724b037ebadaa3f030b312a48ef7f",
+    "original-configured-failure.log.gz": "a168da86ee4cd42da278c43cddcd2d9bb0f797be99e81fff596d3592d499d2da",
+    "forced-yosys-pass.log.gz": "425a3bfb28f9916bf6f3ca84337828686eb6c5e3665d3c4661828769860cbbb3"
+  }
+}

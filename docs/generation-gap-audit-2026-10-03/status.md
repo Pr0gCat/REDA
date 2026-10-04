@@ -76,3 +76,6 @@ New refresh-selected exact world has actual Minecraft26.2 stable-state conforman
 
 
 Native logical operand self-determination is repaired ([retained evidence](../native-logical-context-repair-2026-10-04/README.md)): the unchanged independent fuzz suite passes all4 tests, including10,000 expression cases;36 assignment-context/compiler controls pass. The original case73 failure is retained. Only logical AND/OR operand context changes; user arithmetic remains unstaged. Typed parameter initializer context and broad native/whole-project requirements remain open.
+
+
+Optional Yosys host-temp path handling is repaired ([evidence](../optional-yosys-host-path-repair-2026-10-04/README.md)): configured original forced-Yosys test changes from inability to open its log to terminal0; five unchanged selection controls pass. YoWASP private `/tmp` shadows host paths, so the existing driver uses host-relative paths. The separate long legacy physical CLI control remains pending. No native support or broad gap completion is inferred.
