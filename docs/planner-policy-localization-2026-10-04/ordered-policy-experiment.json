@@ -1,0 +1,6 @@
+{
+  "base": "e5dedef",
+  "scope": "shared src/tests diagnostic copy; not adopted",
+  "change": "only ordered route reserve and original height-cost choices; qualified terminal requests preserved",
+  "source_sha256": "00b0398cf6aa4e68a45c9cbf184ed8321b352dd9d8faf2892e7aab5e6edbb830"
+}
