@@ -1,0 +1,383 @@
+--- a/src/frontend/mod.rs
++++ b/src/frontend/mod.rs
+@@ -338,6 +338,53 @@
+         ports: emitted.ports,
+         ordered_output_ports: emitted.ordered_output_ports,
+         debug,
++    })
++}
++
++pub use crate::compile::resolved_circuit::{
++    CompiledResolvedCircuit as CompiledNativeCircuit, ResolvedBusPort, ResolvedPinout,
++};
++pub use resolved::InvalidBus;
++
++/// Inspect the parsed top-level port directions for consumers choosing a physical path.
++pub fn top_has_inout(sources: &[SourceInput<'_>], options: &CompileOptions) -> Result<bool, String> {
++    let files: Vec<_> = sources.iter().enumerate()
++        .map(|(i, s)| (FileId(i as u32), s.text)).collect();
++    let (set, _) = parser::parse_sources_drives(&files, true).map_err(|d| d.render(sources))?;
++    let shared = set.modules.iter().find(|m| m.name.name == options.top)
++        .is_some_and(|m| m.ports.iter().any(|p| p.direction == PortDirection::Inout));
++    Ok(shared)
++}
++
++/// Compile native source directly to physical hardware and source-owned ports.
++/// Top-level inout retains one shared terminal and checked X/Z observation.
++/// Ordinary sources reuse the existing native frontend and default compiler.
++pub fn compile_systemverilog_physical(
++    sources: &[SourceInput<'_>],
++    options: &CompileOptions,
++) -> Result<CompiledNativeCircuit, String> {
++    let shared = top_has_inout(sources, options)?;
++    if shared {
++        let semantic = resolved::compile_for_materialization(sources, &options.top)?;
++        return crate::compile::resolved_circuit::compile(&semantic);
++    }
++    let artifact = compile_systemverilog(sources, options)
++        .map_err(|ds| ds.iter().map(|d| d.render(sources)).collect::<Vec<_>>().join("\n"))?;
++    let physical = crate::compile::compile(&artifact.netlist).map_err(|e| e.to_string())?;
++    let coordinates = |p: &(i32,i32,i32)| [p.0,p.1,p.2];
++    let source_inputs = artifact.ports.iter().filter(|p| p.direction == PortDirection::Input)
++        .map(|p| (p.name.clone(), physical.input_positions[&p.signal])).collect::<std::collections::BTreeMap<_,_>>();
++    let source_outputs = artifact.ports.iter().filter(|p| p.direction == PortDirection::Output)
++        .map(|p| (p.name.clone(), physical.output_positions[&p.signal])).collect::<std::collections::BTreeMap<_,_>>();
++    let pinout = ResolvedPinout {
++        inputs: source_inputs.iter().map(|(n,p)| (n.clone(),coordinates(p))).collect(),
++        outputs: source_outputs.iter().map(|(n,p)| (n.clone(),coordinates(p))).collect(),
++        inouts: Vec::new(),
++    };
++    Ok(CompiledNativeCircuit {
++        physical, pinout, source_inputs, source_outputs,
++        protocol_inputs: std::collections::BTreeMap::new(),
++        terminals: Vec::new(), implementation: artifact.netlist,
+     })
+ }
+ 
+--- a/src/frontend/resolved.rs
++++ b/src/frontend/resolved.rs
+@@ -40,7 +40,7 @@
+     pub(crate) debug: super::DebugDatabase,
+ }
+ #[derive(Debug, PartialEq, Eq)]
+-pub(crate) enum InvalidBus {
++pub enum InvalidBus {
+     Floating,
+     Contention,
+     ProtocolViolation,
+--- a/src/compile/resolved_circuit.rs
++++ b/src/compile/resolved_circuit.rs
+@@ -10,13 +10,102 @@
+ use crate::redstone::world::block::{BlockKind, Facing};
+ use std::collections::{BTreeMap, BTreeSet};
+ 
+-pub(crate) struct CompiledResolvedCircuit {
+-    pub(crate) physical: CompiledCircuit,
++/// Source-owned port metadata. Physical readback leaves are never user inputs.
++#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct ResolvedPinout {
++    pub inputs: BTreeMap<String, [i32; 3]>,
++    pub outputs: BTreeMap<String, [i32; 3]>,
++    pub inouts: Vec<ResolvedBusPort>,
++}
++#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct ResolvedBusPort {
++    pub source: crate::frontend::PortBinding,
++    pub channel: Vec<[i32; 3]>,
++    pub external_entry: [i32; 3],
++    pub external_pad: [i32; 3],
++    pub readback: [i32; 3],
++    pub external_value: [i32; 3],
++    pub external_present: [i32; 3],
++    pub conflict: [i32; 3],
++    pub floating: [i32; 3],
++    pub expected_value: [i32; 3],
++    pub external_observed: [i32; 3],
++    pub external_expected: [i32; 3],
++}
++impl ResolvedPinout {
++    pub fn load_bundle(
++        path: &std::path::Path,
++        expected: &CompiledResolvedCircuit,
++    ) -> Result<(crate::redstone::world::storage::World, Self), String> {
++        let world = crate::formats::litematic::load(path).map_err(|e| e.to_string())?;
++        let bytes = std::fs::read(path.with_extension("pinout.json")).map_err(|e| e.to_string())?;
++        let pinout: Self = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
++        pinout.validate_loaded(&world, expected)?;
++        Ok((world, pinout))
++    }
++    /// Bind loaded metadata and the initial world before installing caller controls.
++    pub fn validate_loaded(
++        &self,
++        world: &crate::redstone::world::storage::World,
++        expected: &CompiledResolvedCircuit,
++    ) -> Result<(), String> {
++        if self != &expected.pinout {
++            return Err("shared-inout metadata differs from source-owned compiled ports".into());
++        }
++        if super::fragment_synth::benchmark::canonical_world_fingerprint(world)
++            != super::fragment_synth::benchmark::canonical_world_fingerprint(&expected.physical.world)
++        {
++            return Err("shared-inout loaded world differs from compiled world".into());
++        }
++        Ok(())
++    }
++}
++impl ResolvedBusPort {
++    /// Settled checked observation; invalid bus states never become Boolean outputs.
++    pub fn observe(
++        &self,
++        world: &crate::redstone::world::storage::World,
++    ) -> Result<bool, crate::frontend::resolved::InvalidBus> {
++        use crate::frontend::resolved::InvalidBus;
++        let read = |p: [i32; 3], kind: BlockKind| {
++            let cell = world.get(p[0], p[1], p[2]);
++            if cell.kind != kind { return Err(InvalidBus::ProtocolViolation); }
++            Ok(if kind == BlockKind::RedstoneWire { cell.power > 0 } else { cell.lit })
++        };
++        let value = read(self.readback, BlockKind::RedstoneWire)?;
++        if self.channel.is_empty()
++            || self.channel.iter().any(|p| read(*p, BlockKind::RedstoneWire) != Ok(value))
++            || read(self.expected_value, BlockKind::Lamp)? != value
++            || read(self.external_pad, BlockKind::RedstoneWire)?
++                != read(self.external_expected, BlockKind::Lamp)?
++            || read(self.external_observed, BlockKind::Lamp)?
++                != read(self.external_expected, BlockKind::Lamp)?
++        {
++            return Err(InvalidBus::ProtocolViolation);
++        }
++        if read(self.conflict, BlockKind::Lamp)? { return Err(InvalidBus::Contention); }
++        if read(self.floating, BlockKind::Lamp)? { return Err(InvalidBus::Floating); }
++        Ok(value)
++    }
++}
++pub struct CompiledResolvedCircuit {
++    pub physical: CompiledCircuit,
+     pub(crate) terminals: Vec<SharedBusTerminal>,
+     pub(crate) source_inputs: BTreeMap<String, (i32, i32, i32)>,
+     pub(crate) protocol_inputs: BTreeMap<String, (i32, i32, i32)>,
+     pub(crate) source_outputs: BTreeMap<String, (i32, i32, i32)>,
+     pub(crate) implementation: super::Netlist,
++    pub pinout: ResolvedPinout,
++}
++impl CompiledResolvedCircuit {
++    pub fn save_bundle(&self, path: &std::path::Path) -> Result<(), String> {
++        let bytes = serde_json::to_vec_pretty(&self.pinout).map_err(|e| e.to_string())?;
++        crate::formats::litematic::save(path, &self.physical.world, "shared-inout")
++            .map_err(|e| e.to_string())?;
++        std::fs::write(path.with_extension("pinout.json"), bytes).map_err(|e| e.to_string())
++    }
+ }
+ pub(crate) fn compile(semantic: &SemanticArtifact) -> Result<CompiledResolvedCircuit, String> {
+     let mut placements = PortPlacements::default();
+@@ -138,7 +227,7 @@
+                 .flatten()
+         })
+         .collect::<BTreeSet<_>>();
+-    let source_inputs = physical
++    let source_inputs: BTreeMap<String, (i32, i32, i32)> = physical
+         .input_positions
+         .iter()
+         .filter(|(name, _)| !protocol.contains(*name) && !reads.contains(*name))
+@@ -155,13 +244,40 @@
+         .iter()
+         .map(|b| b.original.name.as_str())
+         .collect::<BTreeSet<_>>();
+-    let source_outputs = semantic
++    let source_outputs: BTreeMap<String, (i32, i32, i32)> = semantic
+         .source_outputs
+         .iter()
+         .filter(|(name, _)| !inout_names.contains(name.as_str()))
+         .map(|(name, signal)| (name.clone(), physical.output_positions[signal]))
+         .collect();
++    let coordinates = |p: &(i32, i32, i32)| [p.0, p.1, p.2];
++    let anchor = |p: Anchor| [p.x, p.y, p.z];
++    let output = |name: &str| physical.output_positions.get(name)
++        .map(coordinates).ok_or_else(|| format!("missing physical status output {name}"));
++    let mut inouts = Vec::new();
++    for (b, terminal) in semantic.boundaries.iter().zip(&terminals) {
++        inouts.push(ResolvedBusPort {
++            source: b.original.clone(),
++            channel: terminal.channel.iter().copied().map(anchor).collect(),
++            external_entry: anchor(terminal.external_entry),
++            external_pad: anchor(terminal.external.at),
++            readback: anchor(terminal.read_output),
++            external_value: coordinates(&physical.input_positions[&b.external_value]),
++            external_present: coordinates(&physical.input_positions[&b.external_present]),
++            conflict: output(&b.conflict)?,
++            floating: output(&b.floating)?,
++            expected_value: output(b.expected_value.as_deref().ok_or("missing expected value signal")?)?,
++            external_observed: output(b.external_observed.as_deref().ok_or("missing external sense signal")?)?,
++            external_expected: output(&b.external_injection)?,
++        });
++    }
++    let pinout = ResolvedPinout {
++        inputs: source_inputs.iter().map(|(n, p)| (n.clone(), coordinates(p))).collect(),
++        outputs: source_outputs.iter().map(|(n, p)| (n.clone(), coordinates(p))).collect(),
++        inouts,
++    };
+     Ok(CompiledResolvedCircuit {
++        pinout,
+         implementation: lowered,
+         physical,
+         terminals,
+@@ -178,6 +294,59 @@
+         evaluate::Evaluator, resolved::compile_for_materialization, SourceInput,
+     };
+     use crate::redstone::simulator::Simulator;
++    #[test]
++    fn pinout_roundtrip_retains_shared_bus_and_hides_physical_leaves() {
++        let source = SourceInput {
++            name: "fixture.sv",
++            text: include_str!("../../tests/fixtures/resolved-inout.sv"),
++        };
++        let semantic = compile_for_materialization(&[source], "top").unwrap();
++        let compiled = compile(&semantic).unwrap();
++        let json = serde_json::to_string(&compiled.pinout).unwrap();
++        let decoded: ResolvedPinout = serde_json::from_str(&json).unwrap();
++        assert_eq!(decoded, compiled.pinout);
++        decoded.validate_loaded(&compiled.physical.world, &compiled).unwrap();
++        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
++            .join("target/qualification/inout-export-reload");
++        std::fs::create_dir_all(&directory).unwrap();
++        let path = directory.join("shared-inout.litematic");
++        compiled.save_bundle(&path).unwrap();
++        let (loaded_world, loaded_pinout) = ResolvedPinout::load_bundle(&path, &compiled).unwrap();
++        assert_eq!(loaded_pinout, compiled.pinout);
++        assert_eq!(loaded_world.size(), compiled.physical.world.size());
++
++        let mut wrong = decoded.clone();
++        wrong.inouts[0].source.direction = crate::frontend::PortDirection::Input;
++        assert!(wrong.validate_loaded(&compiled.physical.world, &compiled).is_err());
++        wrong = decoded.clone();
++        wrong.inouts[0].readback = [-1, 0, 0];
++        assert!(wrong.validate_loaded(&compiled.physical.world, &compiled).is_err());
++        wrong = decoded.clone();
++        wrong.inouts[0].channel.pop();
++        assert!(wrong.validate_loaded(&compiled.physical.world, &compiled).is_err());
++        let mut changed = compiled.physical.world.clone();
++        let pad = decoded.inouts[0].external_pad;
++        changed.set(pad[0], pad[1], pad[2], crate::redstone::world::block::BlockState::air());
++        assert!(decoded.validate_loaded(&changed, &compiled).is_err());
++
++        assert_eq!(decoded.inputs.keys().map(String::as_str).collect::<Vec<_>>(),
++                   vec!["d0", "d1", "e0", "e1"]);
++        assert_eq!(decoded.outputs.keys().map(String::as_str).collect::<Vec<_>>(), vec!["y"]);
++        assert_eq!(decoded.inouts.len(), 1);
++        let bus = &decoded.inouts[0];
++        assert_eq!(bus.source, semantic.boundaries[0].original);
++        assert_eq!(bus.source.direction, crate::frontend::PortDirection::Inout);
++        assert_ne!(bus.external_pad, bus.readback);
++        for p in &bus.channel {
++            assert_eq!(compiled.physical.world.get(p[0], p[1], p[2]).kind, BlockKind::RedstoneWire);
++        }
++        for p in [bus.external_value, bus.external_present] {
++            assert_eq!(compiled.physical.world.get(p[0], p[1], p[2]).kind, BlockKind::Lever);
++        }
++        let mut malformed: serde_json::Value = serde_json::from_str(&json).unwrap();
++        malformed["inouts"][0]["unknown_control"] = serde_json::json!([0,0,0]);
++        assert!(serde_json::from_value::<ResolvedPinout>(malformed).is_err());
++    }
+     #[test]
+     fn real_compiled_drivers_and_readers_use_same_shared_channel() {
+         let source = SourceInput {
+@@ -319,6 +488,8 @@
+                 observed.insert(name.clone(), v);
+             }
+             let actual = b.observe(&observed);
++            assert_eq!(physical.pinout.inouts[0].observe(simulator.world()), actual,
++                       "consumer observation state={state},from={before},to={after},phase={phase}");
+             let class = match actual {
+                 Ok(false) => "0",
+                 Ok(true) => "1",
+--- a/src/bin/build_circuit.rs
++++ b/src/bin/build_circuit.rs
+@@ -777,6 +777,39 @@
+         }
+         list_circuits(&circuits);
+         return;
++    }
++
++    if args.first().map(String::as_str) == Some("verilog")
++        && mode != reda::frontend::FrontendMode::Yosys
++    {
++        if let (Some(path), Some(top)) = (args.get(1), args.get(2)) {
++            let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
++                eprintln!("could not read {path}: {e}"); std::process::exit(1);
++            });
++            let source = reda::frontend::SourceInput { name: path, text: &text };
++            let options = reda::frontend::CompileOptions::new(top);
++            // An unsupported parse stays with the existing native/auto selector,
++            // which owns diagnostics and optional Yosys fallback.
++            let shared = reda::frontend::top_has_inout(&[source], &options).unwrap_or(false);
++            if shared {
++                if grown || synth || pins_path.is_some() || evaluation_format.is_some() {
++                    eprintln!("shared inout currently requires the native default physical producer without --grown, --synth, --pins or --evaluation");
++                    std::process::exit(1);
++                }
++                let circuit = reda::frontend::compile_systemverilog_physical(&[source], &options)
++                    .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
++                let output = std::path::Path::new("output");
++                std::fs::create_dir_all(output).unwrap_or_else(|e| {
++                    eprintln!("could not create output directory: {e}"); std::process::exit(1);
++                });
++                let path = output.join(format!("{top}.litematic"));
++                circuit.save_bundle(&path).unwrap_or_else(|e| {
++                    eprintln!("could not export shared inout: {e}"); std::process::exit(1);
++                });
++                println!("wrote {} with source-owned shared-inout pinout", path.display());
++                return;
++            }
++        }
+     }
+ 
+     let SelectedCircuit {
+--- /dev/null
++++ b/tests/native_physical_inout.rs
+@@ -0,0 +1,44 @@
++use reda::frontend::{compile_systemverilog_physical, CompileOptions, SourceInput, PortDirection, ResolvedPinout};
++#[test]
++fn native_physical_entry_retains_shared_inout_and_exports_reloadable_bundle() {
++    let source = SourceInput { name: "fixture.sv", text: include_str!("fixtures/resolved-inout.sv") };
++    let circuit = compile_systemverilog_physical(&[source], &CompileOptions::new("top")).unwrap();
++    assert_eq!(circuit.pinout.inouts.len(), 1);
++    assert_eq!(circuit.pinout.inouts[0].source.direction, PortDirection::Inout);
++    assert_eq!(circuit.pinout.inputs.len(), 4);
++    assert_eq!(circuit.pinout.outputs.len(), 1);
++    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/qualification/native-physical-inout");
++    std::fs::create_dir_all(&dir).unwrap();
++    let path = dir.join("native.litematic");
++    circuit.save_bundle(&path).unwrap();
++    let (_, pinout) = ResolvedPinout::load_bundle(&path, &circuit).unwrap();
++    assert_eq!(pinout, circuit.pinout);
++}
++#[test]
++fn native_physical_entry_preserves_boolean_source_ports() {
++    let source = SourceInput { name: "ordinary.sv", text: "module top(input a,output y); assign y=~a; endmodule" };
++    let circuit = compile_systemverilog_physical(&[source], &CompileOptions::new("top")).unwrap();
++    assert!(circuit.pinout.inouts.is_empty());
++    assert!(circuit.pinout.inputs.contains_key("a"));
++    assert!(circuit.pinout.outputs.contains_key("y"));
++}
++
++#[test]
++fn default_cli_exports_shared_bus_in_native_and_auto_without_yosys() {
++    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
++    let fixture = root.join("tests/fixtures/resolved-inout.sv");
++    for mode in ["native", "auto"] {
++        let dir = root.join("target/qualification/native-inout-cli").join(mode);
++        std::fs::create_dir_all(&dir).unwrap();
++        let output = std::process::Command::new(env!("CARGO_BIN_EXE_build_circuit"))
++            .args(["--frontend", mode, "verilog"])
++            .arg(&fixture).arg("top").current_dir(&dir)
++            .env("PATH", "").env("REDA_PYTHON", "/nonexistent/reda-python")
++            .output().unwrap();
++        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
++        let source = SourceInput { name: "fixture.sv", text: include_str!("fixtures/resolved-inout.sv") };
++        let expected = compile_systemverilog_physical(&[source], &CompileOptions::new("top")).unwrap();
++        let (_, loaded) = ResolvedPinout::load_bundle(&dir.join("output/top.litematic"), &expected).unwrap();
++        assert_eq!(loaded.inouts.len(), 1);
++    }
++}

@@ -1,0 +1,11 @@
+{
+  "README.md": "98513628b5148a7d3c9016de2cce5bc00205d15c1f8b3046bd27ae69983db1b2",
+  "auto/top.litematic": "e0baec0d4356c3a0553d912fa5d43a12e90033af54741561ed37860eeacfb6c1",
+  "auto/top.pinout.json": "4d46ed566984b49fad6a0245e0408d5348d5a9a7e5dbea89c229d24a588a347c",
+  "complete-owned.patch": "54a20133fddb705507959b4abec21ec0f53bd871ed560cd02ab9f81bbad5c41d",
+  "native/top.litematic": "e0baec0d4356c3a0553d912fa5d43a12e90033af54741561ed37860eeacfb6c1",
+  "native/top.pinout.json": "4d46ed566984b49fad6a0245e0408d5348d5a9a7e5dbea89c229d24a588a347c",
+  "native-cli-final.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "native-cli-final.log": "510b8694e9b9ee7d6e10649c798ab89c6edbe05df4afe264a4e3a901fdad6773",
+  "source-sha256.json": "cc414b3760dabd085e4492ff1265657125f478eb014a62930635f936d50c558c"
+}
