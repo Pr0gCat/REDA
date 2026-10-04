@@ -1,0 +1,5 @@
+# Actual ordinary native/auto CLI without tools
+
+The retained hierarchy source uses a typed child default `P=4'hf+4'h1` with overridden W=8 and evaluates y=a XOR16. The actual shared-integration mc_dump binary succeeds twice, in native and auto mode, with empty PATH and a nonexistent REDA_PYTHON. Both dumps are byte-identical. The independent existing dump consumer verifies all16 input words,128 public output occurrences, all8 source labels and8 distinct physical output contacts, including the three repeated constant-low ports.
+
+A separate clean source-bound executable from the root b6d737a-plus-owned-parameter adoption tree produces the identical dump without tools. Its source hashes,29-test clean qualification, exact owned patch and executable/dump hashes are retained in the parent evidence and clean-producer-terminal.json. This is a specific supported source through the ordinary public CLI, not complete HDL/optional-Yosys coverage. Consumer truth alone is not physical wave or Minecraft proof; the separate actual-game evidence is linked in the eight-gap tracker.

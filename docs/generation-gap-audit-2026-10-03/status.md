@@ -88,3 +88,6 @@ Native typed parameter initializer destination context is repaired ([adoption](.
 
 
 Optional Yosys public-port transport now refuses unsupported directions before publishing a partial artifact ([adoption](../yosys-public-port-preservation-2026-10-04/adoption.md)): independently synthesized original inout source previously succeeds in forced/Auto but drops bus; isolated and root bridge9/9 controls pass, and original actual calls now name the unsupported bus/inout contract. This prevents false success; it does not support top-level inout. Broad rows remain open.
+
+
+New typed-parameter/hierarchy native source has exact clean-producer actual Minecraft26.2 conformance ([game evidence](../minecraft-native-parameter-hierarchy-2026-10-04/README.md)):16 vectors,128 literal-source public truths,4560 actual-gate truths; root independently reconstructs every reported value from62854 real RCON command/replies. Cleanup verifies all3319 occupied positions+8 samples Air and30 chunks unforced. The actual ordinary native/auto CLI also succeeds with empty PATH/nonexistent Python and identical dumps ([consumer proof](../native-parameter-context-adoption-2026-10-04/cli-no-tools/README.md)). This is source-bound stable-state game proof, not intra-tick QoR or broad gap completion.

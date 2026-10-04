@@ -1,0 +1,15 @@
+{
+  "exit_code": 0,
+  "source_sha256": "2d3a2eb9c1badf8c066a7c7b83b452b90cd030d47407960207a0908c5199ab4a",
+  "binary_sha256": "52104eabc8b9d4ee3b2f2ac08e210361104d113be6a58728bc9be6b5134ddcb4",
+  "dump_sha256": "591823e984f46fe40fcbfbcec3bb28f770cacfe776da206624cc78e8bb632140",
+  "environment": {
+    "PATH": "",
+    "REDA_PYTHON": "/tmp/reda-python-does-not-exist"
+  },
+  "base": "b6d737a",
+  "patch": "../owned.patch.gz",
+  "source_tree": "/tmp/reda-root-parameter-adoption-20261004",
+  "clean_source_binding": "../root-clean-qualification.json",
+  "shared_dump_equal": true
+}

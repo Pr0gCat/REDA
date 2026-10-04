@@ -23,11 +23,11 @@
 //! why they are a separate catalog rather than more entries in the list
 //! below.
 //!
-//! Synthesizing a `verilog:` circuit needs `python` with `yowasp-yosys`
-//! installed. If either is missing this exits non-zero with the frontend's
-//! own message (see `FrontendError`'s `Display` impl) rather than panicking:
-//! a missing external toolchain is a normal thing for this binary to
-//! encounter, not a bug in it.
+//! Supported `verilog:` sources use the native frontend by default and need
+//! no Python or Yosys. `--frontend yosys`, or an unsupported construct that
+//! selects the optional auto fallback, needs Python with `yowasp-yosys`.
+//! Missing optional tools produce the frontend's diagnostic rather than a
+//! panic (see `FrontendError`'s `Display` implementation).
 //!
 //! Output line kinds:
 //!

@@ -1,0 +1,19 @@
+{
+  "source_sha256": "2d3a2eb9c1badf8c066a7c7b83b452b90cd030d47407960207a0908c5199ab4a",
+  "binary_sha256": "485c72ae66e6ceee075147331717290e72a0782658409c496edb0b1ae8f686df",
+  "environment": {
+    "PATH": "",
+    "REDA_PYTHON": "/tmp/reda-python-does-not-exist"
+  },
+  "results": {
+    "native": {
+      "exit_code": 0,
+      "dump_sha256": "591823e984f46fe40fcbfbcec3bb28f770cacfe776da206624cc78e8bb632140"
+    },
+    "auto": {
+      "exit_code": 0,
+      "dump_sha256": "591823e984f46fe40fcbfbcec3bb28f770cacfe776da206624cc78e8bb632140"
+    }
+  },
+  "scope": "Actual shared-integration CLI; production parameter change and user arithmetic present; no separate whole-project claim."
+}

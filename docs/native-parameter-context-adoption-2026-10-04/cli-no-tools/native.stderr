@@ -1,0 +1,2 @@
+frontend: native
+dumped circuit 'verilog /home/seith/REDA/docs/native-parameter-context-adoption-2026-10-04/cli-no-tools/parameter-hierarchy.sv:m': 4 inputs, 8 outputs, 285 gate outputs (54 of them wired-OR merges)
