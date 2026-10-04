@@ -1,0 +1,17 @@
+{
+  "base_head": "1711119",
+  "change": "Lower the true data subtree before its guarding condition; restore original elaboration-node allocation order for existing enable form while retaining nested conditional support.",
+  "source_scope": "Only owned hunk is staged; arithmetic and all other user-owned edits remain outside this patch. Runtime verification uses current worktree.",
+  "original_fixture_hashes_unchanged": true,
+  "same_unmodified_viewer_test_native_passed": true,
+  "same_unmodified_viewer_test_node_wasm_passed": true,
+  "profile": "debug/test; no release or complete viewer-gate success claimed",
+  "native_dff_tests_passed": 12,
+  "native_reset_tests_passed": 4,
+  "failures_in_qualified_checks": 0,
+  "ignores_in_qualified_checks": 0,
+  "reda_python": "/definitely-missing-reda-python",
+  "wasm_bindgen_version": "0.2.126",
+  "wasm_wrapper_failure": "wasm-pack forwarded a test-name filter to cargo build; retained setup failure, then used installed exact-version wasm-bindgen-test-runner through cargo target runner",
+  "full_project_complete": false
+}

@@ -1173,9 +1173,9 @@ impl Elaborator {
                 Some(value)
             }
             Stmt::If(branch) => {
+                let when_true = self.clocked_value(&branch.when_true, target)?;
                 let condition = self.expr(&branch.cond)?;
                 let condition = self.reduce_to_truth(condition);
-                let when_true = self.clocked_value(&branch.when_true, target)?;
                 let elab = self.node(branch.id, ElabKind::Expr, width);
                 let when_false = match &branch.when_false {
                     Some(statement) => self.clocked_value(statement, target)?,

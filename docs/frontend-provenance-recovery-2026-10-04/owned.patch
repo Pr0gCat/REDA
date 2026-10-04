@@ -1,0 +1,15 @@
+diff --git a/src/frontend/elaborate.rs b/src/frontend/elaborate.rs
+index 6666134..3bc75d0 100644
+--- a/src/frontend/elaborate.rs
++++ b/src/frontend/elaborate.rs
+@@ -1173,9 +1173,9 @@ impl Elaborator {
+                 Some(value)
+             }
+             Stmt::If(branch) => {
++                let when_true = self.clocked_value(&branch.when_true, target)?;
+                 let condition = self.expr(&branch.cond)?;
+                 let condition = self.reduce_to_truth(condition);
+-                let when_true = self.clocked_value(&branch.when_true, target)?;
+                 let elab = self.node(branch.id, ElabKind::Expr, width);
+                 let when_false = match &branch.when_false {
+                     Some(statement) => self.clocked_value(statement, target)?,

@@ -1,0 +1,10 @@
+{
+  "adoption.md": "7c4c489d676eb3dbb7f9ed459aeacf85e8829d3f101d57d51fa3ce0efccf22a0",
+  "before-native.log.gz": "b95f4c38835313068746aba9bafd3500b6f66f8e4da886e1894fcdbabd9b4b43",
+  "native.log.gz": "33aa8536df1c6ebb5a2fc0517e7ca243dfcfc8b8a3837d8174e2cff81b9c70c4",
+  "owned.patch": "0ec82ebaa9a670fd0b117b25c8df5a138fb28e27dd9805836ced8b42c417cda2",
+  "qualification.json": "fc749f0608f22d9c33c7d021bdae13e96aa088436e76670fa33d28420aacb175",
+  "sequential-regressions.log.gz": "9e96a0239cfa234e85597608521434434de147afc724e4e1035a18647d6378b2",
+  "wasm-wrapper-setup-failure.log.gz": "33d1a5d0c0ff6115bf8be0cf252c0b2b84e3c0c7a5c3a95cc2e2a91f6f8d66c8",
+  "wasm.log.gz": "d93f1a4d5b21ed6b153a163bb033c7a9b43500466f1c43cc160389541d4d9845"
+}
