@@ -1170,20 +1170,20 @@ fn typed_world_candidate_with_library(
         let landings: BTreeSet<_> = candidate
             .connections
             .values()
-            .filter_map(|b| {
+            .filter(|b| {
                 candidate
                     .junctions
                     .values()
                     .any(|j| j.contributors.contains(&b.landing))
-                    .then(|| {
-                        candidate.routes[&b.route]
-                            .branches
-                            .iter()
-                            .find(|r| r.sink == b.sink)
-                            .unwrap()
-                            .terminal
-                            .at
-                    })
+            })
+            .map(|b| {
+                candidate.routes[&b.route]
+                    .branches
+                    .iter()
+                    .find(|r| r.sink == b.sink)
+                    .unwrap()
+                    .terminal
+                    .at
             })
             .collect();
         let mut regions = BTreeMap::new();

@@ -1180,10 +1180,10 @@ fn net_intervals(graph: &InstanceGraph, analysis: &SeedPlacementAnalysis) -> Vec
         .map(|(signal, assignments)| {
             let start = assignments
                 .iter()
-                .filter_map(|assignment| match &assignment.driver {
-                    PhysicalDriver::PrimaryInput(_) => Some(0),
+                .map(|assignment| match &assignment.driver {
+                    PhysicalDriver::PrimaryInput(_) => 0,
                     PhysicalDriver::Instance(driver) => {
-                        Some(analysis.nodes[&instance_driver_owner(driver)].forward_level)
+                        analysis.nodes[&instance_driver_owner(driver)].forward_level
                     }
                 })
                 .min()

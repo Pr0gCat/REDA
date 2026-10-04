@@ -3521,9 +3521,11 @@ fn search_step_cost(
     if !strict_local && !seed_rules {
         return 3;
     }
-    ((to_y - goal_y).abs() < (from_y - goal_y).abs())
-        .then_some(1)
-        .unwrap_or(3)
+    if (to_y - goal_y).abs() < (from_y - goal_y).abs() {
+        1
+    } else {
+        3
+    }
 }
 
 fn certify_path(

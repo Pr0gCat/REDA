@@ -1,0 +1,5 @@
+# Equivalent generator iteration and lookup expressions
+
+Six library lint findings are removed: total-value filter_map becomes map; the final optional phase-mark borrow is consumed directly; output conditions use ordered mutable enumeration; a conditional landing collection uses filter then map; search cost uses explicit if/else with exactly the same predicate and1/3 values; a landing-presence lookup uses contains_key with the same equality guard. No routing cost, candidate order, geometry, physical verification condition, simulator rule, cap or test changes. The phase-mark change affects bookkeeping ownership only.
+
+Offline native library cargo check passes in2.99 seconds. Fresh strict library clippy still exits101 with11 findings: nine parameter-count findings, one seam-map type-complexity finding and one copied propagation-descriptor value. The complete diagnostics are retained. No runtime or waveform qualification is claimed for these lexical changes, and no new tests or skips are introduced. This is partial project-gate progress, not completion of any broad requirement. Only owned patches are staged; existing dirty routing changes are preserved.

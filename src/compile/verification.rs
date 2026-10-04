@@ -1016,7 +1016,7 @@ fn verify_typed_connectivity(
                     // Two explicitly listed injection terminals can touch
                     // inside the same OR region. Cut only that declared edge;
                     // retain all edges to unlisted or upstream route cells.
-                    if declared_landings.get(&position).is_some()
+                    if declared_landings.contains_key(&position)
                         && declared_landings.get(&position) == declared_landings.get(&next)
                     {
                         continue;

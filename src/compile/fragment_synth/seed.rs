@@ -804,7 +804,7 @@ impl SparseSeedBuilder {
         )? {
             return Err(SeedError::Repairable(Box::new(SeedRepairRefusal::Routing(failure))));
         }
-        if let Some(marks) = phase_marks.as_deref_mut() {
+        if let Some(marks) = phase_marks {
             marks.push(Instant::now());
         }
         candidate.validate_shape()?;

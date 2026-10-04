@@ -1189,10 +1189,10 @@ fn mixed_product_literals(words: [u8; 4]) -> Option<(u8, [usize; 3])> {
     let rows = program_rows(words);
     let mut conditions = [0; 3];
     let mut product_bits = None;
-    for output in 0..3 {
+    for (output, condition) in conditions.iter_mut().enumerate() {
         let mut terms = rows.iter().filter(|r| r.3 & (1 << output) != 0);
         let Some(&(_, bits, mask, _)) = terms.next() else {
-            conditions[output] = if words.iter().all(|w| w & (1 << output) != 0) {
+            *condition = if words.iter().all(|w| w & (1 << output) != 0) {
                 4
             } else {
                 3
@@ -1202,7 +1202,7 @@ fn mixed_product_literals(words: [u8; 4]) -> Option<(u8, [usize; 3])> {
         if terms.next().is_some() {
             return None;
         }
-        conditions[output] = if mask == 3 {
+        *condition = if mask == 3 {
             if product_bits.is_some_and(|prior| prior != bits & mask) {
                 return None;
             }
