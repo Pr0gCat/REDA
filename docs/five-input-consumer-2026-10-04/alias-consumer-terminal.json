@@ -1,0 +1,11 @@
+{
+  "session": 97845,
+  "exit_code": 0,
+  "passed": 3,
+  "failed": 0,
+  "ignored": 0,
+  "log_sha256": "8ac59dddafe09d1b905551b2cf4881023889833bdc71ac8b536192ca6eb294e0",
+  "test_unchanged_from_original_failure": true,
+  "recursive_rom32_generated_twice": true,
+  "existing_recursive_rom16_retained": true
+}

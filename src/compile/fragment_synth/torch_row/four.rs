@@ -42,48 +42,75 @@ fn literal_refresh_positions(last_row: i32) -> impl Iterator<Item = i32> {
         .filter(move |z| *z <= last_row)
 }
 struct RowCollectionPlan {
+    decoder: Vec<i32>,
+    merges: Vec<i32>,
+    output_start: i32,
     last_column: i32,
     refreshes: Vec<i32>,
 }
 impl RowCollectionPlan {
-    fn new(outputs: usize) -> Self {
-        let last_column = 30 + 3 * (outputs as i32 - 1);
-        let mut refreshes = vec![14, 28];
-        let mut x = 41;
-        while x <= last_column {
-            refreshes.push(x);
-            // Output contacts occupy multiples of three. A row refresh must
-            // remain a distinct contact, with no more than thirteen dust hops.
-            x += if x % 3 == 2 { 14 } else { 13 };
+    fn new(inputs: usize, outputs: usize) -> Self {
+        let final_decoder = 7 + 6 * (inputs as i32 - 1) + 3;
+        let mut decoder = Vec::new();
+        let mut previous = 0;
+        while previous < final_decoder {
+            let mut next = (previous + 14).min(final_decoder);
+            while (0..inputs).any(|bit| [3 + 6 * bit as i32, 4 + 6 * bit as i32, 6 + 6 * bit as i32, 7 + 6 * bit as i32].contains(&next)) {
+                next -= 1;
+            }
+            decoder.push(next);
+            previous = next;
         }
-        Self { last_column, refreshes }
+        // A merge observation must not claim a literal's output conductor.
+        // Keep historical observation sites whenever no ownership collides.
+        let merges = decoder.iter().enumerate().map(|(index, &stage)| {
+            let mut at = stage - if index == 0 { 2 } else { 1 };
+            while (0..inputs).any(|bit| [4 + 6 * bit as i32, 7 + 6 * bit as i32].contains(&at)) {
+                at -= 1;
+            }
+            assert!(at < stage && !decoder.contains(&at));
+            at
+        }).collect();
+        let output_start = final_decoder + 2;
+        let last_column = output_start + 3 * (outputs as i32 - 1);
+        let mut refreshes = decoder.clone();
+        let mut x = final_decoder;
+        loop {
+            x += 14;
+            if x % 3 == output_start % 3 { x -= 1; }
+            if x > last_column { break; }
+            refreshes.push(x);
+        }
+        Self { decoder, merges, output_start, last_column, refreshes }
+    }
+    fn final_decoder(&self) -> i32 { *self.decoder.last().unwrap() }
+    fn input_delay(&self, bit: usize) -> u8 {
+        self.decoder.iter().filter(|&&x| x < 4 + 6 * bit as i32).count() as u8
     }
     fn output_delay(&self, x: i32, short_output: bool) -> u8 {
-        let later = self.refreshes.iter().filter(|&&stage| stage >= 41 && stage > x).count();
-        // Preserve the historical small-boundary balancing stage even when
-        // the row ends before41; larger rows compensate every remaining stage.
-        let late_count = self.refreshes.iter().filter(|&&stage| stage >= 41).count();
-        let delay = later + usize::from(late_count == 0);
-        (delay + usize::from(!short_output)) as u8
+        let later = self.refreshes.iter().filter(|&&stage| stage > self.final_decoder() && stage > x).count();
+        let late_count = self.refreshes.len() - self.decoder.len();
+        (later + usize::from(late_count == 0) + usize::from(!short_output)) as u8
     }
 }
 fn matrix(
     words: &[u64],
+    input_count: usize,
     rows: &[usize],
     outputs: usize,
     short_output: bool,
 ) -> (World, Vec<Position>, Vec<Position>, Vec<Position>) {
-    assert_eq!(words.len(), 16);
+    assert_eq!(words.len(), 1 << input_count);
     assert!(!rows.is_empty() && rows.iter().all(|row| *row < words.len()));
     assert!((1..=16).contains(&outputs));
     let last_row = 4 + 4 * (rows.len() as i32 - 1);
     let end = last_row + 3;
-    let collection = RowCollectionPlan::new(outputs);
+    let collection = RowCollectionPlan::new(input_count, outputs);
     let last_column = collection.last_column;
     let mut world = World::new(last_column + 4, 8, end + 4);
     let mut inputs = Vec::new();
-    for bit in 0..4 {
-        let x = 3 + 6 * bit;
+    for bit in 0..input_count {
+        let x = 3 + 6 * bit as i32;
         for column in [x, x + 3] {
             for z in 1..=last_row {
                 wire(&mut world, column, 5, z);
@@ -98,7 +125,7 @@ fn matrix(
         wire(&mut world, x + 2, 4, 1);
         // Both polarities share arrival time. Later address columns skip one
         // row refresh and therefore receive one extra input-buffer stage.
-        let extra = u8::from(bit >= 2);
+        let extra = collection.input_delay(bit);
         for z in literal_refresh_positions(last_row) {
             for (column, initial_delay) in [(x, 2 + extra), (x + 3, 1 + extra)] {
                 let delay = if z == 2 { initial_delay } else { 1 };
@@ -115,21 +142,21 @@ fn matrix(
         for &x in &collection.refreshes {
             repeater(&mut world, x, 3, z, Facing::West, 1);
         }
-        for bit in 0..4 {
+        for bit in 0..input_count {
             let x = 3 + 6 * bit as i32;
             let literal = if address & (1 << bit) != 0 { x } else { x + 3 };
             torch(&mut world, literal + 1, 4, z, Facing::East);
         }
         for bit in 0..outputs {
             if word & (1 << bit) != 0 {
-                torch(&mut world, 30 + 3 * bit as i32, 2, z + 1, Facing::South);
+                torch(&mut world, collection.output_start + 3 * bit as i32, 2, z + 1, Facing::South);
             }
         }
     }
     let mut drivers = Vec::new();
     let mut lamps = Vec::new();
     for bit in 0..outputs {
-        let x = 30 + 3 * bit as i32;
+        let x = collection.output_start + 3 * bit as i32;
         for z in 5..=end {
             wire(&mut world, x, 1, z);
         }
@@ -181,13 +208,13 @@ impl Binding {
     }
 }
 pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite, TorchRowError> {
-    if source.inputs.len() != 4 || !(1..=16).contains(&source.outputs.len()) {
+    if !(4..=5).contains(&source.inputs.len()) || !(1..=16).contains(&source.outputs.len()) {
         return Err(TorchRowError::UnsupportedBoundary);
     }
     prove_netlist_rewrite(source, source, &source.inputs, &source.outputs, limit)
         .map_err(|e| TorchRowError::Rewrite(PhysicalRewriteError::Rewrite(e)))?;
     let order = source.combinational_order().unwrap();
-    let words: Vec<u64> = (0..16)
+    let words: Vec<u64> = (0..1usize << source.inputs.len())
         .map(|address| {
             let mut values: std::collections::HashMap<_, _> = source
                 .inputs
@@ -212,12 +239,12 @@ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,
                 })
         })
         .collect();
-    let mut rows: Vec<_> = (0..16).filter(|&row| words[row] != 0).collect();
+    let mut rows: Vec<_> = (0..1usize << source.inputs.len()).filter(|&row| words[row] != 0).collect();
     if rows.is_empty() {
         rows.push(0);
     }
     let (mut world, mut inputs, mut drivers, mut lamps) =
-        matrix(&words, &rows, source.outputs.len(), true);
+        matrix(&words, source.inputs.len(), &rows, source.outputs.len(), true);
     for p in &mut inputs {
         let lever = world.get(p.x, p.y, p.z).clone();
         world.set(p.x, p.y, p.z, block(BlockKind::RedstoneWire));
@@ -230,9 +257,9 @@ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,
         positions: BTreeMap::new(),
     };
     let last_row = 4 + 4 * (rows.len() as i32 - 1);
-    let collection = RowCollectionPlan::new(source.outputs.len());
+    let collection = RowCollectionPlan::new(source.inputs.len(), source.outputs.len());
     let mut rails: BTreeMap<(usize, bool), Vec<(i32, String)>> = BTreeMap::new();
-    for bit in 0..4 {
+    for bit in 0..source.inputs.len() {
         let x = 3 + 6 * bit as i32;
         let input = format!("input{bit}");
         let inverse = binding.gate(
@@ -259,7 +286,7 @@ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,
     for (index, &address) in rows.iter().enumerate() {
         let z = 4 + 4 * index as i32;
         let mut mismatches = vec![];
-        for bit in 0..4 {
+        for bit in 0..source.inputs.len() {
             let inverted = address & (1 << bit) == 0;
             let literal = rails[&(bit, inverted)]
                 .iter()
@@ -275,39 +302,33 @@ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,
                 Position::new(4 + 6 * bit as i32 + if inverted { 3 } else { 0 }, 4, z),
             ));
         }
-        let pair = binding.merge(
-            format!("row{address}_pair"),
-            mismatches[..2].to_vec(),
-            Position::new(12, 3, z),
-        );
-        let pair = binding.buffer(
-            format!("row{address}_buffer14"),
-            pair,
-            Position::new(14, 3, z),
-        );
-        let merge = binding.merge(
-            format!("row{address}_merge"),
-            vec![pair, mismatches[2].clone(), mismatches[3].clone()],
-            Position::new(27, 3, z),
-        );
-        let early = binding.buffer(
-            format!("row{address}_buffer28"),
-            merge,
-            Position::new(28, 3, z),
-        );
-        let mut controls = vec![(28, early.clone())];
-        let mut previous = early;
-        for &x in collection.refreshes.iter().filter(|&&x| x >= 41) {
-            previous = binding.buffer(
-                format!("row{address}_buffer{x}"), previous, Position::new(x, 3, z),
-            );
+        let mut previous: Option<String> = None;
+        let mut lower = 0;
+        for (index, &x) in collection.decoder.iter().enumerate() {
+            let mut contributions = previous.take().into_iter().collect::<Vec<_>>();
+            contributions.extend(mismatches.iter().enumerate()
+                .filter(|(bit, _)| { let last = 7 + 6 * *bit as i32; last >= lower && last < x })
+                .map(|(_, name)| name.clone()));
+            assert!((1..=3).contains(&contributions.len()));
+            let name = if index == 0 { format!("row{address}_pair") }
+                else if x == collection.final_decoder() { format!("row{address}_merge") }
+                else { format!("row{address}_merge{x}") };
+            let merged = binding.merge(name, contributions,
+                Position::new(collection.merges[index], 3, z));
+            previous = Some(binding.buffer(format!("row{address}_buffer{x}"), merged, Position::new(x, 3, z)));
+            lower = x;
+        }
+        let mut previous = previous.unwrap();
+        let mut controls = vec![(collection.final_decoder(), previous.clone())];
+        for &x in collection.refreshes.iter().filter(|&&x| x > collection.final_decoder()) {
+            previous = binding.buffer(format!("row{address}_buffer{x}"), previous, Position::new(x, 3, z));
             controls.push((x, previous.clone()));
         }
         for (bit, column) in terms.iter_mut().enumerate() {
             if words[address] & (1 << bit) == 0 {
                 continue;
             }
-            let x = 30 + 3 * bit as i32;
+            let x = collection.output_start + 3 * bit as i32;
             let control = controls.iter().rev().find(|(stage, _)| *stage < x)
                 .unwrap().1.clone();
             let term = binding.gate(
@@ -322,7 +343,7 @@ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,
     let end = last_row + 3;
     let mut outputs = vec![];
     for (bit, column) in terms.iter().enumerate() {
-        let x = 30 + 3 * bit as i32;
+        let x = collection.output_start + 3 * bit as i32;
         if column.is_empty() {
             // A real unpowered support drives a constant-high torch; its
             // isolated output powers the support of a constant-low inverter.
@@ -412,7 +433,7 @@ pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,
         outputs.push(output);
     }
     let implemented = Netlist {
-        inputs: (0..4).map(|bit| format!("input{bit}")).collect(),
+        inputs: (0..source.inputs.len()).map(|bit| format!("input{bit}")).collect(),
         outputs,
         gates: binding.gates,
     };

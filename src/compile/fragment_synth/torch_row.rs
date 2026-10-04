@@ -13,7 +13,7 @@ use crate::redstone::world::{
 mod player;
 mod four;
 
-/// Certify a balanced four-input matrix from the source truth table.
+/// Certify a balanced four/five-input matrix from the source truth table.
 /// The default selector and recursive root can use this bounded method.
 /// It supports one through sixteen outputs, including constants; every call must pass
 /// source equivalence and the unchanged expanded physical certifier.

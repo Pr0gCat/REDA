@@ -1,0 +1,25 @@
+{
+  "all_records_identical_except_artifact": true,
+  "independent_quality_audits_pass": true,
+  "total_phases": 6144,
+  "entries": [
+    {
+      "repeat": 1,
+      "world_fingerprint": "611cb93a85b558186988030a018b175f1b920c536330308cbbc1b22f56075fa8",
+      "wave_gzip_sha256": "fdefe51b3fa65b207aaa38579811ae73eba2894713f9aea455a84cdde4642ff6",
+      "world_sha256": "c041c480bd336d96951bacfacabc4758a8b770dfa37055717024741e7f375ec0"
+    },
+    {
+      "repeat": 2,
+      "world_fingerprint": "611cb93a85b558186988030a018b175f1b920c536330308cbbc1b22f56075fa8",
+      "wave_gzip_sha256": "deadf6d9c9f91ffe853c4a26e032de75fab09264be9b628a53818703ca3eca7b",
+      "world_sha256": "c041c480bd336d96951bacfacabc4758a8b770dfa37055717024741e7f375ec0"
+    },
+    {
+      "repeat": 3,
+      "world_fingerprint": "611cb93a85b558186988030a018b175f1b920c536330308cbbc1b22f56075fa8",
+      "wave_gzip_sha256": "8942d7247c8b511d2530612534d637305526dd64d599ee4bc7107318b24a112e",
+      "world_sha256": "c041c480bd336d96951bacfacabc4758a8b770dfa37055717024741e7f375ec0"
+    }
+  ]
+}

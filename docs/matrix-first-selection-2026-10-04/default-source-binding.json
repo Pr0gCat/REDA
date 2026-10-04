@@ -1,0 +1,9 @@
+{
+  "executable_sha256": "42363736df7c9ef575fd039d4c502a8148ace7ae639a52454078cd36bf33d392",
+  "source_sha256": {
+    "src/compile/fragment_synth/torch_row/four.rs": "ce0b33371e0c95a5580f18a919bb10c6fa93b8695bcdf86f03ac68ca0e171a73",
+    "src/compile/selection.rs": "73ebd90a5f701235649c4e5169c71347e8b7eb52132c664d568edc46d1f758ff",
+    "examples/address_matrix_first.rs": "f66ba5f77be0512b82ae64f236cc6de2a13c712c36d48ec6fa6db4baecb51ea1",
+    "rom32.sv": "c10a4c4fe2fce65b6b51c4f7caffa10e5dd13556531088c5f780736c7a534c36"
+  }
+}

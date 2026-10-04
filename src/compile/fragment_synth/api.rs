@@ -142,7 +142,7 @@ fn compile_recursive_contract(
     // Composition precedes the bounded decoder rewrite in a fixed order.
     // A single gate has no structural partition to improve.
     let choices: &[recursive::StructuralChoice] = if input.lowered.gates.len() > 1
-        && input.lowered.inputs.len() == 4
+        && (4..=5).contains(&input.lowered.inputs.len())
         && (1..=16).contains(&input.lowered.outputs.len())
         && input.pins.is_none_or(|pins| pins.is_empty())
     {

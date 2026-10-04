@@ -633,7 +633,7 @@ pub fn compile_selected_with_refresh_budget(
         // The matrix is a structural candidate, not the flat-refresh seed.
         // Establish a qualified global bound before exploring local reductions.
         // Zero retains the existing flat seed behavior.
-        if budget > 0 && source.inputs.len() == 4 && (1..=16).contains(&source.outputs.len()) {
+        if budget > 0 && (4..=5).contains(&source.inputs.len()) && (1..=16).contains(&source.outputs.len()) {
             if let Ok(rewrite) = compile_balanced_torch_matrix(source, 1_000_000) {
                 let matrix = CompiledCircuit::from_certified_rewrite(rewrite);
                 if let Some(measured) = quality_with_ports(source, &matrix, true, None, Some(&quality)) {

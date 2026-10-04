@@ -1,0 +1,20 @@
+{
+  "base_head": "ef48fa1fde0e7ee2ab5441d5bacad12ee302de9a",
+  "existing_regressions_passed": 9,
+  "consumer_regressions_passed": 3,
+  "failed": 0,
+  "ignored": 0,
+  "default_full_phases": 6144,
+  "default_three_repeat_proof": "../matrix-first-selection-2026-10-04/clean-three-repeat-comparison.json",
+  "source_hashes": {
+    "src/compile/fragment_synth/torch_row/four.rs": "ce0b33371e0c95a5580f18a919bb10c6fa93b8695bcdf86f03ac68ca0e171a73",
+    "src/compile/selection.rs": "1fff80b1e6b7a7b199dcb6e28382097e136a04b2a73af763b5bb9f9abb07d6d2",
+    "src/compile/fragment_synth/api.rs": "2180ddd1e34460afddc2deb733ebcee3967ba9babc7064526e9114ea38f8cafa",
+    "src/compile/fragment_synth/recursive.rs": "910bcbb9b641aeac773da7ffdd93e9e40a4395e85fe8daa5b4b9621c399bebd8"
+  },
+  "production_input_limit": 5,
+  "six_input_admission": false,
+  "physics_changed": false,
+  "default_probe_source": "qualified-default-probe.rs",
+  "default_qualified_selector_source": "qualified-default-selection.rs"
+}

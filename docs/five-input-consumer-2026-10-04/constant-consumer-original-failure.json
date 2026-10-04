@@ -1,0 +1,6 @@
+{
+  "exit_code": 101,
+  "reason": "legacy route declared output PortId(1) has no observation",
+  "test_unchanged": true,
+  "source_sha256": "f78ee5d64f44c778150fa1c34e5f22c5dd7665e79b80d5c817cda7d02b2fcab5"
+}

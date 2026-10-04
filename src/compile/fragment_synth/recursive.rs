@@ -829,13 +829,15 @@ fn compile_with_layout(
     // the packed cutover read the same pins.
     let caller = RootPins::normalise(lowered, pins)?;
     let pins = caller.compiled();
-    // Raw primary aliases need a certified source-to-implementation rewrite:
-    // the legacy physical emitter requires gate-driven output lamps. Keep
+    // Primary and repeated output aliases need a certified boundary rewrite:
+    // the legacy emitter cannot retain every output occurrence. Keep
     // the source unchanged and use the existing bounded truth-table owner.
     // Unsupported boundaries and caller pins retain a typed refusal.
-    if lowered.outputs.iter().any(|output| lowered.inputs.contains(output)) {
+    if lowered.outputs.iter().any(|output| lowered.inputs.contains(output))
+        || lowered.outputs.iter().collect::<BTreeSet<_>>().len() != lowered.outputs.len()
+    {
         if direct_leaf_cutoff == 0 {
-            return Err(RecursiveError::Matrix("primary aliases require a certified boundary rewrite".into()));
+            return Err(RecursiveError::Matrix("output aliases require a certified boundary rewrite".into()));
         }
         return compile_matrix_root(lowered, pins, search);
     }
@@ -864,7 +866,7 @@ fn compile_with_layout(
     // when this free boundary fits it. Forced composition proposals keep their
     // own construction path. Any matrix refusal leaves the original solver.
     if direct_leaf_cutoff > 0 && lowered.gates.len() > direct_leaf_cutoff
-        && pins.is_none() && lowered.inputs.len() == 4
+        && pins.is_none() && (4..=5).contains(&lowered.inputs.len())
         && (1..=16).contains(&lowered.outputs.len())
     {
         if let Ok(product) = compile_matrix_root(lowered, pins, search) {
