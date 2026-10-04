@@ -1,0 +1,7 @@
+{
+  "base": "671be734051c5a46f5dd81b986a1d31a8da9cf21",
+  "scope": "archive plus shared current src/tests; isolated diagnostic, not adoption",
+  "change": "only negotiated branch reserve TerminalStairs to TotalStairs",
+  "planner_sha256": "f72da4d17759643027f8a0b5948eecccf2e72134fc123616594dd488f30fd1b8",
+  "source_preserved_in_workspace": true
+}

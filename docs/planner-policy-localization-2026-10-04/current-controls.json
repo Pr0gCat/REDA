@@ -1,0 +1,29 @@
+{
+  "binary_sha256": "282d25a851c8c16c64b5ac24d29a304a0d5fc82584b0b00145c3768946eed880",
+  "results": [
+    {
+      "test": "a_route_lays_dust_on_its_own_committed_stone",
+      "exit_code": 101
+    },
+    {
+      "test": "an_unpinned_grown_and4_is_the_world_it_always_shipped",
+      "exit_code": 101
+    },
+    {
+      "test": "the_keep_out_footprint_per_circuit_is_what_is_recorded",
+      "exit_code": 101
+    },
+    {
+      "test": "the_strength_verifier_follows_a_repeater_that_feeds_a_climb",
+      "exit_code": 101
+    },
+    {
+      "test": "the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+      "exit_code": 101
+    },
+    {
+      "test": "the_realised_graph_of_every_circuit_is_what_is_recorded",
+      "exit_code": 101
+    }
+  ]
+}
