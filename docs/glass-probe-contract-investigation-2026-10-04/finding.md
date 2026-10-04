@@ -1,0 +1,9 @@
+# Glass-climbing probe contract investigation
+
+The two retained Minecraft 26.2 disagreements concern stale probe assumptions, rather than an observed contradiction of the current simulator climbing rule. Both original game records remain unchanged and still report disagreements. No expectation, simulator rule, physics check, golden, or settling allowance is modified.
+
+`dust_climb_blocked_by_nonconductive_step` expects powered source dust not to reach the dust above a glass step. The real game reports powered source dust and rejects the zero-power target check. Its cited `neighbour_conducts` climbing guard no longer describes the current source. `conducts_glass` also builds a dust-climbing geometry and observes climbing, despite its conductivity label. That observation cannot establish electrical conduction through the glass block.
+
+The current simulator already separates support for an upward dust step from electrical conductivity. Its `dust_climbs_a_full_but_non_conductive_step` test explicitly requires a dust connection up glass and explains the earlier mistaken assumption. The existing test passes unchanged in the frozen release test binary. Connectivity, propagation and Java rules sources are byte-identical to its 5564d7f source base; exact hashes and output are retained here. This is a one-test existing-rule check, not a fresh full simulator or whole-project qualification.
+
+The game observations agree with the current upward-climbing behavior. Independent direct-through-glass electrical-conduction game coverage is still absent from these two probes; it must not be inferred from their labels. A future separately named probe can measure that property without editing or replacing these historical negatives. Full sequential and larger-circuit game qualification remains incomplete.

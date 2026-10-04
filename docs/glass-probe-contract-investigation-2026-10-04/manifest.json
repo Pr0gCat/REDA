@@ -1,0 +1,32 @@
+{
+  "scope": "Existing climbing rule versus two unchanged negative actual-game probes; no new game run, simulator modification, or repinned expectation",
+  "frozen_test_binary": "/tmp/reda-six-clean-target/release/deps/reda-5415b7c62c168235",
+  "binary_sha256": "efdb19cc3dc41a72b1937636639dbccc7298c91771cfff9f3f425568c9ab6430",
+  "source_base": "5564d7f",
+  "command": [
+    "/tmp/reda-six-clean-target/release/deps/reda-5415b7c62c168235",
+    "redstone::simulator::connectivity::tests::dust_climbs_a_full_but_non_conductive_step",
+    "--exact",
+    "--nocapture"
+  ],
+  "exit_code": 0,
+  "passed": 1,
+  "source_checks": {
+    "src/redstone/simulator/connectivity.rs": {
+      "sha256": "14221ef42399e2f72609cd94ee47aab17568cb41d28ab465ca4e7f19d05e42ca",
+      "byte_equal_to_frozen_base": true
+    },
+    "src/redstone/rules/java_1_20.rs": {
+      "sha256": "875592c83fdf24fde2ad64882220aec4f4e04a1b48d0710e26851183116cafd6",
+      "byte_equal_to_frozen_base": true
+    },
+    "src/redstone/simulator/propagate.rs": {
+      "sha256": "2ce5f661244e3ca99d3faafd7cdde834c8fde9a89931a603891dd395ef6961c4",
+      "byte_equal_to_frozen_base": true
+    }
+  },
+  "original_game_report_sha256": "e5604aa9bafa8f5d5d209083b1ffcf71fd676e3581d2ac63a4b8dec94ae9e258",
+  "test_log_sha256": "5d8db6841a086cb5a33eac9ffbc3fb8792f8c569f09d52effacbb0cee482206c",
+  "test_log": "existing-connectivity-test.log.gz",
+  "test_log_gzip_sha256": "3c2544ab3950d2903db3870657a706350110a96506ad9a16ba473545e6430eea"
+}
