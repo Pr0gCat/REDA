@@ -1,0 +1,680 @@
+[
+  {
+    "id": {
+      "JunctionOutput": 0
+    },
+    "at": {
+      "x": 26,
+      "y": 1,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "driver:u"
+  },
+  {
+    "id": {
+      "DeclaredOutput": 0
+    },
+    "at": {
+      "x": 26,
+      "y": 0,
+      "z": 30
+    },
+    "logical_owner": null,
+    "display_label": "lamp:u"
+  },
+  {
+    "id": {
+      "JunctionOutput": 1
+    },
+    "at": {
+      "x": 13,
+      "y": 1,
+      "z": 10
+    },
+    "logical_owner": null,
+    "display_label": "driver:z"
+  },
+  {
+    "id": {
+      "DeclaredOutput": 1
+    },
+    "at": {
+      "x": 12,
+      "y": 0,
+      "z": 10
+    },
+    "logical_owner": null,
+    "display_label": "lamp:z"
+  },
+  {
+    "id": {
+      "JunctionOutput": 2
+    },
+    "at": {
+      "x": 14,
+      "y": 1,
+      "z": 15
+    },
+    "logical_owner": null,
+    "display_label": "driver:o"
+  },
+  {
+    "id": {
+      "DeclaredOutput": 2
+    },
+    "at": {
+      "x": 14,
+      "y": 0,
+      "z": 14
+    },
+    "logical_owner": null,
+    "display_label": "lamp:o"
+  },
+  {
+    "id": {
+      "InstanceOutput": 0
+    },
+    "at": {
+      "x": 14,
+      "y": 1,
+      "z": 15
+    },
+    "logical_owner": null,
+    "display_label": "gate:g0"
+  },
+  {
+    "id": {
+      "InstanceOutput": 1
+    },
+    "at": {
+      "x": 13,
+      "y": 1,
+      "z": 10
+    },
+    "logical_owner": null,
+    "display_label": "gate:g1"
+  },
+  {
+    "id": {
+      "InstanceOutput": 2
+    },
+    "at": {
+      "x": 26,
+      "y": 1,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "gate:g2"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 0,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 12,
+      "y": 0,
+      "z": 10
+    },
+    "logical_owner": null,
+    "display_label": "cell:0"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 1,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 12,
+      "y": 1,
+      "z": 10
+    },
+    "logical_owner": null,
+    "display_label": "cell:1"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 2,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 13,
+      "y": 1,
+      "z": 10
+    },
+    "logical_owner": null,
+    "display_label": "cell:2"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 3,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 0,
+      "z": 11
+    },
+    "logical_owner": null,
+    "display_label": "cell:3"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 4,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 0,
+      "z": 12
+    },
+    "logical_owner": null,
+    "display_label": "cell:4"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 5,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 0,
+      "z": 13
+    },
+    "logical_owner": null,
+    "display_label": "cell:5"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 6,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 0,
+      "z": 14
+    },
+    "logical_owner": null,
+    "display_label": "cell:6"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 7,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 1,
+      "z": 10
+    },
+    "logical_owner": null,
+    "display_label": "cell:7"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 8,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 1,
+      "z": 11
+    },
+    "logical_owner": null,
+    "display_label": "cell:8"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 9,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 1,
+      "z": 12
+    },
+    "logical_owner": null,
+    "display_label": "cell:9"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 10,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 1,
+      "z": 13
+    },
+    "logical_owner": null,
+    "display_label": "cell:10"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 11,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 1,
+      "z": 14
+    },
+    "logical_owner": null,
+    "display_label": "cell:11"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 12,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 1,
+      "z": 15
+    },
+    "logical_owner": null,
+    "display_label": "cell:12"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 13,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 14,
+      "y": 1,
+      "z": 16
+    },
+    "logical_owner": null,
+    "display_label": "cell:13"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 14,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 22,
+      "y": 0,
+      "z": 32
+    },
+    "logical_owner": null,
+    "display_label": "cell:14"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 15,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 22,
+      "y": 1,
+      "z": 32
+    },
+    "logical_owner": null,
+    "display_label": "cell:15"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 16,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 23,
+      "y": 0,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:16"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 17,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 23,
+      "y": 0,
+      "z": 32
+    },
+    "logical_owner": null,
+    "display_label": "cell:17"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 18,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 23,
+      "y": 1,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:18"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 19,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 23,
+      "y": 1,
+      "z": 32
+    },
+    "logical_owner": null,
+    "display_label": "cell:19"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 20,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 24,
+      "y": 0,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:20"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 21,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 24,
+      "y": 1,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:21"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 22,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 25,
+      "y": 0,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:22"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 23,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 25,
+      "y": 1,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:23"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 24,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 26,
+      "y": 0,
+      "z": 30
+    },
+    "logical_owner": null,
+    "display_label": "cell:24"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 25,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 26,
+      "y": 0,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:25"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 26,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 26,
+      "y": 1,
+      "z": 30
+    },
+    "logical_owner": null,
+    "display_label": "cell:26"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 27,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 26,
+      "y": 1,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:27"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 28,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 27,
+      "y": 0,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:28"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 29,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 27,
+      "y": 1,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:29"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 30,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 28,
+      "y": 0,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:30"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 31,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 28,
+      "y": 0,
+      "z": 32
+    },
+    "logical_owner": null,
+    "display_label": "cell:31"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 32,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 28,
+      "y": 1,
+      "z": 31
+    },
+    "logical_owner": null,
+    "display_label": "cell:32"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 33,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 28,
+      "y": 1,
+      "z": 32
+    },
+    "logical_owner": null,
+    "display_label": "cell:33"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 34,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 29,
+      "y": 0,
+      "z": 32
+    },
+    "logical_owner": null,
+    "display_label": "cell:34"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 35,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 29,
+      "y": 1,
+      "z": 32
+    },
+    "logical_owner": null,
+    "display_label": "cell:35"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 36,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 30,
+      "y": 0,
+      "z": 32
+    },
+    "logical_owner": null,
+    "display_label": "cell:36"
+  },
+  {
+    "id": {
+      "PrimitiveOutput": {
+        "instance": 37,
+        "node": 0
+      }
+    },
+    "at": {
+      "x": 30,
+      "y": 1,
+      "z": 32
+    },
+    "logical_owner": null,
+    "display_label": "cell:37"
+  }
+]

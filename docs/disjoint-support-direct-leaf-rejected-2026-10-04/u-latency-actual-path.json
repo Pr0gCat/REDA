@@ -1,0 +1,2284 @@
+{
+  "source_evidence": "/home/seith/REDA/docs/disjoint-support-composition-2026-10-04/whole-default-rejected",
+  "from": 0,
+  "to": 1,
+  "phase": 1,
+  "traces": {
+    "baseline": [
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 57,
+            "node": 0
+          }
+        },
+        "position": [
+          12,
+          1,
+          42
+        ],
+        "label": "cell:57",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 58,
+            "node": 0
+          }
+        },
+        "position": [
+          12,
+          1,
+          43
+        ],
+        "label": "cell:58",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 59,
+            "node": 0
+          }
+        },
+        "position": [
+          12,
+          1,
+          44
+        ],
+        "label": "cell:59",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 60,
+            "node": 0
+          }
+        },
+        "position": [
+          12,
+          1,
+          45
+        ],
+        "label": "cell:60",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": "Floor",
+          "facing": "North",
+          "half": null,
+          "kind": "Lever",
+          "lit": false,
+          "name": "minecraft:lever",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 62,
+            "node": 0
+          }
+        },
+        "position": [
+          12,
+          2,
+          41
+        ],
+        "label": "cell:62",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 63,
+            "node": 0
+          }
+        },
+        "position": [
+          12,
+          3,
+          40
+        ],
+        "label": "cell:63",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 67,
+            "node": 0
+          }
+        },
+        "position": [
+          13,
+          3,
+          40
+        ],
+        "label": "cell:67",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 73,
+            "node": 0
+          }
+        },
+        "position": [
+          14,
+          3,
+          40
+        ],
+        "label": "cell:73",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 75,
+            "node": 0
+          }
+        },
+        "position": [
+          15,
+          3,
+          40
+        ],
+        "label": "cell:75",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 77,
+            "node": 0
+          }
+        },
+        "position": [
+          16,
+          3,
+          40
+        ],
+        "label": "cell:77",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 79,
+            "node": 0
+          }
+        },
+        "position": [
+          17,
+          3,
+          40
+        ],
+        "label": "cell:79",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 81,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          3,
+          40
+        ],
+        "label": "cell:81",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 83,
+            "node": 0
+          }
+        },
+        "position": [
+          19,
+          3,
+          40
+        ],
+        "label": "cell:83",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 85,
+            "node": 0
+          }
+        },
+        "position": [
+          20,
+          3,
+          40
+        ],
+        "label": "cell:85",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 87,
+            "node": 0
+          }
+        },
+        "position": [
+          21,
+          3,
+          40
+        ],
+        "label": "cell:87",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 115,
+            "node": 0
+          }
+        },
+        "position": [
+          22,
+          3,
+          40
+        ],
+        "label": "cell:115",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 121,
+            "node": 0
+          }
+        },
+        "position": [
+          23,
+          3,
+          40
+        ],
+        "label": "cell:121",
+        "value": true,
+        "cell": {
+          "delay": 1,
+          "extra_properties": {},
+          "face": null,
+          "facing": "West",
+          "half": null,
+          "kind": "Repeater",
+          "lit": true,
+          "name": "minecraft:repeater",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 129,
+            "node": 0
+          }
+        },
+        "position": [
+          24,
+          1,
+          34
+        ],
+        "label": "cell:129",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 130,
+            "node": 0
+          }
+        },
+        "position": [
+          24,
+          1,
+          35
+        ],
+        "label": "cell:130",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 131,
+            "node": 0
+          }
+        },
+        "position": [
+          24,
+          1,
+          36
+        ],
+        "label": "cell:131",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 132,
+            "node": 0
+          }
+        },
+        "position": [
+          24,
+          1,
+          37
+        ],
+        "label": "cell:132",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 133,
+            "node": 0
+          }
+        },
+        "position": [
+          24,
+          1,
+          38
+        ],
+        "label": "cell:133",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 136,
+            "node": 0
+          }
+        },
+        "position": [
+          24,
+          2,
+          39
+        ],
+        "label": "cell:136",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 139,
+            "node": 0
+          }
+        },
+        "position": [
+          24,
+          3,
+          40
+        ],
+        "label": "cell:139",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 143,
+            "node": 0
+          }
+        },
+        "position": [
+          25,
+          1,
+          34
+        ],
+        "label": "cell:143",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 153,
+            "node": 0
+          }
+        },
+        "position": [
+          26,
+          1,
+          34
+        ],
+        "label": "cell:153",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 160,
+            "node": 0
+          }
+        },
+        "position": [
+          27,
+          1,
+          34
+        ],
+        "label": "cell:160",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 167,
+            "node": 0
+          }
+        },
+        "position": [
+          28,
+          1,
+          33
+        ],
+        "label": "cell:167",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 168,
+            "node": 0
+          }
+        },
+        "position": [
+          28,
+          1,
+          34
+        ],
+        "label": "cell:168",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "InstanceOutput": 2
+        },
+        "position": [
+          28,
+          1,
+          34
+        ],
+        "label": "gate:g2",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "JunctionOutput": 0
+        },
+        "position": [
+          28,
+          1,
+          34
+        ],
+        "label": "driver:u",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 174,
+            "node": 0
+          }
+        },
+        "position": [
+          29,
+          1,
+          34
+        ],
+        "label": "cell:174",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 180,
+            "node": 0
+          }
+        },
+        "position": [
+          30,
+          1,
+          34
+        ],
+        "label": "cell:180",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 186,
+            "node": 0
+          }
+        },
+        "position": [
+          31,
+          1,
+          34
+        ],
+        "label": "cell:186",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 2,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 201,
+            "node": 0
+          }
+        },
+        "position": [
+          32,
+          1,
+          34
+        ],
+        "label": "cell:201",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 3,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 164,
+            "node": 0
+          }
+        },
+        "position": [
+          28,
+          0,
+          33
+        ],
+        "label": "cell:164",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "Lamp",
+          "lit": false,
+          "name": "minecraft:redstone_lamp",
+          "power": 0
+        }
+      },
+      {
+        "tick": 3,
+        "id": {
+          "DeclaredOutput": 0
+        },
+        "position": [
+          28,
+          0,
+          33
+        ],
+        "label": "lamp:u",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "Lamp",
+          "lit": false,
+          "name": "minecraft:redstone_lamp",
+          "power": 0
+        }
+      }
+    ],
+    "candidate": [
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 16,
+            "node": 0
+          }
+        },
+        "position": [
+          3,
+          5,
+          0
+        ],
+        "label": "cell:16",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": "Floor",
+          "facing": "North",
+          "half": null,
+          "kind": "Lever",
+          "lit": false,
+          "name": "minecraft:lever",
+          "power": 0
+        }
+      },
+      {
+        "tick": 1,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 17,
+            "node": 0
+          }
+        },
+        "position": [
+          3,
+          5,
+          1
+        ],
+        "label": "cell:17",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 4,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 18,
+            "node": 0
+          }
+        },
+        "position": [
+          3,
+          5,
+          2
+        ],
+        "label": "cell:18",
+        "value": true,
+        "cell": {
+          "delay": 2,
+          "extra_properties": {},
+          "face": null,
+          "facing": "North",
+          "half": null,
+          "kind": "Repeater",
+          "lit": false,
+          "name": "minecraft:repeater",
+          "power": 0
+        }
+      },
+      {
+        "tick": 4,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 19,
+            "node": 0
+          }
+        },
+        "position": [
+          3,
+          5,
+          3
+        ],
+        "label": "cell:19",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 4,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 20,
+            "node": 0
+          }
+        },
+        "position": [
+          3,
+          5,
+          4
+        ],
+        "label": "cell:20",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 4,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 21,
+            "node": 0
+          }
+        },
+        "position": [
+          3,
+          5,
+          5
+        ],
+        "label": "cell:21",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 4,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 22,
+            "node": 0
+          }
+        },
+        "position": [
+          3,
+          5,
+          6
+        ],
+        "label": "cell:22",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 4,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 23,
+            "node": 0
+          }
+        },
+        "position": [
+          3,
+          5,
+          7
+        ],
+        "label": "cell:23",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 2,
+            "node": 0
+          }
+        },
+        "position": [
+          2,
+          3,
+          7
+        ],
+        "label": "cell:2",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 6,
+            "node": 0
+          }
+        },
+        "position": [
+          3,
+          3,
+          7
+        ],
+        "label": "cell:6",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 26,
+            "node": 0
+          }
+        },
+        "position": [
+          4,
+          3,
+          7
+        ],
+        "label": "cell:26",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 28,
+            "node": 0
+          }
+        },
+        "position": [
+          4,
+          4,
+          7
+        ],
+        "label": "cell:28",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": "East",
+          "half": null,
+          "kind": "WallTorch",
+          "lit": true,
+          "name": "minecraft:redstone_wall_torch",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "InstanceOutput": 1
+        },
+        "position": [
+          4,
+          4,
+          7
+        ],
+        "label": "gate:component0_row1_mismatch0",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": "East",
+          "half": null,
+          "kind": "WallTorch",
+          "lit": true,
+          "name": "minecraft:redstone_wall_torch",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 31,
+            "node": 0
+          }
+        },
+        "position": [
+          5,
+          3,
+          7
+        ],
+        "label": "cell:31",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 35,
+            "node": 0
+          }
+        },
+        "position": [
+          6,
+          3,
+          7
+        ],
+        "label": "cell:35",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 39,
+            "node": 0
+          }
+        },
+        "position": [
+          7,
+          3,
+          7
+        ],
+        "label": "cell:39",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 43,
+            "node": 0
+          }
+        },
+        "position": [
+          8,
+          3,
+          7
+        ],
+        "label": "cell:43",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 47,
+            "node": 0
+          }
+        },
+        "position": [
+          9,
+          3,
+          7
+        ],
+        "label": "cell:47",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 73,
+            "node": 0
+          }
+        },
+        "position": [
+          10,
+          3,
+          7
+        ],
+        "label": "cell:73",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 78,
+            "node": 0
+          }
+        },
+        "position": [
+          11,
+          3,
+          7
+        ],
+        "label": "cell:78",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 82,
+            "node": 0
+          }
+        },
+        "position": [
+          12,
+          3,
+          7
+        ],
+        "label": "cell:82",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 86,
+            "node": 0
+          }
+        },
+        "position": [
+          13,
+          3,
+          7
+        ],
+        "label": "cell:86",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 90,
+            "node": 0
+          }
+        },
+        "position": [
+          14,
+          3,
+          7
+        ],
+        "label": "cell:90",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 6,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 94,
+            "node": 0
+          }
+        },
+        "position": [
+          15,
+          3,
+          7
+        ],
+        "label": "cell:94",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 8,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 98,
+            "node": 0
+          }
+        },
+        "position": [
+          16,
+          3,
+          7
+        ],
+        "label": "cell:98",
+        "value": false,
+        "cell": {
+          "delay": 1,
+          "extra_properties": {},
+          "face": null,
+          "facing": "West",
+          "half": null,
+          "kind": "Repeater",
+          "lit": false,
+          "name": "minecraft:repeater",
+          "power": 0
+        }
+      },
+      {
+        "tick": 8,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 102,
+            "node": 0
+          }
+        },
+        "position": [
+          17,
+          3,
+          7
+        ],
+        "label": "cell:102",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 8,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 128,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          3,
+          7
+        ],
+        "label": "cell:128",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 8,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 132,
+            "node": 0
+          }
+        },
+        "position": [
+          19,
+          3,
+          7
+        ],
+        "label": "cell:132",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 8,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 136,
+            "node": 0
+          }
+        },
+        "position": [
+          20,
+          3,
+          7
+        ],
+        "label": "cell:136",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 8,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 163,
+            "node": 0
+          }
+        },
+        "position": [
+          21,
+          3,
+          7
+        ],
+        "label": "cell:163",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 8,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 169,
+            "node": 0
+          }
+        },
+        "position": [
+          22,
+          3,
+          7
+        ],
+        "label": "cell:169",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 8,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 173,
+            "node": 0
+          }
+        },
+        "position": [
+          23,
+          3,
+          7
+        ],
+        "label": "cell:173",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 8,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 199,
+            "node": 0
+          }
+        },
+        "position": [
+          24,
+          3,
+          7
+        ],
+        "label": "cell:199",
+        "value": false,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 114,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          1,
+          5
+        ],
+        "label": "cell:114",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 115,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          1,
+          6
+        ],
+        "label": "cell:115",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 116,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          1,
+          7
+        ],
+        "label": "cell:116",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 117,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          1,
+          8
+        ],
+        "label": "cell:117",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 118,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          1,
+          9
+        ],
+        "label": "cell:118",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 119,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          1,
+          10
+        ],
+        "label": "cell:119",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 120,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          1,
+          11
+        ],
+        "label": "cell:120",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 121,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          1,
+          12
+        ],
+        "label": "cell:121",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 122,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          1,
+          13
+        ],
+        "label": "cell:122",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "InstanceOutput": 5
+        },
+        "position": [
+          18,
+          1,
+          13
+        ],
+        "label": "gate:component0_output0",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "JunctionOutput": 0
+        },
+        "position": [
+          18,
+          1,
+          13
+        ],
+        "label": "driver:u",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "RedstoneWire",
+          "lit": false,
+          "name": "minecraft:redstone_wire",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 125,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          2,
+          8
+        ],
+        "label": "cell:125",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": "South",
+          "half": null,
+          "kind": "WallTorch",
+          "lit": true,
+          "name": "minecraft:redstone_wall_torch",
+          "power": 0
+        }
+      },
+      {
+        "tick": 10,
+        "id": {
+          "InstanceOutput": 2
+        },
+        "position": [
+          18,
+          2,
+          8
+        ],
+        "label": "gate:component0_row1_bit0",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": "South",
+          "half": null,
+          "kind": "WallTorch",
+          "lit": true,
+          "name": "minecraft:redstone_wall_torch",
+          "power": 0
+        }
+      },
+      {
+        "tick": 11,
+        "id": {
+          "PrimitiveOutput": {
+            "instance": 123,
+            "node": 0
+          }
+        },
+        "position": [
+          18,
+          1,
+          14
+        ],
+        "label": "cell:123",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "Lamp",
+          "lit": false,
+          "name": "minecraft:redstone_lamp",
+          "power": 0
+        }
+      },
+      {
+        "tick": 11,
+        "id": {
+          "DeclaredOutput": 0
+        },
+        "position": [
+          18,
+          1,
+          14
+        ],
+        "label": "lamp:u",
+        "value": true,
+        "cell": {
+          "delay": 0,
+          "extra_properties": {},
+          "face": null,
+          "facing": null,
+          "half": null,
+          "kind": "Lamp",
+          "lit": false,
+          "name": "minecraft:redstone_lamp",
+          "power": 0
+        }
+      }
+    ]
+  },
+  "interpretation": "Baseline has one delay-1 path refresh before a direct wire OR driver at tick 2 and lamp at tick 3. Candidate inserts delay-2 input refresh (tick 4), row mismatch wall torch (tick 6), delay-1 row refresh (tick 8), row-bit wall torch/collection rail (tick 10), then lamp (tick 11). These path events explain eight added ticks; no simulator timing was changed."
+}

@@ -1,0 +1,6 @@
+original/default: compiling the frozen six-input/nine-occurrence source
+original/default: frozen; candidate: generating
+
+thread 'main' (3) panicked at src/compile/fragment_synth/torch_row.rs:1038:9:
+no real conductor path Position { x: 14, y: 1, z: 14 }->Position { x: 14, y: 2, z: 10 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

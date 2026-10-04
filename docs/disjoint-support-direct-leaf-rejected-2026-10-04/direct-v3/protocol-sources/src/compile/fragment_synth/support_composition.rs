@@ -1,0 +1,399 @@
+//! Compose independently certified bounded leaves whose actual input supports
+//! are disjoint. Shared-support groups remain one leaf and fail closed if large.
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::{
+    rewrite::{CertifiedPhysicalRewrite, PhysicalRewriteError},
+    torch_row,
+};
+use crate::compile::{equivalence::prove_netlist_rewrite, Netlist};
+use crate::redstone::{
+    simulator::position::Position,
+    world::{block::BlockKind, storage::World},
+};
+
+#[derive(Debug)]
+pub enum SupportCompositionError {
+    UnsupportedBoundary,
+    Leaf(torch_row::TorchRowError),
+    Original(String),
+    UnsupportedLeaf { inputs: usize, outputs: usize },
+    Rewrite(PhysicalRewriteError),
+}
+
+/// Structural output-cone decomposition; names only identify graph edges.
+fn groups(source: &Netlist) -> Option<Vec<(Vec<usize>, BTreeSet<String>, BTreeSet<usize>)>> {
+    let order = source.combinational_order()?;
+    let mut supports: BTreeMap<String, BTreeSet<String>> = source
+        .inputs
+        .iter()
+        .map(|s| (s.clone(), BTreeSet::from([s.clone()])))
+        .collect();
+    let mut cones: BTreeMap<String, BTreeSet<usize>> = source
+        .inputs
+        .iter()
+        .map(|s| (s.clone(), BTreeSet::new()))
+        .collect();
+    for index in order {
+        let gate = &source.gates[index];
+        let mut support = BTreeSet::new();
+        let mut cone = BTreeSet::from([index]);
+        for input in &gate.inputs {
+            support.extend(supports.get(input)?.iter().cloned());
+            cone.extend(cones.get(input)?.iter().copied());
+        }
+        supports.insert(gate.output.clone(), support);
+        cones.insert(gate.output.clone(), cone);
+    }
+    let mut groups: Vec<(Vec<usize>, BTreeSet<String>, BTreeSet<usize>)> = vec![];
+    for (ordinal, output) in source.outputs.iter().enumerate() {
+        let mut support = supports.get(output)?.clone();
+        let mut cone = cones.get(output)?.clone();
+        let mut outputs = vec![ordinal];
+        let mut index = 0;
+        while index < groups.len() {
+            if !groups[index].1.is_disjoint(&support) {
+                let (o, s, c) = groups.remove(index);
+                outputs.extend(o);
+                support.extend(s);
+                cone.extend(c);
+                index = 0;
+            } else {
+                index += 1;
+            }
+        }
+        groups.push((outputs, support, cone));
+    }
+    let mut constants = vec![];
+    let mut constant_cones = BTreeSet::new();
+    groups.retain(|g| {
+        if g.1.is_empty() {
+            constants.extend(g.0.iter().copied());
+            constant_cones.extend(g.2.iter().copied());
+            false
+        } else {
+            true
+        }
+    });
+    if !constants.is_empty() {
+        let first = groups
+            .iter_mut()
+            .min_by_key(|g| (g.0.len(), *g.0.iter().min().unwrap()))?;
+        first.0.extend(constants);
+        first.2.extend(constant_cones);
+    }
+    for group in &mut groups {
+        group.0.sort_unstable();
+    }
+    groups.sort_by_key(|g| g.0[0]);
+    Some(groups)
+}
+
+/// Cheap eligibility keeps unsupported cases on their original proposal stream.
+pub(crate) fn eligible(source: &Netlist) -> bool {
+    let Some(groups) = groups(source) else {
+        return false;
+    };
+    groups.len() >= 2
+        && groups
+            .iter()
+            .flat_map(|g| g.1.iter())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == source.inputs.len()
+        && groups.iter().all(|g| {
+            (g.1.len() == 2 && g.0.len() == 3)
+                || ((4..=5).contains(&g.1.len()) && (1..=16).contains(&g.0.len()))
+        })
+}
+
+pub fn compile_disjoint_support(
+    source: &Netlist,
+    proof_work_limit: u64,
+) -> Result<CertifiedPhysicalRewrite, SupportCompositionError> {
+    use SupportCompositionError::*;
+    prove_netlist_rewrite(
+        source,
+        source,
+        &source.inputs,
+        &source.outputs,
+        proof_work_limit,
+    )
+    .map_err(|e| Rewrite(PhysicalRewriteError::Rewrite(e)))?;
+    let groups = groups(source).ok_or(UnsupportedBoundary)?;
+    if groups.len() < 2 {
+        return Err(UnsupportedBoundary);
+    }
+    let covered: BTreeSet<_> = groups.iter().flat_map(|g| g.1.iter().cloned()).collect();
+    if covered.len() != source.inputs.len() {
+        return Err(UnsupportedBoundary);
+    }
+    let mut leaves = vec![];
+    for (outputs, support, cone) in &groups {
+        let leaf = Netlist {
+            inputs: source
+                .inputs
+                .iter()
+                .filter(|s| support.contains(*s))
+                .cloned()
+                .collect(),
+            outputs: outputs.iter().map(|&i| source.outputs[i].clone()).collect(),
+            gates: source
+                .gates
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| cone.contains(i))
+                .map(|(_, g)| g.clone())
+                .collect(),
+        };
+        let rewrite = compile_original_leaf(&leaf, proof_work_limit)?;
+        leaves.push(rewrite);
+    }
+    // Eight air cells separate occupied extents: no coupling or parent routes
+    // can be introduced by translation of independent supports.
+    let width = leaves
+        .iter()
+        .try_fold(0i32, |width, leaf| {
+            width
+                .checked_add(leaf.physical().world().size().0)?
+                .checked_add(8)
+        })
+        .ok_or(UnsupportedBoundary)?;
+    let height = leaves
+        .iter()
+        .map(|l| l.physical().world().size().1)
+        .max()
+        .unwrap();
+    let depth = leaves
+        .iter()
+        .map(|l| l.physical().world().size().2)
+        .max()
+        .unwrap();
+    let mut world = World::new(width, height, depth);
+    let mut implemented = Netlist {
+        inputs: source.inputs.clone(),
+        outputs: vec![String::new(); source.outputs.len()],
+        gates: vec![],
+    };
+    let mut inputs = BTreeMap::new();
+    let mut lamps = vec![Position::new(0, 0, 0); source.outputs.len()];
+    let mut positions = BTreeMap::new();
+    let mut offset = 0;
+    for (ordinal, ((outputs, support, _), leaf)) in groups.iter().zip(&leaves).enumerate() {
+        let child = leaf.implemented();
+        let source_inputs: Vec<_> = source
+            .inputs
+            .iter()
+            .filter(|s| support.contains(*s))
+            .collect();
+        let rename = |name: &String| -> String {
+            child.inputs.iter().position(|s| s == name).map_or_else(
+                || format!("component{ordinal}_{name}"),
+                |i| source_inputs[i].clone(),
+            )
+        };
+        let shifted = |p: (i32, i32, i32)| Position::new(p.0 + offset, p.1, p.2);
+        let old = leaf.physical().world();
+        let (x, y, z) = old.size();
+        for iy in 0..y {
+            for iz in 0..z {
+                for ix in 0..x {
+                    let state = old.get(ix, iy, iz);
+                    if state.kind != BlockKind::Air {
+                        world.set(ix + offset, iy, iz, state.clone());
+                    }
+                }
+            }
+        }
+        for (name, at) in child.inputs.iter().zip(leaf.source_input_positions()) {
+            inputs.insert(rename(name), shifted(*at));
+        }
+        for (local, &root) in outputs.iter().enumerate() {
+            implemented.outputs[root] = rename(&child.outputs[local]);
+            lamps[root] = shifted(leaf.source_output_positions()[local]);
+        }
+        for gate in &child.gates {
+            let mut gate = gate.clone();
+            gate.name = format!("component{ordinal}_{}", gate.name);
+            gate.inputs = gate.inputs.iter().map(&rename).collect();
+            let original_output = gate.output.clone();
+            gate.output = rename(&original_output);
+            positions.insert(
+                gate.output.clone(),
+                shifted(leaf.implemented_observations().gate_output_positions[&original_output]),
+            );
+            implemented.gates.push(gate);
+        }
+        offset += x + 8;
+    }
+    let library = crate::compile::topology::Library::default_library();
+    let size = world.size();
+    let expected_world = super::benchmark::canonical_world_fingerprint(&world);
+    let candidate = compose_original_manifests(source, &implemented, &groups, &leaves)?;
+    let result = super::rewrite::realise_physical_rewrite_with_size(
+        source,
+        &implemented,
+        &candidate,
+        &library,
+        &implemented.inputs,
+        &implemented.outputs,
+        proof_work_limit,
+        Some(size),
+    )
+    .map_err(Rewrite)?;
+    assert_eq!(
+        expected_world,
+        super::benchmark::canonical_world_fingerprint(result.physical().world()),
+        "sealing must preserve all composed leaf cells"
+    );
+    Ok(result)
+}
+
+/// Isolated experiment only: preserve an existing original leaf exactly.
+pub fn compile_original_leaf(leaf: &Netlist, proof_work_limit: u64) -> Result<CertifiedPhysicalRewrite, SupportCompositionError> {
+        // Preserve the existing original physical strategy. Only translation is
+        // introduced here; no unconditional truth-table decoding is performed.
+        let compiled = crate::compile::compile_without_rewrite(&leaf).map_err(|e| SupportCompositionError::Original(format!("{e:?}")))?;
+        let original_fingerprint = super::benchmark::canonical_world_fingerprint(&compiled.world);
+        let library = crate::compile::topology::Library::default_library();
+        let size = compiled.world.size();
+        let candidate = compiled.physical_candidate().ok_or_else(|| SupportCompositionError::Original("missing original candidate manifest".into()))?;
+        let rewrite = super::rewrite::realise_physical_rewrite_with_size(
+            leaf, leaf, candidate, &library,
+            &leaf.inputs, &leaf.outputs, proof_work_limit, Some(size),
+        ).map_err(SupportCompositionError::Rewrite)?;
+        assert_eq!(original_fingerprint, super::benchmark::canonical_world_fingerprint(rewrite.physical().world()));
+        Ok(rewrite)
+}
+
+/// Exact cone sources and root public-output ordinals used by composition.
+pub fn source_leaf_groups(source: &Netlist) -> Vec<(Netlist, Vec<usize>)> {
+    groups(source).unwrap().into_iter().map(|(outputs,support,cone)| {
+        let leaf=Netlist {
+            inputs: source.inputs.iter().filter(|s|support.contains(*s)).cloned().collect(),
+            outputs: outputs.iter().map(|&i|source.outputs[i].clone()).collect(),
+            gates: source.gates.iter().enumerate().filter(|(i,_)|cone.contains(i)).map(|(_,g)|g.clone()).collect(),
+        };
+        (leaf, outputs)
+    }).collect()
+}
+
+// This is a manifest-preserving translation of disjoint original leaves only.
+// No ownership is inferred from the world or assigned to a different authority.
+fn compose_original_manifests(
+    source: &Netlist,
+    implemented: &Netlist,
+    groups: &[(Vec<usize>, BTreeSet<String>, BTreeSet<usize>)],
+    leaves: &[CertifiedPhysicalRewrite],
+) -> Result<super::candidate::ExpandedPhysicalCandidate, SupportCompositionError> {
+    use super::candidate::*;
+    use super::identity::*;
+    use super::instance_graph::InstanceGraph;
+    use crate::compile::geometry::Anchor;
+    use crate::compile::planner::PortPlacements;
+
+    struct Map {
+        instances: u32,
+        inputs: Vec<PortId>,
+        outputs: Vec<PortId>,
+        routes: BTreeMap<RouteId, RouteId>,
+        x: i32,
+    }
+    impl Map {
+        fn instance(&self, p: InstanceId) -> InstanceId { InstanceId(p.0 + self.instances) }
+        fn primitive(&self, p: PrimitiveId) -> PrimitiveId { PrimitiveId { instance:self.instance(p.instance), ..p } }
+        fn connection(&self, p: ConnectionId) -> ConnectionId {
+            match p {
+                ConnectionId::External { instance,input_index } => ConnectionId::External { instance:self.instance(instance),input_index },
+                ConnectionId::Internal { instance,edge_index } => ConnectionId::Internal { instance:self.instance(instance),edge_index },
+            }
+        }
+        fn endpoint(&self, p: PhysicalEndpointId) -> PhysicalEndpointId {
+            match p {
+                PhysicalEndpointId::PrimaryInput(p) => PhysicalEndpointId::PrimaryInput(self.inputs[p.0 as usize]),
+                PhysicalEndpointId::DeclaredOutput(p) => PhysicalEndpointId::DeclaredOutput(self.outputs[p.0 as usize]),
+                PhysicalEndpointId::PrimitiveOutput(p) => PhysicalEndpointId::PrimitiveOutput(self.primitive(p)),
+                PhysicalEndpointId::Landing(p) => PhysicalEndpointId::Landing(self.connection(p)),
+                PhysicalEndpointId::Junction(p) => PhysicalEndpointId::Junction(self.instance(p)),
+            }
+        }
+        fn observation(&self, p: ObservationId) -> ObservationId {
+            match p {
+                ObservationId::PrimaryInput(p) => ObservationId::PrimaryInput(self.inputs[p.0 as usize]),
+                ObservationId::DeclaredOutput(p) => ObservationId::DeclaredOutput(self.outputs[p.0 as usize]),
+                ObservationId::PrimitiveOutput(p) => ObservationId::PrimitiveOutput(self.primitive(p)),
+                ObservationId::InstanceOutput(p) => ObservationId::InstanceOutput(self.instance(p)),
+                ObservationId::JunctionOutput(p) => ObservationId::JunctionOutput(self.instance(p)),
+            }
+        }
+        fn sink(&self, p: RoutedSinkId) -> RoutedSinkId { RoutedSinkId { route:self.routes[&p.route], ..p } }
+        fn owner(&self, p: DelayedOwner) -> DelayedOwner {
+            match p {
+                DelayedOwner::Primitive(p) => DelayedOwner::Primitive(self.primitive(p)),
+                DelayedOwner::Route(p) => DelayedOwner::Route(self.routes[&p]),
+                DelayedOwner::InputBinding(p) => DelayedOwner::InputBinding(self.inputs[p.0 as usize]),
+            }
+        }
+        fn at(&self, p: Anchor) -> Anchor { Anchor { x:p.x + self.x, ..p } }
+        fn delayed(&self, p: Option<DelayedComponent>) -> Option<DelayedComponent> { p.map(|p|DelayedComponent { at:self.at(p.at),owner:self.owner(p.owner) }) }
+        fn blocks(&self, p: &mut [PlacedBlock]) { for p in p { p.at=self.at(p.at); } }
+    }
+    let library=crate::compile::topology::Library::default_library();
+    let mut maps=vec![];
+    let mut instances=0;
+    let mut next_route=0;
+    let mut x=0;
+    let mut implementations=BTreeMap::new();
+    for ((outputs,_,_), leaf) in groups.iter().zip(leaves) {
+        let c=leaf.implemented_candidate();
+        let m=Map {
+            instances,
+            inputs:leaf.implemented().inputs.iter().map(|n| PortId(source.inputs.iter().position(|s|s==n).unwrap() as u32)).collect(),
+            outputs:outputs.iter().map(|&i|PortId(i as u32)).collect(),
+            routes:c.routes.keys().enumerate().map(|(i,&r)|(r,RouteId(next_route + i as u32))).collect(),
+            x,
+        };
+        assert_eq!(c.instances.instances.len(),leaf.implemented().gates.len(),"original disjoint leaf must remain one-to-one");
+        for i in &c.instances.instances { implementations.insert(m.instance(i.id),i.implementation); }
+        instances+=c.instances.instances.len() as u32;
+        next_route+=c.routes.len() as u32;
+        x+=leaf.physical().world().size().0 + 8;
+        maps.push(m);
+    }
+    let graph=InstanceGraph::one_to_one_with_implementations(implemented,&library,&implementations)
+        .map_err(|e|SupportCompositionError::Original(format!("{e:?}")))?;
+    let mut root=ExpandedPhysicalCandidate::empty(graph,PortPlacements::default());
+    for (leaf,m) in leaves.iter().zip(&maps) {
+        let c=leaf.implemented_candidate();
+        assert!(c.pins.is_empty() && c.pin_contracts.is_empty() && c.pin_name_bindings.is_empty(),"free leaf must carry no caller pin contracts");
+        for p in c.placements.values() {
+            let mut p=p.clone();p.id=m.primitive(p.id);p.anchor=m.at(p.anchor);p.delayed=m.delayed(p.delayed);m.blocks(&mut p.blocks);assert!(root.placements.insert(p.id,p).is_none());
+        }
+        for p in c.boundaries.values() {
+            let mut p=p.clone();p.endpoint=m.endpoint(p.endpoint);p.delayed=m.delayed(p.delayed);m.blocks(&mut p.blocks);assert!(root.boundaries.insert(p.endpoint,p).is_none());
+        }
+        for (&alias,&canonical) in &c.output_boundary_aliases { assert!(root.output_boundary_aliases.insert(m.outputs[alias.0 as usize],m.outputs[canonical.0 as usize]).is_none()); }
+        for p in c.connections.values() {
+            let mut p=p.clone();p.id=m.connection(p.id);p.source=m.endpoint(p.source);p.landing=m.endpoint(p.landing);p.route=m.routes[&p.route];p.sink=m.sink(p.sink);assert!(root.connections.insert(p.id,p).is_none());
+        }
+        for p in c.routes.values() {
+            let mut p=p.clone();p.id=m.routes[&p.id];p.source=m.endpoint(p.source);m.blocks(&mut p.cells);m.blocks(&mut p.floors);
+            for b in &mut p.branches {
+                b.sink=m.sink(b.sink);b.target=match b.target { RouteTarget::Connection(p)=>RouteTarget::Connection(m.connection(p)),RouteTarget::DeclaredOutput(p)=>RouteTarget::DeclaredOutput(m.outputs[p.0 as usize]) };
+                b.root=m.at(b.root);for p in &mut b.path {*p=m.at(*p);}
+                b.terminal.sink=m.sink(b.terminal.sink);b.terminal.at=m.at(b.terminal.at);b.terminal.delayed_owner=b.terminal.delayed_owner.map(|p|m.owner(p));
+            }
+            assert!(root.routes.insert(p.id,p).is_none());
+        }
+        for (&sink,handovers) in &c.repeater_handovers {
+            let p=handovers.iter().map(|p|RepeaterHandover { primitive:m.primitive(p.primitive),support:m.at(p.support),kind:p.kind }).collect();assert!(root.repeater_handovers.insert(m.sink(sink),p).is_none());
+        }
+        for p in c.junctions.values() {
+            let mut p=p.clone();p.id=m.instance(p.id);p.at=m.at(p.at);p.contributors=p.contributors.iter().map(|&p|m.endpoint(p)).collect();m.blocks(&mut p.cells);assert!(root.junctions.insert(p.id,p).is_none());
+        }
+        for p in c.observations.values() {
+            let mut p=p.clone();p.site.id=m.observation(p.site.id);p.site.at=m.at(p.site.at);p.site.logical_owner=p.site.logical_owner.map(|p|m.instance(p));assert!(root.observations.insert(p.site.id,p).is_none());
+        }
+    }
+    Ok(root)
+}

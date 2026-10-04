@@ -1,0 +1,1050 @@
+{
+  "accepted": false,
+  "phases": 8192,
+  "mapped_gates": 15,
+  "phase_gate_checks": 122880,
+  "independent_all_gate_end_truth": true,
+  "bijection_complete": true,
+  "regression_counts": {
+    "n1:arrival": 44,
+    "g3:arrival": 15,
+    "g3:pulse_total": 15,
+    "g3:pulse_worst": 15,
+    "g5:glitch": 512,
+    "g5:arrival": 512,
+    "g5:pulse_total": 512,
+    "g5:pulse_worst": 512,
+    "g6:glitch": 512,
+    "g6:arrival": 512,
+    "g6:pulse_total": 512,
+    "g6:pulse_worst": 512,
+    "n5:arrival": 1536,
+    "g4:arrival": 1024
+  },
+  "maximum_delta": {
+    "n1:arrival": 32,
+    "g3:arrival": 18,
+    "g3:pulse_total": 22,
+    "g3:pulse_worst": 22,
+    "g5:glitch": 1,
+    "g5:arrival": 4,
+    "g5:pulse_total": 2,
+    "g5:pulse_worst": 2,
+    "g6:glitch": 1,
+    "g6:arrival": 8,
+    "g6:pulse_total": 2,
+    "g6:pulse_worst": 2,
+    "n5:arrival": 4,
+    "g4:arrival": 4
+  },
+  "first_100_regressions": [
+    {
+      "phase_index": 26,
+      "from": 0,
+      "to": 13,
+      "phase": 0,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 26
+    },
+    {
+      "phase_index": 154,
+      "from": 1,
+      "to": 13,
+      "phase": 0,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 36
+    },
+    {
+      "phase_index": 282,
+      "from": 2,
+      "to": 13,
+      "phase": 0,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 36
+    },
+    {
+      "phase_index": 410,
+      "from": 3,
+      "to": 13,
+      "phase": 0,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 36
+    },
+    {
+      "phase_index": 1037,
+      "from": 8,
+      "to": 6,
+      "phase": 1,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 6
+    },
+    {
+      "phase_index": 1163,
+      "from": 9,
+      "to": 5,
+      "phase": 1,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 28
+    },
+    {
+      "phase_index": 1163,
+      "from": 9,
+      "to": 5,
+      "phase": 1,
+      "gate": "g3",
+      "metric": "arrival",
+      "baseline": 12,
+      "candidate": 30
+    },
+    {
+      "phase_index": 1163,
+      "from": 9,
+      "to": 5,
+      "phase": 1,
+      "gate": "g3",
+      "metric": "pulse_total",
+      "baseline": 4,
+      "candidate": 26
+    },
+    {
+      "phase_index": 1163,
+      "from": 9,
+      "to": 5,
+      "phase": 1,
+      "gate": "g3",
+      "metric": "pulse_worst",
+      "baseline": 4,
+      "candidate": 26
+    },
+    {
+      "phase_index": 1291,
+      "from": 10,
+      "to": 5,
+      "phase": 1,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 28
+    },
+    {
+      "phase_index": 1291,
+      "from": 10,
+      "to": 5,
+      "phase": 1,
+      "gate": "g3",
+      "metric": "arrival",
+      "baseline": 12,
+      "candidate": 30
+    },
+    {
+      "phase_index": 1291,
+      "from": 10,
+      "to": 5,
+      "phase": 1,
+      "gate": "g3",
+      "metric": "pulse_total",
+      "baseline": 4,
+      "candidate": 26
+    },
+    {
+      "phase_index": 1291,
+      "from": 10,
+      "to": 5,
+      "phase": 1,
+      "gate": "g3",
+      "metric": "pulse_worst",
+      "baseline": 4,
+      "candidate": 26
+    },
+    {
+      "phase_index": 1419,
+      "from": 11,
+      "to": 5,
+      "phase": 1,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 28
+    },
+    {
+      "phase_index": 1419,
+      "from": 11,
+      "to": 5,
+      "phase": 1,
+      "gate": "g3",
+      "metric": "arrival",
+      "baseline": 12,
+      "candidate": 30
+    },
+    {
+      "phase_index": 1419,
+      "from": 11,
+      "to": 5,
+      "phase": 1,
+      "gate": "g3",
+      "metric": "pulse_total",
+      "baseline": 4,
+      "candidate": 26
+    },
+    {
+      "phase_index": 1419,
+      "from": 11,
+      "to": 5,
+      "phase": 1,
+      "gate": "g3",
+      "metric": "pulse_worst",
+      "baseline": 4,
+      "candidate": 26
+    },
+    {
+      "phase_index": 1675,
+      "from": 13,
+      "to": 5,
+      "phase": 1,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 6
+    },
+    {
+      "phase_index": 1803,
+      "from": 14,
+      "to": 5,
+      "phase": 1,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 6
+    },
+    {
+      "phase_index": 1931,
+      "from": 15,
+      "to": 5,
+      "phase": 1,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 6
+    },
+    {
+      "phase_index": 2106,
+      "from": 16,
+      "to": 29,
+      "phase": 0,
+      "gate": "n1",
+      "metric": "arrival",
+      "baseline": 4,
+      "candidate": 26
+    },
+    {
+      "phase_index": 2113,
+      "from": 16,
+      "to": 32,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2113,
+      "from": 16,
+      "to": 32,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 4
+    },
+    {
+      "phase_index": 2113,
+      "from": 16,
+      "to": 32,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2113,
+      "from": 16,
+      "to": 32,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2113,
+      "from": 16,
+      "to": 32,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2113,
+      "from": 16,
+      "to": 32,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2113,
+      "from": 16,
+      "to": 32,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2113,
+      "from": 16,
+      "to": 32,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2114,
+      "from": 16,
+      "to": 33,
+      "phase": 0,
+      "gate": "n5",
+      "metric": "arrival",
+      "baseline": 6,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2115,
+      "from": 16,
+      "to": 33,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2115,
+      "from": 16,
+      "to": 33,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 4
+    },
+    {
+      "phase_index": 2115,
+      "from": 16,
+      "to": 33,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2115,
+      "from": 16,
+      "to": 33,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2115,
+      "from": 16,
+      "to": 33,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2115,
+      "from": 16,
+      "to": 33,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2115,
+      "from": 16,
+      "to": 33,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2115,
+      "from": 16,
+      "to": 33,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2116,
+      "from": 16,
+      "to": 34,
+      "phase": 0,
+      "gate": "n5",
+      "metric": "arrival",
+      "baseline": 6,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2117,
+      "from": 16,
+      "to": 34,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2117,
+      "from": 16,
+      "to": 34,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 4
+    },
+    {
+      "phase_index": 2117,
+      "from": 16,
+      "to": 34,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2117,
+      "from": 16,
+      "to": 34,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2117,
+      "from": 16,
+      "to": 34,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2117,
+      "from": 16,
+      "to": 34,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2117,
+      "from": 16,
+      "to": 34,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2117,
+      "from": 16,
+      "to": 34,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2118,
+      "from": 16,
+      "to": 35,
+      "phase": 0,
+      "gate": "n5",
+      "metric": "arrival",
+      "baseline": 6,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2119,
+      "from": 16,
+      "to": 35,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2119,
+      "from": 16,
+      "to": 35,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 4
+    },
+    {
+      "phase_index": 2119,
+      "from": 16,
+      "to": 35,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2119,
+      "from": 16,
+      "to": 35,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2119,
+      "from": 16,
+      "to": 35,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2119,
+      "from": 16,
+      "to": 35,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2119,
+      "from": 16,
+      "to": 35,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2119,
+      "from": 16,
+      "to": 35,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2120,
+      "from": 16,
+      "to": 36,
+      "phase": 0,
+      "gate": "n5",
+      "metric": "arrival",
+      "baseline": 6,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2121,
+      "from": 16,
+      "to": 36,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2121,
+      "from": 16,
+      "to": 36,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 4
+    },
+    {
+      "phase_index": 2121,
+      "from": 16,
+      "to": 36,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2121,
+      "from": 16,
+      "to": 36,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2121,
+      "from": 16,
+      "to": 36,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2121,
+      "from": 16,
+      "to": 36,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2121,
+      "from": 16,
+      "to": 36,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2121,
+      "from": 16,
+      "to": 36,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2122,
+      "from": 16,
+      "to": 37,
+      "phase": 0,
+      "gate": "n5",
+      "metric": "arrival",
+      "baseline": 6,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2123,
+      "from": 16,
+      "to": 37,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2123,
+      "from": 16,
+      "to": 37,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 4
+    },
+    {
+      "phase_index": 2123,
+      "from": 16,
+      "to": 37,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2123,
+      "from": 16,
+      "to": 37,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2123,
+      "from": 16,
+      "to": 37,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2123,
+      "from": 16,
+      "to": 37,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2123,
+      "from": 16,
+      "to": 37,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2123,
+      "from": 16,
+      "to": 37,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2124,
+      "from": 16,
+      "to": 38,
+      "phase": 0,
+      "gate": "n5",
+      "metric": "arrival",
+      "baseline": 6,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2125,
+      "from": 16,
+      "to": 38,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2125,
+      "from": 16,
+      "to": 38,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 4
+    },
+    {
+      "phase_index": 2125,
+      "from": 16,
+      "to": 38,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2125,
+      "from": 16,
+      "to": 38,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2125,
+      "from": 16,
+      "to": 38,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2125,
+      "from": 16,
+      "to": 38,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2125,
+      "from": 16,
+      "to": 38,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2125,
+      "from": 16,
+      "to": 38,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2126,
+      "from": 16,
+      "to": 39,
+      "phase": 0,
+      "gate": "n5",
+      "metric": "arrival",
+      "baseline": 6,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2127,
+      "from": 16,
+      "to": 39,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2127,
+      "from": 16,
+      "to": 39,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 4
+    },
+    {
+      "phase_index": 2127,
+      "from": 16,
+      "to": 39,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2127,
+      "from": 16,
+      "to": 39,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2127,
+      "from": 16,
+      "to": 39,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2127,
+      "from": 16,
+      "to": 39,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2127,
+      "from": 16,
+      "to": 39,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2127,
+      "from": 16,
+      "to": 39,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2128,
+      "from": 16,
+      "to": 40,
+      "phase": 0,
+      "gate": "n5",
+      "metric": "arrival",
+      "baseline": 6,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2129,
+      "from": 16,
+      "to": 40,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2129,
+      "from": 16,
+      "to": 40,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 4
+    },
+    {
+      "phase_index": 2129,
+      "from": 16,
+      "to": 40,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2129,
+      "from": 16,
+      "to": 40,
+      "phase": 1,
+      "gate": "g5",
+      "metric": "pulse_worst",
+      "baseline": 0,
+      "candidate": 2
+    },
+    {
+      "phase_index": 2129,
+      "from": 16,
+      "to": 40,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "glitch",
+      "baseline": 0,
+      "candidate": 1
+    },
+    {
+      "phase_index": 2129,
+      "from": 16,
+      "to": 40,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "arrival",
+      "baseline": 0,
+      "candidate": 8
+    },
+    {
+      "phase_index": 2129,
+      "from": 16,
+      "to": 40,
+      "phase": 1,
+      "gate": "g6",
+      "metric": "pulse_total",
+      "baseline": 0,
+      "candidate": 2
+    }
+  ],
+  "metrics": [
+    "glitch",
+    "single_input_glitch",
+    "arrival",
+    "pulse_total",
+    "pulse_worst"
+  ],
+  "unmapped_gates": []
+}

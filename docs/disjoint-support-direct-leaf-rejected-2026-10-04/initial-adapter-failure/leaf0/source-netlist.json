@@ -1,0 +1,36 @@
+{
+  "gates": [
+    {
+      "inputs": [],
+      "kind": "Nor(0)",
+      "name": "g0",
+      "output": "g0"
+    },
+    {
+      "inputs": [
+        "g0"
+      ],
+      "kind": "Nor(1)",
+      "name": "g1",
+      "output": "g1"
+    },
+    {
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "kind": "Or(2)",
+      "name": "g2",
+      "output": "g2"
+    }
+  ],
+  "inputs": [
+    "a",
+    "b"
+  ],
+  "outputs": [
+    "g2",
+    "g1",
+    "g0"
+  ]
+}

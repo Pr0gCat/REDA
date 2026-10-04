@@ -1,0 +1,15 @@
+{
+  "baseline_entry": "compile_without_rewrite(exact_root_cone_source)",
+  "candidate_entry": "compile_original_leaf(exact_root_cone_source)",
+  "labels": [
+    "u",
+    "z",
+    "o"
+  ],
+  "metrics": "per-phase settle/processed queue/cell boolean events plus all driver/lamp channels' glitches, single-input glitches, arrival, total/worst pulse; every metric must not regress",
+  "observer_policy": "wire power > 0; other cells lit; typed identities preserve shared-site public occurrences",
+  "queue_event_cap": 1000000,
+  "retained_phases": 32,
+  "states": 4,
+  "tick_cap": 2000
+}

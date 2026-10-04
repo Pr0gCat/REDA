@@ -1,0 +1,278 @@
+{
+  "phase": {
+    "phase_index": 2113,
+    "from": 16,
+    "to": 32,
+    "phase": 1,
+    "gate": "g5",
+    "metric": "glitch",
+    "baseline": 0,
+    "candidate": 1
+  },
+  "events": [
+    {
+      "tick": 4,
+      "id": {
+        "InstanceOutput": 6
+      },
+      "position": [
+        70,
+        1,
+        33
+      ],
+      "label": "gate:n2",
+      "value": true,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": "North",
+        "half": null,
+        "kind": "WallTorch",
+        "lit": true,
+        "name": "minecraft:redstone_wall_torch",
+        "power": 0
+      }
+    },
+    {
+      "tick": 4,
+      "id": {
+        "InstanceOutput": 7
+      },
+      "position": [
+        98,
+        1,
+        33
+      ],
+      "label": "gate:n3",
+      "value": false,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": "North",
+        "half": null,
+        "kind": "WallTorch",
+        "lit": true,
+        "name": "minecraft:redstone_wall_torch",
+        "power": 0
+      }
+    },
+    {
+      "tick": 8,
+      "id": {
+        "InstanceOutput": 14
+      },
+      "position": [
+        96,
+        1,
+        15
+      ],
+      "label": "gate:g8",
+      "value": true,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": "North",
+        "half": null,
+        "kind": "WallTorch",
+        "lit": true,
+        "name": "minecraft:redstone_wall_torch",
+        "power": 0
+      }
+    },
+    {
+      "tick": 8,
+      "id": {
+        "JunctionOutput": 8
+      },
+      "position": [
+        96,
+        1,
+        15
+      ],
+      "label": "driver:r",
+      "value": true,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": "North",
+        "half": null,
+        "kind": "WallTorch",
+        "lit": true,
+        "name": "minecraft:redstone_wall_torch",
+        "power": 0
+      }
+    },
+    {
+      "tick": 9,
+      "id": {
+        "DeclaredOutput": 8
+      },
+      "position": [
+        96,
+        0,
+        14
+      ],
+      "label": "lamp:r",
+      "value": true,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "Lamp",
+        "lit": false,
+        "name": "minecraft:redstone_lamp",
+        "power": 0
+      }
+    },
+    {
+      "tick": 10,
+      "id": {
+        "InstanceOutput": 8
+      },
+      "position": [
+        54,
+        1,
+        15
+      ],
+      "label": "gate:n4",
+      "value": false,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": "North",
+        "half": null,
+        "kind": "WallTorch",
+        "lit": true,
+        "name": "minecraft:redstone_wall_torch",
+        "power": 0
+      }
+    },
+    {
+      "tick": 12,
+      "id": {
+        "InstanceOutput": 10
+      },
+      "position": [
+        56,
+        1,
+        5
+      ],
+      "label": "gate:g4",
+      "value": false,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "RedstoneWire",
+        "lit": false,
+        "name": "minecraft:redstone_wire",
+        "power": 0
+      }
+    },
+    {
+      "tick": 12,
+      "id": {
+        "JunctionOutput": 6
+      },
+      "position": [
+        56,
+        1,
+        5
+      ],
+      "label": "driver:y",
+      "value": false,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "RedstoneWire",
+        "lit": false,
+        "name": "minecraft:redstone_wire",
+        "power": 0
+      }
+    },
+    {
+      "tick": 12,
+      "id": {
+        "InstanceOutput": 9
+      },
+      "position": [
+        68,
+        1,
+        15
+      ],
+      "label": "gate:n5",
+      "value": true,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": "North",
+        "half": null,
+        "kind": "WallTorch",
+        "lit": true,
+        "name": "minecraft:redstone_wall_torch",
+        "power": 0
+      }
+    },
+    {
+      "tick": 14,
+      "id": {
+        "InstanceOutput": 10
+      },
+      "position": [
+        56,
+        1,
+        5
+      ],
+      "label": "gate:g4",
+      "value": true,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "RedstoneWire",
+        "lit": false,
+        "name": "minecraft:redstone_wire",
+        "power": 0
+      }
+    },
+    {
+      "tick": 14,
+      "id": {
+        "JunctionOutput": 6
+      },
+      "position": [
+        56,
+        1,
+        5
+      ],
+      "label": "driver:y",
+      "value": true,
+      "cell": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "RedstoneWire",
+        "lit": false,
+        "name": "minecraft:redstone_wire",
+        "power": 0
+      }
+    }
+  ]
+}

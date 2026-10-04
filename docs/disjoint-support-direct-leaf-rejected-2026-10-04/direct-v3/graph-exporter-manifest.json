@@ -1,0 +1,20 @@
+{
+  "/tmp/reda-native-direct-composition-20261004/evidence/direct-v3/graph-exporter.rs": {
+    "sha256": "bb34d6853b59c2851ff7fed897d7ecd2beb671b3edd84d7d179debc1b1075b12",
+    "bytes": 1518
+  },
+  "/tmp/reda-native-direct-composition-20261004/evidence/direct-v3/graph-exporter": {
+    "sha256": "fd83c29d31a87b8f2c36bb3b338d678cca5b6dc08dbb45709fa8423362446b5f",
+    "bytes": 25993560
+  },
+  "/tmp/reda-native-direct-composition-20261004/target/debug/deps/libreda-a12b971a883e3664.rlib": {
+    "sha256": "0bdd2d4122999633dc9dc9b43492116983972b7dd4ef238457ba4044ba221672",
+    "bytes": 113863458
+  },
+  "freeze": {
+    "utc": "2026-10-04T11:31:35.847843+00:00",
+    "before_execution": true,
+    "library_identical_to_phase_producer": true,
+    "purpose": "actual graph extraction only; no retained phase simulation rerun"
+  }
+}

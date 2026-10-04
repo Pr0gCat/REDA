@@ -1,0 +1,6 @@
+{
+  "accepted": true,
+  "baseline_phases": 32,
+  "candidate_phases": 32,
+  "scope": "this frozen whole-default six-input/nine-port comparison only"
+}

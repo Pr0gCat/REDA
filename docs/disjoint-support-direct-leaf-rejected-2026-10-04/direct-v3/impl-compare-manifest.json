@@ -1,0 +1,6 @@
+{
+  "source_sha256": "24bbf844079cfbacdc2d9a317d66fcbf07be4e840d58e7fbdf7dfacf8d4be114",
+  "frozen_before_analysis": true,
+  "utc": "2026-10-04T11:33:14.804469+00:00",
+  "protocol_extension": "all uniquely structurally matched implementation gates also require phasewise glitch/single-input-glitch/arrival/total+worst pulse non-regression; validate kind/input/output bijection and independently check every end-phase gate truth"
+}

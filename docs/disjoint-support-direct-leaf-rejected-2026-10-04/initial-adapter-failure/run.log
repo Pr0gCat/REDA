@@ -1,0 +1,6 @@
+original/default: compiling the frozen six-input/nine-occurrence source
+original/default: frozen; candidate: generating
+
+thread 'main' (3) panicked at src/compile/fragment_synth/torch_row.rs:616:26:
+no entry found for key
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

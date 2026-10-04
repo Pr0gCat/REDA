@@ -1,0 +1,217 @@
+{
+  "accepted": false,
+  "regression_counts": {
+    "ticks": 735,
+    "processed_queue_events": 156,
+    "cell_boolean_events": 304,
+    "channel3:metric2": 15,
+    "channel3:metric3": 15,
+    "channel3:metric4": 15,
+    "channel4:metric2": 15,
+    "channel4:metric3": 15,
+    "channel4:metric4": 15,
+    "channel12:metric2": 15,
+    "channel12:metric3": 15,
+    "channel12:metric4": 15,
+    "channel13:metric2": 15,
+    "channel13:metric3": 15,
+    "channel13:metric4": 15,
+    "channel7:metric0": 512,
+    "channel7:metric2": 512,
+    "channel7:metric3": 512,
+    "channel7:metric4": 512,
+    "channel16:metric0": 512,
+    "channel16:metric2": 512,
+    "channel16:metric3": 512,
+    "channel16:metric4": 512,
+    "channel6:metric2": 1024,
+    "channel15:metric2": 1024
+  },
+  "improvement_counts": {
+    "cell_boolean_events": 7759,
+    "ticks": 6816,
+    "processed_queue_events": 6752
+  },
+  "first_20_regressions": [
+    {
+      "phase_index": 26,
+      "from": 0,
+      "to": 13,
+      "phase": 0,
+      "metric": "ticks",
+      "baseline": 14,
+      "candidate": 26
+    },
+    {
+      "phase_index": 26,
+      "from": 0,
+      "to": 13,
+      "phase": 0,
+      "metric": "processed_queue_events",
+      "baseline": 14,
+      "candidate": 18
+    },
+    {
+      "phase_index": 33,
+      "from": 0,
+      "to": 16,
+      "phase": 1,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 34,
+      "from": 0,
+      "to": 17,
+      "phase": 0,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 154,
+      "from": 1,
+      "to": 13,
+      "phase": 0,
+      "metric": "ticks",
+      "baseline": 14,
+      "candidate": 36
+    },
+    {
+      "phase_index": 154,
+      "from": 1,
+      "to": 13,
+      "phase": 0,
+      "metric": "processed_queue_events",
+      "baseline": 16,
+      "candidate": 25
+    },
+    {
+      "phase_index": 163,
+      "from": 1,
+      "to": 17,
+      "phase": 1,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 164,
+      "from": 1,
+      "to": 18,
+      "phase": 0,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 282,
+      "from": 2,
+      "to": 13,
+      "phase": 0,
+      "metric": "ticks",
+      "baseline": 14,
+      "candidate": 36
+    },
+    {
+      "phase_index": 282,
+      "from": 2,
+      "to": 13,
+      "phase": 0,
+      "metric": "processed_queue_events",
+      "baseline": 16,
+      "candidate": 25
+    },
+    {
+      "phase_index": 293,
+      "from": 2,
+      "to": 18,
+      "phase": 1,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 294,
+      "from": 2,
+      "to": 19,
+      "phase": 0,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 410,
+      "from": 3,
+      "to": 13,
+      "phase": 0,
+      "metric": "ticks",
+      "baseline": 14,
+      "candidate": 36
+    },
+    {
+      "phase_index": 410,
+      "from": 3,
+      "to": 13,
+      "phase": 0,
+      "metric": "processed_queue_events",
+      "baseline": 17,
+      "candidate": 26
+    },
+    {
+      "phase_index": 423,
+      "from": 3,
+      "to": 19,
+      "phase": 1,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 424,
+      "from": 3,
+      "to": 20,
+      "phase": 0,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 553,
+      "from": 4,
+      "to": 20,
+      "phase": 1,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 554,
+      "from": 4,
+      "to": 21,
+      "phase": 0,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 683,
+      "from": 5,
+      "to": 21,
+      "phase": 1,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    },
+    {
+      "phase_index": 684,
+      "from": 5,
+      "to": 22,
+      "phase": 0,
+      "metric": "cell_boolean_events",
+      "baseline": 167,
+      "candidate": 173
+    }
+  ]
+}
