@@ -62,7 +62,7 @@ fn select_with(
 ) -> Result<SelectedFrontend, String> {
     let mut fallback_reason = None;
     if mode != FrontendMode::Yosys {
-        match compile_systemverilog(&[source.clone()], &CompileOptions::new(top)) {
+        match compile_systemverilog(std::slice::from_ref(&source), &CompileOptions::new(top)) {
             Ok(artifact) => {
                 let outputs = artifact.output_map();
                 return Ok(SelectedFrontend {
@@ -75,7 +75,7 @@ fn select_with(
             Err(diagnostics) => {
                 let reason = diagnostics
                     .iter()
-                    .map(|d| d.render(&[source.clone()]))
+                    .map(|d| d.render(std::slice::from_ref(&source)))
                     .collect::<Vec<_>>()
                     .join("\n");
                 if mode != FrontendMode::Auto || !allows_fallback(&diagnostics) {
