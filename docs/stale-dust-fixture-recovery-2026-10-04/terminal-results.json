@@ -1,0 +1,14 @@
+{
+  "historical": {
+    "exit_code": 0,
+    "log_sha256": "76e735ac19901dff9d437cbabe0c4a9f3e28c6b6e04eb1312b5fa9d330e5de85"
+  },
+  "positive": {
+    "exit_code": 0,
+    "log_sha256": "1e78ced1e561cb888fc6976896f03fb9093334dce3358ae29493026e08b0dcd9"
+  },
+  "negative": {
+    "exit_code": 101,
+    "log_sha256": "3756d47c7b76b77fdff3357ad701ba6f552439c45c05e666f81b3d3da7bc4048"
+  }
+}

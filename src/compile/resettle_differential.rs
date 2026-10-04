@@ -147,47 +147,16 @@ fn diff_line(label: &str, settled: &World) -> (Resettle, String) {
 /// ([`PresentSchedule::SHIPPING`]), realised, `g11`'s per-origin isolation
 /// world, with the route repeater at `(56, 1, 91)` reversed.
 fn the_reported_world() -> World {
-    use crate::circuits::full_adder::build_full_adder_netlist;
-
-    let (netlist, _) = build_full_adder_netlist();
-    let candidate = plan_negotiated_on_schedule(
-        &netlist,
-        &PortPlacements::default(),
-        NEGOTIATION_ROUNDS,
-        PresentSchedule::SHIPPING,
-    )
-    .expect("negotiated full_adder routes");
-    let parts =
-        planner::realise_without_verifying(&candidate, &netlist, candidate_world_size(&candidate))
-            .expect("it realises");
-    let world = &parts.realised.world;
-    let ports = &parts.realised.ports;
-
-    let g11 = netlist
-        .gates
-        .iter()
-        .find(|gate| gate.name == "g11")
-        .expect("full_adder has a gate named g11");
-    let origin = ports.gate_output_positions[&g11.output];
-    let origin = Position::new(origin.0, origin.1, origin.2);
-
-    let sources = every_source(
-        &netlist,
-        &ports.gate_output_positions,
-        &ports.input_positions,
-    );
-    let mut isolated = isolation_world(world, &sources, origin);
-
-    let repeater = Position::new(56, 1, 91);
-    let mut state = isolated.get(repeater.x, repeater.y, repeater.z).clone();
+    use sha2::{Digest, Sha256};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/stale_dust_reported.litematic");
+    let bytes = std::fs::read(&path).expect("the immutable reported world exists");
     assert_eq!(
-        state.kind,
-        BlockKind::Repeater,
-        "the reported recipe names a repeater at (56, 1, 91)"
+        format!("{:x}", Sha256::digest(&bytes)),
+        "4df762a5596b2b0a7474505632a67c83a7081726ccd89a9889d7cd59b8ba6f63",
+        "the historical stale-dust world must remain unchanged"
     );
-    state.facing = Some(state.facing.expect("a repeater has a facing").opposite());
-    isolated.set(repeater.x, repeater.y, repeater.z, state);
-    isolated
+    crate::formats::litematic::load(&path).expect("the historical world loads")
 }
 
 /// **The reported case, settling clean.** This test used to be the pin that

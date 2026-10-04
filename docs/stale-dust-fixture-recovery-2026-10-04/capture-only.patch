@@ -1,0 +1,10 @@
+--- a/src/compile/resettle_differential.rs
++++ b/src/compile/resettle_differential.rs
+@@ -184,6 +184,7 @@
+     );
+     state.facing = Some(state.facing.expect("a repeater has a facing").opposite());
+     isolated.set(repeater.x, repeater.y, repeater.z, state);
++    crate::formats::litematic::save(std::path::Path::new("/tmp/reda-stale-historical-20261004/reported.litematic"), &isolated, "historical-stale-dust-78d5185").unwrap();
+     isolated
+ }
+ 

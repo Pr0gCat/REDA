@@ -1,0 +1,47 @@
+--- a/src/compile/resettle_differential.rs
++++ b/src/compile/resettle_differential.rs
+@@ -716,3 +716,44 @@
+     );
+ }
+ 
++
++#[test]
++fn the_restored_world_catches_the_original_stale_dust_defect() {
++    let world = crate::formats::litematic::load(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/stale_dust_reported.litematic"))).unwrap();
++    let mut simulator = Simulator::new(world);
++    simulator
++        .run_until_stable(MAX_TICKS)
++        .expect("the isolation world settles");
++    let settled = simulator.world().clone();
++
++    // The chain the report named, read straight out of the incremental
++    // settle -- the values only the oracle used to see.
++    for (expected, position) in [
++        (10u8, Position::new(57, 2, 99)),
++        (9, Position::new(56, 1, 99)),
++        (8, Position::new(57, 1, 99)),
++        (7, Position::new(58, 1, 99)),
++        (6, Position::new(59, 1, 99)),
++    ] {
++        assert_eq!(
++            settled.get(position.x, position.y, position.z).power,
++            expected,
++            "({}, {}, {}) must carry the re-settled chain's value",
++            position.x,
++            position.y,
++            position.z
++        );
++    }
++
++    let (result, line) = diff_line("reported case", &settled);
++    eprintln!("{line}");
++    for diff in &result.diffs {
++        eprintln!("{}", describe(&result.world, diff));
++    }
++    assert!(
++        result.diffs.is_empty(),
++        "the reported world's incremental settle must agree with the full \
++         re-settle everywhere"
++    );
++}
++
