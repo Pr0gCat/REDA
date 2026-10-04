@@ -11,4 +11,7 @@
 
 ## 額外問題待辦
 
-目前沒有因本補充而新增的待辦。後續每筆記錄須標明與八項驗收的關係，不得自動轉成實作任務。
+以下額外問題僅記錄，不自動轉成實作任務：
+
+1. Minecraft watchdog 關閉：既有 server log 於18:57報告單 tick60.14秒，19:00保存 crash report；主機程序檢查已無 server。這阻擋缺口7的ROM64遊戲驗證。此前啟動與396,900格空氣預檢已完成，但實際遊戲 driver 連線拒絕，不能算遊戲通過。已向使用者詢問先完成其他缺口或暫緩新重型實驗優先驗遊戲；答覆前不再調查伺服器、不改watchdog／tick／physics設定。
+2. 暫存驗收目錄不再存在：主機與沙箱均確認 `/tmp/reda-six-default-20261004`、`/tmp/reda-root-inout-component-20261004`、`/tmp/reda-rom64-certified-game-export-20261004` 不存在。原因未調查；未保存在repository的source、binary或raw evidence不可再宣稱目前可重播。已提交6905d58的ROM64三次驗收及第三次原始gzip仍保留。此事影響各缺口的可重建驗收；先保全尚存patch並沿現有workspace儲存位置繼續原工作，不另開環境修復任務。
