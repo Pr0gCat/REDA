@@ -1,0 +1,1666 @@
+[
+  {
+    "state": 0,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "Z",
+    "resolver": {
+      "value": 0,
+      "present": false,
+      "conflict": false,
+      "floating": true,
+      "valid": false
+    },
+    "diagnosis": "FloatingBus"
+  },
+  {
+    "state": 1,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 2,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "Z",
+    "resolver": {
+      "value": 0,
+      "present": false,
+      "conflict": false,
+      "floating": true,
+      "valid": false
+    },
+    "diagnosis": "FloatingBus"
+  },
+  {
+    "state": 3,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 4,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 5,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 6,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 7,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 8,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "Z",
+    "resolver": {
+      "value": 0,
+      "present": false,
+      "conflict": false,
+      "floating": true,
+      "valid": false
+    },
+    "diagnosis": "FloatingBus"
+  },
+  {
+    "state": 9,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 10,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "Z",
+    "resolver": {
+      "value": 0,
+      "present": false,
+      "conflict": false,
+      "floating": true,
+      "valid": false
+    },
+    "diagnosis": "FloatingBus"
+  },
+  {
+    "state": 11,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 12,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 13,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 14,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 15,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        false
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 16,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 17,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 18,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 19,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 20,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 21,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 22,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 23,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 24,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 25,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 26,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 27,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 28,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 29,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 30,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 31,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        false
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 32,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "Z",
+    "resolver": {
+      "value": 0,
+      "present": false,
+      "conflict": false,
+      "floating": true,
+      "valid": false
+    },
+    "diagnosis": "FloatingBus"
+  },
+  {
+    "state": 33,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 34,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "Z",
+    "resolver": {
+      "value": 0,
+      "present": false,
+      "conflict": false,
+      "floating": true,
+      "valid": false
+    },
+    "diagnosis": "FloatingBus"
+  },
+  {
+    "state": 35,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 36,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 37,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 38,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 39,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 40,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "Z",
+    "resolver": {
+      "value": 0,
+      "present": false,
+      "conflict": false,
+      "floating": true,
+      "valid": false
+    },
+    "diagnosis": "FloatingBus"
+  },
+  {
+    "state": 41,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "0",
+    "resolver": {
+      "value": 0,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 42,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "Z",
+    "resolver": {
+      "value": 0,
+      "present": false,
+      "conflict": false,
+      "floating": true,
+      "valid": false
+    },
+    "diagnosis": "FloatingBus"
+  },
+  {
+    "state": 43,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 44,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 45,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 46,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 47,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 48,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 49,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 50,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 51,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 52,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 53,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 54,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 55,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 56,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 57,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 58,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 59,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 60,
+    "drivers": [
+      [
+        false,
+        false
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 61,
+    "drivers": [
+      [
+        true,
+        false
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "X",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": true,
+      "floating": false,
+      "valid": false
+    },
+    "diagnosis": "ContentionBus"
+  },
+  {
+    "state": 62,
+    "drivers": [
+      [
+        false,
+        true
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  },
+  {
+    "state": 63,
+    "drivers": [
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "expected": "1",
+    "resolver": {
+      "value": 1,
+      "present": true,
+      "conflict": false,
+      "floating": false,
+      "valid": true
+    },
+    "diagnosis": "valid"
+  }
+]

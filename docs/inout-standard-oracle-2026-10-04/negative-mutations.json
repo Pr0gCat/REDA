@@ -1,0 +1,16 @@
+[
+  {
+    "name": "floating_defaults_zero",
+    "state": 0,
+    "reference": "Z",
+    "mutated_observation": 0,
+    "caught_by_domain_oracle": true
+  },
+  {
+    "name": "conflict_returns_high",
+    "state": 19,
+    "reference": "X",
+    "mutated_observation": 1,
+    "caught_by_domain_oracle": true
+  }
+]

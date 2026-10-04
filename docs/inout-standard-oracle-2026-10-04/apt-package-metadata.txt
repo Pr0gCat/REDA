@@ -1,0 +1,31 @@
+Package: iverilog
+Architecture: amd64
+Version: 12.0-2build2
+Priority: optional
+Section: universe/electronics
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Debian Electronics Team <pkg-electronics-devel@alioth-lists.debian.net>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 6668
+Provides: verilog
+Depends: libbz2-1.0, libc6 (>= 2.38), libgcc-s1 (>= 3.3.1), libreadline8t64 (>= 6.0), libstdc++6 (>= 13.1), zlib1g (>= 1:1.2.0)
+Suggests: gtkwave
+Breaks: verilog (<< 10.2-1.1~)
+Replaces: verilog (<< 10.2-1.1~)
+Filename: pool/universe/i/iverilog/iverilog_12.0-2build2_amd64.deb
+Size: 2125764
+MD5sum: 74fa17dfe0d157a6568e2213cce2da5c
+SHA1: 46cd16767b5d91c5cf255f88cd9430362d473647
+SHA256: f19394cee05ad526e0eb3873bc6c17a5828f56df17fbe2db40cb66513a2d4667
+SHA512: 80dcb15748fa7dad7097968bf5fae0cbaef247b3c0c61ed62863f40d101c2347f6d9c7fc417b3f2a44ab20ed246d18588b9c1b4c841dc87573f98b21fc852523
+Homepage: http://iverilog.icarus.com
+Description-en: Icarus verilog compiler
+ Icarus Verilog is intended to compile all of the Verilog HDL as
+ described in the IEEE-1364 standard. It is not quite there
+ yet. It does currently handle a mix of structural and behavioral
+ constructs.
+ .
+ The compiler can target either simulation, or netlist (EDIF).
+Description-md5: 8d6c25d1601b4e55eb201717e035adb9
+

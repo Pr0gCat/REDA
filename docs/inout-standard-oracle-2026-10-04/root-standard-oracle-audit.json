@@ -1,0 +1,19 @@
+{
+  "standard_simulator": "Ubuntu Icarus Verilog12.0-2build2, isolated extracted official package",
+  "states": 64,
+  "transition_pairs": 4096,
+  "settled_endpoint_rows": 8192,
+  "classification_mismatches": 0,
+  "public_readback_assertions_passed": 8192,
+  "physical_evidence": false,
+  "reda_inout_support_claim": false,
+  "hashes": {
+    "/tmp/reda-inout-contract-oracle-20261004/fixture.sv": "5e9d6e002868931329f7e1303f57b646e364ddfb4b06ed90ef2f8013353d592c",
+    "/tmp/reda-inout-contract-oracle-20261004/oracle_tb.sv": "9988c97ca77a54def9e7b2b9dc8182265aadc64e2a56c20eb69ea0e2d1dc2b1f",
+    "/tmp/reda-inout-contract-oracle-20261004/standard-oracle.vvp": "1b24212e824d9291e9710ed2db254546eccf8d55a2683b089c78f6b96e920daa",
+    "/tmp/reda-inout-contract-oracle-20261004/standard-oracle.csv": "170ba618e6867e9e07d8233d6ce2609e8c28cd2f00e1f01ee55103d697d2eb50",
+    "/tmp/reda-iverilog-20261004/iverilog_12.0-2build2_amd64.deb": "f19394cee05ad526e0eb3873bc6c17a5828f56df17fbe2db40cb66513a2d4667",
+    "/tmp/reda-iverilog-20261004/root/usr/bin/iverilog": "a6071e4b4a68feafca0c8ee0e6aa275eee9a43a108c62801cfd1eca6eab6d8a3",
+    "/tmp/reda-iverilog-20261004/root/usr/bin/vvp": "a10bd7d4a0850308ac8c2c98115b6a3084f9be978307610f2a521190c28f4023"
+  }
+}

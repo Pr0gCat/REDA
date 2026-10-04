@@ -1,0 +1,11 @@
+# Frozen initial resolved-bus contract
+
+Scope: acyclic continuous Boolean tri-state assignments, settled observation, one bit with two internal drivers and one external driver. No read-dependent drive, clocks, strength hierarchy, pulls, unknown selectors/data, or unrestricted four-state arithmetic. Every driver has a Boolean value and Boolean presence; disabled data is irrelevant. External protocol separately supplies ext_present and ext_value, and actually drives the shared physical bus consistently. A future materialized shared channel needs diode-isolated injection and a read tap; none is implemented here. Sidebands are protocol metadata, not substituted HDL inout pins.
+
+State index uses e0 bit0,d0 bit1,e1 bit2,d1 bit3,ext_present bit4,ext_value bit5. Enumerate all64 states and all4096 ordered transitions in one logical run, observe both settled endpoints. Equal overlapping drivers are legal. No active driver resolves Z; active opposite values resolve X. A checked observation returns 0/1 only for valid states, and raises FloatingBus or ContentionBus otherwise. Raw value high on invalid states has no HDL meaning.
+
+Reference classifier independently lists active Boolean values: none=>Z, every value equal=>0/1, disagree=>X. Candidate Boolean resolver uses high=OR(p&v),low=OR(p&!v),present=high|low,conflict=high&low,value=high. Equivalence against this declarative electrical-resolution model is useful mathematical evidence; it is not independent standard-HDL simulator evidence. Python does not execute SystemVerilog.
+
+The frozen SV testbench is ready for an independent four-state event simulator: `iverilog -g2012 -s oracle_tb -o oracle.vvp fixture.sv oracle_tb.sv`, then `vvp oracle.vvp`. #1 means one simulator timescale delay after input change; it is not a redstone/game tick or a physical settle bound. The actual game's settle protocol needs separate qualification. Never reinterpret this logical transition enumeration as continuous-wave physical evidence.
+
+No standard HDL event simulator was found by command-v for iverilog,verilator,nvc,ghdl or the searched local executable directories. No packages were installed. Therefore standard_simulator_evidence=false; generated expected HDL classifications remain unexecuted predictions. Yosys is not a substitute for this event-simulation oracle.

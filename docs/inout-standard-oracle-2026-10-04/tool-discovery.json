@@ -1,0 +1,17 @@
+{
+  "path_lookup": {
+    "iverilog": null,
+    "vvp": null,
+    "verilator": null,
+    "nvc": null,
+    "ghdl": null,
+    "yosys": null
+  },
+  "searched_roots": [
+    "/usr/local/bin",
+    "/home/seith/REDA/.venv/bin",
+    "/opt"
+  ],
+  "matching_files": [],
+  "installation_changes": false
+}
