@@ -1,0 +1,17 @@
+{
+  "base_head": "1711119",
+  "owned_source_sha256": {
+    "src/compile/fragment_synth/parent.rs": "d8eb92fe5d5ad397c03c3ebea827386682220ada2f478f2b1e3af83c7521ce43",
+    "src/compile/fragment_synth/packed_recursive.rs": "2c9d06c264ac236056dcbb74a57e856fa567c6a0d0e385823de19e708a04a7c4"
+  },
+  "clean_native_library_check_passed": true,
+  "clean_checkout_source": "git archive 1711119 plus only the two initially clean owned source files; fixtures restored from the same commit after an incomplete archive setup failed",
+  "runtime_test_scope": "Current worktree release library executable; these tests construct Netlists directly, not through frontend compilation. This executable predates the separate frontend provenance patch.",
+  "recursive_tests_passed": 15,
+  "recursive_existing_ignored_measurements": 2,
+  "parent_tests_passed": 41,
+  "parent_tests_ignored": 0,
+  "runtime_failures": 0,
+  "library_test_binary_sha256": "9917e275a10cb84008c82b3b7aff940b2e20886381aa851499b7542dfb3bc4e2",
+  "full_project_complete": false
+}

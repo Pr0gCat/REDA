@@ -1,0 +1,11 @@
+{
+  "adoption.md": "5f334c9f7de76cb924edc030df0135cce7e4e49b78fd129ebd33fdb1954de671",
+  "after-clippy.gz": "86736133dc0401324b902555f2b0e18312687e09d200ff34d1a8ee696b0e26a6",
+  "before-clippy.gz": "153cb96fd2dcb3cc04b6a8dcc4adcc87d95436570c21958c817f2e7a2fd6bbc8",
+  "candidate.patch.gz": "546a3ebf74c3d9a76ef50ebc0cec86b030a2dbe950238d42572eb616d8952aec",
+  "clean-check-setup-failure.gz": "759a453ee3b8c294d9c9490c9647e8ca5be83e242e1fae49f4c86eecb2a78e7b",
+  "clean-check.gz": "6aa00cd0b2580baa24611d56390aadb888d88b9789b1836f6877ab755a81d298",
+  "parent-tests.gz": "631ff370325ad54a2f80275e083b75fdfc9c86eb2d9c5527369c0d4648ec7096",
+  "qualification.json": "5cc4dd7d3e9eb7620d9932b6cbac756580e52ecade85f32f633388e310035bc2",
+  "recursive-tests.gz": "b844fd3574f4ffcb3562bb9497d3ef2a695194b2e86c5b091a9e44a74d70fa78"
+}

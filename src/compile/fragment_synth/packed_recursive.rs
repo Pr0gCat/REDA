@@ -107,24 +107,19 @@ impl PackedRecursiveProduct {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub(crate) enum PackedRecursiveError {
-    #[error(transparent)]
-    Partition(#[from] PartitionError),
-    #[error("node {chunk:?} has no gates to synthesise")]
+    Partition(PartitionError),
     NoGates { chunk: ChunkId },
-    #[error("node {chunk:?} split into a child of the same {gates} gates")]
     NoProgress { chunk: ChunkId, gates: usize },
     /// A one-gate leaf the router refused. Nothing smaller exists to split it
     /// into, so this is where a refusal stops descending; a larger leaf that
     /// refuses is repaired by splitting instead and never reaches here.
-    #[error("terminal child {index} ({chunk:?}) of {parent:?} refused its contract: {error}")]
     ChildRefused {
         index: usize,
         chunk: ChunkId,
         parent: ChunkId,
-        #[source]
-        error: FreeLeafError,
+        error: Box<FreeLeafError>,
     },
     /// A leaf the router refused, whose split repair then failed before it
     /// reached one gate. Both halves of the story are kept typed: the refusal
@@ -132,21 +127,49 @@ pub(crate) enum PackedRecursiveError {
     /// source. The index, chunk and parent are the refused child's own, so the
     /// lineage a caller reads is the one that was asked for, not the one the
     /// repair descended into.
-    #[error("child {index} ({chunk:?}) of {parent:?} refused its contract ({refusal}) and its split repair failed: {error}")]
     RepairFailed {
         index: usize,
         chunk: ChunkId,
         parent: ChunkId,
-        refusal: FreeLeafError,
-        #[source]
+        refusal: Box<FreeLeafError>,
         error: Box<PackedRecursiveError>,
     },
-    #[error("node {chunk:?} could not be packed: {error}")]
     Packed {
         chunk: ChunkId,
-        #[source]
-        error: PackedNodeError,
+        error: Box<PackedNodeError>,
     },
+}
+
+impl From<PartitionError> for PackedRecursiveError {
+    fn from(error: PartitionError) -> Self {
+        Self::Partition(error)
+    }
+}
+
+impl std::fmt::Display for PackedRecursiveError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Partition(error) => error.fmt(formatter),
+            Self::NoGates { chunk } => write!(formatter, "node {chunk:?} has no gates to synthesise"),
+            Self::NoProgress { chunk, gates } => write!(formatter, "node {chunk:?} split into a child of the same {gates} gates"),
+            Self::ChildRefused { index, chunk, parent, error } => write!(formatter, "terminal child {index} ({chunk:?}) of {parent:?} refused its contract: {error}"),
+            Self::RepairFailed { index, chunk, parent, refusal, error } => write!(formatter, "child {index} ({chunk:?}) of {parent:?} refused its contract ({refusal}) and its split repair failed: {error}"),
+            Self::Packed { chunk, error } => write!(formatter, "node {chunk:?} could not be packed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for PackedRecursiveError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // Keep the original typed causes even though their storage is boxed.
+        match self {
+            Self::Partition(error) => error.source(),
+            Self::ChildRefused { error, .. } => Some(error.as_ref()),
+            Self::RepairFailed { error, .. } => Some(error),
+            Self::Packed { error, .. } => Some(error.as_ref()),
+            Self::NoGates { .. } | Self::NoProgress { .. } => None,
+        }
+    }
 }
 
 /// The one contract every leaf in a packed tree is built to.
@@ -302,12 +325,12 @@ pub(crate) fn synthesise_packed_recursive_pinned<R: PhysicalRouter + Sync>(
         }
         let node = packed.map_err(|error| PackedRecursiveError::Packed {
             chunk: chunk.clone(),
-            error,
+            error: Box::new(error),
         })?;
         let artifact = into_parent_connectable(&node, parent).map_err(|error| {
             PackedRecursiveError::Packed {
                 chunk: chunk.clone(),
-                error,
+                error: Box::new(error),
             }
         })?;
         return Ok(PackedRecursiveProduct {
@@ -415,14 +438,14 @@ pub(crate) fn synthesise_packed_recursive_fabric<R: PhysicalRouter + Sync>(
         }
         let node = node.map_err(|error| PackedRecursiveError::Packed {
             chunk: chunk.clone(),
-            error,
+            error: Box::new(error),
         })?;
         break (artifacts, node);
     };
     let artifact = into_parent_connectable(&node, parent).map_err(|error| {
         PackedRecursiveError::Packed {
             chunk: chunk.clone(),
-            error,
+            error: Box::new(error),
         }
     })?;
     Ok(PackedRecursiveProduct {
@@ -460,7 +483,7 @@ fn build_leaf_finer(
                     index: 0,
                     chunk: chunk.id.clone(),
                     parent: chunk.id.clone(),
-                    refusal,
+                    refusal: Box::new(refusal),
                     error: Box::new(error),
                 }
             })
@@ -469,7 +492,7 @@ fn build_leaf_finer(
             index: 0,
             chunk: chunk.id.clone(),
             parent: chunk.id.clone(),
-            error,
+            error: Box::new(error),
         }),
     }
 }
@@ -541,7 +564,7 @@ fn synthesise_packed_recursive_using<R: PhysicalRouter + Sync>(
 
     let refuse = |error| PackedRecursiveError::Packed {
         chunk: chunk.clone(),
-        error,
+        error: Box::new(error),
     };
     let node = synthesise_packed_node(
         netlist,
@@ -854,7 +877,7 @@ fn synthesise_child<R: PhysicalRouter + Sync>(
                     index,
                     chunk: chunk.id.clone(),
                     parent: parent.clone(),
-                    error,
+                    error: Box::new(error),
                 })
             }
             // A refused leaf with room to split falls through to the same
@@ -892,7 +915,7 @@ fn synthesise_child<R: PhysicalRouter + Sync>(
                     index,
                     chunk: chunk.id.clone(),
                     parent: parent.clone(),
-                    refusal,
+                    refusal: Box::new(refusal),
                     error: Box::new(error),
                 },
                 None => error,
@@ -1793,7 +1816,7 @@ mod tests {
             *parent, inner,
             "the parent named is the nonterminal child, not the root"
         );
-        assert!(matches!(error, FreeLeafError::EmptyWorld));
+        assert!(matches!(error.as_ref(), FreeLeafError::EmptyWorld));
         let source = std::error::Error::source(&serial).expect("the leaf error is the source");
         assert!(source.downcast_ref::<FreeLeafError>().is_some());
 
@@ -1978,13 +2001,13 @@ mod tests {
                 panic!("expected a typed repair failure, got {failure}");
             };
             assert_eq!((*index, chunk, parent), (refused_index, &refused.id, &root));
-            assert!(matches!(refusal, FreeLeafError::EmptyWorld));
+            assert!(matches!(refusal.as_ref(), FreeLeafError::EmptyWorld));
             let repair_error = error;
             let PackedRecursiveError::Packed { chunk, error } = &**repair_error else {
                 panic!("the successful leaves must fail at packing, got {repair_error}");
             };
             assert_eq!(*chunk, inner);
-            assert!(matches!(error, PackedNodeError::LayoutsExhausted { .. }));
+            assert!(matches!(error.as_ref(), PackedNodeError::LayoutsExhausted { .. }));
             // thiserror exposes this boxed source as Box<PackedRecursiveError>,
             // not its dereferenced inner value.
             let source = std::error::Error::source(&failure).unwrap();
@@ -2073,7 +2096,7 @@ mod tests {
         assert_eq!(*index, 0);
         assert_eq!(*chunk, chunks[0].id);
         assert_eq!(*parent, root);
-        assert!(matches!(refusal, FreeLeafError::EmptyWorld));
+        assert!(matches!(refusal.as_ref(), FreeLeafError::EmptyWorld));
         let PackedRecursiveError::ChildRefused {
             index: half_index,
             chunk: half_chunk,
@@ -2089,7 +2112,7 @@ mod tests {
             *half_parent, inner,
             "the half's parent is the repaired child"
         );
-        assert!(matches!(half_error, FreeLeafError::EmptyWorld));
+        assert!(matches!(half_error.as_ref(), FreeLeafError::EmptyWorld));
     }
 
     /// The four-gate chain the production-grain tests use, as a fixture.

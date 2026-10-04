@@ -251,7 +251,7 @@ pub(crate) enum PackedConnectionError {
         /// which of its endpoints it is.  A caller that packs many nodes reads
         /// a bare signal name as ambiguous -- two nodes can both have an `a` --
         /// and a stable [`ChunkId`] is the only thing that is not.
-        source: Option<FreeLeafInterfaceId>,
+        source: Option<Box<FreeLeafInterfaceId>>,
         #[source]
         failure: RouterFailure,
     },
@@ -1280,7 +1280,7 @@ fn route_packed_trunks_on(
         let signal = trunk.signal.clone();
         let route = routed.map_err(|failure| PackedConnectionError::Route {
             signal: trunk.signal.clone(),
-            source: trunk.source_id.clone(),
+            source: trunk.source_id.clone().map(Box::new),
             failure,
         })?;
         for block in route.owned_blocks() {
