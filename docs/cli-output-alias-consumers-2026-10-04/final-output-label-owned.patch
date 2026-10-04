@@ -1,0 +1,68 @@
+diff --git a/src/bin/build_circuit.rs b/src/bin/build_circuit.rs
+index 19cc1e5..b0e3dd9 100644
+--- a/src/bin/build_circuit.rs
++++ b/src/bin/build_circuit.rs
+@@ -536,6 +536,19 @@ fn output_pinout<'a>(
+     Ok(entries)
+ }
+ 
++fn output_json_key<'a>(
++    labels: &[(String, String)],
++    placements: &PortPlacements,
++    label: &'a str,
++    signal: &'a str,
++) -> &'a str {
++    // One naming scheme for an aliased interface prevents a public alias
++    // from colliding with another output's internal signal key.
++    let aliased = labels.iter().any(|(_, driver)|
++        labels.iter().filter(|(_, other)| other == driver).count() > 1);
++    if placements.get(signal).is_some() || aliased { label } else { signal }
++}
++
+ fn print_pinout(
+     compiled: &CompiledCircuit,
+     output_labels: &[(String, String)],
+@@ -969,15 +982,23 @@ fn main() {
+             .into_iter()
+             .map(|(label, signal, position)| {
+                 let pin = placements.get(signal);
+-                let aliased = output_labels.iter().filter(|(_, driver)| driver == signal).count() > 1;
+-                let key = if pin.is_some() || aliased { label } else { signal };
++                let key = output_json_key(&output_labels, &placements, label, signal);
+                 entry(key, position, pin, PortRole::Output)
+             })
+             .collect::<Vec<_>>()
+             .join(",");
++        let labels = output_pinout(&compiled, &output_labels)
++            .expect("pinout must bind every public output")
++            .into_iter()
++            .map(|(label, signal, _)| {
++                let key = output_json_key(&output_labels, &placements, label, signal);
++                format!("\"{label}\":\"{key}\"")
++            })
++            .collect::<Vec<_>>()
++            .join(",");
+         write!(
+             json,
+-            "{{\"inputs\":{{{inputs}}},\"outputs\":{{{outputs}}}}}"
++            "{{\"inputs\":{{{inputs}}},\"outputs\":{{{outputs}}},\"output_labels\":{{{labels}}}}}"
+         )
+         .expect("failed to write the pinout json");
+         println!("wrote {}", json_path.display());
+@@ -1012,6 +1033,16 @@ mod tests {
+         assert_eq!(entries.iter().map(|entry| entry.0).collect::<Vec<_>>(), ["y[1]", "z", "y[0]"]);
+         assert_eq!(entries.iter().map(|entry| entry.2).collect::<Vec<_>>(),
+             compiled.physical_rewrite().unwrap().source_output_positions());
++        let placements = PortPlacements::default();
++        let keys: Vec<_> = entries.iter().map(|(label, signal, _)|
++            (*label, output_json_key(&labels, &placements, label, signal))).collect();
++        assert_eq!(keys, [("y[1]", "y[1]"), ("z", "z"), ("y[0]", "y[0]")]);
++        let collision = vec![("g1".into(), "g0".into()), ("alias".into(), "g0".into()), ("other".into(), "g1".into())];
++        let collision_keys: Vec<_> = collision.iter().map(|(label, signal)|
++            output_json_key(&collision, &placements, label, signal)).collect();
++        assert_eq!(collision_keys, ["g1", "alias", "other"]);
++        let unique = vec![("public".into(), "g1".into())];
++        assert_eq!(output_json_key(&unique, &placements, "public", "g1"), "g1");
+         assert_ne!(entries[0].2, entries[1].2);
+         assert!(output_pinout(&compiled, &labels[..2]).is_err());
+         let mut extra = labels.clone();

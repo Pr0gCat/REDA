@@ -1,0 +1,118 @@
+[
+  {
+    "fixture": "rewrite",
+    "frozen_world_identical": true,
+    "implemented_dump_bindings_exist": true,
+    "label_mapping_complete": true,
+    "logical_rename": null,
+    "mode": "native",
+    "output_keys_unique": true,
+    "public_labels": [
+      "y[0]",
+      "y[1]",
+      "z"
+    ],
+    "source_sha256": "ca0e09d1b96f7b088af663c86d6fd867a2c708b61e24c456e4d7e107be2d51ae",
+    "wave_reused_from": "rewrite/native"
+  },
+  {
+    "fixture": "rewrite",
+    "frozen_world_identical": true,
+    "implemented_dump_bindings_exist": true,
+    "label_mapping_complete": true,
+    "logical_rename": null,
+    "mode": "auto",
+    "output_keys_unique": true,
+    "public_labels": [
+      "y[0]",
+      "y[1]",
+      "z"
+    ],
+    "source_sha256": "ca0e09d1b96f7b088af663c86d6fd867a2c708b61e24c456e4d7e107be2d51ae",
+    "wave_reused_from": "rewrite/auto"
+  },
+  {
+    "fixture": "raw",
+    "frozen_world_identical": true,
+    "implemented_dump_bindings_exist": true,
+    "label_mapping_complete": true,
+    "logical_rename": null,
+    "mode": "native",
+    "output_keys_unique": true,
+    "public_labels": [
+      "y[0]",
+      "y[1]",
+      "y[2]",
+      "y[3]",
+      "y[4]",
+      "y[5]",
+      "y[6]",
+      "y[7]",
+      "z"
+    ],
+    "source_sha256": "548c262aefed85fc6a250f4a6b583fb91c06731a5c0106c570977843c778c83a",
+    "wave_reused_from": "raw/native"
+  },
+  {
+    "fixture": "raw",
+    "frozen_world_identical": true,
+    "implemented_dump_bindings_exist": true,
+    "label_mapping_complete": true,
+    "logical_rename": null,
+    "mode": "auto",
+    "output_keys_unique": true,
+    "public_labels": [
+      "y[0]",
+      "y[1]",
+      "y[2]",
+      "y[3]",
+      "y[4]",
+      "y[5]",
+      "y[6]",
+      "y[7]",
+      "z"
+    ],
+    "source_sha256": "548c262aefed85fc6a250f4a6b583fb91c06731a5c0106c570977843c778c83a",
+    "wave_reused_from": "raw/auto"
+  },
+  {
+    "fixture": "collision",
+    "frozen_world_identical": true,
+    "implemented_dump_bindings_exist": true,
+    "label_mapping_complete": true,
+    "logical_rename": {
+      "y[0]": "g1",
+      "y[1]": "other",
+      "z": "alias"
+    },
+    "mode": "native",
+    "output_keys_unique": true,
+    "public_labels": [
+      "g1",
+      "other",
+      "alias"
+    ],
+    "source_sha256": "e159f622f2548466f5f8583d85f2246db0bbb3c8977dca5f7c3deb91562661e3",
+    "wave_reused_from": "rewrite/native"
+  },
+  {
+    "fixture": "collision",
+    "frozen_world_identical": true,
+    "implemented_dump_bindings_exist": true,
+    "label_mapping_complete": true,
+    "logical_rename": {
+      "y[0]": "g1",
+      "y[1]": "other",
+      "z": "alias"
+    },
+    "mode": "auto",
+    "output_keys_unique": true,
+    "public_labels": [
+      "g1",
+      "other",
+      "alias"
+    ],
+    "source_sha256": "e159f622f2548466f5f8583d85f2246db0bbb3c8977dca5f7c3deb91562661e3",
+    "wave_reused_from": "rewrite/auto"
+  }
+]

@@ -1,0 +1,7 @@
+# Public labels in pinout JSON
+
+Actual alias CLI exports revealed that compatibility output keys mix internal signal names and public alias labels. A public alias named g1 can collide with another unique output's internal g1 key. Interfaces containing repeated drivers now use public labels for every output key, preserving each physical occurrence. Interfaces without aliases retain the existing unique internal keys. The additional output_labels map exposes every public label's corresponding outputs key. stdout and physical coordinates remain unchanged.
+
+Clean 94b2eaf plus the precisely qualified canonical raw alias patch and this metadata-only bin patch passes all 11 build_circuit tests, including the independent key-collision fixture and unchanged unique-key control. Independent actual native/auto consumer qualification passes six build/dump pairs: rewrite, raw shared-lamp, and public/internal name collision fixtures. Every public key and label mapping is checked; loaded worlds are byte-for-byte equal by cell state to frozen worlds that passed 16448 retained continuous truth phases. Collision fixture truth is reused only with its explicitly verified logical port rename. Full consumer sources, source bindings and artifacts are retained separately.
+
+The rejected structural-composition candidate is absent from the final consumer producer; no such experimental production hook is adopted by this metadata change.

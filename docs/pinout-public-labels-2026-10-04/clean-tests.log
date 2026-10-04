@@ -1,0 +1,19 @@
+   Compiling reda v0.1.0 (/tmp/reda-raw-alias-clean-20261004)
+    Finished `test` profile [unoptimized] target(s) in 0.74s
+     Running unittests src/bin/build_circuit.rs (/tmp/reda-cli-occurrence-clean-target/debug/deps/build_circuit-4abdb21e923effb5)
+
+running 11 tests
+test tests::a_defective_pin_is_named_by_its_port ... ok
+test tests::a_well_formed_pins_file_parses_into_both_sections ... ok
+test tests::an_unresolvable_output_label_is_refused_by_name ... ok
+test tests::duplicate_sections_and_pin_keys_are_refused_with_full_context ... ok
+test tests::evaluation_format_is_explicit_and_preserves_circuit_arguments ... ok
+test tests::missing_sections_and_reordered_pin_keys_are_lawful ... ok
+test tests::a_reported_handover_is_read_out_of_the_world_and_a_disagreement_is_named ... ok
+test tests::output_pins_refuse_ambiguous_occurrences_and_input_collisions ... ok
+test tests::pins_file_defects_are_named ... ok
+test tests::resolve_pins_translates_output_labels_to_internal_signals ... ok
+test tests::pinout_preserves_each_certified_alias_position_and_label ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

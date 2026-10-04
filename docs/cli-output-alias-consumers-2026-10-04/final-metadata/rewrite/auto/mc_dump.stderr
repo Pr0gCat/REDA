@@ -1,0 +1,2 @@
+frontend: native
+dumped circuit 'verilog /tmp/reda-cli-alias-consumers-20261004/final-metadata/rewrite/auto/source.sv:m': 2 inputs, 3 outputs, 2 gate outputs (0 of them wired-OR merges)

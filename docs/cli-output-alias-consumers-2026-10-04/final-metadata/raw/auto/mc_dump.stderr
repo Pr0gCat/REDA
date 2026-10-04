@@ -1,0 +1,2 @@
+frontend: native
+dumped circuit 'verilog /tmp/reda-cli-alias-consumers-20261004/final-metadata/raw/auto/source.sv:m': 6 inputs, 9 outputs, 15 gate outputs (3 of them wired-OR merges)

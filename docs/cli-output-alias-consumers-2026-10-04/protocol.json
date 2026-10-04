@@ -1,0 +1,16 @@
+{
+  "base_commit": "a3b47a4",
+  "final_metadata_delta": "final-output-label-owned.patch",
+  "actual_baseline_cli_pairs": 4,
+  "actual_final_cli_pairs": 6,
+  "frontend_modes": ["native", "auto"],
+  "subprocess_PATH": "/nonexistent-python-path",
+  "baseline_loaded_truth_phases": 16448,
+  "settling_cap": 2000,
+  "truth_sequence": "one continuous simulator per actual exported artifact; all from, to, then [from, to] phases",
+  "wave_reuse_condition": "every reloaded BlockState and implementation/source binding unchanged; collision public rename explicit",
+  "json_import": "Rust duplicate-key-rejecting Visitor",
+  "world_goldens_modified": false,
+  "production_edits_by_consumer_audit": false,
+  "final_status": "pass"
+}

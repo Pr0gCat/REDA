@@ -1,0 +1,10 @@
+   Compiling reda v0.1.0 (/tmp/reda-cli-alias-clean-a3b47a4)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
+     Running tests/cli_alias_consumers.rs (/tmp/reda-cli-alias-target-a3b47a4/debug/deps/cli_alias_consumers-7d116aab73d7b800)
+
+running 1 test
+test actual_native_and_auto_cli_preserve_aliases_bus_order_and_reloaded_truth has been running for over 60 seconds
+test actual_native_and_auto_cli_preserve_aliases_bus_order_and_reloaded_truth ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 259.04s
+

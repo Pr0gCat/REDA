@@ -1,0 +1,16 @@
+wrote output/m.blocks.txt
+wrote output/m.pinout.json
+circuit: m
+bounding box: 16 x 5 x 12
+non-air blocks: 46
+gate count: 2
+wrote output/m.litematic
+
+pinout (schematic-local coordinates: x,y,z from the corner the .litematic is pasted at)
+  inputs (lever, unless pinned):
+    a[0]         (3, 2, 2)
+    a[1]         (11, 2, 2)
+  outputs (lamp, unless pinned):
+    y[0]         (8, 1, 3)
+    y[1]         (0, 1, 6)
+    z            (8, 1, 9)

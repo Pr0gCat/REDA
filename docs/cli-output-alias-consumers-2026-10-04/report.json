@@ -1,0 +1,78 @@
+[
+  {
+    "alias_indices": [
+      0,
+      2
+    ],
+    "fixture": "rewrite",
+    "inputs": 2,
+    "modes": [
+      {
+        "mode": "native",
+        "phases": 32,
+        "ports": 3,
+        "python_path": "unavailable",
+        "truth": "all retained setup-target phases pass",
+        "unique_json_keys": 3,
+        "world_cells_identical": true
+      },
+      {
+        "mode": "auto",
+        "phases": 32,
+        "ports": 3,
+        "python_path": "unavailable",
+        "truth": "all retained setup-target phases pass",
+        "unique_json_keys": 3,
+        "world_cells_identical": true
+      }
+    ],
+    "outputs": [
+      "y[0]",
+      "y[1]",
+      "z"
+    ],
+    "shared_physical_lamp": false,
+    "source_sha256": "ca0e09d1b96f7b088af663c86d6fd867a2c708b61e24c456e4d7e107be2d51ae"
+  },
+  {
+    "alias_indices": [
+      3,
+      4
+    ],
+    "fixture": "raw",
+    "inputs": 6,
+    "modes": [
+      {
+        "mode": "native",
+        "phases": 8192,
+        "ports": 9,
+        "python_path": "unavailable",
+        "truth": "all retained setup-target phases pass",
+        "unique_json_keys": 9,
+        "world_cells_identical": true
+      },
+      {
+        "mode": "auto",
+        "phases": 8192,
+        "ports": 9,
+        "python_path": "unavailable",
+        "truth": "all retained setup-target phases pass",
+        "unique_json_keys": 9,
+        "world_cells_identical": true
+      }
+    ],
+    "outputs": [
+      "y[0]",
+      "y[1]",
+      "y[2]",
+      "y[3]",
+      "y[4]",
+      "y[5]",
+      "y[6]",
+      "y[7]",
+      "z"
+    ],
+    "shared_physical_lamp": true,
+    "source_sha256": "548c262aefed85fc6a250f4a6b583fb91c06731a5c0106c570977843c778c83a"
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "base_bin_revision": "4899f7c",
+  "clean_tree": "/tmp/reda-raw-alias-clean-20261004",
+  "tests": 11,
+  "source_sha256": "2943dbd456190ce9e4035ab35827be428d5893bf0651fc2dbd8a79be197be25c",
+  "physics_changed": false,
+  "actual_cli_pending": false,
+  "actual_cli_build_dump_pairs": 6,
+  "retained_truth_phases": 16448
+}
