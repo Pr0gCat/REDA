@@ -262,6 +262,11 @@ fn qualify_boundary_ports_while(
     let input_bindings = compiled.physical_rewrite().map_or(&source.inputs[..], |r| {
         r.rewrite_certificate().rewritten_inputs_in_source_order()
     });
+    // The Boolean oracle depends only on the address. Physical state and
+    // observations still replay every phase with their retained history.
+    let states = 1usize << source.inputs.len();
+    let mut source_values = vec![None; states];
+    let mut implementation_values = vec![None; states];
     let mut sim = Simulator::new(measured_world);
     sim.run_until_stable(2000).ok()?;
     sim.attach_observer(
@@ -297,23 +302,29 @@ fn qualify_boundary_ports_while(
                     sim.world_mut().set(p.x, p.y, p.z, lever);
                 }
                 let ticks = sim.run_until_stable(2000).ok()?;
-                let expected = values(
-                    source,
-                    &source_order,
-                    source
-                        .inputs
-                        .iter()
-                        .enumerate()
-                        .map(|(bit, name)| (name.as_str(), address & (1 << bit) != 0)),
-                )?;
-                let implemented = values(
-                    implementation,
-                    &implementation_order,
-                    input_bindings
-                        .iter()
-                        .enumerate()
-                        .map(|(bit, name)| (name.as_str(), address & (1 << bit) != 0)),
-                )?;
+                if source_values[address].is_none() {
+                    source_values[address] = Some(values(
+                        source,
+                        &source_order,
+                        source
+                            .inputs
+                            .iter()
+                            .enumerate()
+                            .map(|(bit, name)| (name.as_str(), address & (1 << bit) != 0)),
+                    )?);
+                }
+                let expected = source_values[address].as_ref()?;
+                if implementation_values[address].is_none() {
+                    implementation_values[address] = Some(values(
+                        implementation,
+                        &implementation_order,
+                        input_bindings
+                            .iter()
+                            .enumerate()
+                            .map(|(bit, name)| (name.as_str(), address & (1 << bit) != 0)),
+                    )?);
+                }
+                let implemented = implementation_values[address].as_ref()?;
                 for gate in &implementation.gates {
                     let p = position(*compiled.gate_output_positions.get(&gate.output)?);
                     if signal(sim.world(), p)? != implemented[gate.output.as_str()] {

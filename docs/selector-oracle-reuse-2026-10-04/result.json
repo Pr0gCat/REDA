@@ -1,0 +1,15 @@
+{
+  "base": "66ebad4",
+  "runtime_scope": "current mixed worktree; all Rust source hashes retained",
+  "release_test_exit": 0,
+  "passed": 6,
+  "failed": 0,
+  "ignored": 0,
+  "final_library_check_exit": 0,
+  "post_test_change": "indentation only; whitespace-separated tokens verified equal",
+  "tested_sha256": "5c72b5f97826eac821cd6de95358e4dbf9ffc3e8166d22b6d3f6b56c46c0fc52",
+  "final_sha256": "f599ab26f704264f6fb84627d5cb51c6910af20ca39e736dd76487a63fee3c0e",
+  "graph_evaluations_per_six_input_graph_before": 8192,
+  "graph_evaluations_per_six_input_graph_after_at_most": 64,
+  "whole_compile_speedup_measured": false
+}
