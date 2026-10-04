@@ -1,0 +1,20 @@
+{
+  "tests/systemverilog_compiler.rs": {
+    "moved_sources": 5,
+    "all_moved_sources_retained_verbatim": true,
+    "sources": [
+      "\"module m(input logic [1:0] a, output logic y);\\n  assign y = a;\\nendmodule\\n\"",
+      "\"module m(input logic a, input logic [1:0] b, output logic y);\\n  assign y = a & b;\\nendmodule\\n\"",
+      "\"module m(input logic a, output logic y);\\n  always_comb y = a;\\nendmodule\\n\"",
+      "\"module m(input logic a, output logic y);\\n  assign y = 2'b11;\\nendmodule\\n\"",
+      "\"module m(input [2:0] a, output y,z); assign {y,z} = a; endmodule\""
+    ]
+  },
+  "tests/systemverilog_instances.rs": {
+    "moved_sources": 1,
+    "all_moved_sources_retained_verbatim": true,
+    "sources": [
+      "word #(.W(2)) u(a,q);"
+    ]
+  }
+}

@@ -1,0 +1,66 @@
+warning: method `as_str` is never used
+   --> src/frontend/ast.rs:289:12
+    |
+288 | impl BinaryOp {
+    | ------------- method in this implementation
+289 |     pub fn as_str(self) -> &'static str {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib) generated 1 warning
+   Compiling reda v0.1.0 (/tmp/reda-root-head-58b4366)
+    Finished `test` profile [unoptimized] target(s) in 1.33s
+     Running tests/assignment_context_provenance.rs (/tmp/reda-root-head-target/debug/deps/assignment_context_provenance-dc8d1e0a77af85ab)
+
+running 2 tests
+test widening_preserves_declaration_types_and_context_ownership ... ok
+test formerly_rejected_sources_have_exhaustive_independent_truth ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/systemverilog_compiler.rs (/tmp/reda-root-head-target/debug/deps/systemverilog_compiler-f06b04599399d740)
+
+running 25 tests
+test a_missing_top_module_names_what_is_there ... ok
+test a_module_with_nothing_to_compile_is_rejected ... ok
+test an_interned_gate_reports_every_expression_that_shares_it ... ok
+test an_empty_debug_database_serializes_identically_twice ... ok
+test a_source_set_can_hold_more_than_one_file ... ok
+test a_passthrough_output_becomes_a_buffer ... ok
+test and2_compiles_to_one_and_gate_whose_four_rows_hold ... ok
+test a_vector_port_is_one_netlist_signal_per_bit ... ok
+test comments_move_spans_but_not_identities ... ok
+test diagnostics_render_with_file_line_and_column ... ok
+test dead_logic_is_recorded_rather_than_forgotten ... ok
+test and4_compiles_and_matches_the_independent_predicate ... ok
+test elaboration_errors_accumulate_in_source_order ... ok
+test procedural_rejection_matrix_has_precise_diagnostics ... ok
+test compiling_the_same_source_twice_is_byte_identical ... ok
+test signal_bits_and_why_missing_explain_what_has_no_gate ... ok
+test and4_agrees_with_the_baked_yosys_netlist_row_for_row ... ok
+test source_expressions_and_gates_find_each_other_in_both_directions ... ok
+test the_output_port_resolves_to_the_root_gate ... ok
+test concatenated_targets_preserve_order_slices_and_driver_validation ... ok
+test the_rejection_matrix_has_stable_messages_and_spans ... ok
+test the_fingerprint_matches_its_own_netlist_and_no_other ... ok
+test the_supported_expression_forms_all_evaluate_correctly ... ok
+test legacy_reg_declarations_and_wildcard_blocks_have_independent_truth ... ok
+test legacy_decoder_keeps_all_outputs_and_literal_truth ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/systemverilog_instances.rs (/tmp/reda-root-head-target/debug/deps/systemverilog_instances-c57350491972c4bc)
+
+running 8 tests
+test unsupported_open_and_implicit_connections_preserve_fallback_classification ... ok
+test independent_instance_clocks_bind_to_their_own_parent_ports ... ok
+test hierarchy_links_modules_across_files_and_concatenated_output_targets ... ok
+test invalid_hierarchy_connections_and_drivers_are_rejected ... ok
+test independent_overrides_preserve_scope_and_instance_provenance ... ok
+test nested_register_clock_aliases_preserve_state_and_single_clock_contract ... ok
+test full_seven_segment_hierarchy_preserves_the_independent_flat_netlist ... ok
+test nested_parameter_instances_reach_all_retained_physical_outputs ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.98s
+
