@@ -320,27 +320,96 @@ impl Constant {
     }
 }
 
-fn parameter_value(
-    value: Constant,
+fn parameter_width(
     parameter: &Parameter,
     definitions: &HashMap<String, &Parameter>,
     values: &mut HashMap<String, Constant>,
     active: &mut HashSet<String>,
-) -> Result<Constant, Diagnostic> {
-    let Some(ty) = &parameter.ty else { return Ok(value); };
-    let width = if let Some(range) = &ty.range {
+) -> Result<Option<u32>, Diagnostic> {
+    let Some(ty) = &parameter.ty else { return Ok(None); };
+    if let Some(range) = &ty.range {
         let msb = constant_value(&range.msb, definitions, values, active)?.number();
         let lsb = constant_value(&range.lsb, definitions, values, active)?.number();
         if lsb != 0 || msb < lsb || msb >= 64 {
             return Err(error(range.span, "parameter packed ranges must be descending [N-1:0], with 1..64 bits"));
         }
-        (msb + 1) as u32
-    } else if ty.integer { 32 } else if ty.packed { 1 } else { value.width };
-    Ok(value.resized(width, ty.signed, false))
+        Ok(Some((msb + 1) as u32))
+    } else {
+        Ok(if ty.integer { Some(32) } else if ty.packed { Some(1) } else { None })
+    }
+}
+
+fn named_constant(
+    name: &str,
+    span: Span,
+    definitions: &HashMap<String, &Parameter>,
+    values: &mut HashMap<String, Constant>,
+    active: &mut HashSet<String>,
+) -> Result<Constant, Diagnostic> {
+    if !active.insert(name.to_owned()) {
+        return Err(error(span, format!("cyclic parameter dependency at `{name}`")));
+    }
+    let result = (|| {
+        let Some(parameter) = definitions.get(name) else {
+            return values.get(name).copied()
+                .ok_or_else(|| error(span, format!("unknown parameter `{name}`")));
+        };
+        let declared_width = parameter_width(parameter, definitions, values, active)?;
+        // Hierarchy overrides were already evaluated in their parent scope.
+        // Coerce their completed values to the formal type without sending
+        // child expression context back across that declaration boundary.
+        if let Some(value) = values.get(name).copied() {
+            return Ok(if let Some(ty) = &parameter.ty {
+                value.resized(declared_width.unwrap_or(value.width), ty.signed, false)
+            } else { value });
+        }
+        let shape = constant_shape(&parameter.value, definitions, values, active)?;
+        let context = Constant { width: shape.width.max(declared_width.unwrap_or(shape.width)), ..shape };
+        let value = constant_in_context(&parameter.value, context, definitions, values, active)?;
+        Ok(if let Some(ty) = &parameter.ty {
+            value.resized(declared_width.unwrap_or(shape.width), ty.signed, false)
+        } else { value })
+    })();
+    active.remove(name);
+    if let Ok(value) = result { values.insert(name.to_owned(), value); }
+    result
+}
+
+// Determine the complete RHS type before computing any arithmetic. A named
+// parameter has its own declaration type; caller context never changes its cache.
+fn constant_shape(
+    expr: &ConstExpr,
+    definitions: &HashMap<String, &Parameter>,
+    values: &mut HashMap<String, Constant>,
+    active: &mut HashSet<String>,
+) -> Result<Constant, Diagnostic> {
+    match &expr.kind {
+        ConstKind::Integer(_) => Ok(Constant { raw: 0, width: 32, signed: true, checked_integer: true }),
+        ConstKind::Sized { width, signed, .. } => Ok(Constant { raw: 0, width: *width, signed: *signed, checked_integer: false }),
+        ConstKind::Name(name) => named_constant(name, expr.span, definitions, values, active),
+        ConstKind::Neg(operand) => constant_shape(operand, definitions, values, active),
+        ConstKind::Binary(_, left, right) => {
+            let left = constant_shape(left, definitions, values, active)?;
+            let right = constant_shape(right, definitions, values, active)?;
+            Ok(Constant { raw: 0, width: left.width.max(right.width), signed: left.signed && right.signed,
+                checked_integer: left.checked_integer && right.checked_integer })
+        }
+    }
 }
 
 fn constant_value(
     expr: &ConstExpr,
+    definitions: &HashMap<String, &Parameter>,
+    values: &mut HashMap<String, Constant>,
+    active: &mut HashSet<String>,
+) -> Result<Constant, Diagnostic> {
+    let context = constant_shape(expr, definitions, values, active)?;
+    constant_in_context(expr, context, definitions, values, active)
+}
+
+fn constant_in_context(
+    expr: &ConstExpr,
+    context: Constant,
     definitions: &HashMap<String, &Parameter>,
     values: &mut HashMap<String, Constant>,
     active: &mut HashSet<String>,
@@ -351,55 +420,37 @@ fn constant_value(
         diagnostic.kind = super::DiagnosticKind::Unsupported;
         diagnostic
     };
+    let extend = |value: Constant| Constant { signed: context.signed, ..value }
+        .resized(context.width, context.signed, value.checked_integer);
     match &expr.kind {
         ConstKind::Integer(value) => {
             let raw = i32::try_from(*value).map_err(|_| overflow())? as u32 as u64;
-            Ok(Constant { raw, width: 32, signed: true, checked_integer: true })
+            Ok(extend(Constant { raw, width: 32, signed: true, checked_integer: true }))
         }
-        ConstKind::Sized { width, bits, signed } => Ok(Constant {
+        ConstKind::Sized { width, bits, signed } => Ok(extend(Constant {
             raw: bits.iter().enumerate().fold(0, |raw, (bit, set)| raw | ((*set as u64) << bit)),
             width: *width, signed: *signed, checked_integer: false,
-        }),
-        ConstKind::Name(name) => {
-            if !active.insert(name.clone()) {
-                return Err(error(expr.span, format!("cyclic parameter dependency at `{name}`")));
-            }
-            let result = (|| {
-                let value = if let Some(value) = values.get(name).copied() { value }
-                    else if let Some(parameter) = definitions.get(name) {
-                        constant_value(&parameter.value, definitions, values, active)?
-                    } else { return Err(error(expr.span, format!("unknown parameter `{name}`"))); };
-                if let Some(parameter) = definitions.get(name) {
-                    parameter_value(value, parameter, definitions, values, active)
-                } else { Ok(value) }
-            })();
-            active.remove(name);
-            if let Ok(value) = result { values.insert(name.clone(), value); }
-            result
-        }
+        })),
+        ConstKind::Name(name) => Ok(extend(named_constant(name, expr.span, definitions, values, active)?)),
         ConstKind::Neg(operand) => {
             if matches!(operand.kind, ConstKind::Integer(value) if value == i32::MIN.unsigned_abs() as u64) {
-                return Ok(Constant { raw: i32::MIN as u32 as u64, width:32, signed:true, checked_integer:true });
+                return Ok(Constant { raw: i32::MIN as i64 as u64, width: context.width,
+                    signed: context.signed, checked_integer: true }.resized(context.width, context.signed, true));
             }
-            let value = constant_value(operand, definitions, values, active)?;
+            let value = constant_in_context(operand, context, definitions, values, active)?;
             let number = -value.number();
             if value.checked_integer && i32::try_from(number).is_err() { return Err(overflow()); }
             Ok(Constant { raw: number as u64, ..value }.resized(value.width, value.signed, value.checked_integer))
         }
         ConstKind::Binary(op, left, right) => {
-            let left = constant_value(left, definitions, values, active)?;
-            let right = constant_value(right, definitions, values, active)?;
-            let width = left.width.max(right.width);
-            let signed = left.signed && right.signed;
+            let left = constant_in_context(left, context, definitions, values, active)?;
+            let right = constant_in_context(right, context, definitions, values, active)?;
             let checked_integer = left.checked_integer && right.checked_integer;
-            // Mixed signed/unsigned expressions extend each operand according
-            // to its original signedness, then interpret at the common type.
-            let left = Constant { signed, ..left }.resized(width, signed, checked_integer).number();
-            let right = Constant { signed, ..right }.resized(width, signed, checked_integer).number();
-            let number = match op { ConstOp::Add => left + right,
-                ConstOp::Sub => left - right, ConstOp::Mul => left.wrapping_mul(right) };
+            let number = match op { ConstOp::Add => left.number() + right.number(),
+                ConstOp::Sub => left.number() - right.number(), ConstOp::Mul => left.number().wrapping_mul(right.number()) };
             if checked_integer && i32::try_from(number).is_err() { return Err(overflow()); }
-            Ok(Constant { raw: number as u64, width, signed, checked_integer }.resized(width, signed, checked_integer))
+            Ok(Constant { raw: number as u64, width: context.width, signed: context.signed, checked_integer }
+                .resized(context.width, context.signed, checked_integer))
         }
     }
 }

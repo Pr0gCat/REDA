@@ -1,0 +1,6 @@
+{
+  "CLEAN-HEAD.txt": "662bdce90ef054311c6b6cb192736d7940623319ef57dcdf0cb9984dff02604f",
+  "src/frontend/elaborate.rs": "2895032b3cdee090f053754525471a0d5603386b07ed2fdbd53e946e94782423",
+  "tests/systemverilog_parameter_context.rs": "63f2dd5fcd30cc095cd5dc9f4066a80d47f1da44ef66daa85a25652573c9477e",
+  "evidence/elaborate-baseline.rs": "bced5f0d860d0f926d71078f03ad5bd4689ee5d0e04caffab4af55a68a494dd8"
+}

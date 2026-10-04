@@ -1,0 +1,54 @@
+{
+  "creator": "Yosys 0.69 (git sha1 9f75ca1f9, Release, Clang /workspace/YoWASP/yosys/wasi-sdk-33.0-x86_64-linux/share/cmake/../..//bin/clang++ 22.1.0)",
+  "modules": {
+    "m": {
+      "attributes": {
+        "top": "00000000000000000000000000000001",
+        "src": "evidence/dependent_override.sv:1.105-1.176"
+      },
+      "ports": {
+        "y": {
+          "direction": "output",
+          "bits": [ "0", "0", "0", "0", "0", "0", "0", "0" ]
+        }
+      },
+      "cells": {
+        "u": {
+          "hide_name": 0,
+          "type": "$scopeinfo",
+          "parameters": {
+            "TYPE": "module"
+          },
+          "attributes": {
+            "cell_src": "evidence/dependent_override.sv:1.158-1.166",
+            "module": "$paramod\\leaf\\W=s32'00000000000000000000000000001000\\P=4'0000",
+            "module_dynports": "00000000000000000000000000000001",
+            "module_hdlname": "leaf",
+            "module_src": "evidence/dependent_override.sv:1.1-1.104"
+          },
+          "port_directions": {
+          },
+          "connections": {
+          }
+        }
+      },
+      "netnames": {
+        "u.y": {
+          "hide_name": 0,
+          "bits": [ "0", "0", "0", "0", "0", "0", "0", "0" ],
+          "attributes": {
+            "hdlname": "u y",
+            "src": "evidence/dependent_override.sv:1.81-1.82"
+          }
+        },
+        "y": {
+          "hide_name": 0,
+          "bits": [ "0", "0", "0", "0", "0", "0", "0", "0" ],
+          "attributes": {
+            "src": "evidence/dependent_override.sv:1.127-1.128"
+          }
+        }
+      }
+    }
+  }
+}

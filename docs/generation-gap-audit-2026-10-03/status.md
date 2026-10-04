@@ -82,3 +82,6 @@ Optional Yosys host-temp path handling is repaired ([evidence](../optional-yosys
 
 
 Six-input actual-default repeat2 has complete8192 phases and successful independent all2208-gate/2294-site replay ([scope](../six-input-default-2026-10-04/repeat2/scope.md)). Every retained public setup/target component and phase/channel arrival/settlement is nonregressing. The compressed raw input and world SHA256 are independently verified. Original driver3770 continues repeat3; the audit does not independently issue an expanded physical certificate. Larger-family production admission and broad requirements remain open.
+
+
+Native typed parameter initializer destination context is repaired ([adoption](../native-parameter-context-adoption-2026-10-04/adoption.md)): clean agent20/20, root clean29/29 and shared29/29 pass without Yosys, including unchanged independent fuzz and physical controls. Typed default f+1 becomes16 before truncation, while parent override f+1 remains0. Named declarations retain their own cache type. Exact source patch excludes user arithmetic. Top-level inout and broad native/optional-Yosys/full-project requirements remain open.

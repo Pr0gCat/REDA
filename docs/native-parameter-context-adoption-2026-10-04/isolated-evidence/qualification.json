@@ -1,0 +1,8 @@
+{
+  "baseline": "9903b8c06a25dbb2158a61fac5863eed04865220",
+  "exit_code": 0,
+  "tests_passed": 20,
+  "ignored": 0,
+  "source_binary_drift": [],
+  "regression_log_sha256": "561dd42b7b040c6dd5feee99878f0d091848fb440f846e236c9429c44537d39a"
+}
