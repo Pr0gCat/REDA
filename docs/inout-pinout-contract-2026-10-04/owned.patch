@@ -1,0 +1,128 @@
+--- a/src/compile/resolved_circuit.rs
++++ b/src/compile/resolved_circuit.rs
+@@ -10,6 +10,30 @@
+ use crate::redstone::world::block::{BlockKind, Facing};
+ use std::collections::{BTreeMap, BTreeSet};
+ 
++/// Source-owned port metadata. Physical readback leaves are never user inputs.
++#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
++#[serde(deny_unknown_fields)]
++pub(crate) struct ResolvedPinout {
++    pub(crate) inputs: BTreeMap<String, [i32; 3]>,
++    pub(crate) outputs: BTreeMap<String, [i32; 3]>,
++    pub(crate) inouts: Vec<ResolvedBusPort>,
++}
++#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
++#[serde(deny_unknown_fields)]
++pub(crate) struct ResolvedBusPort {
++    pub(crate) source: crate::frontend::PortBinding,
++    pub(crate) channel: Vec<[i32; 3]>,
++    pub(crate) external_entry: [i32; 3],
++    pub(crate) external_pad: [i32; 3],
++    pub(crate) readback: [i32; 3],
++    pub(crate) external_value: [i32; 3],
++    pub(crate) external_present: [i32; 3],
++    pub(crate) conflict: [i32; 3],
++    pub(crate) floating: [i32; 3],
++    pub(crate) expected_value: [i32; 3],
++    pub(crate) external_observed: [i32; 3],
++    pub(crate) external_expected: [i32; 3],
++}
+ pub(crate) struct CompiledResolvedCircuit {
+     pub(crate) physical: CompiledCircuit,
+     pub(crate) terminals: Vec<SharedBusTerminal>,
+@@ -17,6 +41,7 @@
+     pub(crate) protocol_inputs: BTreeMap<String, (i32, i32, i32)>,
+     pub(crate) source_outputs: BTreeMap<String, (i32, i32, i32)>,
+     pub(crate) implementation: super::Netlist,
++    pub(crate) pinout: ResolvedPinout,
+ }
+ pub(crate) fn compile(semantic: &SemanticArtifact) -> Result<CompiledResolvedCircuit, String> {
+     let mut placements = PortPlacements::default();
+@@ -138,7 +163,7 @@
+                 .flatten()
+         })
+         .collect::<BTreeSet<_>>();
+-    let source_inputs = physical
++    let source_inputs: BTreeMap<String, (i32, i32, i32)> = physical
+         .input_positions
+         .iter()
+         .filter(|(name, _)| !protocol.contains(*name) && !reads.contains(*name))
+@@ -155,13 +180,40 @@
+         .iter()
+         .map(|b| b.original.name.as_str())
+         .collect::<BTreeSet<_>>();
+-    let source_outputs = semantic
++    let source_outputs: BTreeMap<String, (i32, i32, i32)> = semantic
+         .source_outputs
+         .iter()
+         .filter(|(name, _)| !inout_names.contains(name.as_str()))
+         .map(|(name, signal)| (name.clone(), physical.output_positions[signal]))
+         .collect();
++    let coordinates = |p: &(i32, i32, i32)| [p.0, p.1, p.2];
++    let anchor = |p: Anchor| [p.x, p.y, p.z];
++    let output = |name: &str| physical.output_positions.get(name)
++        .map(coordinates).ok_or_else(|| format!("missing physical status output {name}"));
++    let mut inouts = Vec::new();
++    for (b, terminal) in semantic.boundaries.iter().zip(&terminals) {
++        inouts.push(ResolvedBusPort {
++            source: b.original.clone(),
++            channel: terminal.channel.iter().copied().map(anchor).collect(),
++            external_entry: anchor(terminal.external_entry),
++            external_pad: anchor(terminal.external.at),
++            readback: anchor(terminal.read_output),
++            external_value: coordinates(&physical.input_positions[&b.external_value]),
++            external_present: coordinates(&physical.input_positions[&b.external_present]),
++            conflict: output(&b.conflict)?,
++            floating: output(&b.floating)?,
++            expected_value: output(b.expected_value.as_deref().ok_or("missing expected value signal")?)?,
++            external_observed: output(b.external_observed.as_deref().ok_or("missing external sense signal")?)?,
++            external_expected: output(&b.external_injection)?,
++        });
++    }
++    let pinout = ResolvedPinout {
++        inputs: source_inputs.iter().map(|(n, p)| (n.clone(), coordinates(p))).collect(),
++        outputs: source_outputs.iter().map(|(n, p)| (n.clone(), coordinates(p))).collect(),
++        inouts,
++    };
+     Ok(CompiledResolvedCircuit {
++        pinout,
+         implementation: lowered,
+         physical,
+         terminals,
+@@ -178,6 +230,35 @@
+         evaluate::Evaluator, resolved::compile_for_materialization, SourceInput,
+     };
+     use crate::redstone::simulator::Simulator;
++    #[test]
++    fn pinout_roundtrip_retains_shared_bus_and_hides_physical_leaves() {
++        let source = SourceInput {
++            name: "fixture.sv",
++            text: include_str!("../../tests/fixtures/resolved-inout.sv"),
++        };
++        let semantic = compile_for_materialization(&[source], "top").unwrap();
++        let compiled = compile(&semantic).unwrap();
++        let json = serde_json::to_string(&compiled.pinout).unwrap();
++        let decoded: ResolvedPinout = serde_json::from_str(&json).unwrap();
++        assert_eq!(decoded, compiled.pinout);
++        assert_eq!(decoded.inputs.keys().map(String::as_str).collect::<Vec<_>>(),
++                   vec!["d0", "d1", "e0", "e1"]);
++        assert_eq!(decoded.outputs.keys().map(String::as_str).collect::<Vec<_>>(), vec!["y"]);
++        assert_eq!(decoded.inouts.len(), 1);
++        let bus = &decoded.inouts[0];
++        assert_eq!(bus.source, semantic.boundaries[0].original);
++        assert_eq!(bus.source.direction, crate::frontend::PortDirection::Inout);
++        assert_ne!(bus.external_pad, bus.readback);
++        for p in &bus.channel {
++            assert_eq!(compiled.physical.world.get(p[0], p[1], p[2]).kind, BlockKind::RedstoneWire);
++        }
++        for p in [bus.external_value, bus.external_present] {
++            assert_eq!(compiled.physical.world.get(p[0], p[1], p[2]).kind, BlockKind::Lever);
++        }
++        let mut malformed: serde_json::Value = serde_json::from_str(&json).unwrap();
++        malformed["inouts"][0]["unknown_control"] = serde_json::json!([0,0,0]);
++        assert!(serde_json::from_value::<ResolvedPinout>(malformed).is_err());
++    }
+     #[test]
+     fn real_compiled_drivers_and_readers_use_same_shared_channel() {
+         let source = SourceInput {

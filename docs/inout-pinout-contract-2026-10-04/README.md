@@ -1,0 +1,9 @@
+# Typed shared-inout pinout contract prototype
+
+Extends the independently qualified recovered stitching source from `../inout-stitched-revalidation-2026-10-04/source.tar.gz`. Apply `owned.patch` to that exact source. This remains an isolated private implementation, not adopted public support.
+
+`ResolvedPinout` retains ordinary source inputs and public outputs separately from a typed list of shared-bus ports. Each shared port retains its complete original `PortBinding` (including Inout direction, elaboration identity and bit), explicit shared channel, independent external entry and injection pad, readback tap output, external presence/value controls, conflict/floating diagnostics and expected/observed caller values. Metadata comes from owned source bindings and terminal placement; it does not discover connectivity from a block scan. Synthetic physical readback leaves are absent from the user input map.
+
+The serial 4GiB-bounded test `compile::resolved_circuit::tests::pinout_roundtrip_retains_shared_bus_and_hides_physical_leaves` passes. It compiles the actual source, round-trips JSON exactly, checks all four ordinary input names and public y, checks original inout identity, proves separate injection/readback points, checks channel cells and protocol lever cells, and rejects an unknown nested metadata field. This proves serialization of compiler-owned metadata, not complete validation of arbitrary untrusted metadata.
+
+Public entry integration, consumer-side source/world binding validation, viewer controls and checked X/Z observation, actual exported-world reload, transient qualification and Minecraft evidence remain required. The earlier8192-endpoint physical pass applies to the frozen predecessor, not automatically to this modified source. No simulator, physical guard, circuit limit or historical test changed. No broad acceptance row is closed.

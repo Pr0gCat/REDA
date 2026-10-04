@@ -1,0 +1,40 @@
+   Compiling reda v0.1.0 (/home/seith/REDA/target/qualification/gap5-tool-source-recovery/stitched)
+warning: unused import: `SeedRoutingFailure`
+  --> src/compile/fragment_synth/fragment.rs:25:24
+   |
+25 |     SeedRepairRefusal, SeedRoutingFailure, SeedServices, SeedVariant,
+   |                        ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/compile/resolved_circuit.rs:283:13
+    |
+283 |         let mut implementation_evaluator = Evaluator::new(&physical.implementation).unwrap();
+    |             ----^^^^^^^^^^^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `rank_zero` is never read
+   --> src/compile/fragment_synth/packing.rs:636:9
+    |
+634 |     Exhausted {
+    |     --------- field in this variant
+635 |         attempted: usize,
+636 |         rank_zero: E,
+    |         ^^^^^^^^^
+    |
+    = note: `LayoutSearchError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib test) generated 3 warnings (run `cargo fix --lib -p reda --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 48.17s
+     Running unittests src/lib.rs (target/debug/deps/reda-a2b90b27b67dac89)
+
+running 1 test
+test compile::resolved_circuit::tests::pinout_roundtrip_retains_shared_bus_and_hides_physical_leaves ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1275 filtered out; finished in 12.16s
+
