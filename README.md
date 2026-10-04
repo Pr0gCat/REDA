@@ -159,9 +159,13 @@ cargo run --release --bin build_circuit -- seven_segment      # -> output/*.lite
 cargo run --release --bin mc_dump -- verilog:and4             # text dump for the harness
 ```
 
-The `verilog:` circuits need `python` with `yowasp-yosys` (`pip install -r
-requirements.txt`); everything else needs only cargo. `viewer/` is a separate
-crate: a browser page that runs this simulator compiled to wasm and draws the
+HDL circuits supported by the native frontend need only cargo. The default
+`--frontend auto` tries native first; `--frontend native` forbids fallback.
+Python with `yowasp-yosys` (`pip install -r requirements.txt`) is needed only
+for `--frontend yosys` or an unsupported-feature fallback from auto. Native
+syntax, semantic, validation and physical compilation errors do not trigger
+fallback. [Actual CLI qualification without Python](docs/cli-output-alias-consumers-2026-10-04/README.md)
+covers native and auto exports. `viewer/` is a separate crate: a browser page that runs this simulator compiled to wasm and draws the
 world, in 3D, and as a graph of primitives -- see `viewer/README.md`.
 `conformance/` drives a real Minecraft server over RCON; see
 `docs/minecraft-server.md`.
