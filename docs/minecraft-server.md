@@ -1,11 +1,19 @@
 # Minecraft 26.2 server for redstone conformance testing
 
-**Current Linux checkout, 2026-10-02:** the official 26.2 jar and Linux x64
+**Current Linux checkout, 2026-10-04:** the official 26.2 jar and Linux x64
 Temurin25.0.4.1+1 runtime have been installed and independently checksum-verified.
 The launcher uses `runtime25/bin/java`; it binds the game/RCON host to localhost,
 with a private RCON credential in the gitignored mode-0600 properties file.
-Initialization generated `eula=false` and refused to start, as expected. Owner
-EULA approval remains pending. No new real-game conformance result is claimed.
+Initialization generated `eula=false` and refused to start, as expected. The owner
+subsequently approved the EULA and server operations; the official 26.2 server
+now has retained real RCON conformance evidence. The
+[native parameter/hierarchy run](minecraft-native-parameter-hierarchy-2026-10-04/README.md)
+checks all 16 vectors and every implemented gate, with independent raw-reply
+reconstruction and region cleanup. The
+[sequential run](minecraft-sequential-conformance-2026-10-04/README.md)
+has a separately frozen protocol and stated scope. These results do not prove
+arbitrary new layouts or full waveform equivalence; each new world needs its own
+source-bound qualification.
 [Exact current preparation evidence](minecraft-local-preparation-2026-10-02.json)
 records the official metadata, hashes and nonsecret configuration. The historical
 Windows setup and accepted-EULA state below describe the original environment,
@@ -16,7 +24,7 @@ target lives in `minecraft-server-26.2/` and requires Java25. The current
 Linux launcher uses a minimal JRE25; the original Windows launcher bundled
 JDK25. Every fidelity or conformance result must name this target. The
 recorded original server's `version` command reported data version **4903**;
-the new Linux server has not started past the EULA check.
+the current Linux server startup identifies Minecraft server version **26.2**.
 
 The older `minecraft-server/` tree below is retained only as a historical
 1.20.1 comparison environment. It must not be used to certify a current REDA
