@@ -1,0 +1,483 @@
+--- a/src/frontend/ast.rs
++++ b/src/frontend/ast.rs
+@@ -74,6 +74,7 @@
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum ConstKind {
+     Integer(u64),
++    Sized { width: u32, bits: Vec<bool>, signed: bool },
+     Name(String),
+     Neg(Box<ConstExpr>),
+     Binary(ConstOp, Box<ConstExpr>, Box<ConstExpr>),
+@@ -89,8 +90,17 @@
+     pub kind: ConstKind,
+     pub span: Span,
+ }
++/// Explicit integral parameter type. No type means infer width from its value.
++#[derive(Debug, Clone)]
++pub struct ParameterType {
++    pub packed: bool,
++    pub signed: bool,
++    pub range: Option<Range>,
++    pub integer: bool,
++}
+ #[derive(Debug, Clone)]
+ pub struct Parameter {
++    pub ty: Option<ParameterType>,
+     pub local: bool,
+     pub id: SourceNodeId,
+     pub name: Ident,
+--- a/src/frontend/parser.rs
++++ b/src/frontend/parser.rs
+@@ -12,7 +12,7 @@
+ use super::ast::{
+     AlwaysComb, AlwaysFf, Assign, BinaryOp, BlockingAssign, CaseItem, CaseStatement, ClockEdge, Connection,
+     ConstExpr, ConstKind, ConstOp, Expr, ExprKind, Ident, IfAssign, Instance, Item, Module,
+-    NetDecl, NetType, NonblockingAssign, Parameter, PortDecl, PortDirection, Range, SourceKind,
++    NetDecl, NetType, NonblockingAssign, Parameter, ParameterType, PortDecl, PortDirection, Range, SourceKind,
+     SourceNode, SourceNodeId, SourceSet, Stmt, UnaryOp,
+ };
+ 
+@@ -304,31 +304,40 @@
+ 
+     fn parameters(&mut self, parameters: &mut Vec<Parameter>) -> Result<(), Diagnostic> {
+         let mut local = false;
++        let mut inherited_type = None;
+         loop {
+             let start = self.peek().span;
+             if self.is_keyword(Keyword::Parameter) || self.is_keyword(Keyword::Localparam) {
++                inherited_type = None;
+                 local = self.is_keyword(Keyword::Localparam);
+                 self.advance();
+             } else if parameters.is_empty() {
+                 return Err(self.error_here("`parameter` or `localparam`"));
+             }
+-            if matches!(
+-                self.peek().kind,
+-                TokenKind::Keyword(Keyword::Int | Keyword::Integer)
+-            ) {
+-                self.advance();
+-            }
+-            if matches!(
+-                self.peek().kind,
+-                TokenKind::Keyword(Keyword::Logic | Keyword::Wire | Keyword::Reg)
+-            ) || self.is_punct(Punct::LBracket)
+-            {
+-                return Err(self.unsupported_here("only signed integer parameters are supported"));
+-            }
+-            if matches!(&self.peek().kind, TokenKind::Ident(t) if matches!(t.as_str(), "signed" | "unsigned" | "bit" | "byte" | "shortint" | "longint" | "time" | "real" | "shortreal" | "string" | "type"))
+-            {
+-                return Err(self
+-                    .unsupported_here("this parameter type is outside the native integer subset"));
++            let integer = matches!(self.peek().kind,
++                TokenKind::Keyword(Keyword::Int | Keyword::Integer));
++            let packed = matches!(self.peek().kind,
++                TokenKind::Keyword(Keyword::Logic | Keyword::Wire | Keyword::Reg));
++            if integer || packed { self.advance(); }
++            let signed = match &self.peek().kind {
++                TokenKind::Ident(name) if name == "signed" || name == "unsigned" => {
++                    let signed = name == "signed";
++                    self.advance();
++                    Some(signed)
++                }
++                _ => None,
++            };
++            let range = if self.is_punct(Punct::LBracket) { self.range()? } else { None };
++            let ty = if integer || packed || signed.is_some() || range.is_some() {
++                Some(ParameterType { packed, signed: signed.unwrap_or(integer), range, integer })
++            } else { None };
++            if matches!(&self.peek().kind, TokenKind::Ident(t) if matches!(t.as_str(), "bit" | "byte" | "shortint" | "longint" | "time" | "real" | "shortreal" | "string" | "type")) {
++                return Err(self.unsupported_here("this parameter type is outside the native integral subset"));
++            }
++            let ty = ty.or_else(|| inherited_type.clone());
++            inherited_type = ty.clone();
++            if integer && ty.as_ref().is_some_and(|ty| ty.range.is_some()) {
++                return Err(self.unsupported_here("additional packed dimensions on integer parameters are not supported"));
+             }
+             let name = self.expect_ident()?;
+             self.expect_punct(Punct::Assign)?;
+@@ -336,6 +345,7 @@
+             let span = start.join(value.span);
+             let id = self.node(SourceKind::Parameter, span, Some(name.name.clone()));
+             parameters.push(Parameter {
++                ty,
+                 local,
+                 id,
+                 name,
+@@ -358,8 +368,13 @@
+                     span,
+                 }
+             }
+-            TokenKind::Number(Number::Sized { .. }) => {
+-                return Err(self.unsupported_here("sized parameter values are not supported"));
++            TokenKind::Number(Number::Sized { width, base, digits, signed }) => {
++                let (width, bits) = parse_sized_literal(width, *base, digits)
++                    .map_err(|message| self.error_at(start, message))?;
++                if width > 64 { return Err(self.unsupported_here("parameter values wider than 64 bits are not supported")); }
++                let signed = *signed;
++                self.advance();
++                ConstExpr { kind: ConstKind::Sized { width, bits, signed }, span: start }
+             }
+             TokenKind::Ident(name) => {
+                 let name = name.clone();
+@@ -968,10 +983,12 @@
+                 })
+             }
+             TokenKind::Number(Number::Sized {
++                signed,
+                 width,
+                 base,
+                 digits,
+             }) => {
++                if signed { return Err(self.unsupported_here("signed data literals are not supported; signed integral parameters are supported")); }
+                 self.advance();
+                 let (width, bits) = parse_sized_literal(&width, base, &digits)
+                     .map_err(|message| self.error_at(token.span, message))?;
+@@ -1031,9 +1048,9 @@
+         ));
+     }
+     let mut bits = vec![false; width as usize];
+-    match base {
++    match base.to_ascii_lowercase() {
+         'b' | 'o' | 'h' => {
+-            let (radix, digit_bits, name) = match base {
++            let (radix, digit_bits, name) = match base.to_ascii_lowercase() {
+                 'b' => (2, 1, "binary"),
+                 'o' => (8, 3, "octal"),
+                 'h' => (16, 4, "hexadecimal"),
+--- a/src/frontend/elaborate.rs
++++ b/src/frontend/elaborate.rs
+@@ -187,7 +187,7 @@
+     fn build(
+         &mut self,
+         module: &Module,
+-        parameters: HashMap<String, i32>,
++        parameters: HashMap<String, Constant>,
+     ) -> Result<Design, Vec<Diagnostic>> {
+         if self.active.contains(&module.name.name) {
+             return Err(vec![error(
+@@ -269,65 +269,117 @@
+     }
+ }
+ 
++/// An integral constant owns its width and signed interpretation. Values are
++/// normalized at declaration/override boundaries, never at signal lookup.
++#[derive(Clone, Copy, Debug)]
++struct Constant {
++    raw: u64,
++    width: u32,
++    signed: bool,
++    checked_integer: bool,
++}
++impl Constant {
++    fn number(self) -> i128 {
++        if self.signed && self.raw & (1u64 << (self.width - 1)) != 0 {
++            self.raw as i128 - (1i128 << self.width)
++        } else { self.raw as i128 }
++    }
++    fn resized(self, width: u32, signed: bool, checked_integer: bool) -> Self {
++        let mask = if width == 64 { u64::MAX } else { (1u64 << width) - 1 };
++        Self { raw: self.number() as u64 & mask, width, signed, checked_integer }
++    }
++    fn bits(self) -> Vec<bool> {
++        (0..self.width).map(|bit| self.raw & (1u64 << bit) != 0).collect()
++    }
++}
++
++fn parameter_value(
++    value: Constant,
++    parameter: &Parameter,
++    definitions: &HashMap<String, &Parameter>,
++    values: &mut HashMap<String, Constant>,
++    active: &mut HashSet<String>,
++) -> Result<Constant, Diagnostic> {
++    let Some(ty) = &parameter.ty else { return Ok(value); };
++    let width = if let Some(range) = &ty.range {
++        let msb = constant_value(&range.msb, definitions, values, active)?.number();
++        let lsb = constant_value(&range.lsb, definitions, values, active)?.number();
++        if lsb != 0 || msb < lsb || msb >= 64 {
++            return Err(error(range.span, "parameter packed ranges must be descending [N-1:0], with 1..64 bits"));
++        }
++        (msb + 1) as u32
++    } else if ty.integer { 32 } else if ty.packed { 1 } else { value.width };
++    Ok(value.resized(width, ty.signed, false))
++}
++
+ fn constant_value(
+     expr: &ConstExpr,
+     definitions: &HashMap<String, &Parameter>,
+-    values: &mut HashMap<String, i32>,
++    values: &mut HashMap<String, Constant>,
+     active: &mut HashSet<String>,
+-) -> Result<i32, Diagnostic> {
+-    let value = match &expr.kind {
+-        ConstKind::Integer(value) => i32::try_from(*value).ok(),
++) -> Result<Constant, Diagnostic> {
++    let overflow = || {
++        let mut diagnostic = error(expr.span,
++            "constant expression exceeds the native signed 32-bit integer subset");
++        diagnostic.kind = super::DiagnosticKind::Unsupported;
++        diagnostic
++    };
++    match &expr.kind {
++        ConstKind::Integer(value) => {
++            let raw = i32::try_from(*value).map_err(|_| overflow())? as u32 as u64;
++            Ok(Constant { raw, width: 32, signed: true, checked_integer: true })
++        }
++        ConstKind::Sized { width, bits, signed } => Ok(Constant {
++            raw: bits.iter().enumerate().fold(0, |raw, (bit, set)| raw | ((*set as u64) << bit)),
++            width: *width, signed: *signed, checked_integer: false,
++        }),
+         ConstKind::Name(name) => {
+-            if let Some(value) = values.get(name) {
+-                return Ok(*value);
+-            }
+             if !active.insert(name.clone()) {
+-                return Err(error(
+-                    expr.span,
+-                    format!("cyclic parameter dependency at `{name}`"),
+-                ));
+-            }
+-            let result = match definitions.get(name) {
+-                Some(parameter) => constant_value(&parameter.value, definitions, values, active),
+-                None => Err(error(expr.span, format!("unknown parameter `{name}`"))),
+-            };
++                return Err(error(expr.span, format!("cyclic parameter dependency at `{name}`")));
++            }
++            let result = (|| {
++                let value = if let Some(value) = values.get(name).copied() { value }
++                    else if let Some(parameter) = definitions.get(name) {
++                        constant_value(&parameter.value, definitions, values, active)?
++                    } else { return Err(error(expr.span, format!("unknown parameter `{name}`"))); };
++                if let Some(parameter) = definitions.get(name) {
++                    parameter_value(value, parameter, definitions, values, active)
++                } else { Ok(value) }
++            })();
+             active.remove(name);
+-            if let Ok(value) = result {
+-                values.insert(name.clone(), value);
+-            }
+-            return result;
+-        }
+-        ConstKind::Neg(value) => match &value.kind {
+-            // The magnitude of i32::MIN is not itself a positive i32.
+-            // Apply the sign before checking this literal's representability.
+-            ConstKind::Integer(magnitude) if *magnitude == i32::MIN.unsigned_abs() as u64 => {
+-                Some(i32::MIN)
+-            }
+-            _ => constant_value(value, definitions, values, active)?.checked_neg(),
+-        },
++            if let Ok(value) = result { values.insert(name.clone(), value); }
++            result
++        }
++        ConstKind::Neg(operand) => {
++            if matches!(operand.kind, ConstKind::Integer(value) if value == i32::MIN.unsigned_abs() as u64) {
++                return Ok(Constant { raw: i32::MIN as u32 as u64, width:32, signed:true, checked_integer:true });
++            }
++            let value = constant_value(operand, definitions, values, active)?;
++            let number = -value.number();
++            if value.checked_integer && i32::try_from(number).is_err() { return Err(overflow()); }
++            Ok(Constant { raw: number as u64, ..value }.resized(value.width, value.signed, value.checked_integer))
++        }
+         ConstKind::Binary(op, left, right) => {
+             let left = constant_value(left, definitions, values, active)?;
+             let right = constant_value(right, definitions, values, active)?;
+-            match op {
+-                ConstOp::Add => left.checked_add(right),
+-                ConstOp::Sub => left.checked_sub(right),
+-                ConstOp::Mul => left.checked_mul(right),
+-            }
+-        }
+-    };
+-    value.ok_or_else(|| {
+-        let mut diagnostic = error(
+-            expr.span,
+-            "constant expression exceeds the native signed 32-bit integer subset",
+-        );
+-        diagnostic.kind = super::DiagnosticKind::Unsupported;
+-        diagnostic
+-    })
++            let width = left.width.max(right.width);
++            let signed = left.signed && right.signed;
++            let checked_integer = left.checked_integer && right.checked_integer;
++            // Mixed signed/unsigned expressions extend each operand according
++            // to its original signedness, then interpret at the common type.
++            let left = Constant { signed, ..left }.resized(width, signed, checked_integer).number();
++            let right = Constant { signed, ..right }.resized(width, signed, checked_integer).number();
++            let number = match op { ConstOp::Add => left + right,
++                ConstOp::Sub => left - right, ConstOp::Mul => left.wrapping_mul(right) };
++            if checked_integer && i32::try_from(number).is_err() { return Err(overflow()); }
++            Ok(Constant { raw: number as u64, width, signed, checked_integer }.resized(width, signed, checked_integer))
++        }
++    }
+ }
+ 
+ struct Elaborator {
+     instance: InstancePathId,
+-    parameters: HashMap<String, i32>,
++    parameters: HashMap<String, Constant>,
+     nodes: Vec<ElabNode>,
+     signals: Vec<SignalInfo>,
+     by_name: HashMap<String, usize>,
+@@ -390,7 +442,8 @@
+                 }
+                 Err(diagnostic) => self.errors.push(diagnostic),
+             }
+-            self.node(parameter.id, ElabKind::Expr, 32);
++            let width = self.parameters.get(&parameter.name.name).map_or(32, |value| value.width);
++            self.node(parameter.id, ElabKind::Expr, width);
+         }
+ 
+         // Constant failures prevent meaningful width checking; preserve the
+@@ -748,14 +801,14 @@
+             )
+         };
+         let msb = match resolve(&range.msb) {
+-            Ok(value) => value,
++            Ok(value) => value.number(),
+             Err(error) => {
+                 self.errors.push(error);
+                 return 1;
+             }
+         };
+         let lsb = match resolve(&range.lsb) {
+-            Ok(value) => value,
++            Ok(value) => value.number(),
+             Err(error) => {
+                 self.errors.push(error);
+                 return 1;
+@@ -765,7 +818,7 @@
+             self.fail(range.span, format!("`{name}` must be declared as `[N-1:0]`; version 1 supports only descending ranges based at zero"));
+             return 1;
+         }
+-        match u32::try_from(i64::from(msb) + 1) {
++        match u32::try_from(msb + 1) {
+             Ok(width) if width <= 4096 => width,
+             _ => {
+                 self.fail(
+@@ -1212,7 +1265,7 @@
+             &mut self.parameters,
+             &mut HashSet::new(),
+         ) {
+-            Ok(value) if value >= 0 => Some(value as u64),
++            Ok(value) if value.number() >= 0 && value.number() <= u64::MAX as i128 => Some(value.number() as u64),
+             Ok(_) => {
+                 self.fail(expr.span, "negative selection index is out of range");
+                 None
+@@ -1338,11 +1391,8 @@
+         match &expr.kind {
+             ExprKind::Ident(name) => {
+                 if let Some(value) = self.parameters.get(name).copied() {
+-                    let elab = self.node(expr.id, ElabKind::Expr, 32);
+-                    let bits = (0..32)
+-                        .map(|bit| (value as u32) & (1 << bit) != 0)
+-                        .collect();
+-                    return Some(RtlExpr::new(RtlKind::Const(bits), 32, elab));
++                    let elab = self.node(expr.id, ElabKind::Expr, value.width);
++                    return Some(RtlExpr::new(RtlKind::Const(value.bits()), value.width, elab));
+                 }
+                 let signal = self.lookup(name, expr.span)?;
+                 let width = self.signals[signal].width;
+@@ -1364,13 +1414,13 @@
+                 };
+                 let index = self.constant_index(index)?;
+                 if let Some(value) = self.parameters.get(name).copied() {
+-                    if index >= 32 {
++                    if index >= value.width as u64 {
+                         self.fail(expr.span, "parameter selection is out of range");
+                         return None;
+                     }
+                     let elab = self.node(expr.id, ElabKind::Expr, 1);
+                     return Some(RtlExpr::new(
+-                        RtlKind::Const(vec![(value as u32) & (1 << index) != 0]),
++                        RtlKind::Const(vec![value.raw & (1u64 << index) != 0]),
+                         1,
+                         elab,
+                     ));
+@@ -1388,14 +1438,14 @@
+                 let msb = self.constant_index(msb)?;
+                 let lsb = self.constant_index(lsb)?;
+                 if let Some(value) = self.parameters.get(name).copied() {
+-                    if msb < lsb || msb >= 32 {
++                    if msb < lsb || msb >= value.width as u64 {
+                         self.fail(expr.span, "parameter selection is out of range");
+                         return None;
+                     }
+                     let width = (msb - lsb + 1) as u32;
+                     let elab = self.node(expr.id, ElabKind::Expr, width);
+                     let bits = (lsb..=msb)
+-                        .map(|bit| (value as u32) & (1 << bit) != 0)
++                        .map(|bit| value.raw & (1u64 << bit) != 0)
+                         .collect();
+                     return Some(RtlExpr::new(RtlKind::Const(bits), width, elab));
+                 }
+--- a/src/frontend/lexer.rs
++++ b/src/frontend/lexer.rs
+@@ -204,6 +204,7 @@
+     /// `_` separators and any character the base does not accept, so the
+     /// parser can report exactly what was wrong.
+     Sized {
++        signed: bool,
+         width: String,
+         base: char,
+         digits: String,
+@@ -230,10 +231,11 @@
+             TokenKind::Punct(punct) => format!("`{}`", punct.as_str()),
+             TokenKind::Number(Number::Unsized(text)) => format!("number `{text}`"),
+             TokenKind::Number(Number::Sized {
++                signed,
+                 width,
+                 base,
+                 digits,
+-            }) => format!("number `{width}'{base}{digits}`"),
++            }) => format!("number `{width}'{}{base}{digits}`", if *signed { "s" } else { "" }),
+             TokenKind::Eof => "end of file".to_string(),
+         }
+     }
+@@ -329,7 +331,8 @@
+             }
+             let width = &text[start..pos];
+             if pos < bytes.len() && bytes[pos] == b'\'' {
+-                let base_pos = pos + 1;
++                let signed = matches!(bytes.get(pos + 1), Some(b's' | b'S'));
++                let base_pos = pos + 1 + usize::from(signed);
+                 let base = match bytes.get(base_pos) {
+                     Some(&b) if b.is_ascii_alphabetic() => b.to_ascii_lowercase() as char,
+                     _ => {
+@@ -361,6 +364,7 @@
+                     kind: TokenKind::Number(Number::Sized {
+                         width: width.to_string(),
+                         base,
++                        signed,
+                         digits: text[digits_start..pos].to_string(),
+                     }),
+                     span: Span::new(file, start as u32, pos as u32),
+@@ -455,6 +459,7 @@
+         assert_eq!(got[1], TokenKind::Ident("m".into()));
+         assert!(got.contains(&TokenKind::Punct(Punct::AndAnd)));
+         assert!(got.contains(&TokenKind::Number(Number::Sized {
++            signed: false,
+             width: "4".into(),
+             base: 'b',
+             digits: "01_10".into(),
+--- a/tests/frontend_selection.rs
++++ b/tests/frontend_selection.rs
+@@ -31,8 +31,8 @@
+ #[test]
+ fn explicit_unsupported_falls_back_but_native_rejects() {
+     for text in [
+-        "module m #(parameter logic [0:0] W=1'b1)(input a, output y); assign y = a; endmodule",
+-        "module m #(parameter int unsigned W=1)(input a,output y); assign y=a; endmodule",
++        "module m #(parameter logic [64:0] W=65'h1)(input a, output y); assign y = a; endmodule",
++        "module m #(parameter real W=1)(input a,output y); assign y=a; endmodule",
+         "module m #(parameter W=(1==1)?1:2)(input a,output y); assign y=a; endmodule",
+         "module m(input a, b, output reg y); always @(a or b) y = a & b; endmodule",
+         "module m(input a, output reg y); always @* y <= a; endmodule",
+@@ -121,7 +121,7 @@
+     let path = std::env::temp_dir().join(format!("reda-fallback-{}.v", std::process::id()));
+     std::fs::write(
+         &path,
+-        "module m #(parameter logic [0:0] W=1'b1)(input a, output y); assign y = a; endmodule",
++        "module m #(parameter logic [64:0] W=65'h1)(input a, output y); assign y = a; endmodule",
+     )
+     .unwrap();
+     for args in [

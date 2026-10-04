@@ -1,0 +1,22 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+    Finished `test` profile [unoptimized] target(s) in 0.69s
+     Running tests/frontend_selection.rs (target/debug/deps/frontend_selection-7aba6fa9e8240128)
+
+running 1 test
+test explicit_unsupported_falls_back_but_native_rejects ... FAILED
+
+failures:
+
+---- explicit_unsupported_falls_back_but_native_rejects stdout ----
+
+thread 'explicit_unsupported_falls_back_but_native_rejects' (95) panicked at tests/frontend_selection.rs:45:75:
+called `Result::unwrap()` on an `Err` value: "native frontend unsupported: legacy.v:1:37: parameter values wider than 64 bits are not supported\nYosys fallback failed: could not launch `python` (No such file or directory (os error 2)) -- the Verilog frontend needs Python 3 with `yowasp-yosys` installed (`pip install yowasp-yosys`, or see requirements.txt)"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    explicit_unsupported_falls_back_but_native_rejects
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test frontend_selection`

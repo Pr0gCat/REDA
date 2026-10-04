@@ -1,0 +1,43 @@
+{
+  "scope": "current mixed worktree, parameter implementation; no full project or clean runtime claim",
+  "sources": {
+    "src/frontend/ast.rs": "4e1e17dfdf0b9ee86e64fb0973a8bb8f1daf0364d9743d8952f453c9b0c5cebf",
+    "src/frontend/parser.rs": "a2f48b64df03d9c2bf203a2fa6a2bd270411d58fa7e6b9ac66641de10c4c0542",
+    "src/frontend/elaborate.rs": "869cd25a88017c6e2ee97b4d3cff03493543b126557628667977557ec9335a29",
+    "src/frontend/lexer.rs": "135ceaa4069631fcb56c987a3fc2c2fedbd8a110baca44323cd2918054ec869c",
+    "tests/frontend_selection.rs": "2f3e711385956bbc074ac3e5c95497d9a8c8bbef5c28a6175a36bade8c8499ae",
+    "tests/systemverilog_typed_parameters.rs": "93cce66c76c3804e9a2c5453d3ea8f0696613e3c13b90eb767354b542c974dd8"
+  },
+  "before_owned_edit": {
+    "src/frontend/ast.rs": "a9ccc72d93508781e8f7c60cf100d5cc92234f2fd7b7605f476b5664af7bf991",
+    "src/frontend/parser.rs": "63dc722f3a1ffc997c733a51c73d264dafa9dfc91725f497299bfe3aba3fd091",
+    "src/frontend/elaborate.rs": "6db4da02d847df9a65627da777791c4696403b7e467d7992483214c6510bc1ad",
+    "src/frontend/lexer.rs": "a9697bcb03e3f4bc551d0c3f20dc01c6fae8d229343a1b87bb854418356f83b5",
+    "tests/frontend_selection.rs": "c72e4503a9fd74de7480bdebedb39c58cb403027c589430ebe0ccdfde4e87606"
+  },
+  "owned_patch_sha256": "5573e92f06386708aaa397cc04441a3e730c41ec1e53c92f9c1a830f0d54701c",
+  "native_environment": {
+    "REDA_PYTHON": "/definitely/missing/python",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "RUST_MIN_STACK": "268435456",
+    "CARGO_BUILD_JOBS": "1"
+  },
+  "yosys_environment": {
+    "REDA_PYTHON": "/home/seith/REDA/.venv/bin/python",
+    "XDG_CACHE_HOME": "/tmp/reda-parameter-yowasp-cache",
+    "TMPDIR": "/home/seith/REDA/target/parameter-yosys-tmp"
+  },
+  "logs": {
+    "fallback-cache-tests.log": "f77dbc021ee197e4b67d09ff8476b59bacfca20390e28a478433a3c8da3dc410",
+    "library-check.log": "96e1e2a1518b6659e33be5e2fd69b98976f07a6e33c046c4a3211108b2b7fe02",
+    "fallback-venv-tests.log": "9d02fc5f470a4dffcbdf931d29bf0423d48675f817cb8a49e078bf0241f6df4f",
+    "fallback-tests.log": "5f619e7baf0db828e540aa196d76b8ce287f1c8abd3752da3d2b1cffc4599865",
+    "parser-tests.log": "cf287cddeb53f9c3bd0264cce943eacf3a69d9598287dc4655b9c87ecc1fc986",
+    "fallback-mounted-tests.log": "003b134bb23e04949070f3113c7a217134e06d93c6b8dcbc97d315ca6da8b96f",
+    "cli-fallback-tests.log": "290c375e92b22d94403551da9ac3af7a60af5636296c36ed11e75c228256c16f",
+    "lexer-tests.log": "d0d7339b5491217133090c2185b0edcce29587b9e843de6261809cd56d505e37",
+    "debug-codegen-failure.log": "19fce2781a70bedafcc75c812646d58f2901b01bfbfe68aaee3c8738e7fd5a80",
+    "native-tests.log": "f388436810b7662d06692630a0a77799844f6e603937c661cef5ee4b48130c13"
+  }
+}

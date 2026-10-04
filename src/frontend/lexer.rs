@@ -204,6 +204,7 @@ pub enum Number {
     /// `_` separators and any character the base does not accept, so the
     /// parser can report exactly what was wrong.
     Sized {
+        signed: bool,
         width: String,
         base: char,
         digits: String,
@@ -230,10 +231,11 @@ impl TokenKind {
             TokenKind::Punct(punct) => format!("`{}`", punct.as_str()),
             TokenKind::Number(Number::Unsized(text)) => format!("number `{text}`"),
             TokenKind::Number(Number::Sized {
+                signed,
                 width,
                 base,
                 digits,
-            }) => format!("number `{width}'{base}{digits}`"),
+            }) => format!("number `{width}'{}{base}{digits}`", if *signed { "s" } else { "" }),
             TokenKind::Eof => "end of file".to_string(),
         }
     }
@@ -329,7 +331,8 @@ pub fn tokenize(file: FileId, text: &str) -> Result<Vec<Token>, Diagnostic> {
             }
             let width = &text[start..pos];
             if pos < bytes.len() && bytes[pos] == b'\'' {
-                let base_pos = pos + 1;
+                let signed = matches!(bytes.get(pos + 1), Some(b's' | b'S'));
+                let base_pos = pos + 1 + usize::from(signed);
                 let base = match bytes.get(base_pos) {
                     Some(&b) if b.is_ascii_alphabetic() => b.to_ascii_lowercase() as char,
                     _ => {
@@ -361,6 +364,7 @@ pub fn tokenize(file: FileId, text: &str) -> Result<Vec<Token>, Diagnostic> {
                     kind: TokenKind::Number(Number::Sized {
                         width: width.to_string(),
                         base,
+                        signed,
                         digits: text[digits_start..pos].to_string(),
                     }),
                     span: Span::new(file, start as u32, pos as u32),
@@ -455,6 +459,7 @@ mod tests {
         assert_eq!(got[1], TokenKind::Ident("m".into()));
         assert!(got.contains(&TokenKind::Punct(Punct::AndAnd)));
         assert!(got.contains(&TokenKind::Number(Number::Sized {
+            signed: false,
             width: "4".into(),
             base: 'b',
             digits: "01_10".into(),

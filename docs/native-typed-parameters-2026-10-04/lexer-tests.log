@@ -1,0 +1,32 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+warning: unused import: `SeedRoutingFailure`
+  --> src/compile/fragment_synth/fragment.rs:25:24
+   |
+25 |     SeedRepairRefusal, SeedRoutingFailure, SeedServices, SeedVariant,
+   |                        ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `rank_zero` is never read
+   --> src/compile/fragment_synth/packing.rs:636:9
+    |
+634 |     Exhausted {
+    |     --------- field in this variant
+635 |         attempted: usize,
+636 |         rank_zero: E,
+    |         ^^^^^^^^^
+    |
+    = note: `LayoutSearchError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib test) generated 2 warnings (run `cargo fix --lib -p reda --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized] target(s) in 24.42s
+     Running unittests src/lib.rs (target/debug/deps/reda-458c9562cc1aa2a5)
+
+running 3 tests
+test frontend::lexer::tests::comments_move_spans_but_leave_tokens_alone ... ok
+test frontend::lexer::tests::keywords_operators_and_literals ... ok
+test frontend::lexer::tests::errors_have_spans_and_never_panic ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1263 filtered out; finished in 0.00s
+

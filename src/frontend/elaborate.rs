@@ -187,7 +187,7 @@ impl Hierarchy<'_> {
     fn build(
         &mut self,
         module: &Module,
-        parameters: HashMap<String, i32>,
+        parameters: HashMap<String, Constant>,
     ) -> Result<Design, Vec<Diagnostic>> {
         if self.active.contains(&module.name.name) {
             return Err(vec![error(
@@ -269,65 +269,117 @@ fn relocate(expr: &mut RtlExpr, signals: usize, nodes: u32) {
     }
 }
 
+/// An integral constant owns its width and signed interpretation. Values are
+/// normalized at declaration/override boundaries, never at signal lookup.
+#[derive(Clone, Copy, Debug)]
+struct Constant {
+    raw: u64,
+    width: u32,
+    signed: bool,
+    checked_integer: bool,
+}
+impl Constant {
+    fn number(self) -> i128 {
+        if self.signed && self.raw & (1u64 << (self.width - 1)) != 0 {
+            self.raw as i128 - (1i128 << self.width)
+        } else { self.raw as i128 }
+    }
+    fn resized(self, width: u32, signed: bool, checked_integer: bool) -> Self {
+        let mask = if width == 64 { u64::MAX } else { (1u64 << width) - 1 };
+        Self { raw: self.number() as u64 & mask, width, signed, checked_integer }
+    }
+    fn bits(self) -> Vec<bool> {
+        (0..self.width).map(|bit| self.raw & (1u64 << bit) != 0).collect()
+    }
+}
+
+fn parameter_value(
+    value: Constant,
+    parameter: &Parameter,
+    definitions: &HashMap<String, &Parameter>,
+    values: &mut HashMap<String, Constant>,
+    active: &mut HashSet<String>,
+) -> Result<Constant, Diagnostic> {
+    let Some(ty) = &parameter.ty else { return Ok(value); };
+    let width = if let Some(range) = &ty.range {
+        let msb = constant_value(&range.msb, definitions, values, active)?.number();
+        let lsb = constant_value(&range.lsb, definitions, values, active)?.number();
+        if lsb != 0 || msb < lsb || msb >= 64 {
+            return Err(error(range.span, "parameter packed ranges must be descending [N-1:0], with 1..64 bits"));
+        }
+        (msb + 1) as u32
+    } else if ty.integer { 32 } else if ty.packed { 1 } else { value.width };
+    Ok(value.resized(width, ty.signed, false))
+}
+
 fn constant_value(
     expr: &ConstExpr,
     definitions: &HashMap<String, &Parameter>,
-    values: &mut HashMap<String, i32>,
+    values: &mut HashMap<String, Constant>,
     active: &mut HashSet<String>,
-) -> Result<i32, Diagnostic> {
-    let value = match &expr.kind {
-        ConstKind::Integer(value) => i32::try_from(*value).ok(),
-        ConstKind::Name(name) => {
-            if let Some(value) = values.get(name) {
-                return Ok(*value);
-            }
-            if !active.insert(name.clone()) {
-                return Err(error(
-                    expr.span,
-                    format!("cyclic parameter dependency at `{name}`"),
-                ));
-            }
-            let result = match definitions.get(name) {
-                Some(parameter) => constant_value(&parameter.value, definitions, values, active),
-                None => Err(error(expr.span, format!("unknown parameter `{name}`"))),
-            };
-            active.remove(name);
-            if let Ok(value) = result {
-                values.insert(name.clone(), value);
-            }
-            return result;
+) -> Result<Constant, Diagnostic> {
+    let overflow = || {
+        let mut diagnostic = error(expr.span,
+            "constant expression exceeds the native signed 32-bit integer subset");
+        diagnostic.kind = super::DiagnosticKind::Unsupported;
+        diagnostic
+    };
+    match &expr.kind {
+        ConstKind::Integer(value) => {
+            let raw = i32::try_from(*value).map_err(|_| overflow())? as u32 as u64;
+            Ok(Constant { raw, width: 32, signed: true, checked_integer: true })
         }
-        ConstKind::Neg(value) => match &value.kind {
-            // The magnitude of i32::MIN is not itself a positive i32.
-            // Apply the sign before checking this literal's representability.
-            ConstKind::Integer(magnitude) if *magnitude == i32::MIN.unsigned_abs() as u64 => {
-                Some(i32::MIN)
+        ConstKind::Sized { width, bits, signed } => Ok(Constant {
+            raw: bits.iter().enumerate().fold(0, |raw, (bit, set)| raw | ((*set as u64) << bit)),
+            width: *width, signed: *signed, checked_integer: false,
+        }),
+        ConstKind::Name(name) => {
+            if !active.insert(name.clone()) {
+                return Err(error(expr.span, format!("cyclic parameter dependency at `{name}`")));
             }
-            _ => constant_value(value, definitions, values, active)?.checked_neg(),
-        },
+            let result = (|| {
+                let value = if let Some(value) = values.get(name).copied() { value }
+                    else if let Some(parameter) = definitions.get(name) {
+                        constant_value(&parameter.value, definitions, values, active)?
+                    } else { return Err(error(expr.span, format!("unknown parameter `{name}`"))); };
+                if let Some(parameter) = definitions.get(name) {
+                    parameter_value(value, parameter, definitions, values, active)
+                } else { Ok(value) }
+            })();
+            active.remove(name);
+            if let Ok(value) = result { values.insert(name.clone(), value); }
+            result
+        }
+        ConstKind::Neg(operand) => {
+            if matches!(operand.kind, ConstKind::Integer(value) if value == i32::MIN.unsigned_abs() as u64) {
+                return Ok(Constant { raw: i32::MIN as u32 as u64, width:32, signed:true, checked_integer:true });
+            }
+            let value = constant_value(operand, definitions, values, active)?;
+            let number = -value.number();
+            if value.checked_integer && i32::try_from(number).is_err() { return Err(overflow()); }
+            Ok(Constant { raw: number as u64, ..value }.resized(value.width, value.signed, value.checked_integer))
+        }
         ConstKind::Binary(op, left, right) => {
             let left = constant_value(left, definitions, values, active)?;
             let right = constant_value(right, definitions, values, active)?;
-            match op {
-                ConstOp::Add => left.checked_add(right),
-                ConstOp::Sub => left.checked_sub(right),
-                ConstOp::Mul => left.checked_mul(right),
-            }
+            let width = left.width.max(right.width);
+            let signed = left.signed && right.signed;
+            let checked_integer = left.checked_integer && right.checked_integer;
+            // Mixed signed/unsigned expressions extend each operand according
+            // to its original signedness, then interpret at the common type.
+            let left = Constant { signed, ..left }.resized(width, signed, checked_integer).number();
+            let right = Constant { signed, ..right }.resized(width, signed, checked_integer).number();
+            let number = match op { ConstOp::Add => left + right,
+                ConstOp::Sub => left - right, ConstOp::Mul => left.wrapping_mul(right) };
+            if checked_integer && i32::try_from(number).is_err() { return Err(overflow()); }
+            Ok(Constant { raw: number as u64, width, signed, checked_integer }.resized(width, signed, checked_integer))
         }
-    };
-    value.ok_or_else(|| {
-        let mut diagnostic = error(
-            expr.span,
-            "constant expression exceeds the native signed 32-bit integer subset",
-        );
-        diagnostic.kind = super::DiagnosticKind::Unsupported;
-        diagnostic
-    })
+    }
 }
 
 struct Elaborator {
     instance: InstancePathId,
-    parameters: HashMap<String, i32>,
+    parameters: HashMap<String, Constant>,
     nodes: Vec<ElabNode>,
     signals: Vec<SignalInfo>,
     by_name: HashMap<String, usize>,
@@ -390,7 +442,8 @@ impl Elaborator {
                 }
                 Err(diagnostic) => self.errors.push(diagnostic),
             }
-            self.node(parameter.id, ElabKind::Expr, 32);
+            let width = self.parameters.get(&parameter.name.name).map_or(32, |value| value.width);
+            self.node(parameter.id, ElabKind::Expr, width);
         }
 
         // Constant failures prevent meaningful width checking; preserve the
@@ -748,14 +801,14 @@ impl Elaborator {
             )
         };
         let msb = match resolve(&range.msb) {
-            Ok(value) => value,
+            Ok(value) => value.number(),
             Err(error) => {
                 self.errors.push(error);
                 return 1;
             }
         };
         let lsb = match resolve(&range.lsb) {
-            Ok(value) => value,
+            Ok(value) => value.number(),
             Err(error) => {
                 self.errors.push(error);
                 return 1;
@@ -765,7 +818,7 @@ impl Elaborator {
             self.fail(range.span, format!("`{name}` must be declared as `[N-1:0]`; version 1 supports only descending ranges based at zero"));
             return 1;
         }
-        match u32::try_from(i64::from(msb) + 1) {
+        match u32::try_from(msb + 1) {
             Ok(width) if width <= 4096 => width,
             _ => {
                 self.fail(
@@ -1212,7 +1265,7 @@ impl Elaborator {
             &mut self.parameters,
             &mut HashSet::new(),
         ) {
-            Ok(value) if value >= 0 => Some(value as u64),
+            Ok(value) if value.number() >= 0 && value.number() <= u64::MAX as i128 => Some(value.number() as u64),
             Ok(_) => {
                 self.fail(expr.span, "negative selection index is out of range");
                 None
@@ -1338,11 +1391,8 @@ impl Elaborator {
         match &expr.kind {
             ExprKind::Ident(name) => {
                 if let Some(value) = self.parameters.get(name).copied() {
-                    let elab = self.node(expr.id, ElabKind::Expr, 32);
-                    let bits = (0..32)
-                        .map(|bit| (value as u32) & (1 << bit) != 0)
-                        .collect();
-                    return Some(RtlExpr::new(RtlKind::Const(bits), 32, elab));
+                    let elab = self.node(expr.id, ElabKind::Expr, value.width);
+                    return Some(RtlExpr::new(RtlKind::Const(value.bits()), value.width, elab));
                 }
                 let signal = self.lookup(name, expr.span)?;
                 let width = self.signals[signal].width;
@@ -1364,13 +1414,13 @@ impl Elaborator {
                 };
                 let index = self.constant_index(index)?;
                 if let Some(value) = self.parameters.get(name).copied() {
-                    if index >= 32 {
+                    if index >= value.width as u64 {
                         self.fail(expr.span, "parameter selection is out of range");
                         return None;
                     }
                     let elab = self.node(expr.id, ElabKind::Expr, 1);
                     return Some(RtlExpr::new(
-                        RtlKind::Const(vec![(value as u32) & (1 << index) != 0]),
+                        RtlKind::Const(vec![value.raw & (1u64 << index) != 0]),
                         1,
                         elab,
                     ));
@@ -1388,14 +1438,14 @@ impl Elaborator {
                 let msb = self.constant_index(msb)?;
                 let lsb = self.constant_index(lsb)?;
                 if let Some(value) = self.parameters.get(name).copied() {
-                    if msb < lsb || msb >= 32 {
+                    if msb < lsb || msb >= value.width as u64 {
                         self.fail(expr.span, "parameter selection is out of range");
                         return None;
                     }
                     let width = (msb - lsb + 1) as u32;
                     let elab = self.node(expr.id, ElabKind::Expr, width);
                     let bits = (lsb..=msb)
-                        .map(|bit| (value as u32) & (1 << bit) != 0)
+                        .map(|bit| value.raw & (1u64 << bit) != 0)
                         .collect();
                     return Some(RtlExpr::new(RtlKind::Const(bits), width, elab));
                 }

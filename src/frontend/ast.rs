@@ -74,6 +74,7 @@ pub enum NetType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstKind {
     Integer(u64),
+    Sized { width: u32, bits: Vec<bool>, signed: bool },
     Name(String),
     Neg(Box<ConstExpr>),
     Binary(ConstOp, Box<ConstExpr>, Box<ConstExpr>),
@@ -89,8 +90,17 @@ pub struct ConstExpr {
     pub kind: ConstKind,
     pub span: Span,
 }
+/// Explicit integral parameter type. No type means infer width from its value.
+#[derive(Debug, Clone)]
+pub struct ParameterType {
+    pub packed: bool,
+    pub signed: bool,
+    pub range: Option<Range>,
+    pub integer: bool,
+}
 #[derive(Debug, Clone)]
 pub struct Parameter {
+    pub ty: Option<ParameterType>,
     pub local: bool,
     pub id: SourceNodeId,
     pub name: Ident,

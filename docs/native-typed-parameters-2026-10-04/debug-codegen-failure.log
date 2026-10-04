@@ -1,0 +1,33 @@
+   Compiling reda v0.1.0 (/home/seith/REDA)
+error: rustc interrupted by SIGSEGV, printing backtrace
+
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x3ac17ec)[0x7ef5b70c17ec]
+/lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7ef5b3245330]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm3DIE24computeOffsetsAndAbbrevsERKNS_5dwarf10FormParamsERNS_12DIEAbbrevSetEj+0x65d)[0x7ef5b1bea09d]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm3DIE24computeOffsetsAndAbbrevsERKNS_5dwarf10FormParamsERNS_12DIEAbbrevSetEj+0x676)[0x7ef5b1bea0b6]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm3DIE24computeOffsetsAndAbbrevsERKNS_5dwarf10FormParamsERNS_12DIEAbbrevSetEj+0x676)[0x7ef5b1bea0b6]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm3DIE24computeOffsetsAndAbbrevsERKNS_5dwarf10FormParamsERNS_12DIEAbbrevSetEj+0x676)[0x7ef5b1bea0b6]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm3DIE24computeOffsetsAndAbbrevsERKNS_5dwarf10FormParamsERNS_12DIEAbbrevSetEj+0x676)[0x7ef5b1bea0b6]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm3DIE24computeOffsetsAndAbbrevsERKNS_5dwarf10FormParamsERNS_12DIEAbbrevSetEj+0x676)[0x7ef5b1bea0b6]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm9DwarfFile21computeSizeAndOffsetsEv+0xf3)[0x7ef5b1be99b3]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm10DwarfDebug18finalizeModuleInfoEv+0x34e)[0x7ef5b148bd0e]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm10DwarfDebug9endModuleEv+0x13d)[0x7ef5b1839d3d]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(+0x9355456)[0x7ef5b1d55456]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm13FPPassManager14doFinalizationERNS_6ModuleE+0x2a)[0x7ef5b122f5ea]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.22.1-rust-1.98.1-stable(_ZN4llvm6legacy15PassManagerImpl3runERNS_6ModuleE+0x3e1)[0x7ef5b1828337]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x6175805)[0x7ef5b9775805]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x61752ad)[0x7ef5b97752ad]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x6176a07)[0x7ef5b9776a07]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(_RINvNtNtCs9k3SxhrAWiO_3std3sys9backtrace28___rust_begin_short_backtraceNCINvNtNtCs7pKPTVncLo_17rustc_codegen_ssa4back5write10spawn_workNtCsktsETOFOqAF_18rustc_codegen_llvm18LlvmCodegenBackendE0uEB2b_+0x20a)[0x7ef5b977c728]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x617c26b)[0x7ef5b977c26b]
+/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-eaf3ed1d23ca5027.so(+0x63c2a0e)[0x7ef5b99c2a0e]
+/lib/x86_64-linux-gnu/libc.so.6(+0x9cb84)[0x7ef5b329cb84]
+/lib/x86_64-linux-gnu/libc.so.6(+0x129ecc)[0x7ef5b3329ecc]
+
+note: we would appreciate a report at https://github.com/rust-lang/rust
+help: you can increase rustc's stack size by setting RUST_MIN_STACK=536870912
+note: backtrace dumped due to SIGSEGV! resuming signal
+error: could not compile `reda` (lib)
+
+Caused by:
+  process didn't exit successfully: `/home/seith/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc --crate-name reda --edition=2021 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debuginfo=2 --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=4f08d7dc2b99feb7 -C extra-filename=-b866e79be48eeab8 --out-dir /home/seith/REDA/target/debug/deps -C incremental=/home/seith/REDA/target/debug/incremental -L dependency=/home/seith/REDA/target/debug/deps --extern fastnbt=/home/seith/REDA/target/debug/deps/libfastnbt-eddb2245910a93cd.rmeta --extern flate2=/home/seith/REDA/target/debug/deps/libflate2-8397564dfb0e1f06.rmeta --extern serde=/home/seith/REDA/target/debug/deps/libserde-8c528b1968919fe1.rmeta --extern serde_json=/home/seith/REDA/target/debug/deps/libserde_json-407d1e11c108080b.rmeta --extern sha2=/home/seith/REDA/target/debug/deps/libsha2-b2f5124753ef0f8a.rmeta --extern thiserror=/home/seith/REDA/target/debug/deps/libthiserror-812603b07848defd.rmeta --extern toml=/home/seith/REDA/target/debug/deps/libtoml-46ab29de371ae957.rmeta` (signal: 11, SIGSEGV: invalid memory reference)

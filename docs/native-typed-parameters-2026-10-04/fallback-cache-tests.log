@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/frontend_selection.rs (target/debug/deps/frontend_selection-7aba6fa9e8240128)
+
+running 1 test
+test explicit_unsupported_falls_back_but_native_rejects ... FAILED
+
+failures:
+
+---- explicit_unsupported_falls_back_but_native_rejects stdout ----
+
+thread 'explicit_unsupported_falls_back_but_native_rejects' (15) panicked at tests/frontend_selection.rs:45:75:
+called `Result::unwrap()` on an `Err` value: "native frontend unsupported: legacy.v:1:37: parameter values wider than 64 bits are not supported\nYosys fallback failed: yosys synthesis failed:\nPreparing to run yowasp-yosys. This might take a while...\nCan't open log file `/tmp/reda-verilog-14-0/out.json.yosys.log' for writing!\nreda: synthesizing `/tmp/reda-verilog-14-0/top.v` failed; yosys did not produce an output JSON.\nreda: (could not read yosys's own log at `/tmp/reda-verilog-14-0/out.json.yosys.log`)\n"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    explicit_unsupported_falls_back_but_native_rejects
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 15.10s
+
+error: test failed, to rerun pass `--test frontend_selection`

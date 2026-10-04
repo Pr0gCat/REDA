@@ -12,7 +12,7 @@
 use super::ast::{
     AlwaysComb, AlwaysFf, Assign, BinaryOp, BlockingAssign, CaseItem, CaseStatement, ClockEdge, Connection,
     ConstExpr, ConstKind, ConstOp, Expr, ExprKind, Ident, IfAssign, Instance, Item, Module,
-    NetDecl, NetType, NonblockingAssign, Parameter, PortDecl, PortDirection, Range, SourceKind,
+    NetDecl, NetType, NonblockingAssign, Parameter, ParameterType, PortDecl, PortDirection, Range, SourceKind,
     SourceNode, SourceNodeId, SourceSet, Stmt, UnaryOp,
 };
 
@@ -303,31 +303,40 @@ impl<'n> Parser<'n> {
 
     fn parameters(&mut self, parameters: &mut Vec<Parameter>) -> Result<(), Diagnostic> {
         let mut local = false;
+        let mut inherited_type = None;
         loop {
             let start = self.peek().span;
             if self.is_keyword(Keyword::Parameter) || self.is_keyword(Keyword::Localparam) {
+                inherited_type = None;
                 local = self.is_keyword(Keyword::Localparam);
                 self.advance();
             } else if parameters.is_empty() {
                 return Err(self.error_here("`parameter` or `localparam`"));
             }
-            if matches!(
-                self.peek().kind,
-                TokenKind::Keyword(Keyword::Int | Keyword::Integer)
-            ) {
-                self.advance();
+            let integer = matches!(self.peek().kind,
+                TokenKind::Keyword(Keyword::Int | Keyword::Integer));
+            let packed = matches!(self.peek().kind,
+                TokenKind::Keyword(Keyword::Logic | Keyword::Wire | Keyword::Reg));
+            if integer || packed { self.advance(); }
+            let signed = match &self.peek().kind {
+                TokenKind::Ident(name) if name == "signed" || name == "unsigned" => {
+                    let signed = name == "signed";
+                    self.advance();
+                    Some(signed)
+                }
+                _ => None,
+            };
+            let range = if self.is_punct(Punct::LBracket) { self.range()? } else { None };
+            let ty = if integer || packed || signed.is_some() || range.is_some() {
+                Some(ParameterType { packed, signed: signed.unwrap_or(integer), range, integer })
+            } else { None };
+            if matches!(&self.peek().kind, TokenKind::Ident(t) if matches!(t.as_str(), "bit" | "byte" | "shortint" | "longint" | "time" | "real" | "shortreal" | "string" | "type")) {
+                return Err(self.unsupported_here("this parameter type is outside the native integral subset"));
             }
-            if matches!(
-                self.peek().kind,
-                TokenKind::Keyword(Keyword::Logic | Keyword::Wire | Keyword::Reg)
-            ) || self.is_punct(Punct::LBracket)
-            {
-                return Err(self.unsupported_here("only signed integer parameters are supported"));
-            }
-            if matches!(&self.peek().kind, TokenKind::Ident(t) if matches!(t.as_str(), "signed" | "unsigned" | "bit" | "byte" | "shortint" | "longint" | "time" | "real" | "shortreal" | "string" | "type"))
-            {
-                return Err(self
-                    .unsupported_here("this parameter type is outside the native integer subset"));
+            let ty = ty.or_else(|| inherited_type.clone());
+            inherited_type = ty.clone();
+            if integer && ty.as_ref().is_some_and(|ty| ty.range.is_some()) {
+                return Err(self.unsupported_here("additional packed dimensions on integer parameters are not supported"));
             }
             let name = self.expect_ident()?;
             self.expect_punct(Punct::Assign)?;
@@ -335,6 +344,7 @@ impl<'n> Parser<'n> {
             let span = start.join(value.span);
             let id = self.node(SourceKind::Parameter, span, Some(name.name.clone()));
             parameters.push(Parameter {
+                ty,
                 local,
                 id,
                 name,
@@ -357,8 +367,13 @@ impl<'n> Parser<'n> {
                     span,
                 }
             }
-            TokenKind::Number(Number::Sized { .. }) => {
-                return Err(self.unsupported_here("sized parameter values are not supported"));
+            TokenKind::Number(Number::Sized { width, base, digits, signed }) => {
+                let (width, bits) = parse_sized_literal(width, *base, digits)
+                    .map_err(|message| self.error_at(start, message))?;
+                if width > 64 { return Err(self.unsupported_here("parameter values wider than 64 bits are not supported")); }
+                let signed = *signed;
+                self.advance();
+                ConstExpr { kind: ConstKind::Sized { width, bits, signed }, span: start }
             }
             TokenKind::Ident(name) => {
                 let name = name.clone();
@@ -963,10 +978,12 @@ impl<'n> Parser<'n> {
                 })
             }
             TokenKind::Number(Number::Sized {
+                signed,
                 width,
                 base,
                 digits,
             }) => {
+                if signed { return Err(self.unsupported_here("signed data literals are not supported; signed integral parameters are supported")); }
                 self.advance();
                 let (width, bits) = parse_sized_literal(&width, base, &digits)
                     .map_err(|message| self.error_at(token.span, message))?;
@@ -1026,9 +1043,9 @@ fn parse_sized_literal(width: &str, base: char, digits: &str) -> Result<(u32, Ve
         ));
     }
     let mut bits = vec![false; width as usize];
-    match base {
+    match base.to_ascii_lowercase() {
         'b' | 'o' | 'h' => {
-            let (radix, digit_bits, name) = match base {
+            let (radix, digit_bits, name) = match base.to_ascii_lowercase() {
                 'b' => (2, 1, "binary"),
                 'o' => (8, 3, "octal"),
                 'h' => (16, 4, "hexadecimal"),

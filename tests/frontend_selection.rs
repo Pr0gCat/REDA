@@ -31,8 +31,8 @@ fn native_auto_and_forced_yosys_compile_same_function() {
 #[test]
 fn explicit_unsupported_falls_back_but_native_rejects() {
     for text in [
-        "module m #(parameter logic [0:0] W=1'b1)(input a, output y); assign y = a; endmodule",
-        "module m #(parameter int unsigned W=1)(input a,output y); assign y=a; endmodule",
+        "module m #(parameter logic [64:0] W=65'h1)(input a, output y); assign y = a; endmodule",
+        "module m #(parameter real W=1)(input a,output y); assign y=a; endmodule",
         "module m #(parameter W=(1==1)?1:2)(input a,output y); assign y=a; endmodule",
         "module m(input a, b, output reg y); always @(a or b) y = a & b; endmodule",
         "module m(input a, output reg y); always @* y <= a; endmodule",
@@ -121,7 +121,7 @@ fn cli_exercises_real_yosys_fallback_and_forced_mode() {
     let path = std::env::temp_dir().join(format!("reda-fallback-{}.v", std::process::id()));
     std::fs::write(
         &path,
-        "module m #(parameter logic [0:0] W=1'b1)(input a, output y); assign y = a; endmodule",
+        "module m #(parameter logic [64:0] W=65'h1)(input a, output y); assign y = a; endmodule",
     )
     .unwrap();
     for args in [

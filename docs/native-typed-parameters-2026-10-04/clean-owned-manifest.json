@@ -1,0 +1,19 @@
+{
+  "base": "aef704769f52b21bd9996771f67517d7be058025",
+  "patch": "owned.patch",
+  "scope": "clean HEAD archive plus only owned parameter patch and new tests; no user arithmetic or backend dirty changes",
+  "test_exit": 0,
+  "passed": 6,
+  "failed": 0,
+  "ignored": 0,
+  "REDA_PYTHON": "/nonexistent/reda-python",
+  "sha256": {
+    "src/frontend/ast.rs": "b08509d80eb481bf7d241e29ef856ac36d3b8227c3a190fee6ffc385c71f23e4",
+    "src/frontend/parser.rs": "f675e692c2d46c7ea88ac29f1e0f05d5763eca912fbbf94ff428109b358d3720",
+    "src/frontend/elaborate.rs": "7ad97bbe13c7703d452bbbdfd405c08adf29bc1f256132bda89b755f60112dbc",
+    "src/frontend/rtl.rs": "13b3252799464985f6e5981eb690845ccd9ce492ed265e259a4c618063bc9a03",
+    "tests/frontend_selection.rs": "b37f6d1e04cbb6c9dbcbe13c1a048c390a3eefde2103ff4fddcac5e937b9e1c0",
+    "tests/systemverilog_typed_parameters.rs": "93cce66c76c3804e9a2c5453d3ea8f0696613e3c13b90eb767354b542c974dd8"
+  },
+  "owned_patch_sha256": "5573e92f06386708aaa397cc04441a3e730c41ec1e53c92f9c1a830f0d54701c"
+}
