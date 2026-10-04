@@ -1,0 +1,20 @@
+   Compiling reda v0.1.0 (/tmp/reda-direct-literal-20261004)
+    Finished `dev` profile [unoptimized] target(s) in 0.45s
+     Running `/tmp/reda-direct-literal-target/debug/examples/direct_literal_controls`
+debug 21,1,4 Air lit=false power=0 facing=None
+debug 22,1,4 RedstoneWire lit=false power=15 facing=None
+debug 23,1,4 WallTorch lit=true power=0 facing=Some(West)
+debug 24,1,4 Solid lit=false power=0 facing=None
+debug 21,1,5 Air lit=false power=0 facing=None
+debug 22,1,5 RedstoneWire lit=false power=14 facing=None
+debug 23,1,5 Air lit=false power=0 facing=None
+debug 24,1,5 Air lit=false power=0 facing=None
+debug 21,1,6 Lamp lit=false power=0 facing=None
+debug 22,1,6 RedstoneWire lit=false power=13 facing=None
+debug 23,1,6 Air lit=false power=0 facing=None
+debug 24,1,6 Air lit=false power=0 facing=None
+phase failure from=0 to=0 address=0 site=6 at=(21, 1, 6) target=true actual=Some(false) events=[]
+
+thread 'main' (4) panicked at examples/direct_literal_controls.rs:14:71:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

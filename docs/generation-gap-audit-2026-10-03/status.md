@@ -1,5 +1,7 @@
 # REDA eight-gap acceptance status
 
+Latest direct-literal prototype review: root independently verifies all 41 frozen artifact hashes, replays both 512-phase raw event streams, evaluates all 285 baseline and 11 candidate implementation truth tables from their gate graphs, and checks every recorded public expected value against the original literal source formula. Public metrics and every same-function private-site pair have zero pointwise regressions. [Runnable retained audit](../direct-literal-root-review-2026-10-04/audit-prototype.py), [result](../direct-literal-root-review-2026-10-04/audit-result.json). This is prototype evidence only: production selector integration and new-world Minecraft conformance remain pending. All eight broad requirements remain open.
+
 Snapshot: 2026-10-04; qualified evidence includes c45bb2e and the scratch-collection change linked below. **0 of8 broad requirements are complete.** This is the current reviewable status; earlier pending statements are historical observations, not current claims. The complete previous tracker is preserved in [history-through-2026-10-04.md](history-through-2026-10-04.md).
 
 | Requirement | Qualified current evidence | Evidence still required for completion |

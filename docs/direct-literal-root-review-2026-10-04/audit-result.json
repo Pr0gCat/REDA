@@ -1,0 +1,9 @@
+{
+  "artifact_hashes_verified": 41,
+  "raw_phases_per_world": 512,
+  "public_channels": 16,
+  "candidate_actual_sites": 11,
+  "baseline_actual_sites": 285,
+  "pointwise_regressions": 0,
+  "scope": "prototype raw-event metrics, independently evaluated implementation truth and literal source truth; not production adoption or fresh physical/game proof"
+}

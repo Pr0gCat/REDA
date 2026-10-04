@@ -1,0 +1,14 @@
+{
+  "binary": "/tmp/reda-direct-literal-target/debug/examples/direct_literal_controls",
+  "binary_sha256": "acadc496dc1db7221089bb74acbf984468932429cef753505632ef1d02c13b1f",
+  "source_binary_manifest_sha256": "bf1a1ede13a021d40ef57617797baa03b631957c33f1ffca3d7f8ffed1356814",
+  "event_prefix": null,
+  "cwd": "/tmp/reda-direct-literal-20261004",
+  "command": [
+    "/tmp/reda-direct-literal-target/debug/examples/direct_literal_controls"
+  ],
+  "frozen_source_unchanged": true,
+  "phase_order": "from 0..15, to 0..15, setup(from), target(to); generic five-input controls use states0..31",
+  "exit_code": 0,
+  "source_binary_drift": []
+}

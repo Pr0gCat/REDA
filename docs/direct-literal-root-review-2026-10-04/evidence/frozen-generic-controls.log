@@ -1,0 +1,10 @@
+mixed source/actual/site truth all pass 512 phases
+sixteen_direct source/actual/site truth all pass 512 phases
+sixteen_inverted source/actual/site truth all pass 512 phases
+unused_inputs_constant source/actual/site truth all pass 512 phases
+mixed_five source/actual/site truth all pass 2048 phases
+sixteen_direct_five source/actual/site truth all pass 2048 phases
+sixteen_inverted_five source/actual/site truth all pass 2048 phases
+unused_inputs_constant_five source/actual/site truth all pass 2048 phases
+nonliteral outside candidate family rejected; existing generation retained
+nonliteral positive-budget fallback preserves old occurrence world with zero generated proposals

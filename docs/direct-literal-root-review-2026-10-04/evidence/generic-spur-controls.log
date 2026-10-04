@@ -1,0 +1,20 @@
+   Compiling reda v0.1.0 (/tmp/reda-direct-literal-20261004)
+    Finished `dev` profile [unoptimized] target(s) in 5.71s
+     Running `/tmp/reda-direct-literal-target/debug/examples/direct_literal_controls`
+debug 21,1,4 Air lit=false power=0 facing=None
+debug 22,1,4 RedstoneWire lit=false power=15 facing=None
+debug 23,1,4 WallTorch lit=true power=0 facing=Some(West)
+debug 24,1,4 Solid lit=false power=0 facing=None
+debug 21,1,5 Air lit=false power=0 facing=None
+debug 22,1,5 RedstoneWire lit=false power=14 facing=None
+debug 23,1,5 Air lit=false power=0 facing=None
+debug 24,1,5 Air lit=false power=0 facing=None
+debug 21,1,6 RedstoneWire lit=false power=12 facing=None
+debug 22,1,6 RedstoneWire lit=false power=13 facing=None
+debug 23,1,6 Air lit=false power=0 facing=None
+debug 24,1,6 Air lit=false power=0 facing=None
+mixed source/actual/site truth all pass 512 phases
+sixteen_direct source/actual/site truth all pass 512 phases
+sixteen_inverted source/actual/site truth all pass 512 phases
+unused_inputs_constant source/actual/site truth all pass 512 phases
+nonliteral outside candidate family rejected; existing generation retained

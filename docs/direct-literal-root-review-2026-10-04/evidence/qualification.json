@@ -1,0 +1,27 @@
+{
+  "baseline": "08733c1ff5cf279084a543390c9146626fb69e80",
+  "frozen_source_binary_drift": [],
+  "original_history_phases": 512,
+  "original_public_channels": 16,
+  "original_baseline_actual_sites": 285,
+  "original_candidate_actual_sites": 11,
+  "original_pointwise_public_and_truth_class_private_regressions": 0,
+  "generic_controls": 8,
+  "generic_phases": 10240,
+  "generic_bounds": "4..5 inputs, 1..16 outputs",
+  "budget_controls": [
+    0,
+    1,
+    4
+  ],
+  "proposal_counts": [
+    0,
+    1,
+    1
+  ],
+  "budget_zero_original_world": true,
+  "positive_budget_deterministic": true,
+  "nonliteral_preserves_old_world": true,
+  "minecraft_candidate_conformance": "not yet executed",
+  "shared_source_modified": false
+}

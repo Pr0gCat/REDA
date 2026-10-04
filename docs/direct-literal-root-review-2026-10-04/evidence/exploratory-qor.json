@@ -1,0 +1,24 @@
+{
+  "phases": 512,
+  "regressions": [],
+  "metrics": {
+    "ticks": {
+      "baseline_max": 26,
+      "baseline_total": 12064,
+      "candidate_max": 6,
+      "candidate_total": 2484
+    },
+    "queue_work": {
+      "baseline_max": 145,
+      "baseline_total": 40502,
+      "candidate_max": 8,
+      "candidate_total": 2040
+    },
+    "physical_site_events": {
+      "baseline_max": 966,
+      "baseline_total": 280665,
+      "candidate_max": 20,
+      "candidate_total": 5100
+    }
+  }
+}

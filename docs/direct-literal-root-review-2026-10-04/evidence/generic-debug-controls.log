@@ -1,0 +1,8 @@
+   Compiling reda v0.1.0 (/tmp/reda-direct-literal-20261004)
+    Finished `dev` profile [unoptimized] target(s) in 8.11s
+     Running `/tmp/reda-direct-literal-target/debug/examples/direct_literal_controls`
+phase failure from=0 to=0 address=0 site=6 at=(21, 1, 6) target=true actual=Some(false) events=[]
+
+thread 'main' (4) panicked at examples/direct_literal_controls.rs:12:71:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

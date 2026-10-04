@@ -1,0 +1,172 @@
+--- a/src/compile/fragment_synth/torch_row.rs
++++ b/src/compile/fragment_synth/torch_row.rs
+@@ -12,6 +12,7 @@
+ 
+ mod player;
+ mod four;
++mod literals;
+ 
+ /// Certify a balanced four/five-input matrix from the source truth table.
+ /// The default selector and recursive root can use this bounded method.
+@@ -120,6 +121,7 @@
+         BlockKind::WallTorch => "minecraft:redstone_wall_torch",
+         BlockKind::Lever => "minecraft:lever",
+         BlockKind::Lamp => "minecraft:redstone_lamp",
++        BlockKind::Repeater => "minecraft:repeater",
+         _ => unreachable!(),
+     }
+     .into();
+@@ -1447,3 +1449,8 @@
+     candidate.bind_pin_contracts(&netlist).unwrap();
+     (netlist, world, candidate)
+ }
++
++/// Experimental direct-literal family; qualified selection is separate.
++pub fn compile_direct_literals(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite,TorchRowError> {
++    literals::compile(source,limit)
++}
+--- a/src/compile/fragment_synth/torch_row/player.rs
++++ b/src/compile/fragment_synth/torch_row/player.rs
+@@ -1138,7 +1138,7 @@
+ }
+ 
+ // Reuse the ordinary high/low torch construction in a separate output domain.
+-fn constant_output(
++pub(super) fn constant_output(
+     w: &mut World,
+     gates: &mut Vec<Gate>,
+     positions: &mut BTreeMap<String, Position>,
+--- /dev/null
++++ b/src/compile/fragment_synth/torch_row/literals.rs
+@@ -0,0 +1,81 @@
++//! Experimental source-truth literal implementation, without name recognition.
++use super::*;
++use crate::compile::{Gate,topology::GateKind};
++use std::collections::{HashMap,BTreeMap};
++
++#[derive(Clone,Copy,Debug)]
++enum Literal { Constant(bool), Input(usize,bool) }
++
++pub fn compile(source:&Netlist,limit:u64)->Result<CertifiedPhysicalRewrite,TorchRowError> {
++    if !(4..=5).contains(&source.inputs.len()) || !(1..=16).contains(&source.outputs.len()) || source.gates.iter().any(|g|g.kind.is_sequential()) {
++        return Err(TorchRowError::UnsupportedBoundary);
++    }
++    prove_netlist_rewrite(source,source,&source.inputs,&source.outputs,limit)
++        .map_err(|e|TorchRowError::Rewrite(PhysicalRewriteError::Rewrite(e)))?;
++    let order=source.combinational_order().unwrap();
++    let states=1usize<<source.inputs.len();
++    let truths:Vec<Vec<bool>>=(0..states).map(|address| {
++        let mut v:HashMap<_,_>=source.inputs.iter().enumerate().map(|(bit,n)|(n.as_str(),address&(1<<bit)!=0)).collect();
++        for &g in &order { let g=&source.gates[g];let args=g.inputs.iter().map(|n|v[n.as_str()]).collect::<Vec<_>>();v.insert(g.output.as_str(),g.kind.evaluate(&args)); }
++        source.outputs.iter().map(|n|v[n.as_str()]).collect()
++    }).collect();
++    let mut literals=Vec::new();
++    for output in 0..source.outputs.len() {
++        let table:Vec<_>=truths.iter().map(|v|v[output]).collect();
++        let literal=if table.iter().all(|&v|v==table[0]) {Literal::Constant(table[0])} else {
++            let Some((bit,inverse))=(0..source.inputs.len()).flat_map(|bit|[false,true].map(move|inv|(bit,inv)))
++                .find(|&(bit,inv)|table.iter().enumerate().all(|(a,&v)|v==((a&(1<<bit)!=0)^inv))) else {return Err(TorchRowError::UnsupportedBoundary);};
++            Literal::Input(bit,inverse)
++        };
++        literals.push(literal);
++    }
++    let mut world=World::new(12*source.inputs.len() as i32+44,8,4*source.outputs.len() as i32+20);
++    let mut gates=Vec::new();let mut positions=BTreeMap::new();let mut inputs=Vec::new();
++    let mut rails:BTreeMap<(usize,bool),Vec<(i32,String)>>=BTreeMap::new();
++    for bit in 0..source.inputs.len() {
++        let x=4+10*bit as i32;
++        let p=Position::new(x,2,2);world.set(x,1,2,block(BlockKind::Solid));
++        let mut lever=block(BlockKind::Lever);lever.face=Some(Face::Floor);lever.facing=Some(Facing::North);world.set(x,2,2,lever);inputs.push(p);
++        for inverse in [false,true] {
++            let count=literals.iter().filter(|l|matches!(l,Literal::Input(b,i) if *b==bit&&*i==inverse)).count();
++            if count==0 && (inverse || !literals.iter().any(|l|matches!(l,Literal::Input(b,true) if *b==bit))) {continue;}
++            let (column,y,mut previous,start)=if inverse {
++                let torch_at=Position::new(x-1,1,4);torch(&mut world,torch_at.x,torch_at.y,torch_at.z,Facing::West);
++                let name=format!("negative{bit}");gates.push(Gate::nor(&name,&[&format!("positive{bit}")]));positions.insert(name.clone(),torch_at);
++                wire(&mut world,x-2,1,4);(x-2,1,name,4)
++            } else {
++                let at=Position::new(x,2,3);world.set(x,1,3,block(BlockKind::Solid));
++                let mut repeater=block(BlockKind::Repeater);repeater.facing=Some(Facing::North);world.set(x,2,3,repeater);
++                let name=format!("positive{bit}");gates.push(Gate{name:name.clone(),output:name.clone(),kind:GateKind::Buf,inputs:vec![format!("input{bit}")]});positions.insert(name.clone(),at);
++                (x,2,name,3)
++            };
++            rails.entry((bit,inverse)).or_default().push((start,previous.clone()));
++            for z in start+1..=(if inverse {6}else{4})+2*(count.saturating_sub(1) as i32) {
++                if z>=13&&(z-13)%14==0 {
++                    world.set(column,y-1,z,block(BlockKind::Solid));let mut r=block(BlockKind::Repeater);r.facing=Some(Facing::North);world.set(column,y,z,r);
++                    let name=format!("rail{bit}_{inverse}_{z}");gates.push(Gate{name:name.clone(),output:name.clone(),kind:GateKind::Buf,inputs:vec![previous]});positions.insert(name.clone(),Position::new(column,y,z));previous=name;
++                    rails.entry((bit,inverse)).or_default().push((z,previous.clone()));
++                } else {wire(&mut world,column,y,z);}
++            }
++        }
++    }
++    let mut counts:BTreeMap<(usize,bool),i32>=BTreeMap::new();let mut lamps=Vec::new();let mut outputs=Vec::new();
++    for (output,literal) in literals.into_iter().enumerate() {
++        let (lamp,name)=match literal {
++            Literal::Constant(high)=>super::player::constant_output(&mut world,&mut gates,&mut positions,output,high,12*source.inputs.len() as i32+16,6+3*output as i32),
++            Literal::Input(bit,inverse)=>{
++                let count=counts.entry((bit,inverse)).or_default();let z=(if inverse {6}else{4})+2*(*count);*count+=1;
++                let x=4+10*bit as i32;if inverse { wire(&mut world,x-3,1,z); (Position::new(x-4,1,z),rails[&(bit,inverse)].iter().rev().find(|(stage,_)|*stage<z).unwrap().1.clone()) }
++                else {wire(&mut world,x+1,2,z); (Position::new(x+2,2,z),rails[&(bit,inverse)].iter().rev().find(|(stage,_)|*stage<z).unwrap().1.clone())}
++            }
++        };
++        world.set(lamp.x,lamp.y-1,lamp.z,block(BlockKind::Solid));world.set(lamp.x,lamp.y,lamp.z,block(BlockKind::Lamp));lamps.push(lamp);outputs.push(name);
++    }
++    let implemented=Netlist{inputs:(0..source.inputs.len()).map(|b|format!("input{b}")).collect(),outputs,gates};
++    let size=world.size();let library=typed_matrix_library();
++    let expected=super::super::benchmark::canonical_world_fingerprint(&world);
++    let (implemented,_,candidate)=typed_world_candidate_with_library(implemented,world,inputs,lamps,positions,true,&library);
++    let result=super::super::rewrite::realise_physical_rewrite_with_size(source,&implemented,&candidate,&library,&implemented.inputs,&implemented.outputs,limit,Some(size)).map_err(TorchRowError::Rewrite)?;
++    assert_eq!(expected,super::super::benchmark::canonical_world_fingerprint(result.physical().world()));
++    Ok(result)
++}
+--- a/src/compile/selection.rs
++++ b/src/compile/selection.rs
+@@ -1000,3 +1000,47 @@
+         }
+     }
+ }
++
++fn literal_site_truths(source:&Netlist,circuit:&CompiledCircuit)->Option<Vec<Vec<bool>>> {
++    let implemented=circuit.implementation_netlist(source);let order=implemented.combinational_order()?;
++    let names=circuit.physical_rewrite()?.rewrite_certificate().rewritten_inputs_in_source_order();
++    let mut tables=vec![Vec::new();implemented.gates.len()];
++    for address in 0..1usize<<source.inputs.len() {
++        let v=values(implemented,&order,names.iter().enumerate().map(|(bit,n)|(n.as_str(),address&(1<<bit)!=0)))?;
++        for (i,g) in implemented.gates.iter().enumerate(){tables[i].push(v[g.output.as_str()]);}
++    }
++    Some(tables)
++}
++
++fn literal_profiles_dominate(source:&Netlist,baseline:&CompiledCircuit,candidate:&CompiledCircuit,old:&[StrictPhase],new:&[StrictPhase])->bool {
++    let Some(old_truth)=literal_site_truths(source,baseline) else{return false;};
++    let Some(new_truth)=literal_site_truths(source,candidate) else{return false;};
++    let offset=2*source.outputs.len();
++    let matches:Vec<Vec<usize>>=new_truth.iter().map(|table|old_truth.iter().enumerate().filter(|(_,old)|*old==table).map(|(i,_)|i).collect()).collect();
++    if matches.iter().any(Vec::is_empty)||old.len()!=new.len(){return false;}
++    let private=|phase:&StrictPhase|{
++        let channels=&phase.channels[offset..];
++        [channels.iter().map(|c|c[0]).sum::<u64>(),channels.iter().map(|c|c[1]).sum::<u64>(),channels.iter().map(|c|c[2]).max().unwrap_or(0),channels.iter().map(|c|c[3]).sum::<u64>(),channels.iter().map(|c|c[4]).max().unwrap_or(0)]
++    };
++    old.iter().zip(new).all(|(a,b)|{
++        b.ticks<=a.ticks&&b.work<=a.work&&b.cells<=a.cells
++        &&a.channels[..offset].iter().zip(&b.channels[..offset]).all(|(a,b)|a.iter().zip(b).all(|(a,b)|b<=a))
++        &&private(a).iter().zip(private(b)).all(|(a,b)|b<=*a)
++        &&matches.iter().enumerate().all(|(gate,old_gates)|old_gates.iter().all(|&old|b.channels[offset+gate].iter().zip(a.channels[offset+old]).all(|(b,a)|*b<=a)))
++    })&&old.iter().zip(new).any(|(a,b)|b.ticks<a.ticks||b.work<a.work||b.cells<a.cells||private(b)!=private(a))
++}
++
++/// Isolated prototype. Count generated proposals, retain budget-zero baseline.
++pub fn experiment_literal_selection(source:&Netlist,budget:usize)->Result<(CompiledCircuit,usize),CompileError> {
++    let baseline=compile_selected_with_refresh_budget(source,0)?;
++    if budget==0{return Ok((baseline,0));}
++    let rewrite=match super::fragment_synth::torch_row::compile_direct_literals(source,1_000_000) {
++        Ok(rewrite)=>rewrite,
++        Err(super::fragment_synth::torch_row::TorchRowError::UnsupportedBoundary)=>return Ok((baseline,0)),
++        Err(_)=>return Ok((baseline,1)),
++    };
++    let candidate=CompiledCircuit::from_certified_rewrite(rewrite);
++    let Some(old)=strict_profile(source,&baseline,None) else{return Ok((baseline,1));};
++    let Some(new)=strict_profile(source,&candidate,None) else{return Ok((baseline,1));};
++    Ok((if literal_profiles_dominate(source,&baseline,&candidate,&old,&new){candidate}else{baseline},1))
++}

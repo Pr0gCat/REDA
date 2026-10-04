@@ -1,0 +1,14 @@
+{
+  "binary": "/tmp/reda-direct-literal-target/debug/examples/direct_literal_observe",
+  "binary_sha256": "d4e726b465dbf4d0f6130747a31059578630324ba3525c229796fa3ac8a4f774",
+  "source_binary_manifest_sha256": "bf1a1ede13a021d40ef57617797baa03b631957c33f1ffca3d7f8ffed1356814",
+  "event_prefix": "evidence/frozen-original",
+  "cwd": "/tmp/reda-direct-literal-20261004",
+  "command": [
+    "/tmp/reda-direct-literal-target/debug/examples/direct_literal_observe"
+  ],
+  "frozen_source_unchanged": true,
+  "phase_order": "from 0..15, to 0..15, setup(from), target(to); generic five-input controls use states0..31",
+  "exit_code": 0,
+  "source_binary_drift": []
+}
