@@ -1,0 +1,10 @@
+--- a/src/compile/relax/project.rs
++++ b/src/compile/relax/project.rs
+@@ -840,6 +840,7 @@
+             nodes: (0..count).map(|index| vec![index]).collect(),
+             anchor_body: (0..count).collect(),
+             lower_bound: None,
++            arrival_runway_inputs: Default::default(),
+         }
+     }
+ 

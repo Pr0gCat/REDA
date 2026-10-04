@@ -1,0 +1,9 @@
+# Output fanout consumer parity
+
+The existing consumer indexed original source gate names after default physical rewrites had eliminated those gates. Both the unchanged baseline and the proposed placement candidate reproduced the same missing-key failure. The historical test now explicitly invokes `compile_without_rewrite` and preserves every original fixture, source-gate, public-lamp, one-way terminal and deterministic-compilation assertion. A separate actual-default test evaluates `implementation_netlist`, binds implementation inputs through the sealed physical positions, validates the exact rewrite view, and checks every implemented gate and original public lamp.
+
+Both tests pass in the current worktree with an unavailable Python executable: six renamed/reordered fixtures per path, 192 continuous settled phases per path, 384 total. The settling cap remains 2000. An isolated baseline independently passes both corrected tests. These checks establish consumer correctness and continuous settled truth, not full event-level quality dominance or complete project gates.
+
+A per-input placement-pruning proposal was rejected. It reused the planner's arrival eligibility to remove apparently unused relay clearance. Parent 41 tests, recursive 26 tests (five existing ignores), all 57 corrected relaxation tests and three DFF controls passed, yet the historical fanout consumer reported g3 false instead of true at allzero input. The same corrected consumer passes without pruning. All four backend files were restored byte-exact to their pre-agent backups, including dirty user changes. Retained patches document the rejected experiment and must not be adopted. Semantic runway eligibility alone is insufficient proof that its placement clearance can be removed.
+
+The five historical planner/coupling identity controls remain failing. No golden, assertion, physical invariant, simulator rule or budget changed. No broad gap is marked complete.

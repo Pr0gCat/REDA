@@ -1,0 +1,154 @@
+[
+  {
+    "name": "parent",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::fragment_synth::parent::tests",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "registered": 41,
+    "result": "ok. 41 passed; 0 failed; 0 ignored; 0 measured; 1227 filtered out; finished in 0.19s",
+    "seconds": 0.19283165398519486
+  },
+  {
+    "name": "recursive",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::fragment_synth::recursive::tests",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "registered": 31,
+    "result": "ok. 26 passed; 0 failed; 5 ignored; 0 measured; 1237 filtered out; finished in 2.39s",
+    "seconds": 2.3910692369681783
+  },
+  {
+    "name": "relax",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::relax::",
+      "--nocapture"
+    ],
+    "exit_code": 101,
+    "registered": 57,
+    "result": "FAILED. 56 passed; 1 failed; 0 ignored; 0 measured; 1211 filtered out; finished in 0.26s",
+    "seconds": 0.2608620509854518
+  },
+  {
+    "name": "arrival-selection",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::planner::arrival_balance_tests::",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "registered": 1,
+    "result": "ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1267 filtered out; finished in 0.00s",
+    "seconds": 0.005489912000484765
+  },
+  {
+    "name": "dff-power-on",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::planner::low_clock_repeaters_do_not_emit_a_power_on_capture",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "registered": 1,
+    "result": "ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1267 filtered out; finished in 0.02s",
+    "seconds": 0.020244697981979698
+  },
+  {
+    "name": "dff-native",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::tests::compile_places_and_runs_a_dff_without_legacy_fallback",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "registered": 1,
+    "result": "ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1267 filtered out; finished in 0.00s",
+    "seconds": 0.007778868020977825
+  },
+  {
+    "name": "dff-pinned-isolation",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::planner::tests::a_pinned_output_feeding_a_dff_asks_for_a_repeater_too",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "registered": 1,
+    "result": "ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1267 filtered out; finished in 0.02s",
+    "seconds": 0.022632175008766353
+  },
+  {
+    "name": "grown-history",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit_code": 101,
+    "registered": 1,
+    "result": "FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1267 filtered out; finished in 0.03s",
+    "seconds": 0.03927707200637087
+  },
+  {
+    "name": "own-floor-history",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit_code": 101,
+    "registered": 1,
+    "result": "FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1267 filtered out; finished in 0.15s",
+    "seconds": 0.15133737598080188
+  },
+  {
+    "name": "keepout-history",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit_code": 101,
+    "registered": 1,
+    "result": "FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1267 filtered out; finished in 0.02s",
+    "seconds": 0.022451944008935243
+  },
+  {
+    "name": "derived-range-history",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit_code": 101,
+    "registered": 1,
+    "result": "FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1267 filtered out; finished in 0.99s",
+    "seconds": 0.9938612320111133
+  },
+  {
+    "name": "graph-history",
+    "command": [
+      "/tmp/reda-planner-policy-target-20261004/release/deps/reda-5415b7c62c168235",
+      "compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit_code": 101,
+    "registered": 1,
+    "result": "FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1267 filtered out; finished in 31.94s",
+    "seconds": 31.94877319195075
+  }
+]

@@ -1,0 +1,110 @@
+--- a/tests/observed_output_isolation.rs
++++ b/tests/observed_output_isolation.rs
+@@ -1,9 +1,10 @@
+ //! Public output fanout must not read power coming backward from a gate support.
+ use reda::compile::{
+-    compile,
++    compile, compile_without_rewrite,
+     lowering::lower_optimised,
+     planner::{plan_from_netlist, PortPlacements},
+     routing::RouteTerminalKind,
++    CompileError, CompiledCircuit, Netlist,
+ };
+ use reda::frontend::{compile_systemverilog, CompileOptions, SourceInput};
+ use reda::redstone::{simulator::Simulator, world::block::BlockKind};
+@@ -11,6 +12,19 @@
+ 
+ #[test]
+ fn output_lamp_fanout_has_one_way_gate_landings_and_correct_history() {
++    check_output_history(compile_without_rewrite);
++}
++
++#[test]
++fn default_output_fanout_checks_sealed_implementation_and_public_history() {
++    assert!(
++        check_output_history(compile) > 0,
++        "actual default must exercise a physical rewrite"
++    );
++}
++
++fn check_output_history(compiler: fn(&Netlist) -> Result<CompiledCircuit, CompileError>) -> usize {
++    let mut rewrites = 0;
+     for words in [[1u8, 3, 2, 0], [5u8, 3, 2, 0]] {
+         for (a, b, reverse) in [
+             ("a", "b", false),
+@@ -44,8 +58,11 @@
+             source.outputs = (0..3)
+                 .map(|bit| ports[&format!("y{bit}")].clone())
+                 .collect();
+-            let circuit = compile(&source).unwrap();
+-            let repeated = compile(&source).unwrap();
++            let circuit = compiler(&source).unwrap();
++            let repeated = compiler(&source).unwrap();
++            circuit.validate_rewrite_view(&source).unwrap();
++            repeated.validate_rewrite_view(&source).unwrap();
++            rewrites += usize::from(circuit.physical_rewrite().is_some());
+             assert_eq!(
+                 reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(
+                     &circuit.world
+@@ -68,13 +85,30 @@
+                 }
+             }
+             assert!(checked > 0, "the fixture must exercise output fanout");
+-            let order = source.combinational_order().unwrap();
++            let implementation = circuit.implementation_netlist(&source);
++            let order = implementation.combinational_order().unwrap();
++            let input_bindings: HashMap<_, _> = implementation
++                .inputs
++                .iter()
++                .map(|name| {
++                    let at = circuit.physical_rewrite().map_or_else(
++                        || circuit.input_positions[name],
++                        |rewrite| rewrite.implemented_observations().input_positions[name],
++                    );
++                    let source_input = source
++                        .inputs
++                        .iter()
++                        .find(|name| circuit.input_positions[*name] == at)
++                        .expect("every implementation input must bind a public source port");
++                    (name.clone(), source_input.clone())
++                })
++                .collect();
+             let mut sim = Simulator::new(circuit.world.clone());
+             sim.run_until_stable(2000).unwrap();
+             for from in 0..4usize {
+                 for to in 0..4usize {
+                     for address in [from, to] {
+-                        let mut values: HashMap<String, bool> = source
++                        let values: HashMap<String, bool> = source
+                             .inputs
+                             .iter()
+                             .enumerate()
+@@ -89,11 +123,19 @@
+                             sim.world_mut().set(x, y, z, s);
+                         }
+                         sim.run_until_stable(2000).unwrap();
++                        let mut implementation_values: HashMap<_, _> = input_bindings
++                            .iter()
++                            .map(|(name, source_input)| (name.clone(), values[source_input]))
++                            .collect();
+                         for &index in &order {
+-                            let gate = &source.gates[index];
+-                            let operands: Vec<_> = gate.inputs.iter().map(|n| values[n]).collect();
++                            let gate = &implementation.gates[index];
++                            let operands: Vec<_> = gate
++                                .inputs
++                                .iter()
++                                .map(|n| implementation_values[n])
++                                .collect();
+                             let expected = gate.kind.evaluate(&operands);
+-                            values.insert(gate.output.clone(), expected);
++                            implementation_values.insert(gate.output.clone(), expected);
+                             let (x, y, z) = circuit.gate_output_positions[&gate.output];
+                             let state = sim.world().get(x, y, z);
+                             assert_eq!(
+@@ -120,4 +162,5 @@
+             }
+         }
+     }
++    rewrites
+ }

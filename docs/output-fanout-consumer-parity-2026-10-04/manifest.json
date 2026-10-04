@@ -1,0 +1,61 @@
+{
+  "scope": "Observed-output consumer parity and rejected placement experiment; no production backend change adopted",
+  "old_consumer_baseline": "Both baseline and candidate originally fail indexing removed source gate IDs under default rewrite. Same corrected historical/default tests pass with baseline backend.",
+  "current_tree_result": {
+    "command": "REDA_PYTHON=/nonexistent-reda-python RUST_MIN_STACK=268435456 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/reda-planner-policy-target-20261004 cargo test --locked --offline --test observed_output_isolation -- --nocapture",
+    "cwd": "/home/seith/REDA",
+    "exit_code": 0,
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0,
+    "fixture_variants_per_path": 6,
+    "continuous_phases_per_path": 192,
+    "total_phases": 384,
+    "bound_binary_sha256": "06057a031de9c22a86da5628047f8eabaebd43ebad5749a1808f3b90e8ba419f",
+    "scope_note": "Current mixed worktree runtime; isolated baseline independently passes same two corrected consumers. No clean full project gate claim."
+  },
+  "assertions_preserved": [
+    "original six fixture variants",
+    "original source gates and original public lamps via explicit no-rewrite compiler",
+    "one-way observed-output planner terminals",
+    "deterministic repeated compilation",
+    "unchanged settle cap 2000"
+  ],
+  "new_assertions": [
+    "actual default exercises physical rewrite",
+    "exact sealed rewrite views",
+    "implementation inputs bound by certified physical positions to source ports",
+    "all implementation gates at every phase",
+    "all original public lamps at every phase"
+  ],
+  "rejected_pruning": {
+    "adopted": false,
+    "reason": "Removing retiming relay clearance based only on per-input semantic eligibility breaks historical no-rewrite g3 at allzero input; parent recursive relax and three DFF controls passed but were insufficient",
+    "backend_files_restored_byte_exact": [
+      "src/compile/planner.rs",
+      "src/compile/relax/build.rs",
+      "src/compile/relax/mod.rs",
+      "src/compile/relax/project.rs"
+    ],
+    "historical_controls_closed": 0
+  },
+  "files": {
+    "baseline-observed-output-native-debug.log.gz": "ac1342d8ef9c91180e1bf8da685207c9ce679124d4cb6a5e47af26f911f71118",
+    "baseline-source-sha256.json": "ea020ffb4e02070ef6caaaf57f554d4f6efc8aeecd1ad07336b1a67f16120671",
+    "bound-baseline-observed-output-both-native-debug.log.gz": "6dd62c634aa345a01d68c7068bbef90f9d81b3da835ab652eb8f1e33d5402a7c",
+    "bound-observed-output-both-native-debug.log.gz": "18764fd1bea00815fb6c85aa8d0f364a8e0312bdbd75e3bc53bb3fc788fe95c2",
+    "consumer-owned.patch": "5939b4402e2c7020cf25c9129ca8352259c7957ad8edc55c8dc792ba8ea5f3b1",
+    "control-results.json": "6e84912346d0679375e618094f231bc80188ecdd1fca995d00c3fff426287867",
+    "corrected-relax-debug.log.gz": "204f8b50794836e0ea9871b02b87d00a7874fd8225497214d405bfb66e80d751",
+    "corrected-source-sha256.json": "36a9b8e00626b7dd67eb23235db6ada7f33398005d1118cdc33f3d63e379d1f3",
+    "current-observed-output-both-native-debug.log.gz": "486d739b02369013b75f57e7faabe45cccb1d4eabdf1a067572e983c32640d6f",
+    "observed-output-both-native-debug.log.gz": "754df268c5e26d2b8b3126d0edba5149b73bf8df72b0b6fe1897bd5a0189a370",
+    "planner-owned.patch": "654697bcc9ca16b06e45ddc54babe01c5fc30ec79f896889b072f2b101475f44",
+    "relax-build-owned.patch": "87d1391d1d5a8f8d90d4826824e64b1d7aae2157514cf636e00b7d61735577e6",
+    "relax-mod-owned.patch": "f4c734874d7f8500a053557fe8494eda9be5ccf5100e14ef66ed912173447449",
+    "relax-project-owned.patch": "8d0ec9b832003067d731660ed81a23e5fa9dee6f905676d4cb4578485c92ec3d",
+    "status.md": "33a32eb99ab134e919eadd3fe64967c2dd2ff71c361d0eae340f4d78a94fe63e"
+  },
+  "consumer_source_sha256": "0f4c9a25a0f160873933ecbdbce4b4b6546d2e126f9ffdd716f6921bb28ef36a",
+  "original_consumer_source_sha256": "6909f9c26e839ba0bec4cbf6174f3040072ef73925c0eb9f943ff4d559254553"
+}

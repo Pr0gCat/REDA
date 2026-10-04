@@ -1,0 +1,43 @@
+--- a/src/compile/planner.rs
++++ b/src/compile/planner.rs
+@@ -5672,7 +5672,7 @@
+     // `Repeater` and not `Exact`, because the *diode* is the requirement; which
+     // repeater kind satisfies it stays the router's decision, the way it is for
+     // every other automatically terminated sink.
+-    let selected_gates = arrival_balance_gates(netlist).unwrap_or_default();
++    let runway_inputs = arrival_runway_inputs(netlist);
+     let feeds_observed_output = netlist.outputs.iter().any(|output| output == signal)
+         || consumers.iter().any(|consumer| matches!(consumer, NetConsumer::Terminal { .. }));
+     let mut sinks = Vec::with_capacity(consumers.len());
+@@ -5700,10 +5700,8 @@
+                     TerminalRequirement::Exact(RouteTerminalKind::BareMergeRepeater)
+                 } else if netlist.gates[*gate].is_merge() {
+                     TerminalRequirement::Exact(RouteTerminalKind::RepeaterIntoSupport)
+-                } else if matches!(netlist.gates[*gate].kind, crate::compile::topology::GateKind::Nor(n) if n > 0)
+-                    && selected_gates.contains(gate)
++                } else if runway_inputs.contains(&(*gate, *input_index))
+                     && !feeds_observed_output
+-                    && !netlist.gates.iter().any(|g| g.kind.is_sequential())
+                     && !consumers.iter().any(|c| matches!(c, NetConsumer::Terminal { .. })) {
+                     TerminalRequirement::DirectedDustRunway
+                 } else if feeds_observed_output
+@@ -5803,6 +5801,19 @@
+             assert!(arrival_balance_gates(&sequential).is_none());
+         }
+     }
++}
++
++/// Per-input arrival contracts shared by placement and route requests.
++/// An observed input net keeps its diode isolation instead of a weak runway.
++pub(crate) fn arrival_runway_inputs(netlist: &Netlist) -> std::collections::HashSet<(usize, usize)> {
++    let selected = arrival_balance_gates(netlist).unwrap_or_default();
++    selected.into_iter().filter(|&gate| {
++        matches!(netlist.gates[gate].kind, crate::compile::topology::GateKind::Nor(n) if n > 0)
++    }).flat_map(|gate| {
++        netlist.gates[gate].inputs.iter().enumerate().filter_map(move |(input, signal)| {
++            (!netlist.outputs.contains(signal)).then_some((gate, input))
++        })
++    }).collect()
+ }
+ 
+ fn arrival_balance_gates(netlist: &Netlist) -> Option<std::collections::HashSet<usize>> {

@@ -1,0 +1,124 @@
+--- a/src/compile/relax/build.rs
++++ b/src/compile/relax/build.rs
+@@ -336,6 +336,8 @@
+     /// The caller's [`LowerBound`], from `PortPlacements`. Projection lifts
+     /// every free node whose cells would fall below it.
+     pub lower_bound: Option<LowerBound>,
++    /// Per-input weak arrival contracts, computed once from the source graph.
++    pub arrival_runway_inputs: std::collections::HashMap<String, Vec<bool>>,
+ }
+ 
+ /// How many hops out along a body's output face its pin sits.
+@@ -441,7 +443,7 @@
+ /// - the **torch** and the **pin** carry the gate's own output net.
+ /// - a **floor** -- a repeater's, a junction's, a lever's -- carries nothing.
+ pub fn cells(body: &Body) -> Vec<Cell> {
+-    cells_with_runways(body, false)
++    cells_with_runways(body, false, None)
+ }
+ 
+ /// Sequential graphs keep their existing cell geometry because their routes
+@@ -451,10 +453,15 @@
+         .bodies
+         .iter()
+         .any(|b| matches!(b.what, BodyKind::DffPosedge { .. }));
+-    cells_with_runways(body, weak)
++    let runways = body
++        .output
++        .as_ref()
++        .and_then(|signal| graph.arrival_runway_inputs.get(signal))
++        .map(Vec::as_slice);
++    cells_with_runways(body, weak, runways)
+ }
+ 
+-fn cells_with_runways(body: &Body, weak: bool) -> Vec<Cell> {
++fn cells_with_runways(body: &Body, weak: bool, runways: Option<&[bool]>) -> Vec<Cell> {
+     let facing = body.facing;
+     let mut cells = Vec::new();
+ 
+@@ -556,14 +563,30 @@
+                         carries: vec![signal.clone()],
+                     });
+                 }
+-                if weak && matches!(body.what, BodyKind::Primitive { kind: Primitive::Torch, .. }) && body.inputs.len() > 1 {
++                if weak
++                    && runways.is_some_and(|inputs| inputs[index])
++                    && matches!(
++                        body.what,
++                        BodyKind::Primitive {
++                            kind: Primitive::Torch,
++                            ..
++                        }
++                    )
++                    && body.inputs.len() > 1
++                {
+                     // The relocated relay needs an approach and its own floor.
+                     // Reserve geometry on each actual input face, not a
+                     // uniform spacing increment on unrelated bodies.
+                     for hops in [2, 3] {
+-                        cells.push(Cell { offset: (step.x * hops, step.y, step.z * hops), carries: vec![signal.clone()] });
++                        cells.push(Cell {
++                            offset: (step.x * hops, step.y, step.z * hops),
++                            carries: vec![signal.clone()],
++                        });
+                     }
+-                    cells.push(Cell { offset: (step.x * 2, step.y - 1, step.z * 2), carries: Vec::new() });
++                    cells.push(Cell {
++                        offset: (step.x * 2, step.y - 1, step.z * 2),
++                        carries: Vec::new(),
++                    });
+                 }
+             }
+ 
+@@ -919,7 +942,22 @@
+         "a terminal has one lawful realisation, and its facing is the one `toward` names"
+     );
+ 
++    let runway_inputs = crate::compile::planner::arrival_runway_inputs(netlist);
++    let arrival_runway_inputs = netlist
++        .gates
++        .iter()
++        .enumerate()
++        .map(|(gate, source)| {
++            (
++                source.output.clone(),
++                (0..source.inputs.len())
++                    .map(|input| runway_inputs.contains(&(gate, input)))
++                    .collect(),
++            )
++        })
++        .collect();
+     Ok(BodyGraph {
++        arrival_runway_inputs,
+         bodies,
+         pulls,
+         welds,
+@@ -1055,6 +1093,28 @@
+         let sequential = built(&source);
+         for body in &sequential.bodies {
+             assert_eq!(cells_for_graph(&sequential, body), cells(body));
++        }
++    }
++
++    #[test]
++    fn observed_inputs_reserve_no_unused_retiming_runway() {
++        let source = Netlist {
++            inputs: vec!["a".into(), "b".into()],
++            outputs: vec!["na".into(), "y".into()],
++            gates: vec![Gate::nor("na", &["a"]), Gate::nor("y", &["na", "b"])],
++        };
++        let graph = built(&source);
++        let body = &graph.bodies[graph.anchor_body[1]];
++        let cells = cells_for_graph(&graph, body);
++        let relay_cells = |input| {
++            let at = Position::new(0, 0, 0).offset(geometry::input_directions(body.facing)[input]);
++            [(at.x * 3, at.y, at.z * 3), (at.x * 2, at.y - 1, at.z * 2)]
++        };
++        for offset in relay_cells(0) {
++            assert!(!cells.iter().any(|cell| cell.offset == offset), "observed `na` keeps its diode rather than a retiming relay");
++        }
++        for offset in relay_cells(1) {
++            assert!(cells.iter().any(|cell| cell.offset == offset), "unobserved `b` retains the qualified relay runway");
+         }
+     }
+ 
