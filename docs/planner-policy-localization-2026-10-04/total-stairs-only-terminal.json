@@ -1,0 +1,18 @@
+{
+  "terminal_exit_code": 101,
+  "trace": [
+    8,
+    5,
+    5,
+    0
+  ],
+  "expected_unchanged": [
+    8,
+    5,
+    6,
+    0
+  ],
+  "conclusion": "changing only negotiated stair reserve does not recover historical trace",
+  "adopted": false,
+  "binary_sha256": "bc21468165c62c1dab92d728b16cc21bdaf8feff7a45500661542405aba97566"
+}
