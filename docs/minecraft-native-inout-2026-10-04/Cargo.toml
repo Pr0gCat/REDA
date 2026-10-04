@@ -1,0 +1,11 @@
+[package]
+name = "reda-shared-inout-game-qualification"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+reda = { path = "../main-inout-integration/index-candidate" }
+serde_json = "1"

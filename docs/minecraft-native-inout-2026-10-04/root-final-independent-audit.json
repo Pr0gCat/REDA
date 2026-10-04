@@ -1,0 +1,31 @@
+{
+  "accepted": true,
+  "scope": "Real-game settled-state raw observation and checked-bus audit; no transient claim",
+  "raw_states": 128,
+  "actual_gates": 37,
+  "output_lamps": 12,
+  "checked_counts": {
+    "Floating": 8,
+    "Value": 38,
+    "Contention": 18,
+    "ProtocolViolation": 64
+  },
+  "actual_injection_pad_reads": 256,
+  "physical_output_partition": {
+    "lamps": 12,
+    "injection_pads": 2
+  },
+  "raw_rcon_pairs": 654478,
+  "observations_per_state": 64,
+  "cleanup_original_positions": 3282,
+  "cleanup_air_sites": 3282,
+  "cleanup_chunks": 104,
+  "sha256": {
+    "/home/seith/REDA/target/qualification/shared-inout-game-producer/candidate.dump": "259115458192ade4741ea35fdf1c87fc473a0e04630d5c92fe615ad8a71f0164",
+    "/home/seith/REDA/target/qualification/shared-inout-game-producer/expected-trace.json": "8be6b8579d7a8b6eeef9b27e46eafb9653e64cd2b33d24f61438c144384b26d2",
+    "target/qualification/shared-inout-game-producer/final-result.json": "c9a0789c571f64459229931cdefbc2e812d8e1cc0c7fda420aad63c22d299393",
+    "target/qualification/shared-inout-game-producer/final-rcon.jsonl": "7c62e92ab5535f413cad961e2798e1cc41d4a802fe44b60adb40a2c07fe894fa",
+    "target/qualification/shared-inout-game-producer/final-cleanup-audit.json": "136e7c08e60e354a55aff9a00dcbb1b529f27c21dcdc8666289a5a73eebd887c",
+    "/home/seith/REDA/target/qualification/shared-inout-game-producer/audit_game_raw.py": "a1b77d7e407ca3b634dd426ff34a9973c00e01dfa4be1f47cf3c8cc21140883d"
+  }
+}

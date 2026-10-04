@@ -1,0 +1,78 @@
+{
+  "accepted": false,
+  "raw_states": 128,
+  "gate_lamp_raw_report_reconstruction": true,
+  "electrical_failures": [
+    {
+      "raw_state": 60,
+      "category": "lamp",
+      "signal": "__qualification_output_0",
+      "expected": true,
+      "actual": false
+    },
+    {
+      "raw_state": 60,
+      "category": "gate",
+      "signal": "g16",
+      "expected": true,
+      "actual": false
+    },
+    {
+      "raw_state": 60,
+      "category": "gate",
+      "signal": "n11",
+      "expected": false,
+      "actual": true
+    },
+    {
+      "raw_state": 61,
+      "category": "lamp",
+      "signal": "__qualification_output_0",
+      "expected": true,
+      "actual": false
+    },
+    {
+      "raw_state": 61,
+      "category": "gate",
+      "signal": "g16",
+      "expected": true,
+      "actual": false
+    },
+    {
+      "raw_state": 61,
+      "category": "gate",
+      "signal": "n11",
+      "expected": false,
+      "actual": true
+    },
+    {
+      "raw_state": 62,
+      "category": "lamp",
+      "signal": "__qualification_output_0",
+      "expected": true,
+      "actual": false
+    },
+    {
+      "raw_state": 62,
+      "category": "gate",
+      "signal": "g16",
+      "expected": true,
+      "actual": false
+    },
+    {
+      "raw_state": 62,
+      "category": "gate",
+      "signal": "n11",
+      "expected": false,
+      "actual": true
+    }
+  ],
+  "missing_checked_bus_observations": [],
+  "checked_counts_from_complete_raw_reads": {
+    "Floating": 8,
+    "Value": 38,
+    "Contention": 18,
+    "ProtocolViolation": 64
+  },
+  "raw_rcon_pairs": 131466
+}

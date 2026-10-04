@@ -1,0 +1,5 @@
+{
+  "path": "../inout-main-integration-2026-10-04/source.tar.gz",
+  "sha256": "ea26d50e4c72dfa42b5c2b4384334c4832d838674cf2eb3e87e1092ef510506e",
+  "note": "Reuse main-inout source archive; producer Cargo dependency and include_str paths record original workspace layout."
+}

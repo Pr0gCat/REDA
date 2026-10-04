@@ -1,0 +1,18 @@
+test_actual_storage_cleanup_ack_is_exact_and_errors_remain_rejected (test_sequential_conformance.SequentialDumpTest.test_actual_storage_cleanup_ack_is_exact_and_errors_remain_rejected) ... ok
+test_dff_is_a_stateful_repeater_and_comb_evaluation_refuses_it (test_sequential_conformance.SequentialDumpTest.test_dff_is_a_stateful_repeater_and_comb_evaluation_refuses_it) ... ok
+test_existing_datapack_is_never_overwritten (test_sequential_conformance.SequentialDumpTest.test_existing_datapack_is_never_overwritten) ... ok
+test_failed_cleanup_responses_are_reported_and_release_still_runs (test_sequential_conformance.SequentialDumpTest.test_failed_cleanup_responses_are_reported_and_release_still_runs) ... ok
+test_invalid_dff_arity_component_and_metadata_are_rejected (test_sequential_conformance.SequentialDumpTest.test_invalid_dff_arity_component_and_metadata_are_rejected) ... ok
+test_literal_oracle_rejects_changed_logic_with_identical_interface (test_sequential_conformance.SequentialDumpTest.test_literal_oracle_rejects_changed_logic_with_identical_interface) ... ok
+test_module_and_direct_script_entrypoints_import_without_pythonpath (test_sequential_conformance.SequentialDumpTest.test_module_and_direct_script_entrypoints_import_without_pythonpath) ... ok
+test_native_capture_queries_actual_components_and_locking (test_sequential_conformance.SequentialDumpTest.test_native_capture_queries_actual_components_and_locking) ... ok
+test_native_snapshot_uses_required_owned_nbt_path_and_refuses_missing_function (test_sequential_conformance.SequentialDumpTest.test_native_snapshot_uses_required_owned_nbt_path_and_refuses_missing_function) ... ok
+test_partial_pack_write_cleans_only_new_owned_directory (test_sequential_conformance.SequentialDumpTest.test_partial_pack_write_cleans_only_new_owned_directory) ... ok
+test_properties_setup_failure_preserves_report_and_removes_owned_pack (test_sequential_conformance.SequentialDumpTest.test_properties_setup_failure_preserves_report_and_removes_owned_pack) ... ok
+test_protocol_has_exact_264_phases_and_changes_controls_without_edges (test_sequential_conformance.SequentialDumpTest.test_protocol_has_exact_264_phases_and_changes_controls_without_edges) ... ok
+test_tick_step_waits_for_exact_boundary_and_rejects_skipped_tick (test_sequential_conformance.SequentialDumpTest.test_tick_step_waits_for_exact_boundary_and_rejects_skipped_tick) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.210s
+
+OK

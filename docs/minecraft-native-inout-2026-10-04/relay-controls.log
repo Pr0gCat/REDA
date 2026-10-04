@@ -1,0 +1,9 @@
+test_actual_repeater_and_comparator_properties_and_missing_relay (test_relay_quiescence.RelayQuiescenceTest.test_actual_repeater_and_comparator_properties_and_missing_relay) ... ok
+test_hidden_relay_change_resets_streak_with_stable_gates (test_relay_quiescence.RelayQuiescenceTest.test_hidden_relay_change_resets_streak_with_stable_gates) ... ok
+test_oscillating_relay_keeps_original_ceiling_failure (test_relay_quiescence.RelayQuiescenceTest.test_oscillating_relay_keeps_original_ceiling_failure) ... ok
+test_slow_final_relay_scan_cannot_pass_after_original_ceiling (test_relay_quiescence.RelayQuiescenceTest.test_slow_final_relay_scan_cannot_pass_after_original_ceiling) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.003s
+
+OK

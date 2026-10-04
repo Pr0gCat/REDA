@@ -437,6 +437,7 @@ def parse_dump(path: Path) -> Dump:
             outputs[key] = pos
             bindings[key] = signal
             output_labels[key] = label if label is not None else source_labels.get(source, source)
+    validate_placement_blocks(blocks)
     return Dump(size, blocks, inputs, outputs, output_labels, gate_outputs, gates, bindings, sequential_cells)
 
 
@@ -465,7 +466,7 @@ def evaluate_expected(gates: list[Gate], primary: dict[str, int], output_binding
 
 
 def block_state_string(b: Block) -> str:
-    if b.kind == "Solid":
+    if b.kind in ("Solid", "Glass"):
         return b.name
     if b.kind == "Lamp":
         return f"{b.name}[lit=false]"
@@ -496,7 +497,17 @@ def lever_state_string(b: Block, on: bool) -> str:
     return f"{b.name}[face={b.face},facing={b.facing},powered={'true' if on else 'false'}]"
 
 
-CATEGORY_ORDER = ["Solid", "Lamp", "WallTorch", "Torch", "Repeater", "Comparator", "RedstoneWire"]
+CATEGORY_ORDER = ["Solid", "Glass", "Lamp", "WallTorch", "Torch", "Repeater", "Comparator", "RedstoneWire"]
+
+
+def validate_placement_blocks(blocks: list[Block]) -> None:
+    """Reject unsupported exports before any caller changes the game world."""
+    for block in blocks:
+        if block.kind == "Lever":
+            continue  # Caller controls are installed separately, after static blocks.
+        if block.kind not in CATEGORY_ORDER:
+            raise ValueError(f"unsupported placement block kind {block.kind!r} ({block.name})")
+        block_state_string(block)
 
 
 def build_phase_commands(blocks: list[Block], origin: tuple[int, int, int]) -> list[str]:
@@ -504,6 +515,7 @@ def build_phase_commands(blocks: list[Block], origin: tuple[int, int, int]) -> l
     category in CATEGORY_ORDER, collapsing contiguous same-state runs along
     X into a single /fill (see module docstring for why category order
     matters; run-collapsing is purely a speed optimisation on top of it)."""
+    validate_placement_blocks(blocks)
     ox, oy, oz = origin
     commands: list[str] = []
     for category in CATEGORY_ORDER:
@@ -1003,6 +1015,25 @@ def compute_settle_ceiling(dump: Dump) -> float:
 REQUIRED_STABLE_POLLS = 5
 
 
+def read_relay_state(client: RconClient, dump: Dump, origin: tuple[int, int, int]) -> dict:
+    """Observe physical relay progress, including components absent from the gate graph."""
+    ox, oy, oz = origin
+    states = {}
+    for block in dump.blocks:
+        if block.kind not in ("Repeater", "Comparator"):
+            continue
+        pos = (ox + block.x, oy + block.y, oz + block.z)
+        for prop in (("powered", "locked") if block.kind == "Repeater" else ("powered",)):
+            for value in (True, False):
+                state = f"{block.name}[{prop}={str(value).lower()}]"
+                if client.command(f"execute if block {pos[0]} {pos[1]} {pos[2]} {state}").strip().startswith("Test passed"):
+                    states[(block.x, block.y, block.z, prop)] = value
+                    break
+            else:
+                raise RegionNotReady(f"missing or unreadable actual relay {block.name} {prop} at {pos}")
+    return states
+
+
 def poll_until_quiescent(
     client: RconClient,
     dump: Dump,
@@ -1037,6 +1068,8 @@ def poll_until_quiescent(
     vs CircuitMismatch in the module docstring). Exit code and category are
     unaffected by why the mismatch was found -- mid-sweep or here.
 
+    Reads every physical repeater powered/locked state and comparator powered
+    state too, so hidden relay progress resets the same stability streak.
     Reads every gate's output torch on every poll, not just the output
     lamps: the same ~11ms measurement above showed no meaningful cost
     difference between reading 7 positions and 91, so there is no real
@@ -1049,10 +1082,9 @@ def poll_until_quiescent(
     if min_wait > 0:
         time.sleep(min_wait)
     prev = read_state(client, dump, origin)
+    prev_relays = read_relay_state(client, dump, origin)
     stable_streak = 1  # the read we just took counts as the first of the streak
     while True:
-        if stable_streak >= REQUIRED_STABLE_POLLS:
-            return prev
         elapsed = time.monotonic() - start
         if elapsed >= ceiling:
             raise CircuitMismatch(
@@ -1063,13 +1095,17 @@ def poll_until_quiescent(
                 "This is a real circuit fault, not an environment or timing problem: a redstone "
                 "circuit that never reaches a fixed point cannot be made to pass by waiting longer."
             )
+        if stable_streak >= REQUIRED_STABLE_POLLS:
+            return prev
         time.sleep(poll_interval)
         cur = read_state(client, dump, origin)
-        if cur == prev:
+        cur_relays = read_relay_state(client, dump, origin)
+        if cur == prev and cur_relays == prev_relays:
             stable_streak += 1
         else:
             stable_streak = 1
         prev = cur
+        prev_relays = cur_relays
 
 
 def assert_quiescent(

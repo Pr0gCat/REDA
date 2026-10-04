@@ -1,0 +1,6 @@
+{
+  "run": "qualified",
+  "terminal_exit": 130,
+  "cause": "Root sent SIGINT after identifying missing direct physical injection-pad observations; full qualification was restarted with both pads mandatory.",
+  "scope": "Retained partial evidence, never a completed or successful 128-state qualification."
+}

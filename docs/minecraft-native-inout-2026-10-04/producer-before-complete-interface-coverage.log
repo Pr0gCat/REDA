@@ -1,0 +1,22 @@
+     Locking 42 packages to latest compatible versions
+   Compiling reda v0.1.0 (/home/seith/REDA/target/qualification/main-inout-integration/index-candidate)
+   Compiling reda-shared-inout-game-qualification v0.0.0 (/home/seith/REDA/target/qualification/shared-inout-game-producer)
+warning: variable does not need to be mutable
+   --> src/main.rs:131:9
+    |
+131 |     let mut evaluator = Evaluator::new(&reference)?;
+    |         ----^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda-shared-inout-game-qualification` (bin "reda-shared-inout-game-qualification") generated 1 warning (run `cargo fix --bin "reda-shared-inout-game-qualification" -p reda-shared-inout-game-qualification` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized] target(s) in 29.24s
+     Running `/home/seith/REDA/target/qualification/main-inout-integration/index-target/debug/reda-shared-inout-game-qualification /home/seith/REDA/target/qualification/shared-inout-game-producer/candidate.dump /home/seith/REDA/target/qualification/shared-inout-game-producer/expected-trace.json`
+
+thread 'main' (63553) panicked at src/main.rs:102:13:
+assertion `left == right` failed: non-public output must be an actual internal injection pad
+  left: Lamp
+ right: RedstoneWire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

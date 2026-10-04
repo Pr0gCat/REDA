@@ -1,0 +1,7 @@
+{
+  "compiler_commit": "4e359bd",
+  "source": "cc05820799cdf3ef2abbf460bf6c3c3d223c9dc9a87b13c4384006125b85fe96",
+  "manifest": "e2c9f99fe53da061beba5ba4528667d7c4db5cc228246c8e58498330f30bf430",
+  "previous_failed_source": "d9e324400891d077e2c5967f699da99e80d8f9fa99caec7f5499aa861e382ac9",
+  "scope": "Qualification exporter only; no production compiler/harness/physics changes."
+}

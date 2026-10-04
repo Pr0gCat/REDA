@@ -1,0 +1,8 @@
+test_all_supported_static_exports_are_placed_with_actual_identity (test_placement_commands.PlacementCommandsTest.test_all_supported_static_exports_are_placed_with_actual_identity) ... ok
+test_original_command_sequence_and_lever_skip_are_preserved (test_placement_commands.PlacementCommandsTest.test_original_command_sequence_and_lever_skip_are_preserved) ... ok
+test_unknown_export_rejects_before_rcon_or_world_changes (test_placement_commands.PlacementCommandsTest.test_unknown_export_rejects_before_rcon_or_world_changes) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+OK

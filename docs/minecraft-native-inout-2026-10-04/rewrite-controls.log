@@ -1,0 +1,11 @@
+test_actual_permuted_boundary_dump (test_rewrite_dump.RewriteDumpTest.test_actual_permuted_boundary_dump) ... skipped 'generate mc_dump test fixtures'
+test_actual_rust_rewrite_dumps_preserve_truth_ports_and_components (test_rewrite_dump.RewriteDumpTest.test_actual_rust_rewrite_dumps_preserve_truth_ports_and_components) ... skipped 'generate mc_dump test fixtures and set REDA_DUMP_FIXTURE_DIR'
+test_invalid_output_port_ordinals_and_bindings_are_rejected (test_rewrite_dump.RewriteDumpTest.test_invalid_output_port_ordinals_and_bindings_are_rejected) ... ok
+test_legacy_nor_merge_dump_still_evaluates_and_reads (test_rewrite_dump.RewriteDumpTest.test_legacy_nor_merge_dump_still_evaluates_and_reads) ... ok
+test_rewritten_gate_observation_mismatch_is_rejected (test_rewrite_dump.RewriteDumpTest.test_rewritten_gate_observation_mismatch_is_rejected) ... ok
+test_unknown_observation_and_wrong_arity_are_rejected (test_rewrite_dump.RewriteDumpTest.test_unknown_observation_and_wrong_arity_are_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.004s
+
+OK (skipped=2)

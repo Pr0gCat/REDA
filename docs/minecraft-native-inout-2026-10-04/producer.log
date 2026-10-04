@@ -1,0 +1,17 @@
+   Compiling reda-shared-inout-game-qualification v0.0.0 (/home/seith/REDA/target/qualification/shared-inout-game-producer)
+    Finished `dev` profile [unoptimized] target(s) in 1.00s
+     Running `/home/seith/REDA/target/qualification/main-inout-integration/index-target/debug/reda-shared-inout-game-qualification /home/seith/REDA/target/qualification/shared-inout-game-producer/candidate.dump /home/seith/REDA/target/qualification/shared-inout-game-producer/expected-trace.json`
+PHYSICAL_OUTPUT g0 8 1 1 RedstoneWire
+PHYSICAL_OUTPUT g1 8 1 5 RedstoneWire
+PHYSICAL_OUTPUT g13 112 0 33 Lamp
+PHYSICAL_OUTPUT g15 126 0 10 Lamp
+PHYSICAL_OUTPUT g16 119 0 55 Lamp
+PHYSICAL_OUTPUT g17 56 0 83 Lamp
+PHYSICAL_OUTPUT g18 35 0 83 Lamp
+PHYSICAL_OUTPUT g19 84 0 82 Lamp
+PHYSICAL_OUTPUT g2 127 0 73 Lamp
+PHYSICAL_OUTPUT g20 120 0 80 Lamp
+PHYSICAL_OUTPUT g21 157 0 86 Lamp
+PHYSICAL_OUTPUT g22 167 0 83 Lamp
+PHYSICAL_OUTPUT g23 153 0 55 Lamp
+PHYSICAL_OUTPUT g4 104 0 48 Lamp

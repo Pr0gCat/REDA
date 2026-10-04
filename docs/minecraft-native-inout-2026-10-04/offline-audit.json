@@ -1,0 +1,643 @@
+{
+  "status": "pass",
+  "scope": "offline expected graph and frozen HDL oracle only; actual-game qualification pending",
+  "raw_states": 128,
+  "icarus_states": 64,
+  "icarus_endpoint_rows": 8192,
+  "checked_counts": {
+    "Floating": 8,
+    "Value": 38,
+    "Contention": 18,
+    "ProtocolViolation": 64
+  },
+  "actual_gates": 37,
+  "output_lamps": 12,
+  "physical_observation_inventory": [
+    {
+      "type": "gate",
+      "signal": "n0",
+      "position": [
+        45,
+        1,
+        78
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "n1",
+      "position": [
+        50,
+        1,
+        79
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "n2",
+      "position": [
+        92,
+        1,
+        78
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "n3",
+      "position": [
+        78,
+        1,
+        80
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "n4",
+      "position": [
+        138,
+        1,
+        87
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "n5",
+      "position": [
+        143,
+        1,
+        83
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g5",
+      "position": [
+        85,
+        1,
+        90
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g7",
+      "position": [
+        111,
+        1,
+        90
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g10",
+      "position": [
+        145,
+        1,
+        90
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g18",
+      "position": [
+        35,
+        1,
+        82
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g0",
+      "position": [
+        42,
+        1,
+        54
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g17",
+      "position": [
+        55,
+        1,
+        83
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g20",
+      "position": [
+        120,
+        1,
+        81
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g1",
+      "position": [
+        62,
+        1,
+        57
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g19",
+      "position": [
+        84,
+        1,
+        83
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g21",
+      "position": [
+        157,
+        1,
+        87
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g2",
+      "position": [
+        127,
+        1,
+        74
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g22",
+      "position": [
+        167,
+        1,
+        84
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "n6",
+      "position": [
+        89,
+        1,
+        84
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "n7",
+      "position": [
+        114,
+        1,
+        84
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "n8",
+      "position": [
+        148,
+        1,
+        82
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "n12",
+      "position": [
+        99,
+        1,
+        42
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g3",
+      "position": [
+        67,
+        1,
+        53
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "gate",
+      "signal": "g6",
+      "position": [
+        79,
+        1,
+        75
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g8",
+      "position": [
+        106,
+        1,
+        75
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g11",
+      "position": [
+        139,
+        1,
+        71
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g23",
+      "position": [
+        153,
+        1,
+        56
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g4",
+      "position": [
+        104,
+        1,
+        47
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "gate",
+      "signal": "n11",
+      "position": [
+        80,
+        1,
+        41
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g9",
+      "position": [
+        103,
+        1,
+        66
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "gate",
+      "signal": "n9",
+      "position": [
+        106,
+        1,
+        39
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g16",
+      "position": [
+        119,
+        1,
+        56
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g12",
+      "position": [
+        122,
+        1,
+        48
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "gate",
+      "signal": "n10",
+      "position": [
+        120,
+        1,
+        38
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g14",
+      "position": [
+        122,
+        1,
+        14
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "gate",
+      "signal": "g13",
+      "position": [
+        112,
+        1,
+        34
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "gate",
+      "signal": "g15",
+      "position": [
+        126,
+        1,
+        11
+      ],
+      "kind": "WallTorch"
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g13",
+      "alias": "__qualification_output_1",
+      "label": "bus:conflict",
+      "position": [
+        112,
+        0,
+        33
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g15",
+      "alias": "__qualification_output_2",
+      "label": "bus:floating",
+      "position": [
+        126,
+        0,
+        10
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g16",
+      "alias": "__qualification_output_0",
+      "label": "y",
+      "position": [
+        119,
+        0,
+        55
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g17",
+      "alias": "__qualification_output_6",
+      "label": "interface:g17",
+      "position": [
+        56,
+        0,
+        83
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g18",
+      "alias": "__qualification_output_7",
+      "label": "interface:g18",
+      "position": [
+        35,
+        0,
+        83
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g19",
+      "alias": "__qualification_output_8",
+      "label": "interface:g19",
+      "position": [
+        84,
+        0,
+        82
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g2",
+      "alias": "__qualification_output_5",
+      "label": "bus:external_expected",
+      "position": [
+        127,
+        0,
+        73
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g20",
+      "alias": "__qualification_output_9",
+      "label": "interface:g20",
+      "position": [
+        120,
+        0,
+        80
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g21",
+      "alias": "__qualification_output_10",
+      "label": "interface:g21",
+      "position": [
+        157,
+        0,
+        86
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g22",
+      "alias": "__qualification_output_11",
+      "label": "interface:g22",
+      "position": [
+        167,
+        0,
+        83
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g23",
+      "alias": "__qualification_output_4",
+      "label": "bus:external_observed",
+      "position": [
+        153,
+        0,
+        55
+      ]
+    },
+    {
+      "type": "lamp",
+      "actual_signal": "g4",
+      "alias": "__qualification_output_3",
+      "label": "bus:expected_value",
+      "position": [
+        104,
+        0,
+        48
+      ]
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        1
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        2
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        3
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        4
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        5
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        6
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        7
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        8
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        9
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        10
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "channel",
+      "position": [
+        6,
+        1,
+        11
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "readback",
+      "position": [
+        8,
+        1,
+        11
+      ],
+      "kind": "RedstoneWire"
+    },
+    {
+      "type": "external_pad",
+      "position": [
+        8,
+        1,
+        9
+      ],
+      "kind": "RedstoneWire"
+    }
+  ],
+  "source_sha256": {
+    "protocol/circuit_conformance.py": "01182c06cc2ed816c9d207039df30d2299bf5e051f9e0c8cba416a08c2c74c88",
+    "standard-oracle.csv": "170ba618e6867e9e07d8233d6ce2609e8c28cd2f00e1f01ee55103d697d2eb50",
+    "candidate.dump": "259115458192ade4741ea35fdf1c87fc473a0e04630d5c92fe615ad8a71f0164",
+    "expected-trace.json": "8be6b8579d7a8b6eeef9b27e46eafb9653e64cd2b33d24f61438c144384b26d2",
+    "audit-expected.py": "6520638fc86c80f6e53f41c3da1163044f64ce28e59017738fdffb2dea2f966a"
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "final-rcon.jsonl": {
+    "decompressed_sha256": "7c62e92ab5535f413cad961e2798e1cc41d4a802fe44b60adb40a2c07fe894fa",
+    "decompressed_bytes": 97132779
+  },
+  "final-game.log": {
+    "decompressed_sha256": "dbfb8956aab5a6bac3576b490f61d84e3d225b350b0c45bf873ffa5ef8aeb5fe",
+    "decompressed_bytes": 33652
+  },
+  "final-cleanup-rcon.jsonl": {
+    "decompressed_sha256": "a6a907fe716f9f58b8dab6e5f1015046a892a6e32245947c632afd2bef88a87a",
+    "decompressed_bytes": 464069
+  },
+  "game-rcon.jsonl": {
+    "decompressed_sha256": "31aad17a71e1bd5f32b22e6cde004e2e4e153cfc08f5f20d8bc360b159a1a717",
+    "decompressed_bytes": 15056246
+  },
+  "game.log": {
+    "decompressed_sha256": "4d8c5e22db79417af98a3081840fe70390b534e21af67c837389886882e0c14a",
+    "decompressed_bytes": 39752
+  },
+  "complete-rcon.jsonl": {
+    "decompressed_sha256": "2857ee81678f192ff500bdd6dad4a5a1de89ac6854014d66fae1e0f730430728",
+    "decompressed_bytes": 19839699
+  },
+  "complete-game.log": {
+    "decompressed_sha256": "f9187e41f9c759f4f3cd3a6e379f448732c9096d5ccd41ed6297ae5241d93528",
+    "decompressed_bytes": 33808
+  },
+  "reader-wave-rcon.jsonl": {
+    "decompressed_sha256": "7c1f8ce57f2b1273c569db16a7444434d3c7b101a3e640eab8174f966373ed2f",
+    "decompressed_bytes": 704175
+  },
+  "reader-wave-game.log": {
+    "decompressed_sha256": "50133ff7d6b47b2db3c855a420c8e88e3910ef68e1300d05277b3f1b0980301f",
+    "decompressed_bytes": 1030
+  },
+  "targeted-rcon.jsonl": {
+    "decompressed_sha256": "e9742ab605d2ade5f175c8bff5dbf017be6761419e50ea8170599992f302e907",
+    "decompressed_bytes": 578594
+  },
+  "targeted-game.log": {
+    "decompressed_sha256": "050877a6ecfd64489942ed28a03a42e5816d4616cf21d21f93a97bcc570816f5",
+    "decompressed_bytes": 768
+  },
+  "glass-support-rcon.jsonl": {
+    "decompressed_sha256": "8a936381e7876b29b5dca4e5de08555d60518a9d63e96e4d39622c6760d6d9d4",
+    "decompressed_bytes": 642137
+  },
+  "glass-support-game.log": {
+    "decompressed_sha256": "89611914573898d0578c9dd8f5e488f1519dd75a5524a8a54051e451589dd4f2",
+    "decompressed_bytes": 765
+  },
+  "qualified-rcon.jsonl": {
+    "decompressed_sha256": "ad5b6e597468843960d1cc8622db39e78182694d68907bb36788f2f4fdff478d",
+    "decompressed_bytes": 23676388
+  },
+  "qualified-game.log": {
+    "decompressed_sha256": "1f6f9e832090affff91f9646a7edfed14d549d6587f14d4eb8695ee432e59774",
+    "decompressed_bytes": 8737
+  },
+  "strong-reader-transition-rcon.jsonl": {
+    "decompressed_sha256": "ce9e7b43c62820139756cd4c7150e78926488864eeb9df715cc1c316b5c4000b",
+    "decompressed_bytes": 2703747
+  },
+  "strong-reader-transition-game.log": {
+    "decompressed_sha256": "d8a005be207d84a436af749e1857dde5fdedbf70901875b66030153041d29a03",
+    "decompressed_bytes": 1035
+  },
+  "reader-route-rcon.jsonl": {
+    "decompressed_sha256": "a111617fb6571e15f53e4668ab55c91e12602a30bbd6f09bc53a6242618d35ce",
+    "decompressed_bytes": 651208
+  },
+  "reader-route-game.log": {
+    "decompressed_sha256": "fd08778cb2c614e8132290a868d2e788fec9569e7b09d0dfaa56bb4978b7a52a",
+    "decompressed_bytes": 721
+  },
+  "reader-transition-rcon.jsonl": {
+    "decompressed_sha256": "72c90025647834eb2fc3947ca398a8ed54bc6827678bfdf7d39c209e55cb4c49",
+    "decompressed_bytes": 679241
+  },
+  "reader-transition-game.log": {
+    "decompressed_sha256": "1f47c90b2ddd6f4f513a8450f417eeee043e42ea5b035b4d8c14eb3780e8a8ed",
+    "decompressed_bytes": 1079
+  },
+  "reader-route-cleanup-rcon.jsonl": {
+    "decompressed_sha256": "700ce2607699a81002c76acb143474e7973a99f432309e49535eaafeffdee65c",
+    "decompressed_bytes": 464046
+  },
+  "interrupted-cleanup-rcon.jsonl": {
+    "decompressed_sha256": "0b4a260dbbfbb7a07d136a2c3523f68ad1a6e1d3270a561c1beccb478c8fd142",
+    "decompressed_bytes": 464088
+  },
+  "complete-cleanup-rcon.jsonl": {
+    "decompressed_sha256": "f29b4eeda58ffe3310dc096950a540fbef561c5cd14d0f96fbc34b72e967c2ff",
+    "decompressed_bytes": 464056
+  },
+  "cleanup-rcon.jsonl": {
+    "decompressed_sha256": "07ec1c23f209c7f09378c73cf0c2f96d0c0fb22e2391a9dccbefbd13c1601de7",
+    "decompressed_bytes": 921004
+  }
+}

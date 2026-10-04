@@ -1,0 +1,932 @@
+[
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=0]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=0]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=1]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=1]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=2]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=2]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=3]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=3]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=4]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=4]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=5]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=5]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=6]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=6]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=7]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=7]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=8]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=8]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=9]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=9]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=10]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=10]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=11]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=11]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=12]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=12]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=13]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=13]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=14]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=14]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      6,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=15]",
+    "command": "execute if block 230006 152 180011 minecraft:redstone_wire[power=15]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      7,
+      1,
+      11
+    ],
+    "state": "minecraft:repeater[powered=true]",
+    "command": "execute if block 230007 152 180011 minecraft:repeater[powered=true]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      7,
+      1,
+      11
+    ],
+    "state": "minecraft:repeater[powered=false]",
+    "command": "execute if block 230007 152 180011 minecraft:repeater[powered=false]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=0]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=0]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=1]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=1]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=2]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=2]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=3]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=3]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=4]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=4]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=5]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=5]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=6]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=6]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=7]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=7]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=8]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=8]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=9]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=9]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=10]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=10]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=11]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=11]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=12]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=12]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=13]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=13]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=14]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=14]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      8,
+      1,
+      11
+    ],
+    "state": "minecraft:redstone_wire[power=15]",
+    "command": "execute if block 230008 152 180011 minecraft:redstone_wire[power=15]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      9,
+      1,
+      11
+    ],
+    "state": "minecraft:repeater[powered=true]",
+    "command": "execute if block 230009 152 180011 minecraft:repeater[powered=true]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      9,
+      1,
+      11
+    ],
+    "state": "minecraft:repeater[powered=false]",
+    "command": "execute if block 230009 152 180011 minecraft:repeater[powered=false]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      9,
+      1,
+      11
+    ],
+    "state": "minecraft:repeater[locked=true]",
+    "command": "execute if block 230009 152 180011 minecraft:repeater[locked=true]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      9,
+      1,
+      11
+    ],
+    "state": "minecraft:repeater[locked=false]",
+    "command": "execute if block 230009 152 180011 minecraft:repeater[locked=false]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      10,
+      1,
+      25
+    ],
+    "state": "minecraft:repeater[powered=true]",
+    "command": "execute if block 230010 152 180025 minecraft:repeater[powered=true]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      10,
+      1,
+      25
+    ],
+    "state": "minecraft:repeater[powered=false]",
+    "command": "execute if block 230010 152 180025 minecraft:repeater[powered=false]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      10,
+      1,
+      25
+    ],
+    "state": "minecraft:repeater[locked=true]",
+    "command": "execute if block 230010 152 180025 minecraft:repeater[locked=true]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      10,
+      1,
+      25
+    ],
+    "state": "minecraft:repeater[locked=false]",
+    "command": "execute if block 230010 152 180025 minecraft:repeater[locked=false]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      11,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[powered=true]",
+    "command": "execute if block 230011 152 180039 minecraft:repeater[powered=true]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      11,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[powered=false]",
+    "command": "execute if block 230011 152 180039 minecraft:repeater[powered=false]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      11,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[locked=true]",
+    "command": "execute if block 230011 152 180039 minecraft:repeater[locked=true]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      11,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[locked=false]",
+    "command": "execute if block 230011 152 180039 minecraft:repeater[locked=false]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      26,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[powered=true]",
+    "command": "execute if block 230026 152 180039 minecraft:repeater[powered=true]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      26,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[powered=false]",
+    "command": "execute if block 230026 152 180039 minecraft:repeater[powered=false]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      26,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[locked=true]",
+    "command": "execute if block 230026 152 180039 minecraft:repeater[locked=true]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      26,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[locked=false]",
+    "command": "execute if block 230026 152 180039 minecraft:repeater[locked=false]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      41,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[powered=true]",
+    "command": "execute if block 230041 152 180039 minecraft:repeater[powered=true]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      41,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[powered=false]",
+    "command": "execute if block 230041 152 180039 minecraft:repeater[powered=false]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      41,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[locked=true]",
+    "command": "execute if block 230041 152 180039 minecraft:repeater[locked=true]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      41,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[locked=false]",
+    "command": "execute if block 230041 152 180039 minecraft:repeater[locked=false]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      56,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[powered=true]",
+    "command": "execute if block 230056 152 180039 minecraft:repeater[powered=true]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      56,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[powered=false]",
+    "command": "execute if block 230056 152 180039 minecraft:repeater[powered=false]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      56,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[locked=true]",
+    "command": "execute if block 230056 152 180039 minecraft:repeater[locked=true]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      56,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[locked=false]",
+    "command": "execute if block 230056 152 180039 minecraft:repeater[locked=false]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      71,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[powered=true]",
+    "command": "execute if block 230071 152 180039 minecraft:repeater[powered=true]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      71,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[powered=false]",
+    "command": "execute if block 230071 152 180039 minecraft:repeater[powered=false]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      71,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[locked=true]",
+    "command": "execute if block 230071 152 180039 minecraft:repeater[locked=true]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      71,
+      1,
+      39
+    ],
+    "state": "minecraft:repeater[locked=false]",
+    "command": "execute if block 230071 152 180039 minecraft:repeater[locked=false]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=0]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=0]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=1]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=1]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=2]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=2]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=3]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=3]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=4]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=4]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=5]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=5]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=6]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=6]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=7]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=7]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=8]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=8]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=9]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=9]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=10]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=10]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=11]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=11]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=12]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=12]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=13]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=13]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=14]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=14]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[power=15]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[power=15]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      41
+    ],
+    "state": "minecraft:stone",
+    "command": "execute if block 230079 152 180041 minecraft:stone",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      80,
+      1,
+      41
+    ],
+    "state": "minecraft:redstone_wall_torch[lit=true]",
+    "command": "execute if block 230080 152 180041 minecraft:redstone_wall_torch[lit=true]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      80,
+      1,
+      41
+    ],
+    "state": "minecraft:redstone_wall_torch[lit=false]",
+    "command": "execute if block 230080 152 180041 minecraft:redstone_wall_torch[lit=false]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[north=none]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[north=none]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[north=side]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[north=side]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[north=up]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[north=up]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[south=none]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[south=none]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[south=side]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[south=side]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[south=up]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[south=up]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[east=none]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[east=none]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[east=side]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[east=side]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[east=up]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[east=up]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[west=none]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[west=none]",
+    "response": "Test passed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[west=side]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[west=side]",
+    "response": "Test failed"
+  },
+  {
+    "position": [
+      79,
+      1,
+      40
+    ],
+    "state": "minecraft:redstone_wire[west=up]",
+    "command": "execute if block 230079 152 180040 minecraft:redstone_wire[west=up]",
+    "response": "Test failed"
+  }
+]
