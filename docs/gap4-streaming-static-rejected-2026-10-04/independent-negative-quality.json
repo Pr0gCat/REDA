@@ -1,0 +1,8088 @@
+{
+  "cases": 6,
+  "qualified": false,
+  "regressions": [
+    {
+      "case": "native-feedback_counter",
+      "phase": 5,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 6,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 8,
+      "metric": "settlement_ticks",
+      "before": 38,
+      "after": 40
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 8,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 8,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 8,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 8,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 8,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 10,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 12,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 13,
+      "metric": "settlement_ticks",
+      "before": 48,
+      "after": 52
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 14,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 14,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 42
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "channel": "cell:g5:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "channel": "gate:g8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 16,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 17,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 26,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 34
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 26,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 26,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 29,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 30,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 37,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 38,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 40,
+      "metric": "settlement_ticks",
+      "before": 38,
+      "after": 40
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 40,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 40,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 40,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 40,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 40,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 42,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 44,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 45,
+      "metric": "settlement_ticks",
+      "before": 48,
+      "after": 52
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 46,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 46,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 42
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "channel": "cell:g5:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "channel": "gate:g8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 48,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 49,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 58,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 34
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 58,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 58,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 61,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 62,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 69,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 70,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 72,
+      "metric": "settlement_ticks",
+      "before": 38,
+      "after": 40
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 72,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 72,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 72,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 72,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 72,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 74,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 76,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 77,
+      "metric": "settlement_ticks",
+      "before": 48,
+      "after": 52
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 78,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 78,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 42
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "channel": "cell:g5:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "channel": "gate:g8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 80,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 81,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 90,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 34
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 90,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 90,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 93,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 94,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 101,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 102,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 104,
+      "metric": "settlement_ticks",
+      "before": 38,
+      "after": 40
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 104,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 104,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 104,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 104,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 104,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 106,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 108,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 109,
+      "metric": "settlement_ticks",
+      "before": 48,
+      "after": 52
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 110,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 110,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 42
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "channel": "cell:g5:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "channel": "gate:g8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 112,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 113,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 122,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 34
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 122,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 122,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 125,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 126,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 133,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 134,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 136,
+      "metric": "settlement_ticks",
+      "before": 38,
+      "after": 40
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 136,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 136,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 136,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 136,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 136,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 138,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 140,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 141,
+      "metric": "settlement_ticks",
+      "before": 48,
+      "after": 52
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 142,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 142,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 42
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "channel": "cell:g5:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "channel": "gate:g8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 144,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 145,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 154,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 34
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 154,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 154,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 157,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 158,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 165,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 166,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 168,
+      "metric": "settlement_ticks",
+      "before": 38,
+      "after": 40
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 168,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 168,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 168,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 168,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 168,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 170,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 172,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 173,
+      "metric": "settlement_ticks",
+      "before": 48,
+      "after": 52
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 174,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 174,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 42
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "channel": "cell:g5:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "channel": "gate:g8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 176,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 177,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 186,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 34
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 186,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 186,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 189,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 190,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 197,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 198,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 200,
+      "metric": "settlement_ticks",
+      "before": 38,
+      "after": 40
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 200,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 200,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 200,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 200,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 200,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 202,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 204,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 205,
+      "metric": "settlement_ticks",
+      "before": 48,
+      "after": 52
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 206,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 206,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 42
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "channel": "cell:g5:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "channel": "gate:g8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 208,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 209,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 218,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 34
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 218,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 218,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 221,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 222,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 229,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 230,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 232,
+      "metric": "settlement_ticks",
+      "before": 38,
+      "after": 40
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 232,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 232,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 232,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 232,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 232,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 234,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 236,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 237,
+      "metric": "settlement_ticks",
+      "before": 48,
+      "after": 52
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 238,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 238,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 42
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "channel": "cell:g0:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "channel": "cell:g0:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "channel": "cell:g5:MData",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "channel": "cell:g5:MData",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "channel": "gate:g8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "channel": "gate:n10",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 240,
+      "channel": "gate:n11",
+      "metric": "last_arrival_ticks",
+      "before": 10,
+      "after": 12
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 241,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 250,
+      "metric": "settlement_ticks",
+      "before": 30,
+      "after": 34
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 250,
+      "channel": "gate:g4",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 250,
+      "channel": "gate:g4",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 16
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 253,
+      "metric": "settlement_ticks",
+      "before": 54,
+      "after": 58
+    },
+    {
+      "case": "native-feedback_counter",
+      "phase": 254,
+      "metric": "settlement_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 1,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 1,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 1,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 1,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 3,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 3,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 3,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 3,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 5,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 5,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 5,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 7,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 7,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 7,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 7,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g14",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g15",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g16",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g18",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g19",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:n0",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:n8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 9,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 9,
+      "after": 11
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 11,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 11,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 11,
+      "channel": "cell:g2:MData",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 11,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 11,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 12,
+      "channel": "cell:g2:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 12,
+      "channel": "gate:g13",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 24,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 26,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 28,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 13,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 15,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 15,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 15,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 15,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 17,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 17,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 17,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 19,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 19,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 19,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 19,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 21,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 21,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 21,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 21,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 23,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 23,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 23,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 23,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 25,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 25,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 25,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 27,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 27,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 27,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 27,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 29,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 29,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 29,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 31,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 31,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 31,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 31,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 33,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 33,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 33,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 35,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 35,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 35,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 35,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 37,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 37,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 37,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 39,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 39,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 39,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 39,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g14",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g15",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g16",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g18",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g19",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:n0",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:n8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 41,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 9,
+      "after": 11
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 43,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 43,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 43,
+      "channel": "cell:g2:MData",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 43,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 43,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 44,
+      "channel": "cell:g2:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 44,
+      "channel": "gate:g13",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 24,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 26,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 28,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 45,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 47,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 47,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 47,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 47,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 49,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 49,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 49,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 51,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 51,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 51,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 51,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 53,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 53,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 53,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 53,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 55,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 55,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 55,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 55,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 57,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 57,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 57,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 59,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 59,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 59,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 59,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 61,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 61,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 61,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 63,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 63,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 63,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 63,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 65,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 65,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 65,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 67,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 67,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 67,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 67,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 69,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 69,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 69,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 71,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 71,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 71,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 71,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g14",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g15",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g16",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g18",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g19",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:n0",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:n8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 73,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 9,
+      "after": 11
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 75,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 75,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 75,
+      "channel": "cell:g2:MData",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 75,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 75,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 76,
+      "channel": "cell:g2:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 76,
+      "channel": "gate:g13",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 24,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 26,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 28,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 77,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 79,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 79,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 79,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 79,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 81,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 81,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 81,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 83,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 83,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 83,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 83,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 85,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 85,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 85,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 85,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 87,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 87,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 87,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 87,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 89,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 89,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 89,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 91,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 91,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 91,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 91,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 93,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 93,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 93,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 95,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 95,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 95,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 95,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 97,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 97,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 97,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 99,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 99,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 99,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 99,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 101,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 101,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 101,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 103,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 103,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 103,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 103,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g14",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g15",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g16",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g18",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g19",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:n0",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:n8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 105,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 9,
+      "after": 11
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 107,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 107,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 107,
+      "channel": "cell:g2:MData",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 107,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 107,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 108,
+      "channel": "cell:g2:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 108,
+      "channel": "gate:g13",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 24,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 26,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 28,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 109,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 111,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 111,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 111,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 111,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 113,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 113,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 113,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 115,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 115,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 115,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 115,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 117,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 117,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 117,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 117,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 119,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 119,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 119,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 119,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 121,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 121,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 121,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 123,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 123,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 123,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 123,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 125,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 125,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 125,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 127,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 127,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 127,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 127,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 129,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 129,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 129,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 131,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 131,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 131,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 131,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 133,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 133,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 133,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 135,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 135,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 135,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 135,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g14",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g15",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g16",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g18",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g19",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:n0",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:n8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 137,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 9,
+      "after": 11
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 139,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 139,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 139,
+      "channel": "cell:g2:MData",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 139,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 139,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 140,
+      "channel": "cell:g2:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 140,
+      "channel": "gate:g13",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 24,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 26,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 28,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 141,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 143,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 143,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 143,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 143,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 145,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 145,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 145,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 147,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 147,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 147,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 147,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 149,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 149,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 149,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 149,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 151,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 151,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 151,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 151,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 153,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 153,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 153,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 155,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 155,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 155,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 155,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 157,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 157,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 157,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 159,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 159,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 159,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 159,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 161,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 161,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 161,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 163,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 163,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 163,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 163,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 165,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 165,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 165,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 167,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 167,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 167,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 167,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g14",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g15",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g16",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g18",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g19",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:n0",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:n8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 169,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 9,
+      "after": 11
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 171,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 171,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 171,
+      "channel": "cell:g2:MData",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 171,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 171,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 172,
+      "channel": "cell:g2:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 172,
+      "channel": "gate:g13",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 24,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 26,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 28,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 173,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 175,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 175,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 175,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 175,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 177,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 177,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 177,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 179,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 179,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 179,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 179,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 181,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 181,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 181,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 181,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 183,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 183,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 183,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 183,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 185,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 185,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 185,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 187,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 187,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 187,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 187,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 189,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 189,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 189,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 191,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 191,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 191,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 191,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 193,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 193,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 193,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 195,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 195,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 195,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 195,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 197,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 197,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 197,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 199,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 199,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 199,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 199,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g14",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g15",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g16",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g18",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g19",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:n0",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:n8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 201,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 9,
+      "after": 11
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 203,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 203,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 203,
+      "channel": "cell:g2:MData",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 203,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 203,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 204,
+      "channel": "cell:g2:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 204,
+      "channel": "gate:g13",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 24,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 26,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 28,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 205,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 207,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 207,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 207,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 207,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 209,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 209,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 209,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 211,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 211,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 211,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 211,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 213,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 213,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 213,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 213,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 215,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 215,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 215,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 215,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 217,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 217,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 217,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 219,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 219,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 219,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 219,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 221,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 221,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 221,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 223,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 223,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 223,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 223,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 225,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 225,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 225,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 227,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 227,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 227,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 227,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 229,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 229,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 229,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 231,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 231,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 231,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 231,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g14",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g15",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g16",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g18",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g19",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:n0",
+      "metric": "pulse_width_ticks:0",
+      "before": 2,
+      "after": 4
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:n8",
+      "metric": "transitions",
+      "before": 0,
+      "after": 2
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 0,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 233,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 9,
+      "after": 11
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 235,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 235,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 235,
+      "channel": "cell:g2:MData",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 235,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 235,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 236,
+      "channel": "cell:g2:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 236,
+      "channel": "gate:g13",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "cell:g2:SData",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:g14",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:g15",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:g16",
+      "metric": "last_arrival_ticks",
+      "before": 24,
+      "after": 26
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:g18",
+      "metric": "last_arrival_ticks",
+      "before": 26,
+      "after": 28
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:g19",
+      "metric": "last_arrival_ticks",
+      "before": 34,
+      "after": 36
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:g2",
+      "metric": "last_arrival_ticks",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:g7",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:g8",
+      "metric": "last_arrival_ticks",
+      "before": 16,
+      "after": 18
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:g9",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:n0",
+      "metric": "last_arrival_ticks",
+      "before": 18,
+      "after": 20
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:n1",
+      "metric": "last_arrival_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "gate:n8",
+      "metric": "last_arrival_ticks",
+      "before": 28,
+      "after": 30
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 237,
+      "channel": "lamp:q[1]",
+      "metric": "last_arrival_ticks",
+      "before": 12,
+      "after": 14
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 239,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 239,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 239,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 239,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 241,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 241,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 241,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 243,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 243,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 243,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 243,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 245,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 245,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 245,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 245,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 247,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 247,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 247,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 247,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 249,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 249,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 249,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 251,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 251,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 251,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 251,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 253,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 253,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 253,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 255,
+      "metric": "settlement_ticks",
+      "before": 22,
+      "after": 24
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 255,
+      "channel": "cell:g2:InvC",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 255,
+      "channel": "cell:g2:MLock",
+      "metric": "last_arrival_ticks",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "native-feedback_fsm",
+      "phase": 255,
+      "channel": "cell:g2:SLock",
+      "metric": "last_arrival_ticks",
+      "before": 6,
+      "after": 8
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 8,
+      "channel": "cell:g0:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 8,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 26,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 40,
+      "channel": "cell:g0:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 40,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 58,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 72,
+      "channel": "cell:g0:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 72,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 90,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 104,
+      "channel": "cell:g0:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 104,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 122,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 136,
+      "channel": "cell:g0:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 136,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 154,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 168,
+      "channel": "cell:g0:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 168,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 186,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 200,
+      "channel": "cell:g0:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 200,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 218,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 4,
+      "after": 6
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 232,
+      "channel": "cell:g0:MData",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 232,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 8,
+      "after": 10
+    },
+    {
+      "case": "yosys-feedback_fsm",
+      "phase": 250,
+      "channel": "gate:g6",
+      "metric": "pulse_width_ticks:0",
+      "before": 4,
+      "after": 6
+    }
+  ],
+  "decision": "rejected; do not adopt candidate",
+  "independent_recomputed": true,
+  "regression_categories": {
+    "settlement_ticks": 145,
+    "transitions": 88,
+    "last_arrival_ticks": 728,
+    "pulse": 64
+  },
+  "source_and_raw_bindings": {
+    "baseline": {
+      "controls_log": "target/qualification/gap4-paired-original-router/feedback-run/controls.log",
+      "controls_log_sha256": "36ec11429d67454a41c125afd201b07dc6084e8757721c4f0210893506af8808",
+      "source_manifest_sha256": "1caaff5ffd7be0e9715f77bfafcc26438c2965212aa288d32e212b5fb556dab4",
+      "phases": 1536
+    },
+    "candidate": {
+      "controls_log": "target/qualification/gap4-streaming-static-potential/feedback-run/controls.log",
+      "controls_log_sha256": "b0244ad7d635f6a79d1673f0360cdffbfd53f14187b2043f1e9c84bfd81cc4f0",
+      "source_manifest_sha256": "73f41f232c2d96aaa5ba5187a9857de0879c4bea463b3470d3ffa0670c023758",
+      "phases": 1536
+    }
+  },
+  "baseline_binary_binding_verified": true,
+  "scope": "Six original feedback cases,1536phases perarm; combined optional streaming/static arm vs required-router. No isolated static-potential causality or block-count QoR claim.",
+  "differing_source_files": [
+    "src/compile/routing.rs"
+  ]
+}

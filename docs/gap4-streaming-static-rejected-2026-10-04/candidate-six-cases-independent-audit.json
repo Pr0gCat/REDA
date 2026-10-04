@@ -1,0 +1,72 @@
+{
+  "cases": 6,
+  "retained_phases_per_case": 256,
+  "literal_state_oracle": true,
+  "all_gate_and_hidden_cell_events_replayed": true,
+  "scope": "six original feedback cases only; 1536 phases",
+  "total_phases": 1536,
+  "physical_events_replayed": 11367,
+  "raw_hidden_cell_snapshots_checked": 12800,
+  "negative_controls": {
+    "native-feedback_counter": {
+      "literal_q": "rejected",
+      "missing_physical_event": "rejected",
+      "raw_storage_lock": "rejected",
+      "implemented_gate_value": "rejected"
+    },
+    "yosys-feedback_counter": {
+      "literal_q": "rejected",
+      "missing_physical_event": "rejected",
+      "raw_storage_lock": "rejected",
+      "implemented_gate_value": "rejected"
+    },
+    "native-feedback_fsm": {
+      "literal_q": "rejected",
+      "missing_physical_event": "rejected",
+      "raw_storage_lock": "rejected",
+      "implemented_gate_value": "rejected"
+    },
+    "yosys-feedback_fsm": {
+      "literal_q": "rejected",
+      "missing_physical_event": "rejected",
+      "raw_storage_lock": "rejected",
+      "implemented_gate_value": "rejected"
+    },
+    "native-feedback_state_enable": {
+      "literal_q": "rejected",
+      "missing_physical_event": "rejected",
+      "raw_storage_lock": "rejected",
+      "implemented_gate_value": "rejected"
+    },
+    "yosys-feedback_state_enable": {
+      "literal_q": "rejected",
+      "missing_physical_event": "rejected",
+      "raw_storage_lock": "rejected",
+      "implemented_gate_value": "rejected"
+    }
+  },
+  "runtime_metadata": {
+    "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+    "executable": "/home/seith/REDA/.venv/bin/python",
+    "packages": {
+      "yowasp-yosys": "0.69.0.0.post1233",
+      "yowasp-runtime": "1.96"
+    }
+  },
+  "source_and_tool_sha256": {
+    "target/qualification/gap4-streaming-static-potential/feedback-run/six-cases-trace.jsonl": "3765b0a297844397c78aeb62364a1fac8541353d3efcdae51e6ab42603b165a8",
+    "tools/compare_feedback_probe.py": "368b7f26a638bc969e45b162e691e31922b7a7f9b79d10f331eb64cf1014b7ff",
+    "target/qualification/gap4-streaming-static-potential/feedback-run/controls.log": "b0244ad7d635f6a79d1673f0360cdffbfd53f14187b2043f1e9c84bfd81cc4f0",
+    "target/qualification/gap4-streaming-static-potential/feedback-run/controls.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "target/qualification/gap4-streaming-static-potential/feedback-run/source-before.json": "73f41f232c2d96aaa5ba5187a9857de0879c4bea463b3470d3ffa0670c023758",
+    "target/qualification/gap4-streaming-static-potential/src/frontend/synth.py": "80d52cf97345b522808ccb252d9d3076c2311b54a3e84b4fc50d35c68d679b3c",
+    "target/qualification/gap4-streaming-static-potential/run-feedback-control.sh": "8d19ee35cda0e8e5273332f06ada3afc0113441e13791497a66b822ebbce10f2",
+    ".venv/lib/python3.12/site-packages/yowasp_runtime-1.96.dist-info/METADATA": "602ba94b8a2d2cec43da750af461c06839cf6c531572f35c137bf48e07384e27",
+    ".venv/lib/python3.12/site-packages/yowasp_yosys-0.69.0.0.post1233.dist-info/METADATA": "83de996b5c9cf4b9fa2d430e5b78e70c2d7953f08792aa19eaef893d9b50fed1"
+  },
+  "paired_baseline_qor": "pending",
+  "static_heuristic_causal_comparison": "pending",
+  "original_statement_control": "pending separate run",
+  "all_original_gap4_qualification_complete": false,
+  "main_source_adopted": false
+}

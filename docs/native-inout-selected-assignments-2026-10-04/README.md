@@ -1,0 +1,11 @@
+# Native inout: ordinary selected assignments
+
+The resolved-drive projection previously required every continuous assignment to target a complete declared net, including ordinary Boolean readers. It also looked up ordinary declarations in source order. This rejected native bit/part-select and concatenated targets and ordinary forward-declared wires when a top-level inout was present.
+
+The repair leaves assignments without Z unchanged for the native elaborator. Their contributions retain the existing all-present default. Z-bearing drives keep their original complete-net requirement and explicit selected-target refusal. No parser, arithmetic, placement, routing, bus observation or simulator rule changed.
+
+Terminal evidence: resolved semantic tests **5/5**, selected-reader physical test **1/1**, native physical/CLI tests **4/4**; both recorded process exits are **0**. Semantic controls cover bit-select, part-select, concatenated targets and forward declarations across all 64 declared driver states, with independent 0/1/X/Z expectations and two source-owned internal drivers. Physical controls combine these forms in one source and drive actual source levers through 0→1→0, checking the shared bus and four actual output lamps. Existing native/auto CLI checks run without Python/Yosys; ordinary seven-segment observation uses the actual compiled implementation.
+
+The complete original 8192-phase stitched physical regression and metadata roundtrip both pass (**2/2**, terminal **0**, 406.64 seconds). The prior `original-physical.pending.log` snapshot is retained as history. This repair does not complete all eight broad project gaps or independently qualify the new selected-reader source in Minecraft.
+
+`source-binding.json` retains the producer's source hashes; `manifest.json` records a fresh source-drift check and artifact/tool hashes. `binary-binding.json` retains producer binary hashes and timestamps; binary files are not duplicated here. `run.sh` is the exact recorded bounded runner; its original target paths are preserved. Logs and exit files contain the terminal evidence above. The original regression ran the bound library test executable directly under the same memory wrapper, with filter `compile::resolved_circuit::tests --test-threads=1`.

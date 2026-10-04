@@ -1,0 +1,92 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling syn v3.0.3
+   Compiling version_check v0.9.5
+   Compiling serde v1.0.229
+   Compiling generic-array v0.14.7
+   Compiling serde_derive v1.0.229
+   Compiling typenum v1.20.1
+   Compiling crc32fast v1.5.0
+   Compiling cfg-if v1.0.4
+   Compiling equivalent v1.0.2
+   Compiling zmij v1.0.23
+   Compiling hashbrown v0.17.1
+   Compiling indexmap v2.14.0
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling adler2 v2.0.1
+   Compiling winnow v0.7.15
+   Compiling thiserror v2.0.19
+   Compiling toml_write v0.1.2
+   Compiling serde_json v1.0.151
+   Compiling simd-adler32 v0.3.10
+   Compiling miniz_oxide v0.8.9
+   Compiling toml_edit v0.22.27
+   Compiling digest v0.10.7
+   Compiling serde_bytes v0.11.19
+   Compiling thiserror-impl v2.0.19
+   Compiling cpufeatures v0.2.17
+   Compiling byteorder v1.5.0
+   Compiling cesu8 v1.1.0
+   Compiling memchr v2.8.3
+   Compiling itoa v1.0.18
+   Compiling fastnbt v2.6.2
+   Compiling sha2 v0.10.9
+   Compiling flate2 v1.1.9
+   Compiling toml v0.8.23
+   Compiling reda v0.1.0 (/home/seith/REDA)
+warning: unused import: `SeedRoutingFailure`
+  --> src/compile/fragment_synth/fragment.rs:25:24
+   |
+25 |     SeedRepairRefusal, SeedRoutingFailure, SeedServices, SeedVariant,
+   |                        ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/compile/resolved_circuit.rs:384:13
+    |
+384 |         let mut implementation_evaluator = Evaluator::new(&physical.implementation).unwrap();
+    |             ----^^^^^^^^^^^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `rank_zero` is never read
+   --> src/compile/fragment_synth/packing.rs:636:9
+    |
+634 |     Exhausted {
+    |     --------- field in this variant
+635 |         attempted: usize,
+636 |         rank_zero: E,
+    |         ^^^^^^^^^
+    |
+    = note: `LayoutSearchError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `as_str` is never used
+   --> src/frontend/ast.rs:293:12
+    |
+292 | impl BinaryOp {
+    | ------------- method in this implementation
+293 |     pub fn as_str(self) -> &'static str {
+    |            ^^^^^^
+
+warning: `reda` (lib test) generated 4 warnings (run `cargo fix --lib -p reda --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 1m 09s
+     Running unittests src/lib.rs (target/qualification/native-inout-selected-repair/build/debug/deps/reda-a2b90b27b67dac89)
+
+running 5 tests
+test frontend::resolved::tests::contextual_z_rejects_arithmetic_and_bus_read_feedback ... ok
+test frontend::resolved::tests::hierarchy_driver_set_matches_frozen_four_state_oracle ... ok
+test frontend::resolved::tests::ordinary_selected_and_forward_declared_assignments_preserve_bus_semantics ... ok
+test frontend::resolved::tests::selected_z_driver_keeps_explicit_full_net_refusal ... ok
+test frontend::resolved::tests::vector_alias_concat_and_multiple_readers_preserve_source_bits ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1279 filtered out; finished in 0.68s
+

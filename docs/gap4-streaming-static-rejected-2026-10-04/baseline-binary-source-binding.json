@@ -1,0 +1,8 @@
+{
+  "executable": "/home/seith/REDA/target/qualification/gap4-paired-original-router/target-build/debug/deps/feedback_physical-dff58b6d5681ec90",
+  "binary_sha256": "7c869b9bb80b28b6281c66d25138de16b349c3de5f89354407374aaf550fe7d1",
+  "binary_mtime_ns": 1791155075494970537,
+  "routing_source_sha256": "a62712c4729462597fa2521f00b0394535753c684f3964d982a391f545e82aab",
+  "routing_source_mtime_ns": 1791155025262054006,
+  "manifest_path": "/home/seith/REDA/target/qualification/gap4-paired-original-router/Cargo.toml"
+}

@@ -108,3 +108,8 @@ New typed-parameter/hierarchy native source has exact clean-producer actual Mine
 
 
 The route-owned-air placement proposal is rejected ([negative evidence](../terminal-owned-air-placement-2026-10-04/proposal.md)): original and4 bbox/digest pass, but actual stock history returns g3=false at0→0 when source requirestrue. Historical guard outcomes are1 pass/3 fail; restoring three old self-clashes is not QoR improvement. Root verifies21 proposal/12 caller-trace hashes. [Caller trace](../terminal-policy-caller-trace-2026-10-04/scope.md) identifies primary b at(34,1,58)→(34,1,59), correcting the earlier c label without altering frozen evidence. No source or historical expectation changes are adopted.
+
+
+Native shared-inout ordinary assignment projection is repaired ([qualified source](../native-inout-selected-assignments-2026-10-04/README.md)): bit/part-select, concatenated targets and ordinary forward declarations retain native elaboration semantics. Semantic5/5, new physical1/1, existing physical/CLI4/4 and original physical2/2 pass, including8192 endpoints/4096 ordered transitions and native/auto operation without Python/Yosys. The new selected-reader source has no independent Minecraft qualification; broad rows5/6 remain open.
+
+The streaming/static routing candidate is rejected ([independent replay](../gap4-streaming-static-rejected-2026-10-04/README.md)): same-source dedicated baseline and candidate complete1536 phases each but1025 waveform components regress. The earlier shared-target-cache run is excluded. No candidate adoption is admitted; actual path/landing timing diagnosis continues within gaps2/4. All eight broad rows remain open.

@@ -1,0 +1,10 @@
+{
+  "excluded": true,
+  "reason": "Shared Cargo target reused an un-recompiled candidate binary; terminal0 from that run is not an independent baseline. Replaced by dedicated target-build binary with verified binding.",
+  "retained_raw_files": {
+    "target/qualification/gap4-paired-original-router/feedback-run/invalid-shared-target-cache/controls.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "target/qualification/gap4-paired-original-router/feedback-run/invalid-shared-target-cache/controls.log": "83279967bd03823bcfc1b678ee15d4c30670d990f2f8bf4f3a732595fb5b63bc",
+    "target/qualification/gap4-paired-original-router/feedback-run/invalid-shared-target-cache/sha256.json": "d2e3fce23ecb91912e68eb9a160d5d776f367af454c8efe30aa1152a306f063c",
+    "target/qualification/gap4-paired-original-router/feedback-run/invalid-shared-target-cache/source-before.json": "1caaff5ffd7be0e9715f77bfafcc26438c2965212aa288d32e212b5fb556dab4"
+  }
+}

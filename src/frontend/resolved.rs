@@ -266,6 +266,13 @@ fn compile_projected(
         for (n, item) in std::mem::take(&mut module.items).into_iter().enumerate() {
             match item {
                 Item::Assign(mut a) => {
+                    // Ordinary assignments keep the native elaborator's complete
+                    // lvalue and declaration-order support. Their contributions
+                    // use the existing all-present default below.
+                    if !contains_z(&a.rhs, &z) {
+                        items.push(Item::Assign(a));
+                        continue;
+                    }
                     let ExprKind::Ident(target) = &a.lhs.kind else {
                         return Err("prototype drive target must be a complete declared net".into());
                     };
@@ -720,6 +727,51 @@ pub(crate) fn compile_for_materialization(
 mod tests {
     use super::super::evaluate::Evaluator;
     use super::*;
+    #[test]
+    fn ordinary_selected_and_forward_declared_assignments_preserve_bus_semantics() {
+        let fixture = include_str!("../../tests/fixtures/resolved-inout.sv");
+        for assignments in [
+            "assign y[0]=bus; assign y[1]=~bus;",
+            "assign y[1:0]={~bus,bus};",
+            "assign {y[1],y[0]}={~bus,bus};",
+            "assign late=bus; wire late; assign y={~late,late};",
+        ] {
+            let source = fixture.replace("output wire y", "output wire [1:0] y")
+                .replace("assign y = bus;", assignments);
+            let artifact = compile_semantics(&[SourceInput { name: "selected.sv", text: &source }], "top").unwrap();
+            assert_eq!(artifact.boundaries.len(), 1);
+            let bus = &artifact.boundaries[0];
+            assert_eq!(bus.original.name, "bus");
+            assert_eq!(bus.original.direction, PortDirection::Inout);
+            assert_eq!(bus.internal_contributions.len(), 2);
+            let mut evaluator = Evaluator::new(&artifact.netlist).unwrap();
+            for state in 0usize..64 {
+                let inputs = [("e0",0),("d0",1),("e1",2),("d1",3),
+                              (bus.external_present.as_str(),4),(bus.external_value.as_str(),5)]
+                    .into_iter().map(|(name,bit)| (name.to_owned(),state & (1<<bit)!=0)).collect();
+                let values = evaluator.step(&inputs).unwrap();
+                let active: Vec<_> = [(0,1),(2,3),(4,5)].into_iter()
+                    .filter(|(en,_)| state & (1<<en)!=0)
+                    .map(|(_,data)| state & (1<<data)!=0).collect();
+                let expected = if active.is_empty() { Err(InvalidBus::Floating) }
+                    else if active.iter().any(|value| *value != active[0]) { Err(InvalidBus::Contention) }
+                    else { Ok(active[0]) };
+                assert_eq!(bus.observe(&values), expected, "{assignments} state={state}");
+                if let Ok(value) = expected {
+                    assert_eq!(values[&artifact.source_outputs["y[0]"]], value);
+                    assert_eq!(values[&artifact.source_outputs["y[1]"]], !value);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn selected_z_driver_keeps_explicit_full_net_refusal() {
+        let source = "module top(input en,data,inout wire [1:0] bus); assign bus[0]=en?data:1'bz; endmodule";
+        let error = compile_semantics(&[SourceInput { name: "selected-z.sv", text: source }], "top").err().unwrap();
+        assert_eq!(error, "prototype drive target must be a complete declared net");
+    }
+
     #[test]
     fn hierarchy_driver_set_matches_frozen_four_state_oracle() {
         let text = include_str!("../../tests/fixtures/resolved-inout.sv");

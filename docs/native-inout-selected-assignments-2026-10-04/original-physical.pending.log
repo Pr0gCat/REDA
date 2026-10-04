@@ -1,0 +1,4 @@
+
+running 2 tests
+test compile::resolved_circuit::tests::pinout_roundtrip_retains_shared_bus_and_hides_physical_leaves ... ok
+test compile::resolved_circuit::tests::real_compiled_drivers_and_readers_use_same_shared_channel ... 

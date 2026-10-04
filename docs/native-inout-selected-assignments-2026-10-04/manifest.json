@@ -1,0 +1,44 @@
+{
+  "created_utc": "2026-10-04T23:17:59.636873+00:00",
+  "status": "selected-assignment repair and original full physical regression terminal passed",
+  "terminal_checks": {
+    "resolved_semantics": {
+      "passed": 5,
+      "exit": 0
+    },
+    "selected_physical": {
+      "passed": 1,
+      "exit": 0
+    },
+    "native_physical_and_cli": {
+      "passed": 4,
+      "exit": 0
+    },
+    "original_physical": {
+      "passed": 2,
+      "exit": 0,
+      "ordered_transitions": 4096,
+      "phase_endpoints": 8192
+    }
+  },
+  "pending_checks": [],
+  "source_binding_checked_files": 129,
+  "source_binding_drift": [],
+  "binary_hash_provenance": "producer binary-binding.json retained; binaries not recopied or rehashed in this documentation step",
+  "tool_sha256": {
+    "tools/run_memory_bounded.sh": "f9fca80c2268b3284c324e8d9e7c56433e0a21cba48ac66f2a672d9bcb7ba229"
+  },
+  "artifact_sha256": {
+    "README.md": "9b20849c1539e98bac0808119113237710a1de59dd8e2d6b611008c7399ac46c",
+    "binary-binding.json": "9f2303c22133464adbd2927d34ecbb91ddbf08512ad6588499a2b5ba3a034e44",
+    "original-physical.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original-physical.log": "408182619a2f765cbcf1704d8d568b61585f6669a5217b3c7de8a63f89712700",
+    "original-physical.pending.log": "20b1aaea458e9a30997c55081c31a20eb29fb788882a963479a6f69659db9b0a",
+    "physical.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "physical.log": "2a36d68a5afb19b1895e1561b526d8ad7fc6006d473896956feadd891d7a4981",
+    "run.sh": "efe583151edc4c751dba26d3623762b0a69069325409fe7e71e08c3a0a42db41",
+    "semantic.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "semantic.log": "117fa5eee9f967b7aa372fe2a16f500496a13b901d9325c4203495a238b5724b",
+    "source-binding.json": "7c0d5908f1820ea94becb7333680f6141700d0d3e7662288fcbc57890f973a2c"
+  }
+}

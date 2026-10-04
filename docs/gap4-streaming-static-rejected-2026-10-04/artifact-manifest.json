@@ -1,0 +1,62 @@
+{
+  "README.md": {
+    "sha256": "402fc7aab127db3764697622a52b6fea595d5d6a1a772aa8255c174d92d7c6fd",
+    "bytes": 1453
+  },
+  "baseline-binary-source-binding.json": {
+    "sha256": "34953d763fcd9089680d7af45772c59d8cc78949fe71dff9902dbd164eae221a",
+    "bytes": 520
+  },
+  "baseline-controls.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2
+  },
+  "baseline-source-before.json": {
+    "sha256": "1caaff5ffd7be0e9715f77bfafcc26438c2965212aa288d32e212b5fb556dab4",
+    "bytes": 25881
+  },
+  "baseline-trace.jsonl.gz": {
+    "sha256": "89d759d3006e46e0d4bed22ca62ceae4f6dd1f79be740fd50f1eee7c3dc8d9bf",
+    "bytes": 149964
+  },
+  "candidate-controls.exit": {
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2
+  },
+  "candidate-six-cases-independent-audit.json": {
+    "sha256": "8b9ccc6c2c2eebc7a39ac01e141c41b11bafda60ccde2c64c2b17c174c961007",
+    "bytes": 3368
+  },
+  "candidate-source-before.json": {
+    "sha256": "73f41f232c2d96aaa5ba5187a9857de0879c4bea463b3470d3ffa0670c023758",
+    "bytes": 25881
+  },
+  "candidate-trace.jsonl.gz": {
+    "sha256": "7051538a4c3590d627d6fd2ccc7393fc9f78f245e5c68d0a966b38c4f52019cf",
+    "bytes": 151129
+  },
+  "compare_feedback_probe.py": {
+    "sha256": "368b7f26a638bc969e45b162e691e31922b7a7f9b79d10f331eb64cf1014b7ff",
+    "bytes": 10080
+  },
+  "independent-negative-quality.json": {
+    "sha256": "ead828d12bd07a1259bd590f127aef92e3e7037fe13a9c536115ee42c5d7950d",
+    "bytes": 176953
+  },
+  "invalid-shared-cache-exclusion.json": {
+    "sha256": "576da9a8561454428e8d28524b62dfb24eb108365cbe34aba63d12b5e2d3488a",
+    "bytes": 969
+  },
+  "invalid-shared-cache-original-sha256.json": {
+    "sha256": "d2e3fce23ecb91912e68eb9a160d5d776f367af454c8efe30aa1152a306f063c",
+    "bytes": 268
+  },
+  "paired-source-binding.json": {
+    "sha256": "12aae60dd6e88ab88d0c9b142f7f1a0ea059f0d21893435e6c0bf969f0d51091",
+    "bytes": 56491
+  },
+  "replay.py": {
+    "sha256": "7b2b1be00ed37d75458e9c41fc652e5b6bf2db6378b9b333d7e2d995f2ea6a3b",
+    "bytes": 758
+  }
+}
