@@ -1,0 +1,36 @@
+{
+  "occupied_cell_count_equal": true,
+  "descriptive_only": true,
+  "changed_cells": [
+    {
+      "at": [
+        42,
+        1,
+        16
+      ],
+      "before": {
+        "delay": 1,
+        "extra_properties": {},
+        "face": null,
+        "facing": "East",
+        "half": null,
+        "kind": "Repeater",
+        "lit": true,
+        "name": "minecraft:repeater",
+        "power": 0
+      },
+      "after": {
+        "delay": 0,
+        "extra_properties": {},
+        "face": null,
+        "facing": null,
+        "half": null,
+        "kind": "RedstoneWire",
+        "lit": false,
+        "name": "minecraft:redstone_wire",
+        "power": 0
+      }
+    }
+  ],
+  "qor_criterion": "all retained public+implementation waveform metrics, settlement and queue/cell event work; never cell count"
+}

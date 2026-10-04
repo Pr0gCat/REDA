@@ -165,3 +165,29 @@ pub fn remove_flat_refresh(
     }
     true
 }
+
+/// The remaining isolated terminal can refresh a dust run of at most fifteen.
+/// This is a proposal recognizer; certification and retained waveform replay
+/// remain mandatory, including interactions outside the edited route.
+pub fn adjacent_terminal_refresh(candidate: &ExpandedPhysicalCandidate, id: super::identity::RouteId, at: crate::compile::geometry::Anchor) -> bool {
+    let Some(route)=candidate.routes.get(&id) else { return false; };
+    let Some(relay)=route.cells.iter().find(|c|c.at==at) else {return false;};
+    let mut matched=false;
+    for branch in &route.branches {
+        let Some(i)=branch.path.iter().position(|p|*p==at) else {continue;};
+        let Some(next)=branch.path.get(i+1) else {return false;};
+        if *next != branch.terminal.at {return false;}
+        let Some(terminal)=route.cells.iter().find(|c|c.at==*next) else {return false;};
+        if terminal.state.kind!=BlockKind::Repeater || terminal.state.facing!=relay.state.facing {return false;}
+        let mut dust=1usize; let mut refreshed=false;
+        for p in branch.path[..i].iter().rev() {
+            let Some(cell)=route.cells.iter().find(|c|c.at==*p) else {return false;};
+            if cell.state.kind==BlockKind::Repeater {refreshed=true;break;}
+            if cell.state.kind!=BlockKind::RedstoneWire {return false;}
+            dust+=1;
+        }
+        if !refreshed || dust>15 {return false;}
+        matched=true;
+    }
+    matched
+}

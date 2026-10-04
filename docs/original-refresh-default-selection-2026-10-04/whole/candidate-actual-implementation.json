@@ -1,0 +1,297 @@
+{
+  "actual_implementation": {
+    "gates": [
+      {
+        "inputs": [],
+        "kind": "Nor(0)",
+        "name": "g0",
+        "output": "g0"
+      },
+      {
+        "inputs": [
+          "g0"
+        ],
+        "kind": "Nor(1)",
+        "name": "g1",
+        "output": "g1"
+      },
+      {
+        "inputs": [
+          "a",
+          "b"
+        ],
+        "kind": "Or(2)",
+        "name": "g2",
+        "output": "g2"
+      },
+      {
+        "inputs": [
+          "c"
+        ],
+        "kind": "Nor(1)",
+        "name": "n0",
+        "output": "n0"
+      },
+      {
+        "inputs": [
+          "d"
+        ],
+        "kind": "Nor(1)",
+        "name": "n1",
+        "output": "n1"
+      },
+      {
+        "inputs": [
+          "n0",
+          "n1"
+        ],
+        "kind": "Nor(2)",
+        "name": "g3",
+        "output": "g3"
+      },
+      {
+        "inputs": [
+          "e"
+        ],
+        "kind": "Nor(1)",
+        "name": "n2",
+        "output": "n2"
+      },
+      {
+        "inputs": [
+          "f"
+        ],
+        "kind": "Nor(1)",
+        "name": "n3",
+        "output": "n3"
+      },
+      {
+        "inputs": [
+          "n2",
+          "f"
+        ],
+        "kind": "Nor(2)",
+        "name": "n4",
+        "output": "n4"
+      },
+      {
+        "inputs": [
+          "n3",
+          "e"
+        ],
+        "kind": "Nor(2)",
+        "name": "n5",
+        "output": "n5"
+      },
+      {
+        "inputs": [
+          "n4",
+          "n5"
+        ],
+        "kind": "Or(2)",
+        "name": "g4",
+        "output": "g4"
+      },
+      {
+        "inputs": [
+          "e",
+          "f"
+        ],
+        "kind": "Or(2)",
+        "name": "g5",
+        "output": "g5"
+      },
+      {
+        "inputs": [
+          "g5"
+        ],
+        "kind": "Nor(1)",
+        "name": "g6",
+        "output": "g6"
+      },
+      {
+        "inputs": [
+          "n0"
+        ],
+        "kind": "Nor(1)",
+        "name": "g7",
+        "output": "g7"
+      },
+      {
+        "inputs": [
+          "n3"
+        ],
+        "kind": "Nor(1)",
+        "name": "g8",
+        "output": "g8"
+      }
+    ],
+    "inputs": [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f"
+    ],
+    "outputs": [
+      "g2",
+      "g1",
+      "g0",
+      "g3",
+      "g3",
+      "g7",
+      "g4",
+      "g6",
+      "g8"
+    ]
+  },
+  "source": {
+    "gates": [
+      {
+        "inputs": [],
+        "kind": "Nor(0)",
+        "name": "g0",
+        "output": "g0"
+      },
+      {
+        "inputs": [
+          "g0"
+        ],
+        "kind": "Nor(1)",
+        "name": "g1",
+        "output": "g1"
+      },
+      {
+        "inputs": [
+          "a",
+          "b"
+        ],
+        "kind": "Or(2)",
+        "name": "g2",
+        "output": "g2"
+      },
+      {
+        "inputs": [
+          "c"
+        ],
+        "kind": "Nor(1)",
+        "name": "n0",
+        "output": "n0"
+      },
+      {
+        "inputs": [
+          "d"
+        ],
+        "kind": "Nor(1)",
+        "name": "n1",
+        "output": "n1"
+      },
+      {
+        "inputs": [
+          "n0",
+          "n1"
+        ],
+        "kind": "Nor(2)",
+        "name": "g3",
+        "output": "g3"
+      },
+      {
+        "inputs": [
+          "e"
+        ],
+        "kind": "Nor(1)",
+        "name": "n2",
+        "output": "n2"
+      },
+      {
+        "inputs": [
+          "f"
+        ],
+        "kind": "Nor(1)",
+        "name": "n3",
+        "output": "n3"
+      },
+      {
+        "inputs": [
+          "n2",
+          "f"
+        ],
+        "kind": "Nor(2)",
+        "name": "n4",
+        "output": "n4"
+      },
+      {
+        "inputs": [
+          "n3",
+          "e"
+        ],
+        "kind": "Nor(2)",
+        "name": "n5",
+        "output": "n5"
+      },
+      {
+        "inputs": [
+          "n4",
+          "n5"
+        ],
+        "kind": "Or(2)",
+        "name": "g4",
+        "output": "g4"
+      },
+      {
+        "inputs": [
+          "e",
+          "f"
+        ],
+        "kind": "Or(2)",
+        "name": "g5",
+        "output": "g5"
+      },
+      {
+        "inputs": [
+          "g5"
+        ],
+        "kind": "Nor(1)",
+        "name": "g6",
+        "output": "g6"
+      },
+      {
+        "inputs": [
+          "n0"
+        ],
+        "kind": "Nor(1)",
+        "name": "g7",
+        "output": "g7"
+      },
+      {
+        "inputs": [
+          "n3"
+        ],
+        "kind": "Nor(1)",
+        "name": "g8",
+        "output": "g8"
+      }
+    ],
+    "inputs": [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f"
+    ],
+    "outputs": [
+      "g2",
+      "g1",
+      "g0",
+      "g3",
+      "g3",
+      "g7",
+      "g4",
+      "g6",
+      "g8"
+    ]
+  },
+  "world_fingerprint": "a4d7b9d9e82cd4f759b0d3f9d21199b183e8ee7bb5bf98c8c4d4b397e04649ba"
+}

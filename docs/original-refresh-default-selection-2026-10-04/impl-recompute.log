@@ -1,0 +1,19 @@
+{
+  "accepted": true,
+  "phases": 8192,
+  "mapped_gates": 15,
+  "phase_gate_checks": 122880,
+  "independent_all_gate_end_truth": true,
+  "bijection_complete": true,
+  "regression_counts": {},
+  "maximum_delta": {},
+  "first_100_regressions": [],
+  "metrics": [
+    "glitch",
+    "single_input_glitch",
+    "arrival",
+    "pulse_total",
+    "pulse_worst"
+  ],
+  "unmapped_gates": []
+}

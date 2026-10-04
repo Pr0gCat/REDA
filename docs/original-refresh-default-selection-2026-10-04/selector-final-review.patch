@@ -1,0 +1,190 @@
+--- a/src/compile/selection.rs
++++ b/src/compile/selection.rs
+@@ -658,7 +658,7 @@
+             return Ok(raw);
+         }
+         let Some(mut quality) = refresh_quality(source, &raw, false) else {
+-            return Ok(raw);
++            return Ok(if budget > 0 { strict_refresh_selection(source, raw, budget) } else { raw });
+         };
+         let mut best = raw;
+         let flat_seed = flat_refresh_from_compiled(source, &best);
+@@ -682,14 +682,14 @@
+             if let Some(candidate) = quality_with_ports(source, &flat, true, None, Some(&quality)) {
+                 if candidate.dominates(&quality) {
+                     let (improved, measured) =
+-                        improve_refreshes(source, flat, candidate.clone(), budget);
++                        improve_refreshes(source, flat, candidate.clone(), 0);
+                     if moved > 0 || measured != candidate {
+                         best = improved;
+                     }
+                 }
+             }
+         }
+-        return Ok(best);
++        return Ok(if budget > 0 { strict_refresh_selection(source, best, budget) } else { best });
+     }
+     let player = compile_player_torch_row(source, 1_000_000)
+         .ok()
+@@ -718,9 +718,129 @@
+     }
+ }
+ 
++
++// Local edits preserve the actual implementation graph; compare each channel
++// and phase separately so aggregate improvements cannot mask regressions.
++#[derive(Clone, PartialEq, Eq)]
++struct StrictPhase { ticks: u64, work: u64, cells: u64, channels: Vec<[u64; 5]> }
++impl StrictPhase {
++    fn dominates(&self, old: &Self) -> bool {
++        self.ticks <= old.ticks && self.work <= old.work && self.cells <= old.cells
++            && self.channels.len() == old.channels.len()
++            && self.channels.iter().zip(&old.channels).all(|(a,b)| a.iter().zip(b).all(|(a,b)| a <= b))
++    }
++}
++fn strict_profile(source: &Netlist, circuit: &CompiledCircuit, upper: Option<&[StrictPhase]>) -> Option<Vec<StrictPhase>> {
++    circuit.validate_rewrite_view(source).ok()?;
++    let implementation = circuit.implementation_netlist(source);
++    let order = implementation.combinational_order()?;
++    let source_order = source.combinational_order()?;
++    let bindings = circuit.physical_rewrite().map_or(&source.inputs[..], |r| r.rewrite_certificate().rewritten_inputs_in_source_order());
++    let drivers = if let Some(r) = circuit.physical_rewrite() { r.source_output_driver_positions().to_vec() } else {
++        source.outputs.iter().map(|s| circuit.gate_output_positions.get(s).copied()).collect::<Option<Vec<_>>>()?
++    };
++    if bindings.len() != source.inputs.len() || drivers.len() != source.outputs.len() { return None; }
++    let lamps: Vec<_> = circuit.output_occurrences().iter().map(|(_, p)| *p).collect();
++    if lamps.len() != source.outputs.len() { return None; }
++    // Repeated public positions are accepted only for the same source signal.
++    for i in 0..lamps.len() { for j in 0..i {
++        if lamps[i] == lamps[j] && source.outputs[i] != source.outputs[j] { return None; }
++    }}
++    let mut sites: Vec<_> = drivers.iter().chain(&lamps).copied().collect();
++    sites.extend(implementation.gates.iter().map(|g| circuit.gate_output_positions.get(&g.output).copied()).collect::<Option<Vec<_>>>()?);
++    let channel_count = sites.len();
++    let mut occupied = Vec::new();
++    for (flat, &index) in circuit.world.cells().iter().enumerate() {
++        if circuit.world.palette().get(index)?.kind != BlockKind::Air { occupied.push(circuit.world.decode(flat)); }
++    }
++    let mut watches: Vec<_> = sites.iter().enumerate().map(|(i, &p)| (position(p), format!("channel{i}"))).collect();
++    watches.extend(occupied.iter().enumerate().map(|(i, &p)| (position(p), format!("cell{i}"))));
++    let mut sim = Simulator::new(circuit.world.clone());
++    sim.run_until_stable_bounded(2000, 1_000_000).ok()?;
++    sim.attach_observer(watches);
++    let mut result = Vec::new();
++    let mut previous = 0usize;
++    let states = 1usize << source.inputs.len();
++    let mut targets = Vec::new();
++    for address in 0..states {
++        let truth = values(source, &source_order, source.inputs.iter().enumerate().map(|(b, s)| (s.as_str(), address & (1 << b) != 0)))?;
++        let implemented = values(implementation, &order, bindings.iter().enumerate().map(|(b,s)| (s.as_str(), address & (1 << b) != 0)))?;
++        let public: Vec<_> = source.outputs.iter().map(|s| truth[s.as_str()]).collect();
++        targets.push(public.iter().chain(&public).copied().chain(implementation.gates.iter().map(|g| implemented[g.output.as_str()])).collect::<Vec<_>>());
++    }
++    for from in 0..states { for to in 0..states { for address in [from,to] {
++        sim.reset_observer();
++        let start = sim.current_tick(); let work = sim.work_done();
++        for (bit, name) in source.inputs.iter().enumerate() {
++            let at = *circuit.input_positions.get(name)?;
++            let mut lever = sim.world().get(at.0,at.1,at.2).clone();
++            if lever.kind != BlockKind::Lever { return None; }
++            lever.lit = address & (1 << bit) != 0;
++            sim.world_mut().set(at.0,at.1,at.2,lever);
++        }
++        let ticks = sim.run_until_stable_bounded(2000, 1_000_000).ok()?;
++        let mut channels = vec![[0;5];channel_count];
++        let mut events = vec![Vec::new();channel_count]; let mut cells = 0;
++        for e in sim.observations() {
++            if let Some(i) = e.label.strip_prefix("channel") { events[i.parse::<usize>().ok()?].push(e); }
++            else { cells += 1; }
++        }
++        for (i, es) in events.iter().enumerate() {
++            let target = targets[address][i];
++            if signal(sim.world(), position(sites[i]))? != target || es.last().is_some_and(|e| e.value != target) || (es.is_empty() && targets[previous][i] != target) { return None; }
++            channels[i] = [u64::from(es.len()>1),u64::from(es.len()>1 && (previous ^ address).count_ones()==1),es.last().map_or(0,|e|e.tick-start),0,0];
++            for pair in es.windows(2) { if pair[0].value != target { let width=pair[1].tick-pair[0].tick; channels[i][3]+=width; channels[i][4]=channels[i][4].max(width); }}
++        }
++        let phase = StrictPhase {ticks,work:sim.work_done()-work,cells,channels};
++        if let Some(bound) = upper {
++            let old = bound.get(result.len())?;
++            if !phase.dominates(old) { return None; }
++        }
++        result.push(phase); previous=address;
++    }}}
++    Some(result)
++}
++fn strict_refresh_selection(source: &Netlist, mut best: CompiledCircuit, budget: usize) -> CompiledCircuit {
++    use super::fragment_synth::refresh::{removable_flat_refreshes, remove_flat_refresh};
++    let Some(mut quality)=strict_profile(source,&best,None) else { return best; };
++    let Some(initial)=best.physical_candidate() else { return best; };
++    let mut sites=removable_flat_refreshes(initial);
++    // Adjacent terminal relays first: their terminal isolation remains intact.
++    sites.sort_by_key(|(id,at)| {
++        let adjacent=super::fragment_synth::refresh::adjacent_terminal_refresh(initial,*id,*at);
++        (!adjacent,*id,*at)
++    });
++    for (id,at) in sites.into_iter().take(budget) {
++        let Some(mut candidate)=best.physical_candidate().cloned() else { break; };
++        if !remove_flat_refresh(&mut candidate,id,at) { continue; }
++        let Ok(rewrite)=realise_physical_rewrite_with_size(source,source,&candidate,&super::topology::Library::default_library(),&source.inputs,&source.outputs,1_000_000,Some(best.world.size())) else {continue;};
++        let proposed=CompiledCircuit::from_certified_rewrite(rewrite);
++        if proposed.implementation_netlist(source) != best.implementation_netlist(source) { continue; }
++        if let Some(measured)=strict_profile(source,&proposed,Some(&quality)) {
++            if measured != quality {best=proposed;quality=measured;}
++        }
++    }
++    best
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn strict_refresh_guard_rejects_missing_channels_and_private_work_regressions() {
++        let control = StrictPhase { ticks: 10, work: 20, cells: 30, channels: vec![[0;5];2] };
++        let mut candidate = control.clone();
++        candidate.channels.pop();
++        assert!(!candidate.dominates(&control));
++        candidate = control.clone(); candidate.work += 1;
++        assert!(!candidate.dominates(&control));
++        candidate = control.clone(); candidate.cells += 1;
++        assert!(!candidate.dominates(&control));
++        candidate = control.clone(); candidate.channels[1][3] = 1;
++        assert!(!candidate.dominates(&control));
++        candidate = control.clone(); candidate.ticks -= 1;
++        assert!(candidate.dominates(&control));
++    }
+     use crate::compile::{topology::GateKind, Gate};
+     fn source() -> Netlist {
+         Netlist {
+--- a/src/compile/fragment_synth/refresh.rs
++++ b/src/compile/fragment_synth/refresh.rs
+@@ -165,3 +165,29 @@
+     }
+     true
+ }
++
++/// The remaining isolated terminal can refresh a dust run of at most fifteen.
++/// This is a proposal recognizer; certification and retained waveform replay
++/// remain mandatory, including interactions outside the edited route.
++pub fn adjacent_terminal_refresh(candidate: &ExpandedPhysicalCandidate, id: super::identity::RouteId, at: crate::compile::geometry::Anchor) -> bool {
++    let Some(route)=candidate.routes.get(&id) else { return false; };
++    let Some(relay)=route.cells.iter().find(|c|c.at==at) else {return false;};
++    let mut matched=false;
++    for branch in &route.branches {
++        let Some(i)=branch.path.iter().position(|p|*p==at) else {continue;};
++        let Some(next)=branch.path.get(i+1) else {return false;};
++        if *next != branch.terminal.at {return false;}
++        let Some(terminal)=route.cells.iter().find(|c|c.at==*next) else {return false;};
++        if terminal.state.kind!=BlockKind::Repeater || terminal.state.facing!=relay.state.facing {return false;}
++        let mut dust=1usize; let mut refreshed=false;
++        for p in branch.path[..i].iter().rev() {
++            let Some(cell)=route.cells.iter().find(|c|c.at==*p) else {return false;};
++            if cell.state.kind==BlockKind::Repeater {refreshed=true;break;}
++            if cell.state.kind!=BlockKind::RedstoneWire {return false;}
++            dust+=1;
++        }
++        if !refreshed || dust>15 {return false;}
++        matched=true;
++    }
++    matched
++}

@@ -1,0 +1,7 @@
+{
+  "command": "RUST_MIN_STACK=268435456 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo test --lib compile::selection::tests -- --test-threads=1",
+  "passed": 7,
+  "failed": 0,
+  "new_test": "strict_refresh_guard_rejects_missing_channels_and_private_work_regressions",
+  "qualification_note": "This tests guarded source. Full v2 producer remains original frozen source; shape guard equivalence is documented separately."
+}

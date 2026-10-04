@@ -1,0 +1,6 @@
+{
+  "exporter_frozen_before_run": true,
+  "same_exporter_executable_v1_v2": true,
+  "producer_library_linked_sha256": "571c73d6dfd518f664a0f66009a6ee324e7e36f0275e1cff8eea813a28c40aed",
+  "output_note": "exporter executed frozen clean production compile and compile_without_rewrite independently; graphs exported outside main raw event run and compared against actual audited world fingerprints"
+}

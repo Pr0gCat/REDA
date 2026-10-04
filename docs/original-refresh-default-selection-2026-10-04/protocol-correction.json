@@ -1,0 +1,6 @@
+{
+  "baseline_entry": "reda::compile::compile_without_rewrite(lower_optimised(native(source)))",
+  "candidate_entry": "reda::compile::compile(lower_optimised(native(source))) actual production default budget256",
+  "reason": "Producer protocol label retained a pilot default-baseline string. Frozen executable source shows actual baseline uses compile_without_rewrite; retain original protocol.json and add explicit correction, never overwrite raw artifact.",
+  "actual_baseline_source_statement": "let original = reda::compile::compile_without_rewrite(&source);"
+}

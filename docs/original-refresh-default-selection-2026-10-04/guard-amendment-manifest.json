@@ -1,0 +1,35 @@
+{
+  "qualifying_producer": "v2 original frozen producer; never relabeled as guarded executable",
+  "guarded_source_sha256": "2c0b9578c443433880a33c80b858d95df5dd71a2708b29e016bb704e8a211ed3",
+  "qualifying_selection_source_sha256": "8752dbdca6a61c7a16b0097bf58834bc3b8e1c052d12ce3ebbcfce2c1e3110b8",
+  "amendment_sha256": "071a9ab98cba9afd96488aca611b0dd59f4cfd1114b9d925fea2204259317740",
+  "amendment": "Only fail-closed input/driver/channel length guards and unit test; old zip bounds unchanged for v2 exact identities",
+  "shape_proofs": [
+    {
+      "name": "baseline",
+      "source_inputs": 6,
+      "rewritten_inputs": 6,
+      "source_outputs": 9,
+      "public_drivers": 9,
+      "public_lamps": 9,
+      "actual_implementation_gates": 15,
+      "public_channels_every_phase": 18,
+      "strict_profile_channels_every_phase": 33,
+      "phase_count": 8192,
+      "strict_shape_derivation": "Frozen strict_profile sites are drivers + lamps + all actual implementation gates; this fixed vector is allocated on every phase; graph equality and complete typed site identities independently checked."
+    },
+    {
+      "name": "candidate",
+      "source_inputs": 6,
+      "rewritten_inputs": 6,
+      "source_outputs": 9,
+      "public_drivers": 9,
+      "public_lamps": 9,
+      "actual_implementation_gates": 15,
+      "public_channels_every_phase": 18,
+      "strict_profile_channels_every_phase": 33,
+      "phase_count": 8192,
+      "strict_shape_derivation": "Frozen strict_profile sites are drivers + lamps + all actual implementation gates; this fixed vector is allocated on every phase; graph equality and complete typed site identities independently checked."
+    }
+  ]
+}

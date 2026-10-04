@@ -1,0 +1,55 @@
+--- a/src/compile/selection.rs
++++ b/src/compile/selection.rs
+@@ -723,6 +723,13 @@
+ // and phase separately so aggregate improvements cannot mask regressions.
+ #[derive(Clone, PartialEq, Eq)]
+ struct StrictPhase { ticks: u64, work: u64, cells: u64, channels: Vec<[u64; 5]> }
++impl StrictPhase {
++    fn dominates(&self, old: &Self) -> bool {
++        self.ticks <= old.ticks && self.work <= old.work && self.cells <= old.cells
++            && self.channels.len() == old.channels.len()
++            && self.channels.iter().zip(&old.channels).all(|(a,b)| a.iter().zip(b).all(|(a,b)| a <= b))
++    }
++}
+ fn strict_profile(source: &Netlist, circuit: &CompiledCircuit, upper: Option<&[StrictPhase]>) -> Option<Vec<StrictPhase>> {
+     circuit.validate_rewrite_view(source).ok()?;
+     let implementation = circuit.implementation_netlist(source);
+@@ -732,6 +739,7 @@
+     let drivers = if let Some(r) = circuit.physical_rewrite() { r.source_output_driver_positions().to_vec() } else {
+         source.outputs.iter().map(|s| circuit.gate_output_positions.get(s).copied()).collect::<Option<Vec<_>>>()?
+     };
++    if bindings.len() != source.inputs.len() || drivers.len() != source.outputs.len() { return None; }
+     let lamps: Vec<_> = circuit.output_occurrences().iter().map(|(_, p)| *p).collect();
+     if lamps.len() != source.outputs.len() { return None; }
+     // Repeated public positions are accepted only for the same source signal.
+@@ -786,7 +794,7 @@
+         let phase = StrictPhase {ticks,work:sim.work_done()-work,cells,channels};
+         if let Some(bound) = upper {
+             let old = bound.get(result.len())?;
+-            if phase.ticks>old.ticks || phase.work>old.work || phase.cells>old.cells || phase.channels.iter().zip(&old.channels).any(|(a,b)| a.iter().zip(b).any(|(a,b)|a>b)) { return None; }
++            if !phase.dominates(old) { return None; }
+         }
+         result.push(phase); previous=address;
+     }}}
+@@ -818,6 +826,21 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn strict_refresh_guard_rejects_missing_channels_and_private_work_regressions() {
++        let control = StrictPhase { ticks: 10, work: 20, cells: 30, channels: vec![[0;5];2] };
++        let mut candidate = control.clone();
++        candidate.channels.pop();
++        assert!(!candidate.dominates(&control));
++        candidate = control.clone(); candidate.work += 1;
++        assert!(!candidate.dominates(&control));
++        candidate = control.clone(); candidate.cells += 1;
++        assert!(!candidate.dominates(&control));
++        candidate = control.clone(); candidate.channels[1][3] = 1;
++        assert!(!candidate.dominates(&control));
++        candidate = control.clone(); candidate.ticks -= 1;
++        assert!(candidate.dominates(&control));
++    }
+     use crate::compile::{topology::GateKind, Gate};
+     fn source() -> Netlist {
+         Netlist {

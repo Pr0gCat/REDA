@@ -1,0 +1,102 @@
+{
+  "ticks": {
+    "improved_phases": 1472,
+    "baseline_total": 112462,
+    "candidate_total": 109070,
+    "baseline_worst": 18,
+    "candidate_worst": 18,
+    "max_improvement": 5
+  },
+  "processed_queue_events": {
+    "improved_phases": 4095,
+    "baseline_total": 184785,
+    "candidate_total": 179154,
+    "baseline_worst": 49,
+    "candidate_worst": 46,
+    "max_improvement": 4
+  },
+  "cell_boolean_events": {
+    "improved_phases": 512,
+    "baseline_total": 2116073,
+    "candidate_total": 2113001,
+    "baseline_worst": 548,
+    "candidate_worst": 542,
+    "max_improvement": 6
+  },
+  "public_channels": {
+    "driver:v": {
+      "glitch": {
+        "improved_phases": 512,
+        "max_improvement": 1
+      },
+      "arrival": {
+        "improved_phases": 2048,
+        "max_improvement": 12
+      },
+      "pulse_total": {
+        "improved_phases": 512,
+        "max_improvement": 4
+      },
+      "pulse_worst": {
+        "improved_phases": 512,
+        "max_improvement": 4
+      }
+    },
+    "driver:w": {
+      "glitch": {
+        "improved_phases": 512,
+        "max_improvement": 1
+      },
+      "arrival": {
+        "improved_phases": 2048,
+        "max_improvement": 12
+      },
+      "pulse_total": {
+        "improved_phases": 512,
+        "max_improvement": 4
+      },
+      "pulse_worst": {
+        "improved_phases": 512,
+        "max_improvement": 4
+      }
+    },
+    "lamp:v": {
+      "glitch": {
+        "improved_phases": 512,
+        "max_improvement": 1
+      },
+      "arrival": {
+        "improved_phases": 2048,
+        "max_improvement": 16
+      },
+      "pulse_total": {
+        "improved_phases": 512,
+        "max_improvement": 7
+      },
+      "pulse_worst": {
+        "improved_phases": 512,
+        "max_improvement": 7
+      }
+    },
+    "lamp:w": {
+      "glitch": {
+        "improved_phases": 512,
+        "max_improvement": 1
+      },
+      "arrival": {
+        "improved_phases": 2048,
+        "max_improvement": 16
+      },
+      "pulse_total": {
+        "improved_phases": 512,
+        "max_improvement": 7
+      },
+      "pulse_worst": {
+        "improved_phases": 512,
+        "max_improvement": 7
+      }
+    }
+  },
+  "regressions": 0,
+  "scope": "frozen representative original whole versus actual default; source bounded"
+}

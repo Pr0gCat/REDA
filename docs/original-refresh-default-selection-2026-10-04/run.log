@@ -1,0 +1,35 @@
+original/default: compiling the frozen six-input/nine-occurrence source
+original/default: frozen; candidate: generating
+baseline: 512 / 8192 retained phases
+baseline: 1024 / 8192 retained phases
+baseline: 1536 / 8192 retained phases
+baseline: 2048 / 8192 retained phases
+baseline: 2560 / 8192 retained phases
+baseline: 3072 / 8192 retained phases
+baseline: 3584 / 8192 retained phases
+baseline: 4096 / 8192 retained phases
+baseline: 4608 / 8192 retained phases
+baseline: 5120 / 8192 retained phases
+baseline: 5632 / 8192 retained phases
+baseline: 6144 / 8192 retained phases
+baseline: 6656 / 8192 retained phases
+baseline: 7168 / 8192 retained phases
+baseline: 7680 / 8192 retained phases
+baseline: 8192 / 8192 retained phases
+candidate: 512 / 8192 retained phases
+candidate: 1024 / 8192 retained phases
+candidate: 1536 / 8192 retained phases
+candidate: 2048 / 8192 retained phases
+candidate: 2560 / 8192 retained phases
+candidate: 3072 / 8192 retained phases
+candidate: 3584 / 8192 retained phases
+candidate: 4096 / 8192 retained phases
+candidate: 4608 / 8192 retained phases
+candidate: 5120 / 8192 retained phases
+candidate: 5632 / 8192 retained phases
+candidate: 6144 / 8192 retained phases
+candidate: 6656 / 8192 retained phases
+candidate: 7168 / 8192 retained phases
+candidate: 7680 / 8192 retained phases
+candidate: 8192 / 8192 retained phases
+whole-default non-regression: true

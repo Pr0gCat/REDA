@@ -1,0 +1,21 @@
+{
+  "baseline_entry": "reda::compile::compile(lower_optimised(native(source)))",
+  "candidate_entry": "actual production default compile; generic budget256 local refresh selection",
+  "labels": [
+    "u",
+    "z",
+    "o",
+    "v",
+    "w",
+    "x",
+    "y",
+    "q",
+    "r"
+  ],
+  "metrics": "per-phase settle/processed queue/cell boolean events plus all driver/lamp channels' glitches, single-input glitches, arrival, total/worst pulse; every metric must not regress",
+  "observer_policy": "wire power > 0; other cells lit; typed identities preserve shared-site public occurrences",
+  "queue_event_cap": 1000000,
+  "retained_phases": 8192,
+  "states": 64,
+  "tick_cap": 2000
+}

@@ -1,0 +1,16 @@
+{
+  "source_sha256": "1a68109f596a2af9c6d4b5d8db1c28bf35484c66e976b045e43440c88f1e05c5",
+  "executable_sha256": "d50f4c0c83fdc62c34bf6ba01603718897f99fb0e8cfe3fd4ff8c66346f2fb71",
+  "actual_selector_realise_calls_for_representative_alias_source": {
+    "budget0": 0,
+    "budget1": 1
+  },
+  "count_scope": "selector candidate realise calls; excludes initial primitive/library certificates",
+  "count_evidence": "Frozen selection source early alias refusal returns before flat seed at budget0. At budget1 the strict stream is .take(1); observed certified world change proves exactly one proposal realised. No instrumentation or simulator changes.",
+  "assertions": [
+    "budget0 raw world equality",
+    "budget1 two runs world equality",
+    "budget1 nonidentity qualified improvement",
+    "9 output occurrences"
+  ]
+}
