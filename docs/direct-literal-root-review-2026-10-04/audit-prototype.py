@@ -88,6 +88,9 @@ assert all(matching)
 for a, b in zip(old, new):
     assert all(b[key] <= a[key] for key in ['ticks', 'queue_work', 'physical_site_events'])
     assert all(y <= x for aa, bb in zip(a['channels'][:16], b['channels'][:16]) for x, y in zip(aa, bb))
+    for metric in range(5):
+        aggregate = max if metric in (2, 4) else sum
+        assert aggregate(channel[metric] for channel in b['channels'][16:]) <= aggregate(channel[metric] for channel in a['channels'][16:])
     for candidate, baseline_indices in enumerate(matching):
         for baseline in baseline_indices:
             assert all(y <= x for x, y in zip(a['channels'][16 + baseline], b['channels'][16 + candidate]))
