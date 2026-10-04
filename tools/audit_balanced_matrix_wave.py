@@ -93,8 +93,11 @@ def audit_certificate_waves(path, control=None):
         assert set(phase['internal']) == labels
         values = evaluations[phase['address']]
         assert all(phase['internal'][label] == values[signal] for signal, label in graph['bindings'].items())
+        events_by_label = {}
+        for event in phase['events']:
+            events_by_label.setdefault(event['label'], []).append(event)
         for label in labels:
-            events = [event for event in phase['events'] if event['label'] == label]
+            events = events_by_label.get(label, [])
             changes = max(0, len(events) - int(previous[label] != phase['internal'][label]))
             if not label.startswith('boundary'):
                 all_hidden_transitions += changes

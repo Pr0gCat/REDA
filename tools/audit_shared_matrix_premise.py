@@ -83,8 +83,11 @@ def audit(log, control):
             slower_settlement.append({'phase': index, 'before': previous['ticks'], 'after': phase['ticks']})
         ideal = {label: expected(d['oracle'], phase['address']) for label, d in definitions.items()}
         assert phase['internal'] == ideal
+        events_by_label = {}
+        for event in phase['events']:
+            events_by_label.setdefault(event['label'], []).append(event)
         for label in definitions:
-            events = [e for e in phase['events'] if e['label'] == label]
+            events = events_by_label.get(label, [])
             if not label.startswith('boundary'):
                 hidden_extra_transitions += max(0, len(events) - int(observed[label] != ideal[label]))
         observed = replay_events(observed, phase['events'], 'label', phase['ticks'])

@@ -1,0 +1,23 @@
+{
+  "source_hashes": {
+    "tools/audit_balanced_matrix_wave.py": "e52ec31f457dca93da0577a6fee1699a9c81fb25b437107b5fec59f62844892c",
+    "tools/audit_shared_matrix_premise.py": "1ec7fc1681f344919d94ce7dbed37a39c4a5b6b2c770207a0cd188e7a61e15a7"
+  },
+  "results": [
+    {
+      "repeat": 1,
+      "seconds": 7.5187663960387,
+      "historical_and_rom32_results_identical": true
+    },
+    {
+      "repeat": 2,
+      "seconds": 7.518518479017075,
+      "historical_and_rom32_results_identical": true
+    },
+    {
+      "repeat": 3,
+      "seconds": 7.570061957987491,
+      "historical_and_rom32_results_identical": true
+    }
+  ]
+}
