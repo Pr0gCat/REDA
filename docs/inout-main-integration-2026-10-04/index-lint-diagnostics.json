@@ -1,0 +1,112 @@
+[
+  {
+    "code": "clippy::too_many_arguments",
+    "message": "this function has too many arguments (8/7)",
+    "primary": [
+      [
+        "src/compile/fragment_synth/packed_recursive.rs",
+        276
+      ]
+    ]
+  },
+  {
+    "code": "clippy::type_complexity",
+    "message": "very complex type used. Consider factoring parts into `type` definitions",
+    "primary": [
+      [
+        "src/compile/fragment_synth/parent.rs",
+        2221
+      ]
+    ]
+  },
+  {
+    "code": "clippy::too_many_arguments",
+    "message": "this function has too many arguments (8/7)",
+    "primary": [
+      [
+        "src/compile/fragment_synth/placement.rs",
+        723
+      ]
+    ]
+  },
+  {
+    "code": "clippy::too_many_arguments",
+    "message": "this function has too many arguments (8/7)",
+    "primary": [
+      [
+        "src/compile/fragment_synth/rewrite.rs",
+        132
+      ]
+    ]
+  },
+  {
+    "code": "clippy::too_many_arguments",
+    "message": "this function has too many arguments (8/7)",
+    "primary": [
+      [
+        "src/compile/fragment_synth/seed.rs",
+        1515
+      ]
+    ]
+  },
+  {
+    "code": "clippy::too_many_arguments",
+    "message": "this function has too many arguments (9/7)",
+    "primary": [
+      [
+        "src/compile/fragment_synth/seed.rs",
+        1824
+      ]
+    ]
+  },
+  {
+    "code": "clippy::too_many_arguments",
+    "message": "this function has too many arguments (10/7)",
+    "primary": [
+      [
+        "src/compile/fragment_synth/seed.rs",
+        2469
+      ]
+    ]
+  },
+  {
+    "code": "clippy::too_many_arguments",
+    "message": "this function has too many arguments (11/7)",
+    "primary": [
+      [
+        "src/compile/fragment_synth/seed.rs",
+        2927
+      ]
+    ]
+  },
+  {
+    "code": "clippy::too_many_arguments",
+    "message": "this function has too many arguments (8/7)",
+    "primary": [
+      [
+        "src/compile/mod.rs",
+        3187
+      ]
+    ]
+  },
+  {
+    "code": "clippy::too_many_arguments",
+    "message": "this function has too many arguments (9/7)",
+    "primary": [
+      [
+        "src/compile/mod.rs",
+        5847
+      ]
+    ]
+  },
+  {
+    "code": "clippy::clone_on_copy",
+    "message": "using `clone` on type `PropagationSemantics` which implements the `Copy` trait",
+    "primary": [
+      [
+        "src/redstone/simulator/mod.rs",
+        214
+      ]
+    ]
+  }
+]

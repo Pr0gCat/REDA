@@ -1,0 +1,12 @@
+{
+  "tests/fixtures/resolved-inout.sv": {
+    "sha256": "5e9d6e002868931329f7e1303f57b646e364ddfb4b06ed90ef2f8013353d592c",
+    "independent_original": "docs/inout-standard-oracle-2026-10-04/fixture.sv",
+    "bytes": 270
+  },
+  "tests/fixtures/resolved-inout-standard-oracle.csv": {
+    "sha256": "170ba618e6867e9e07d8233d6ce2609e8c28cd2f00e1f01ee55103d697d2eb50",
+    "independent_original": "docs/inout-standard-oracle-2026-10-04/standard-oracle.csv",
+    "bytes": 79405
+  }
+}

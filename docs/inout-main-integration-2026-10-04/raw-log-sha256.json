@@ -1,0 +1,97 @@
+{
+  "arithmetic-baseline-shared-cache-invalid.log": {
+    "bytes": 13457,
+    "compressed": "arithmetic-baseline-shared-cache-invalid.log.gz",
+    "sha256": "8833074fb497c2bb6454f88cac8a08d0da0d40efeb55ada66cd4a8a275a59ae1"
+  },
+  "arithmetic-baseline.log": {
+    "bytes": 12225,
+    "compressed": "arithmetic-baseline.log.gz",
+    "sha256": "d74a0e9f234142d56c6a0e39b1148f913259c0c58285b5a770edb66fc6d1c3fd"
+  },
+  "final-semantic.log": {
+    "bytes": 1916,
+    "compressed": "final-semantic.log.gz",
+    "sha256": "680f71a9aba5d160460abd70f15e70801e260ce2fbdf2b2a49ce6111aa67f871"
+  },
+  "index-decoder.log": {
+    "bytes": 462,
+    "compressed": "index-decoder.log.gz",
+    "sha256": "d90f60d6181f38e38799b00f8bac6947031048ffbc309ee10553fdc131d8c13d"
+  },
+  "index-entry-cfg-inference-failure.log": {
+    "bytes": 870,
+    "compressed": "index-entry-cfg-inference-failure.log.gz",
+    "sha256": "1edb61fccabe1f2c9b7c1ab5b3c23b657148db23d2b27e2d4d7bbb6d6d146944"
+  },
+  "index-entry-decoder-source-name-failure.log": {
+    "bytes": 1629,
+    "compressed": "index-entry-decoder-source-name-failure.log.gz",
+    "sha256": "2ce65c0c23dc607c1d2110e6b815a8737e0d1cbc32f090bf5d96a6b37cf844df"
+  },
+  "index-lint.jsonl": {
+    "bytes": 70042,
+    "compressed": "index-lint.jsonl.gz",
+    "sha256": "6183c249d7e4e685d855bdc42bb98ea6dcf2a53129c613fccf30f0c84b6188d8"
+  },
+  "index-lint.log": {
+    "bytes": 168,
+    "compressed": "index-lint.log.gz",
+    "sha256": "1db4b07f060e6bcd9006b44f317f4f098e5709d9f0f53b245d01c6de8969ed85"
+  },
+  "index-semantic-setup-failure.log": {
+    "bytes": 164,
+    "compressed": "index-semantic-setup-failure.log.gz",
+    "sha256": "57636027edb83c2dc0fb20e9934396ac0fbff4a672d5927608a252946c7bb391"
+  },
+  "index-semantic.log": {
+    "bytes": 3137,
+    "compressed": "index-semantic.log.gz",
+    "sha256": "e90b4d40e3470d04a85746ed249c679bba32c9fabd51619c6d3cb081a4e88de8"
+  },
+  "native-entry.log": {
+    "bytes": 3505,
+    "compressed": "native-entry.log.gz",
+    "sha256": "8f21764b532bd407b1099a45a42ea531752f03595997c979c8ef6719c03f88d2"
+  },
+  "page-syntax.log": {
+    "bytes": 0,
+    "compressed": "page-syntax.log.gz",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "physical.log": {
+    "bytes": 2810,
+    "compressed": "physical.log.gz",
+    "sha256": "c9e28ab2ac3e8765accf9bcedc3bee302231307903fbc7c594e1209460e79ac7"
+  },
+  "remaining-regressions.log": {
+    "bytes": 7582,
+    "compressed": "remaining-regressions.log.gz",
+    "sha256": "b547cd0c51d325fa986f6cdadf3a4d20a9d835f980f0a52c78ff02d1d1b71b34"
+  },
+  "semantic.log": {
+    "bytes": 2035,
+    "compressed": "semantic.log.gz",
+    "sha256": "6f7bbeb0954c9bfbeff3b4b7470d1a6dacf72d131e54fd91a60417c55b6ff27d"
+  },
+  "source-regressions.log": {
+    "bytes": 13636,
+    "compressed": "source-regressions.log.gz",
+    "sha256": "a256c1d6c52bfd7ad085a33f86f5083ec492b2ba0b68a32c781fa2e786db8ac4"
+  },
+  "viewer.log": {
+    "bytes": 8141,
+    "compressed": "viewer.log.gz",
+    "sha256": "a5beb79ef7de69e9935d11e4d2c90afb9423b550d49b9eb103db358c7cedf59d"
+  },
+  "wasm-build.log": {
+    "bytes": 811,
+    "compressed": "wasm-build.log.gz",
+    "sha256": "704b21f682861ab8c8375e610d473a1623c418ae98ecdef28f301cadde820a99"
+  },
+  "wasm-consumer.log": {
+    "bytes": 81,
+    "compressed": "wasm-consumer.log.gz",
+    "sha256": "0141f9868cffcd8fc1bc483709cddfd9c22fc4d351c3addc650ba7efab78b448"
+  }
+}

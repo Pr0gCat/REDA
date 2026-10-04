@@ -81,6 +81,7 @@ mod logic;
 mod netlist;
 mod parser;
 mod rtl;
+pub(crate) mod resolved;
 mod selection;
 mod yosys_json;
 pub use selection::{synthesize_selected, FrontendMode, SelectedFrontend};
@@ -337,6 +338,61 @@ pub fn compile_systemverilog(
         ports: emitted.ports,
         ordered_output_ports: emitted.ordered_output_ports,
         debug,
+    })
+}
+
+pub use crate::compile::resolved_circuit::{
+    CompiledResolvedCircuit as CompiledNativeCircuit, ResolvedBusPort, ResolvedPinout,
+};
+pub use resolved::InvalidBus;
+
+/// Inspect the parsed top-level port directions for consumers choosing a physical path.
+pub fn top_has_inout(sources: &[SourceInput<'_>], options: &CompileOptions) -> Result<bool, String> {
+    let files: Vec<_> = sources.iter().enumerate()
+        .map(|(i, s)| (FileId(i as u32), s.text)).collect();
+    let (set, _) = parser::parse_sources_drives(&files, true).map_err(|d| d.render(sources))?;
+    let shared = set.modules.iter().find(|m| m.name.name == options.top)
+        .is_some_and(|m| m.ports.iter().any(|p| p.direction == PortDirection::Inout));
+    Ok(shared)
+}
+
+/// Compile native source directly to physical hardware and source-owned ports.
+/// Top-level inout retains one shared terminal and checked X/Z observation.
+/// Ordinary sources reuse the existing native frontend and default compiler.
+pub fn compile_systemverilog_physical(
+    sources: &[SourceInput<'_>],
+    options: &CompileOptions,
+) -> Result<CompiledNativeCircuit, String> {
+    let shared = top_has_inout(sources, options)?;
+    if shared {
+        let semantic = resolved::compile_for_materialization(sources, &options.top)?;
+        return crate::compile::resolved_circuit::compile(&semantic);
+    }
+    let artifact = compile_systemverilog(sources, options)
+        .map_err(|ds| ds.iter().map(|d| d.render(sources)).collect::<Vec<_>>().join("\n"))?;
+    let physical = crate::compile::compile(&artifact.netlist).map_err(|e| e.to_string())?;
+    let implementation = physical.implementation_netlist(&artifact.netlist).clone();
+    let coordinates = |p: &(i32,i32,i32)| [p.0,p.1,p.2];
+    let source_inputs = artifact.ports.iter().filter(|p| p.direction == PortDirection::Input)
+        .map(|p| (p.name.clone(), physical.input_positions[&p.signal])).collect::<std::collections::BTreeMap<_,_>>();
+    let source_outputs = artifact.ports.iter().filter(|p| p.direction == PortDirection::Output)
+        .map(|p| (p.name.clone(), physical.output_positions[&p.signal])).collect::<std::collections::BTreeMap<_,_>>();
+    let pinout = ResolvedPinout {
+        inputs: source_inputs.iter().map(|(n,p)| (n.clone(),coordinates(p))).collect(),
+        outputs: source_outputs.iter().map(|(n,p)| (n.clone(),coordinates(p))).collect(),
+        inouts: Vec::new(),
+    };
+    Ok(CompiledNativeCircuit {
+        physical, pinout,
+        #[cfg(test)]
+        source_inputs,
+        #[cfg(test)]
+        source_outputs,
+        #[cfg(test)]
+        protocol_inputs: std::collections::BTreeMap::new(),
+        #[cfg(test)]
+        terminals: Vec::new(),
+        implementation,
     })
 }
 

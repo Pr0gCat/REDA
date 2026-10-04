@@ -1,0 +1,26 @@
+{
+  "restored_pre_integration_files": [
+    {
+      "path": "src/frontend/parser.rs",
+      "sha256": "799917be12b1d41113367400cf58cb69e0d0f1731fbb700cad809887775ce097"
+    },
+    {
+      "path": "src/frontend/logic.rs",
+      "sha256": "e96cde7bf98779d5afd28c2b6415cd61ca0204fa8dafc7a44fb793b95ce33936"
+    },
+    {
+      "path": "src/frontend/mod.rs",
+      "sha256": "3e10b00e2ad22233b60a3fa7759a6ed0f72ed1edb86d34686053db68888e6d0d"
+    },
+    {
+      "path": "src/compile/mod.rs",
+      "sha256": "31fd547f00e33d9489ae948b3a766a5e90f58972f8301e845d34f5a3ac67e739"
+    },
+    {
+      "path": "src/bin/build_circuit.rs",
+      "sha256": "2943dbd456190ce9e4035ab35827be428d5893bf0651fc2dbd8a79be197be25c"
+    }
+  ],
+  "test": "arithmetic_keeps_width_and_unsupported_operator_validation",
+  "purpose": "Determine whether the current arithmetic assertion failure predates inout integration."
+}

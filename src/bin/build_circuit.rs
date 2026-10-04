@@ -779,6 +779,39 @@ fn main() {
         return;
     }
 
+    if args.first().map(String::as_str) == Some("verilog")
+        && mode != reda::frontend::FrontendMode::Yosys
+    {
+        if let (Some(path), Some(top)) = (args.get(1), args.get(2)) {
+            let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                eprintln!("could not read {path}: {e}"); std::process::exit(1);
+            });
+            let source = reda::frontend::SourceInput { name: path, text: &text };
+            let options = reda::frontend::CompileOptions::new(top);
+            // An unsupported parse stays with the existing native/auto selector,
+            // which owns diagnostics and optional Yosys fallback.
+            let shared = reda::frontend::top_has_inout(&[source], &options).unwrap_or(false);
+            if shared {
+                if grown || synth || pins_path.is_some() || evaluation_format.is_some() {
+                    eprintln!("shared inout currently requires the native default physical producer without --grown, --synth, --pins or --evaluation");
+                    std::process::exit(1);
+                }
+                let circuit = reda::frontend::compile_systemverilog_physical(&[source], &options)
+                    .unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
+                let output = std::path::Path::new("output");
+                std::fs::create_dir_all(output).unwrap_or_else(|e| {
+                    eprintln!("could not create output directory: {e}"); std::process::exit(1);
+                });
+                let path = output.join(format!("{top}.litematic"));
+                circuit.save_bundle(&path).unwrap_or_else(|e| {
+                    eprintln!("could not export shared inout: {e}"); std::process::exit(1);
+                });
+                println!("wrote {} with source-owned shared-inout pinout", path.display());
+                return;
+            }
+        }
+    }
+
     let SelectedCircuit {
         name,
         netlist,

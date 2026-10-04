@@ -24,6 +24,11 @@ use super::{Diagnostic, Severity};
 /// node table. Files are parsed in order; a failure in any file stops the
 /// whole parse.
 pub fn parse_sources(files: &[(FileId, &str)]) -> Result<SourceSet, Diagnostic> {
+    parse_sources_drives(files, false).map(|(set, _)| set)
+}
+
+pub(super) fn parse_sources_drives(files: &[(FileId, &str)], allow_z: bool) -> Result<(SourceSet, std::collections::HashSet<SourceNodeId>), Diagnostic> {
+    let mut absent = std::collections::HashSet::new();
     let mut set = SourceSet {
         modules: Vec::new(),
         nodes: Vec::new(),
@@ -32,6 +37,8 @@ pub fn parse_sources(files: &[(FileId, &str)]) -> Result<SourceSet, Diagnostic> 
         let tokens = lexer::tokenize(file, text)?;
         let mut parser = Parser {
             tokens,
+            allow_z,
+            absent: &mut absent,
             pos: 0,
             nodes: &mut set.nodes,
         };
@@ -40,10 +47,12 @@ pub fn parse_sources(files: &[(FileId, &str)]) -> Result<SourceSet, Diagnostic> 
             set.modules.push(module);
         }
     }
-    Ok(set)
+    Ok((set, absent))
 }
 
 struct Parser<'n> {
+    allow_z: bool,
+    absent: &'n mut std::collections::HashSet<SourceNodeId>,
     tokens: Vec<Token>,
     pos: usize,
     nodes: &'n mut Vec<SourceNode>,
@@ -1005,9 +1014,12 @@ impl<'n> Parser<'n> {
                 digits,
             }) => {
                 self.advance();
-                let (width, bits) = parse_sized_literal(&width, base, &digits)
+                let z = self.allow_z && !base.eq_ignore_ascii_case(&'d') && digits.chars().filter(|&c| c != '_').all(|c| c == 'z' || c == 'Z');
+                let normalized = if z { digits.chars().map(|c| if c == 'z' || c == 'Z' { '0' } else { c }).collect() } else { digits.clone() };
+                let (width, bits) = parse_sized_literal(&width, base, &normalized)
                     .map_err(|message| self.error_at(token.span, message))?;
                 let id = self.node(SourceKind::Literal, token.span, None);
+                if z { self.absent.insert(id); }
                 Ok(Expr {
                     id,
                     span: token.span,

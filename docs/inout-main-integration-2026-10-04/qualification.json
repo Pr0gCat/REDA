@@ -1,0 +1,68 @@
+{
+  "full_broad_requirements_complete": 0,
+  "main_physical": {
+    "passed": 5,
+    "failed": 0,
+    "settled_endpoints": 8192,
+    "scope": "settled simulator, complete implementation and public y"
+  },
+  "main_semantic": {
+    "passed": 3,
+    "failed": 0
+  },
+  "main_related_source": {
+    "passed": 52,
+    "failed": 0
+  },
+  "main_viewer": {
+    "passed": 26,
+    "failed": 0
+  },
+  "main_original_entry": {
+    "passed": 3,
+    "failed": 0
+  },
+  "isolated_staged_entry": {
+    "original_three": "pass in retained four-test failure log",
+    "corrected_decoder": {
+      "passed": 1,
+      "failed": 0,
+      "public_values": 112,
+      "all_implementation_gates": true
+    }
+  },
+  "isolated_final_semantic": {
+    "passed": 3,
+    "failed": 0
+  },
+  "actual_generated_wasm": {
+    "states": 64,
+    "valid_public_y": true,
+    "negative_controls": true,
+    "runtime": "Node; browser interaction unverified"
+  },
+  "strict_lint": {
+    "exit": 101,
+    "retained_errors": 11,
+    "gate_unchanged": true,
+    "scope": "preexisting library failures block consumer lint qualification"
+  },
+  "existing_arithmetic_rejection": {
+    "main_exit": 101,
+    "fresh_preintegration_baseline_exit": 101,
+    "test_unchanged": true
+  },
+  "memory": {
+    "max_bytes": 4294967296,
+    "swap_max_bytes": 0,
+    "minimum_available_bytes": 6442450944,
+    "heavy_jobs": 1,
+    "cargo_jobs": 1,
+    "test_threads": 1
+  },
+  "protected_example_staged": false,
+  "user_arithmetic_routing_sequential_staged": false,
+  "push": false,
+  "source_file_count": 288,
+  "replay_base": "5ec71e2 plus this integration source archive"
+}

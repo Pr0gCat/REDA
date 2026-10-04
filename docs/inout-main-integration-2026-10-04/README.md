@@ -1,0 +1,31 @@
+# Native shared-inout main-source integration
+
+The native physical API, default native/auto CLI and existing viewer now retain top-level shared inout ownership. Each bit has one actual shared dust channel, independently isolated source injections, an external caller fixture and checked source-owned readback. Caller declaration and actual drive must agree. Valid observations return Boolean values; floating, contention and protocol mismatch remain explicit errors.
+
+The native entry reuses the existing ordinary compiler. Its implementation graph comes from the existing physical rewrite contract, so generated gates and source gates remain distinct. Rewritten input names are bound through the retained rewrite certificate, not inferred from source names. The seven-segment consumer control checks all 112 literal public values and every physical implementation gate over the 16 input states.
+
+Typed export/reload authenticates both source-owned metadata and the complete initial world against an independently compiled source artifact before installing caller controls. Native and auto CLI executions use an empty PATH and nonexistent REDA_PYTHON. The independently executed Icarus source and oracle CSV are retained byte-for-byte as test fixtures; oracle-binding.json records their hashes.
+
+## Qualification scope
+
+The main shared physical suite passes 5/5, including all 4096 ordered source transitions and 8192 settled endpoints, every implemented gate, all driver pads/channel positions, public y, 1–4 driver reach/isolation, collision atomicity, export/reload and both deliberate caller mismatch polarities with restoration. These are settled simulator observations, not transient waveform QoR or Minecraft evidence.
+
+The main semantic suite passes 3/3; compiler, DFF, hierarchy, parameters and reset integration suites pass 52/52. The main native/auto physical-entry suite passes its original 3/3. The complete main viewer suite passes 26/26, including all 64 independently classified shared states, public y, both caller mismatch polarities, restoration and malformed metadata refusal. Viewer source/lowering ownership assertions retain their original literals in a lowering-reference fixture; an additional actual default seven-segment Session checks all literal public outputs and refuses fabricated source containment after rewrite.
+
+An isolated Git-index candidate excludes existing user arithmetic, sequential and routing work. index-source-sha256.json identifies the exact staged source. Its final shared semantic controls pass 3/3. The original native/auto CLI and physical-entry controls pass 3/3; the corrected independent ordinary-decoder control passes 1/1. A newly generated wasm-pack web bundle executes all64 shared states and valid public y readings through the actual exported JS bindings in Node, with unknown-port, ordinary/shared control separation, metadata mismatch and reset-port controls. The page module passes node --check. These are source-bound native/WASM proofs, not browser interaction or actual game proof.
+
+## Retained failures and remaining requirements
+
+The existing unstaged arithmetic rejection test fails because it expects mixed-width addition to be rejected. An independently rebuilt pre-integration source snapshot reproduces that same first failure. The test remains unchanged, and whole-project convergence is not claimed. A shared-target baseline invocation is explicitly invalid evidence because it reused Cargo outputs; only the separate-target rebuild establishes the baseline result.
+
+The first isolated candidate setup attempt lacks the target directory; its log is retained. Test-only field cleanup then exposes a production protocol_inputs type-inference error, repaired by keeping the entire test-only map behind cfg(test). The first new decoder control supplies source input names to a rewritten implementation graph and fails MissingInput("input0"); it is corrected using the existing certificate's exact input binding. No implementation truth assertion, output assertion, oracle, physical rule or circuit budget is weakened.
+
+Shared terminals support 1–4 total drivers under the original unrefreshed dust strength limit. The current declared subset is continuous acyclic Boolean driver logic with contextual all-Z branches and hierarchy/bit aliases. Read-dependent drive, procedural/clocked bus drivers and shared --grown/--synth/--pins/--evaluation modes remain unsupported and are not counted as support. Wider inout-family physical controls, continuous waveform quality, real Minecraft, full native HDL/optional-Yosys coverage and whole-project gates remain open. Browser interaction is not proved by Node execution. All eight broad requirements remain open.
+
+Every heavy qualification uses tools/run_memory_bounded.sh: one flock owner, Cargo jobs=1, one test thread, actual MemoryMax=4 GiB, MemorySwapMax=0, and at least 6 GiB host memory available before startup. Original user modifications and examples/rom_family_physical_probe.rs are excluded from staging; no push is authorized.
+
+Strict Clippy qualification retains 11 errors in unchanged preexisting functions: argument-count/type-complexity diagnostics and simulator clone-on-copy. The one new parser ASCII-comparison diagnostic is repaired with the standard char comparison; the final diagnostic inventory has no new parser error. The original -D warnings gate remains unchanged and failing, and consumers behind that failed library lint gate are not claimed lint-qualified.
+
+Replay the scripts retained here through tools/run_memory_bounded.sh using the frozen source archive. The source archive contains only Git-index source/tests/viewer/manifests, excluding user working-tree additions and the protected example. Frozen library include dependencies and the shared viewer bundle are included for isolated replay.
+
+Raw terminal logs are retained losslessly as gzip; raw-log-sha256.json authenticates their decompressed bytes. The page module is reproducible from the archived index.html, with its exact binding recorded in page-module-binding.json; the replay script performs this extraction. The verified generated WASM bundle is installed in main viewer/pkg, and the preceding generated bundle is backed up in the workspace qualification directory.

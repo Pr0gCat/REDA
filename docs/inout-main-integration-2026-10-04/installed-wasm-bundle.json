@@ -1,0 +1,31 @@
+{
+  "backup": "target/qualification/main-inout-integration/previous-main-pkg",
+  "source": "exact staged-source candidate",
+  "installed": "viewer/pkg",
+  "files": {
+    "reda_viewer_bg.wasm": {
+      "sha256": "87b9365ca82dc7fcce99c3c7416d7d55035390e3047dcc861ebec756eba7e046",
+      "bytes": 20879814
+    },
+    "package.json": {
+      "sha256": "df37ee7c98ac18275d109c658131f7faa3175af6f6d2c9c5682ee9a0a4c8f672",
+      "bytes": 381
+    },
+    "reda_viewer.d.ts": {
+      "sha256": "beaffe13800f79dbdea6c892484301b084f4d4ac962e23c84594f1195b277f17",
+      "bytes": 15214
+    },
+    "README.md": {
+      "sha256": "282cc165ae328d0796cc18bcfd48a24930c712dac46796f928bfa6e02b762f2d",
+      "bytes": 8752
+    },
+    "reda_viewer.js": {
+      "sha256": "d91d6b353dbc76345c5f0e1653b9743954cc25885b6a1b7540ebbc8250ee6fb2",
+      "bytes": 42411
+    },
+    "reda_viewer_bg.wasm.d.ts": {
+      "sha256": "a557cfacb847f0034b2e49628d99bfddb8d07990c77375cc4dd90720d9db396e",
+      "bytes": 2341
+    }
+  }
+}

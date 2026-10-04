@@ -1,0 +1,6 @@
+{
+  "sha256": "d9505168e1f41fef719a84855c4d541dee1ea6edd0cd5a173bd325c36fd4ad4c",
+  "bytes": 170621,
+  "source": "viewer/index.html in source.tar.gz",
+  "extraction": "Exactly one script with type=module; extract its contents before node --check."
+}

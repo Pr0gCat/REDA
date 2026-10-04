@@ -77,6 +77,8 @@ pub mod planner;
 pub mod polarity;
 pub mod primitive_graph;
 pub mod relax;
+pub(crate) mod resolved_port;
+pub(crate) mod resolved_circuit;
 /// The incremental settle against a full re-settle, cell by cell, over every
 /// surface this project reads truth through. Measurement only plus one pin --
 /// see the module doc and `redstone::simulator::differential`.

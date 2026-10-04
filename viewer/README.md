@@ -51,6 +51,30 @@ A ready-made launch entry for this is checked in at `.claude/launch.json`
 
 ## Using the page
 
+### Native shared-inout bundles
+
+Compile a supported source with `build_circuit --frontend native verilog
+source.sv top` (or `--frontend auto`). The CLI writes `output/top.litematic`
+and `output/top.pinout.json`. Use the page's native bundle loader to select
+the original source, top module, litematic and typed pinout together. The
+loader recompiles the source and checks the complete initial world and port
+metadata before installing controls; an arbitrary sidecar cannot authenticate
+itself.
+
+Ordinary input levers remain separate from each shared port's **Drive** and
+**High** controls. Checked shared readings distinguish `0`, `1`, `X`, `Z`
+and invalid protocol states. Public output badges report invalid shared
+status conservatively; signal history records raw electrical values. Reset
+restores the original fixture-installed world.
+
+Current shared support covers continuous acyclic Boolean drivers with
+contextual all-Z branches, hierarchy and bit aliases, and up to four total
+drivers per terminal. Read-dependent drive and procedural/clocked bus
+drivers remain unsupported. Shared `--grown`, `--synth`, `--pins` and
+`--evaluation` combinations are also unsupported. See the
+[integration evidence](../docs/inout-main-integration-2026-10-04/README.md)
+for validation scope and remaining browser/game checks.
+
 Four views share one loaded circuit, switched from the header: **2D Slice**,
 **3D View**, **Topology**, and **Signals**. The circuit dropdown lists the four
 hand-written reference circuits plus the Verilog-derived ones, which the wasm

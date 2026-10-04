@@ -990,6 +990,7 @@ pub struct Session {
     /// `seven_segment`'s `a` before `b`, etc).
     output_positions: Vec<(String, (i32, i32, i32))>,
     pinned_outputs: Vec<(i32, i32, i32)>,
+    shared_ports: Vec<reda::frontend::ResolvedBusPort>,
     /// The primitive-topology expansion of this circuit's own netlist --
     /// connectivity only, no positions (see this module's "Primitive
     /// topology" section and `compile::primitive_graph`'s own doc comment).
@@ -1120,6 +1121,62 @@ fn source_terminals_by_declared_output(
 }
 
 impl Session {
+    fn build_native_baked(
+        source: &str, top: &str, bytes: &[u8], pinout: reda::frontend::ResolvedPinout,
+    ) -> Result<Session, String> {
+        let compiled = reda::frontend::compile_systemverilog_physical(
+            &[reda::frontend::SourceInput { name: "viewer.sv", text: source }],
+            &reda::frontend::CompileOptions::new(top),
+        )?;
+        let mut world = reda::formats::litematic::load_bytes(bytes).map_err(|e| e.to_string())?;
+        pinout.validate_loaded(&world, &compiled)?;
+        for bus in &pinout.inouts {
+            let [x,y,z] = bus.external_entry;
+            if world.get(x,y,z).kind != BlockKind::Air { return Err("external entry is occupied".into()); }
+            let mut floor = BlockState::air();
+            floor.kind = BlockKind::Solid; floor.name = "minecraft:stone".into();
+            world.set(x,y-1,z,floor);
+            let mut lever = BlockState::air();
+            lever.kind = BlockKind::Lever; lever.name = "minecraft:lever".into();
+            lever.face = Some(Face::Floor); lever.facing = Some(Facing::North);
+            world.set(x,y,z,lever);
+        }
+        // Shared-source topology is the explicit generated implementation graph.
+        let source_netlist = compiled.implementation_netlist().clone();
+        let (lowered, provenance) = lower_with_provenance(&source_netlist).map_err(|e| e.to_string())?;
+        let terminals = source_terminals_by_declared_output(&source_netlist, &lowered, &provenance);
+        let (primitive_graph, gate_meta, cell_meta) = topology_views(
+            &source_netlist, &lowered, &provenance, &terminals, compiled.physical.physical_rewrite());
+        let input_positions: BTreeMap<_,_> = pinout.inputs.iter()
+            .map(|(n,p)| (n.clone(),(p[0],p[1],p[2]))).collect();
+        let input_controls = input_positions.keys().map(|n| (n.clone(),InputControl::Lever)).collect();
+        let output_positions = pinout.outputs.iter().map(|(n,p)| (n.clone(),(p[0],p[1],p[2]))).collect();
+        let mut simulator = Simulator::new(world);
+        simulator.run_until_stable(MAX_GAME_TICKS).map_err(|e| format!("{e:?}"))?;
+        let initial_world = simulator.world().clone();
+        Ok(Session {
+            circuit_name: top.into(), simulator, initial_world,
+            input_positions, input_controls, output_positions, pinned_outputs: Vec::new(),
+            shared_ports: pinout.inouts, primitive_graph, gate_meta, source_netlist, cell_meta,
+            boundary_rewritten: true,
+        })
+    }
+    fn drive_shared_port(&mut self, name: &str, present: bool, value: bool) -> Result<(), String> {
+        let bus = self.shared_ports.iter().find(|b| b.source.name == name)
+            .ok_or_else(|| format!("no shared inout named {name}"))?;
+        for (p,_) in [(bus.external_present,present),(bus.external_value,value),
+                       (bus.external_entry,present && value)] {
+            if self.simulator.world().get(p[0],p[1],p[2]).kind != BlockKind::Lever {
+                return Err("shared inout control is not a lever".into());
+            }
+        }
+        for (p,on) in [(bus.external_present,present),(bus.external_value,value),
+                       (bus.external_entry,present && value)] {
+            let mut cell = self.simulator.world().get(p[0],p[1],p[2]).clone();
+            cell.lit = on; self.simulator.world_mut().set(p[0],p[1],p[2],cell);
+        }
+        Ok(())
+    }
     /// Build a session initially: look up the circuit's generator, compile it,
     /// and settle the simulator once so a caller sees a self-consistent world
     /// before ever calling `step`.
@@ -1307,6 +1364,7 @@ impl Session {
             input_controls,
             output_positions,
             pinned_outputs,
+            shared_ports: Vec::new(),
             primitive_graph,
             gate_meta,
             source_netlist,
@@ -1439,6 +1497,25 @@ impl Session {
         Session::build(circuit_name).map_err(|error| JsValue::from_str(&error))
     }
 
+    /// Load a native source-bound world with shared inout controls.
+    pub fn from_native_baked(source: &str, top: &str, bytes: &[u8], pinout: JsValue) -> Result<Session, JsValue> {
+        let pinout = serde_wasm_bindgen::from_value(pinout)
+            .map_err(|e| JsValue::from_str(&format!("bad native pinout: {e}")))?;
+        Self::build_native_baked(source,top,bytes,pinout).map_err(|e| JsValue::from_str(&e))
+    }
+    pub fn set_inout(&mut self, name: &str, present: bool, value: bool) -> Result<(), JsValue> {
+        self.drive_shared_port(name,present,value).map_err(|e| JsValue::from_str(&e))
+    }
+    pub fn inout_names(&self) -> Vec<String> {
+        self.shared_ports.iter().map(|b| b.source.name.clone()).collect()
+    }
+    /// 0/1 for valid settled states; X/Z and protocol mismatch remain errors.
+    pub fn read_inout(&self, name: &str) -> Result<bool, JsValue> {
+        let bus = self.shared_ports.iter().find(|b| b.source.name == name)
+            .ok_or_else(|| JsValue::from_str("unknown shared inout"))?;
+        bus.observe(self.simulator.world()).map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
+
     /// Build a session from a pre-baked circuit: the gzip `.litematic` bytes
     /// `build_circuit --synth` wrote, and its `.pinout.json`. Each input or
     /// output value is either the legacy unpinned `[x,y,z]`, or the structured
@@ -1482,6 +1559,7 @@ impl Session {
             input_controls: BTreeMap::new(),
             output_positions: Vec::new(),
             pinned_outputs: Vec::new(),
+            shared_ports: Vec::new(),
             primitive_graph,
             gate_meta: Vec::new(),
             source_netlist,
@@ -1841,8 +1919,31 @@ impl Session {
 mod gate_level_tests {
     use super::*;
 
+    // Preserve the original literal lowering/ownership oracle separately
+    // from default physical rewrites. This fixture tests topology only.
+    fn lowering_reference(circuit: &str) -> Result<Session, String> {
+        let (source_netlist, _) = build_named_circuit(circuit).ok_or("unknown reference circuit")?;
+        let (lowered, provenance, terminals) = if verilog::find(circuit).is_some() {
+            let result = lower_optimised_with_provenance(&source_netlist).map_err(|e| e.to_string())?;
+            (result.netlist,result.provenance,result.source_terminals)
+        } else {
+            let (lowered,provenance) = lower_with_provenance(&source_netlist).map_err(|e| e.to_string())?;
+            let terminals = source_terminals_by_declared_output(&source_netlist,&lowered,&provenance);
+            (lowered,provenance,terminals)
+        };
+        let (primitive_graph,gate_meta,cell_meta) = topology_views(
+            &source_netlist,&lowered,&provenance,&terminals,None);
+        let world = World::new(1,1,1);
+        Ok(Session {
+            circuit_name: circuit.into(), simulator: Simulator::new(world.clone()), initial_world: world,
+            input_positions: BTreeMap::new(), input_controls: BTreeMap::new(),
+            output_positions: Vec::new(), pinned_outputs: Vec::new(), shared_ports: Vec::new(),
+            primitive_graph,gate_meta,source_netlist,cell_meta,boundary_rewritten:false,
+        })
+    }
+
     fn gate_level_of(circuit: &str) -> GateLevel {
-        Session::build(circuit)
+        lowering_reference(circuit)
             .expect("circuit builds")
             .gate_level()
     }
@@ -2007,7 +2108,7 @@ mod gate_level_tests {
             "seven_segment",
             "full_adder",
         ] {
-            let session = Session::build(circuit).expect("circuit builds");
+            let session = lowering_reference(circuit).expect("circuit builds");
             let total = session.gate_meta.len();
             let level = session.gate_level();
 
@@ -2044,7 +2145,7 @@ mod gate_level_tests {
             "seven_segment",
             "full_adder",
         ] {
-            let session = Session::build(circuit).expect("circuit builds");
+            let session = lowering_reference(circuit).expect("circuit builds");
             let ports = session
                 .primitive_graph
                 .nodes
@@ -2087,7 +2188,7 @@ mod gate_level_tests {
     /// accident such as "g1 always builds !d1".
     #[test]
     fn a_shared_inverter_is_reported_as_an_edge_out_of_the_cell_that_built_it() {
-        let session = Session::build("verilog:seven_segment").expect("circuit builds");
+        let session = lowering_reference("verilog:seven_segment").expect("circuit builds");
         let level = session.gate_level();
         assert!(
             !level.shared_edges.is_empty(),
@@ -2176,7 +2277,7 @@ mod gate_level_tests {
     /// solution, and the picture must show those five and no others.
     #[test]
     fn the_muxs_hull_holds_exactly_the_five_primitives_its_optimised_lowering_instantiates() {
-        let session = Session::build("verilog:seven_segment").expect("circuit builds");
+        let session = lowering_reference("verilog:seven_segment").expect("circuit builds");
         let level = session.gate_level();
         let mux = level
             .cells
@@ -2215,7 +2316,7 @@ mod gate_level_tests {
     /// than a fallback.
     #[test]
     fn a_hand_written_circuits_gate_level_is_already_realisable() {
-        let session = Session::build("seven_segment").expect("circuit builds");
+        let session = lowering_reference("seven_segment").expect("circuit builds");
         let lowered = session.gate_meta.len();
         let level = session.gate_level();
 
@@ -2296,6 +2397,7 @@ mod repeater_delay_geometry_tests {
             input_controls: BTreeMap::new(),
             output_positions: Vec::new(),
             pinned_outputs: Vec::new(),
+            shared_ports: Vec::new(),
             primitive_graph,
             gate_meta: Vec::new(),
             source_netlist: empty_netlist,
@@ -2791,6 +2893,34 @@ mod rewritten_topology_tests {
     use reda::compile::{fragment_synth::torch_row::compile_player_torch_row, Gate};
 
     #[test]
+    fn actual_default_decoder_retains_source_and_matches_independent_literal_truth() {
+        let mut session = Session::build("verilog:seven_segment").unwrap();
+        let source = session.gate_level();
+        assert_eq!(source.cells.len(),31);
+        assert!(session.boundary_rewritten);
+        assert!(source.cells.iter().all(|cell| cell.nodes.is_empty() && cell.lowered.is_empty()));
+        assert!(source.shared_edges.is_empty());
+        assert!(!session.primitive_graph.nodes.is_empty());
+        // Literal decimal glyphs in a..g order; 10..15 are blank.
+        let expected: [u8;16] = [0x3f,0x06,0x5b,0x4f,0x66,0x6d,0x7d,0x07,0x7f,0x6f,0,0,0,0,0,0];
+        let names: Vec<_> = session.output_positions.iter().map(|(n,_)| n.as_str()).collect();
+        assert_eq!(names,["a","b","c","d","e","f","g"]);
+        for (state,glyph) in expected.into_iter().enumerate() {
+            for bit in 0..4 {
+                let p = session.input_positions[&format!("d{bit}")];
+                let mut cell = session.simulator.world().get(p.0,p.1,p.2).clone();
+                cell.lit = state & (1<<bit)!=0;
+                session.simulator.world_mut().set(p.0,p.1,p.2,cell);
+            }
+            session.simulator.run_until_stable(MAX_GAME_TICKS).unwrap();
+            for (bit,(_,p)) in session.output_positions.iter().enumerate() {
+                assert_eq!(session.simulator.world().get(p.0,p.1,p.2).lit,
+                           glyph & (1<<bit)!=0,"default glyph={state},segment={bit}");
+            }
+        }
+    }
+
+    #[test]
     fn rewritten_topology_shows_selected_primitives_without_invented_source_containment() {
         let source = Netlist {
             inputs: vec!["left".into(), "right".into()],
@@ -2840,6 +2970,7 @@ mod rewritten_topology_tests {
                 .collect(),
             output_positions: compiled.output_positions.into_iter().collect(),
             pinned_outputs: Vec::new(),
+            shared_ports: Vec::new(),
             primitive_graph: graph,
             gate_meta: gates,
             source_netlist: source,
@@ -2854,5 +2985,63 @@ mod rewritten_topology_tests {
             .all(|cell| cell.nodes.is_empty() && cell.lowered.is_empty()));
         assert!(gate_level.shared_edges.is_empty());
         assert!(session.boundary_rewritten);
+    }
+}
+
+#[cfg(test)]
+mod native_inout_tests {
+    use super::*;
+    #[test]
+    fn source_bound_shared_session_controls_and_checks_all_64_states() {
+        let source = include_str!("../../tests/fixtures/resolved-inout.sv");
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/inout-native-cli-2026-10-04/native");
+        let bytes = std::fs::read(directory.join("top.litematic")).unwrap();
+        let pinout: reda::frontend::ResolvedPinout = serde_json::from_slice(
+            &std::fs::read(directory.join("top.pinout.json")).unwrap()).unwrap();
+        let mut session = Session::build_native_baked(source,"top",&bytes,pinout.clone()).unwrap();
+        assert_eq!(session.input_positions.len(),4);
+        for state in 0usize..64 {
+            for (name,bit) in [("e0",0),("d0",1),("e1",2),("d1",3)] {
+                let p = session.input_positions[name];
+                let mut cell = session.simulator.world().get(p.0,p.1,p.2).clone();
+                cell.lit = state & (1<<bit) != 0;
+                session.simulator.world_mut().set(p.0,p.1,p.2,cell);
+            }
+            session.drive_shared_port("bus",state&16!=0,state&32!=0).unwrap();
+            session.simulator.run_until_stable(MAX_GAME_TICKS).unwrap();
+            let active: Vec<_> = [(0,1),(2,3),(4,5)].into_iter()
+                .filter(|(e,_)| state & (1<<e)!=0).map(|(_,d)| state & (1<<d)!=0).collect();
+            let expected = if active.is_empty() { Err(reda::frontend::InvalidBus::Floating) }
+                else if active.iter().any(|v| *v!=active[0]) { Err(reda::frontend::InvalidBus::Contention) }
+                else { Ok(active[0]) };
+            assert_eq!(session.shared_ports[0].observe(session.simulator.world()),expected,"state={state}");
+            if let Ok(value) = expected {
+                let p = session.output_positions.iter().find(|(name,_)| name=="y").unwrap().1;
+                assert_eq!(session.simulator.world().get(p.0,p.1,p.2).lit,value,"viewer y state={state}");
+            }
+
+        }
+        for name in ["e0","e1"] {
+            let p = session.input_positions[name];
+            let mut cell = session.simulator.world().get(p.0,p.1,p.2).clone();
+            cell.lit=false; session.simulator.world_mut().set(p.0,p.1,p.2,cell);
+        }
+        for declared in [true,false] {
+            session.drive_shared_port("bus",true,declared).unwrap();
+            let [x,y,z] = session.shared_ports[0].external_entry;
+            let mut cell = session.simulator.world().get(x,y,z).clone();
+            cell.lit=!declared; session.simulator.world_mut().set(x,y,z,cell);
+            session.simulator.run_until_stable(MAX_GAME_TICKS).unwrap();
+            assert_eq!(session.shared_ports[0].observe(session.simulator.world()),
+                       Err(reda::frontend::InvalidBus::ProtocolViolation));
+            session.drive_shared_port("bus",true,declared).unwrap();
+            session.simulator.run_until_stable(MAX_GAME_TICKS).unwrap();
+            assert_eq!(session.shared_ports[0].observe(session.simulator.world()),Ok(declared));
+        }
+        assert!(session.drive_shared_port("missing",true,true).is_err());
+        let mut wrong = pinout;
+        wrong.inouts[0].readback=[-1,0,0];
+        assert!(Session::build_native_baked(source,"top",&bytes,wrong).is_err());
     }
 }

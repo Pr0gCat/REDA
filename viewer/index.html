@@ -237,6 +237,15 @@
       <h2>Circuit</h2>
       <label for="circuit-select">Circuit</label>
       <select id="circuit-select"></select>
+      <details>
+        <summary>Load native source and exported circuit</summary>
+        <label for="native-source">SystemVerilog source</label><input id="native-source" type="file" accept=".sv,.v">
+        <label for="native-top">Top module</label><input id="native-top" value="top">
+        <label for="native-world">Litematic</label><input id="native-world" type="file" accept=".litematic">
+        <label for="native-pinout">Pinout</label><input id="native-pinout" type="file" accept=".json">
+        <button id="native-load">Load exported circuit</button>
+      </details>
+      <div id="shared-controls"></div>
     </div>
 
     <div class="panel" data-view="2d">
@@ -850,7 +859,12 @@ async function loadCircuit(name) {
     setStatus(`Failed to build ${name}: ${e}`, true);
     return;
   }
-  refreshVerilog(name);
+  initializeSession(name);
+}
+
+function initializeSession(name, source = null) {
+  if (source === null) refreshVerilog(name);
+  else { verilogCaption.textContent = `Verilog — ${name}`; verilogCode.value = source; }
   size = Array.from(session.size());
 
   const rawPinout = session.pinout();
@@ -866,6 +880,7 @@ async function loadCircuit(name) {
   outputSliceCache.clear();
 
   buildLeverUI();
+  buildSharedControls();
   buildOutputUI();
   buildLegendUI();
 
@@ -877,6 +892,63 @@ async function loadCircuit(name) {
   resetSignalHistory();
   build3DGeometry(true);
   buildTopology();
+}
+
+document.getElementById('native-load').addEventListener('click', async () => {
+  try {
+    const file = id => {
+      const selected = document.getElementById(id).files[0];
+      if (!selected) throw new Error('Select source, litematic and pinout files.');
+      return selected;
+    };
+    const top = document.getElementById('native-top').value.trim();
+    if (!top) throw new Error('Enter the top module.');
+    const [source, bytes, metadata] = await Promise.all([
+      file('native-source').text(), file('native-world').arrayBuffer(), file('native-pinout').text()
+    ]);
+    setStatus('Validating source and exported world…');
+    const loaded = Session.from_native_baked(source, top, new Uint8Array(bytes), JSON.parse(metadata));
+    session = loaded;
+    initializeSession(top, source);
+  } catch (error) { setStatus(`Native circuit load failed: ${error}`, true); }
+});
+
+function buildSharedControls() {
+  const panel = document.getElementById('shared-controls');
+  panel.replaceChildren();
+  for (const name of session.inout_names()) {
+    const row = document.createElement('div');
+    const title = document.createElement('span'); title.textContent = `${name} external driver `;
+    const present = document.createElement('input'); present.type = 'checkbox';
+    const value = document.createElement('input'); value.type = 'checkbox';
+    const presentLabel = document.createElement('label'); presentLabel.append(present, 'Drive');
+    const valueLabel = document.createElement('label'); valueLabel.append(value, 'High');
+    const reading = document.createElement('span'); reading.dataset.inoutName = name;
+    row.append(title, presentLabel, valueLabel, reading); panel.append(row);
+    const change = () => {
+      try {
+        session.set_inout(name, present.checked, value.checked);
+        recordSettle(session.run_until_stable());
+        updateTickCount(); refreshSlice(); refreshOutputs(); recordSignalSample(); update3DStrengths();
+      } catch (error) { setStatus(`Shared port ${name}: ${error}`, true); }
+    };
+    present.addEventListener('change', change); value.addEventListener('change', change);
+  }
+}
+
+function sharedPortError() {
+  let invalid = null;
+  for (const name of session.inout_names()) {
+    let text;
+    try { text = session.read_inout(name) ? '1' : '0'; }
+    catch (error) {
+      text = String(error) === 'Floating' ? 'Z' : String(error) === 'Contention' ? 'X' : 'Invalid';
+      invalid = text;
+    }
+    const reading = document.querySelector(`[data-inout-name="${CSS.escape(name)}"]`);
+    if (reading) reading.textContent = ` Bus: ${text}`;
+  }
+  return invalid;
 }
 
 function updateTickCount() {
@@ -1034,6 +1106,7 @@ function readCell(x, y, z) {
 }
 
 function refreshOutputs() {
+  const invalid = sharedPortError();
   outputSliceCache.clear();
   for (const pin of pinout.outputs) {
     const { strength } = readCell(pin.x, pin.y, pin.z);
@@ -1041,8 +1114,8 @@ function refreshOutputs() {
     const row = outputList.querySelector(`[data-pin-name="${CSS.escape(pin.name)}"]`);
     if (!row) continue;
     const badge = row.querySelector('.output-badge');
-    badge.dataset.on = String(on);
-    badge.textContent = on ? 'ON' : 'OFF';
+    badge.dataset.on = String(!invalid && on);
+    badge.textContent = invalid || (on ? 'ON' : 'OFF');
   }
 }
 
@@ -4041,6 +4114,7 @@ resetBtn.addEventListener('click', () => {
     return;
   }
   leverState = new Map(pinout.inputs.map((p) => [p.name, false]));
+  buildSharedControls();
   buildLeverUI();
   setStatus('Reset.', false);
   updateTickCount();

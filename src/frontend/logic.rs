@@ -585,11 +585,11 @@ pub fn build(design: &Design) -> Result<Blasted, Vec<Diagnostic>> {
 /// Deterministic connected components for undirected hierarchy net aliases.
 /// The smallest flattened bit is the representative; path compression keeps
 /// deeply nested aliases independent of hierarchy traversal depth.
-struct AliasClasses {
+pub(super) struct AliasClasses {
     bits: Vec<Vec<(usize, u32)>>,
 }
 impl AliasClasses {
-    fn new(design: &Design) -> Self {
+    pub(super) fn new(design: &Design) -> Self {
         if design.aliases.is_empty() { return Self { bits: Vec::new() }; }
         let mut offsets = vec![0];
         let mut identities = Vec::new();
@@ -615,7 +615,7 @@ impl AliasClasses {
         }).collect();
         Self { bits }
     }
-    fn canonical(&self, signal: usize, bit: u32) -> (usize, u32) {
+    pub(super) fn canonical(&self, signal: usize, bit: u32) -> (usize, u32) {
         if self.bits.is_empty() { (signal, bit) } else { self.bits[signal][bit as usize] }
     }
 }

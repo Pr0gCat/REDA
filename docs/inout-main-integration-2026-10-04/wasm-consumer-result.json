@@ -1,0 +1,396 @@
+{
+  "runtime": "v24.21.0",
+  "states": [
+    {
+      "state": 0,
+      "expected": "Floating",
+      "observed": "Floating",
+      "publicY": null
+    },
+    {
+      "state": 1,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 2,
+      "expected": "Floating",
+      "observed": "Floating",
+      "publicY": null
+    },
+    {
+      "state": 3,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 4,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 5,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 6,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 7,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 8,
+      "expected": "Floating",
+      "observed": "Floating",
+      "publicY": null
+    },
+    {
+      "state": 9,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 10,
+      "expected": "Floating",
+      "observed": "Floating",
+      "publicY": null
+    },
+    {
+      "state": 11,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 12,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 13,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 14,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 15,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 16,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 17,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 18,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 19,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 20,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 21,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 22,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 23,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 24,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 25,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 26,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 27,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 28,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 29,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 30,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 31,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 32,
+      "expected": "Floating",
+      "observed": "Floating",
+      "publicY": null
+    },
+    {
+      "state": 33,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 34,
+      "expected": "Floating",
+      "observed": "Floating",
+      "publicY": null
+    },
+    {
+      "state": 35,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 36,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 37,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 38,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 39,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 40,
+      "expected": "Floating",
+      "observed": "Floating",
+      "publicY": null
+    },
+    {
+      "state": 41,
+      "expected": false,
+      "observed": false,
+      "publicY": false
+    },
+    {
+      "state": 42,
+      "expected": "Floating",
+      "observed": "Floating",
+      "publicY": null
+    },
+    {
+      "state": 43,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 44,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 45,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 46,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 47,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 48,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 49,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 50,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 51,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 52,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 53,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 54,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 55,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 56,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 57,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 58,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 59,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 60,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 61,
+      "expected": "Contention",
+      "observed": "Contention",
+      "publicY": null
+    },
+    {
+      "state": 62,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    },
+    {
+      "state": 63,
+      "expected": true,
+      "observed": true,
+      "publicY": true
+    }
+  ],
+  "controls": [
+    "unknown inout",
+    "inout not ordinary input",
+    "source-mismatched metadata",
+    "reset retains shared port"
+  ],
+  "scope": "Actual generated WebAssembly bindings executed in Node; not browser or Minecraft evidence."
+}
