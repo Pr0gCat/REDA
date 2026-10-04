@@ -18,17 +18,29 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from circuit_conformance import (
-    CircuitMismatch, RegionNotReady, block_id_present, build_phase_commands,
-    clear_region, evaluate_expected, expected_block_at, forceload, forceload_release,
-    lever_state_string, parse_dump, read_lamp, read_merge_junction, read_powered_block,
-    read_properties, read_torch, verify_positions_placed, verify_region_is_air,
-    wait_for_region_loaded,
-)
-from rcon import RconClient
+if __package__:
+    from .circuit_conformance import (
+        CircuitMismatch, RegionNotReady, block_id_present, build_phase_commands,
+        clear_region, evaluate_expected, expected_block_at, forceload, forceload_release,
+        lever_state_string, parse_dump, read_lamp, read_merge_junction, read_powered_block,
+        read_properties, read_torch, verify_positions_placed, verify_region_is_air,
+        wait_for_region_loaded,
+    )
+    from .rcon import RconClient
+else:
+    from circuit_conformance import (
+        CircuitMismatch, RegionNotReady, block_id_present, build_phase_commands,
+        clear_region, evaluate_expected, expected_block_at, forceload, forceload_release,
+        lever_state_string, parse_dump, read_lamp, read_merge_junction, read_powered_block,
+        read_properties, read_torch, verify_positions_placed, verify_region_is_air,
+        wait_for_region_loaded,
+    )
+    from rcon import RconClient
+
 
 NAMESPACE = 'reda_sequential_20261004'
 STORAGE = NAMESPACE + ':trace'
+SNAPSHOT_PATH = 'snapshot'
 ROLES = {'MData', 'SData', 'MLock', 'SLock', 'InvC'}
 # Bound to the qualified native graph and output bindings retained in
 # docs/mixed-clock-reset-feedback-2026-10-04/repeat1.log.gz. Physical placement
@@ -77,16 +89,16 @@ def property_for(site):
 
 
 def capture_commands(sites):
-    commands = [f'data modify storage {STORAGE} set value {{}}',
-                f'execute store result storage {STORAGE} t0 int 1 run time query gametime']
+    commands = [f'data modify storage {STORAGE} {SNAPSHOT_PATH} set value {{}}',
+                f'execute store result storage {STORAGE} {SNAPSHOT_PATH}.t0 int 1 run time query gametime']
     for index,site in enumerate(sites):
         position = ' '.join(map(str,site.position))
         base = f'execute if block {position} {site.block_id}'
         for suffix,predicate in [('p',base), ('v',base+'['+property_for(site)+']')]:
-            commands.append(f'execute store success storage {STORAGE} s{index}{suffix} int 1 run {predicate}')
+            commands.append(f'execute store success storage {STORAGE} {SNAPSHOT_PATH}.s{index}{suffix} int 1 run {predicate}')
         if site.block_id == 'minecraft:repeater':
-            commands.append(f'execute store success storage {STORAGE} s{index}l int 1 run {base}[locked=true]')
-    commands.append(f'execute store result storage {STORAGE} t1 int 1 run time query gametime')
+            commands.append(f'execute store success storage {STORAGE} {SNAPSHOT_PATH}.s{index}l int 1 run {base}[locked=true]')
+    commands.append(f'execute store result storage {STORAGE} {SNAPSHOT_PATH}.t1 int 1 run time query gametime')
     return commands
 
 
@@ -199,8 +211,10 @@ class TickCapture:
         self.current = self.capture()
 
     def capture(self):
-        self.client.command('function '+NAMESPACE+':capture')
-        return parse_snapshot(self.client.command('data get storage '+STORAGE),self.sites)
+        response = self.client.command('function '+NAMESPACE+':capture')
+        if response.strip() != 'Running function '+NAMESPACE+':capture' and not response.strip().startswith('Executed '):
+            raise RegionNotReady('native snapshot function was not executed: '+response)
+        return parse_snapshot(self.client.command('data get storage '+STORAGE+' '+SNAPSHOT_PATH),self.sites)
 
     def step(self):
         target = self.current['game_tick']+1
@@ -239,6 +253,7 @@ def run(args):
     report = {'protocol':'mixed-clock-reset-feedback/v1','status':'running','phases':[]}
     client = raw = log = None
     out_owned = pack_owned = pack_loaded = loaded = frozen = False
+    cleaning_up = False
     previous = None
     try:
         directory.mkdir(parents=True,exist_ok=False)
@@ -267,6 +282,11 @@ def run(args):
         def recorded(command):
             response = original_command(command)
             log.write(json.dumps({'command':command,'response':response})+'\n'); log.flush()
+            if cleaning_up:
+                prefixes = ('Successfully filled ', 'No blocks were filled') if command.startswith('fill ') else (
+                    ('Unmarked ',) if command.startswith('forceload remove ') else None)
+                if prefixes is not None and not response.strip().startswith(prefixes):
+                    raise RegionNotReady('cleanup command was not acknowledged: '+command+': '+response)
             return response
         client.command = recorded
         client.connect()
@@ -348,23 +368,32 @@ def run(args):
         report['status']='fail';report['error_type']=type(error).__name__;report['error']=str(error)
         raise
     finally:
+        cleaning_up = True
+        def cleanup_command(command,prefixes):
+            response=client.command(command)
+            if not response.strip().startswith(prefixes):
+                raise RegionNotReady('cleanup command was not acknowledged: '+command+': '+response)
         if frozen:
-            try: client.command('tick unfreeze')
+            try: cleanup_command('tick unfreeze',('The game is running normally',))
             except Exception as error: report['unfreeze_error']=str(error)
         if loaded:
             try:
-                clear_region(client,origin,dump.size);forceload_release(client,origin,dump.size)
+                clear_region(client,origin,dump.size)
             except Exception as error: report['cleanup_error']=str(error)
+            try: forceload_release(client,origin,dump.size)
+            except Exception as error: report['forceload_release_error']=str(error)
         if pack_owned:
             if pack_loaded and client is not None:
                 try:
-                    client.command('datapack disable '+json.dumps('file/'+args.pack.name))
-                    client.command('data remove storage '+STORAGE)
+                    cleanup_command('datapack disable '+json.dumps('file/'+args.pack.name),('Disabling data pack ',))
                 except Exception as error: report['datapack_unload_error']=str(error)
+                try:
+                    cleanup_command('data remove storage '+STORAGE+' '+SNAPSHOT_PATH,('Removed ',))
+                except Exception as error: report['storage_remove_error']=str(error)
             try: shutil.rmtree(args.pack)
             except Exception as error: report['datapack_remove_error']=str(error)
             if pack_loaded and client is not None:
-                try: client.command('reload')
+                try: cleanup_command('reload',('Reloading!',))
                 except Exception as error: report['datapack_reload_error']=str(error)
         if client is not None: client.close()
         if raw is not None: raw.close()

@@ -151,7 +151,10 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from rcon import RconClient
+if __package__:
+    from .rcon import RconClient
+else:
+    from rcon import RconClient
 
 # Slot geometry. Each probe owns a box SLOT_SPAN blocks wide (X), SLOT_DEPTH
 # deep (Z), starting SLOT_SPAN*index blocks east of the region origin. Given

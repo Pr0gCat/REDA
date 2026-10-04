@@ -216,8 +216,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from harness import GAME_TICK_S
-from rcon import RconClient
+if __package__:
+    from .harness import GAME_TICK_S
+    from .rcon import RconClient
+else:
+    from harness import GAME_TICK_S
+    from rcon import RconClient
 
 # Where the circuit is placed. Deliberately far from both world spawn and
 # the probes.py region (100000, *, 100000..~101300) so the two suites can

@@ -1,0 +1,227 @@
+--- a/conformance/sequential_conformance.py
++++ b/conformance/sequential_conformance.py
+@@ -18,17 +18,29 @@
+ from dataclasses import dataclass
+ from pathlib import Path
+ 
+-from circuit_conformance import (
+-    CircuitMismatch, RegionNotReady, block_id_present, build_phase_commands,
+-    clear_region, evaluate_expected, expected_block_at, forceload, forceload_release,
+-    lever_state_string, parse_dump, read_lamp, read_merge_junction, read_powered_block,
+-    read_properties, read_torch, verify_positions_placed, verify_region_is_air,
+-    wait_for_region_loaded,
+-)
+-from rcon import RconClient
++if __package__:
++    from .circuit_conformance import (
++        CircuitMismatch, RegionNotReady, block_id_present, build_phase_commands,
++        clear_region, evaluate_expected, expected_block_at, forceload, forceload_release,
++        lever_state_string, parse_dump, read_lamp, read_merge_junction, read_powered_block,
++        read_properties, read_torch, verify_positions_placed, verify_region_is_air,
++        wait_for_region_loaded,
++    )
++    from .rcon import RconClient
++else:
++    from circuit_conformance import (
++        CircuitMismatch, RegionNotReady, block_id_present, build_phase_commands,
++        clear_region, evaluate_expected, expected_block_at, forceload, forceload_release,
++        lever_state_string, parse_dump, read_lamp, read_merge_junction, read_powered_block,
++        read_properties, read_torch, verify_positions_placed, verify_region_is_air,
++        wait_for_region_loaded,
++    )
++    from rcon import RconClient
++
+ 
+ NAMESPACE = 'reda_sequential_20261004'
+ STORAGE = NAMESPACE + ':trace'
++SNAPSHOT_PATH = 'snapshot'
+ ROLES = {'MData', 'SData', 'MLock', 'SLock', 'InvC'}
+ # Bound to the qualified native graph and output bindings retained in
+ # docs/mixed-clock-reset-feedback-2026-10-04/repeat1.log.gz. Physical placement
+@@ -77,16 +89,16 @@
+ 
+ 
+ def capture_commands(sites):
+-    commands = [f'data modify storage {STORAGE} set value {{}}',
+-                f'execute store result storage {STORAGE} t0 int 1 run time query gametime']
++    commands = [f'data modify storage {STORAGE} {SNAPSHOT_PATH} set value {{}}',
++                f'execute store result storage {STORAGE} {SNAPSHOT_PATH}.t0 int 1 run time query gametime']
+     for index,site in enumerate(sites):
+         position = ' '.join(map(str,site.position))
+         base = f'execute if block {position} {site.block_id}'
+         for suffix,predicate in [('p',base), ('v',base+'['+property_for(site)+']')]:
+-            commands.append(f'execute store success storage {STORAGE} s{index}{suffix} int 1 run {predicate}')
++            commands.append(f'execute store success storage {STORAGE} {SNAPSHOT_PATH}.s{index}{suffix} int 1 run {predicate}')
+         if site.block_id == 'minecraft:repeater':
+-            commands.append(f'execute store success storage {STORAGE} s{index}l int 1 run {base}[locked=true]')
+-    commands.append(f'execute store result storage {STORAGE} t1 int 1 run time query gametime')
++            commands.append(f'execute store success storage {STORAGE} {SNAPSHOT_PATH}.s{index}l int 1 run {base}[locked=true]')
++    commands.append(f'execute store result storage {STORAGE} {SNAPSHOT_PATH}.t1 int 1 run time query gametime')
+     return commands
+ 
+ 
+@@ -199,8 +211,10 @@
+         self.current = self.capture()
+ 
+     def capture(self):
+-        self.client.command('function '+NAMESPACE+':capture')
+-        return parse_snapshot(self.client.command('data get storage '+STORAGE),self.sites)
++        response = self.client.command('function '+NAMESPACE+':capture')
++        if response.strip() != 'Running function '+NAMESPACE+':capture' and not response.strip().startswith('Executed '):
++            raise RegionNotReady('native snapshot function was not executed: '+response)
++        return parse_snapshot(self.client.command('data get storage '+STORAGE+' '+SNAPSHOT_PATH),self.sites)
+ 
+     def step(self):
+         target = self.current['game_tick']+1
+@@ -239,6 +253,7 @@
+     report = {'protocol':'mixed-clock-reset-feedback/v1','status':'running','phases':[]}
+     client = raw = log = None
+     out_owned = pack_owned = pack_loaded = loaded = frozen = False
++    cleaning_up = False
+     previous = None
+     try:
+         directory.mkdir(parents=True,exist_ok=False)
+@@ -267,6 +282,11 @@
+         def recorded(command):
+             response = original_command(command)
+             log.write(json.dumps({'command':command,'response':response})+'\n'); log.flush()
++            if cleaning_up:
++                prefixes = ('Successfully filled ', 'No blocks were filled') if command.startswith('fill ') else (
++                    ('Unmarked ',) if command.startswith('forceload remove ') else None)
++                if prefixes is not None and not response.strip().startswith(prefixes):
++                    raise RegionNotReady('cleanup command was not acknowledged: '+command+': '+response)
+             return response
+         client.command = recorded
+         client.connect()
+@@ -348,23 +368,32 @@
+         report['status']='fail';report['error_type']=type(error).__name__;report['error']=str(error)
+         raise
+     finally:
++        cleaning_up = True
++        def cleanup_command(command,prefixes):
++            response=client.command(command)
++            if not response.strip().startswith(prefixes):
++                raise RegionNotReady('cleanup command was not acknowledged: '+command+': '+response)
+         if frozen:
+-            try: client.command('tick unfreeze')
++            try: cleanup_command('tick unfreeze',('The game is running normally',))
+             except Exception as error: report['unfreeze_error']=str(error)
+         if loaded:
+             try:
+-                clear_region(client,origin,dump.size);forceload_release(client,origin,dump.size)
++                clear_region(client,origin,dump.size)
+             except Exception as error: report['cleanup_error']=str(error)
++            try: forceload_release(client,origin,dump.size)
++            except Exception as error: report['forceload_release_error']=str(error)
+         if pack_owned:
+             if pack_loaded and client is not None:
+                 try:
+-                    client.command('datapack disable '+json.dumps('file/'+args.pack.name))
+-                    client.command('data remove storage '+STORAGE)
++                    cleanup_command('datapack disable '+json.dumps('file/'+args.pack.name),('Disabling data pack ',))
+                 except Exception as error: report['datapack_unload_error']=str(error)
++                try:
++                    cleanup_command('data remove storage '+STORAGE+' '+SNAPSHOT_PATH,('Removed ',))
++                except Exception as error: report['storage_remove_error']=str(error)
+             try: shutil.rmtree(args.pack)
+             except Exception as error: report['datapack_remove_error']=str(error)
+             if pack_loaded and client is not None:
+-                try: client.command('reload')
++                try: cleanup_command('reload',('Reloading!',))
+                 except Exception as error: report['datapack_reload_error']=str(error)
+         if client is not None: client.close()
+         if raw is not None: raw.close()
+--- a/conformance/test_sequential_conformance.py
++++ b/conformance/test_sequential_conformance.py
+@@ -7,10 +7,59 @@
+ from unittest.mock import patch
+ from pathlib import Path
+ from circuit_conformance import parse_dump,evaluate_expected,expected_block_at,RegionNotReady,CircuitMismatch
+-from sequential_conformance import Site,capture_commands,parse_snapshot,protocol,prepare_pack,run,TickCapture,MixedClockOracle
++from sequential_conformance import Site,capture_commands,parse_snapshot,protocol,prepare_pack,run,TickCapture,MixedClockOracle,STORAGE,SNAPSHOT_PATH
+ 
+ 
+ class SequentialDumpTest(unittest.TestCase):
++    def test_module_and_direct_script_entrypoints_import_without_pythonpath(self):
++        import os,subprocess,sys
++        root=Path(__file__).resolve().parents[1]
++        environment=dict(os.environ);environment.pop('PYTHONPATH',None)
++        for arguments in [('-m','conformance.sequential_conformance'),('conformance/sequential_conformance.py',)]:
++            result=subprocess.run([sys.executable,*arguments,'--help'],cwd=root,env=environment,capture_output=True,text=True)
++            self.assertEqual(result.returncode,0,result.stderr)
++
++    def test_failed_cleanup_responses_are_reported_and_release_still_runs(self):
++        from unittest.mock import Mock
++        with tempfile.TemporaryDirectory() as directory:
++            root=Path(directory);jar=root/'server.jar'
++            with zipfile.ZipFile(jar,'w') as archive:
++                archive.writestr('version.json',json.dumps({'pack_version':{'data_major':107,'data_minor':1}}))
++            source=Path(__file__).resolve().parents[1]/'docs/minecraft-sequential-conformance-2026-10-04/offline/qualified.dump'
++            args=SimpleNamespace(dump=source,origin='0,0,0',out=root/'evidence',pack=root/'new-pack',properties=root/'properties',jar=jar,host='127.0.0.1')
++            client=Mock();client.command.return_value='Unknown or incomplete command'
++            with patch('sequential_conformance.read_properties',return_value={'rcon.password':'test'}),patch('sequential_conformance.RconClient',return_value=client),patch('sequential_conformance.forceload'),patch('sequential_conformance.wait_for_region_loaded'),patch('sequential_conformance.verify_region_is_air'),patch('sequential_conformance.verify_positions_placed',return_value=[]),patch('sequential_conformance.clear_region') as clear:
++                # Placement succeeds in this offline failure injection; cleanup
++                # still uses the actual command reader and rejects raw errors.
++                clear.side_effect=[None,RegionNotReady('synthetic cleanup failure')]
++                with self.assertRaisesRegex(RegionNotReady,'function was not executed'):run(args)
++            report=json.loads((args.out/'report.json').read_text())
++            for key in ['unfreeze_error','cleanup_error','forceload_release_error','datapack_unload_error','storage_remove_error','datapack_reload_error']:
++                self.assertIn(key,report)
++            self.assertIn('Unknown or incomplete command',report['storage_remove_error'])
++            self.assertFalse(args.pack.exists())
++
++    def test_native_snapshot_uses_required_owned_nbt_path_and_refuses_missing_function(self):
++        from unittest.mock import Mock
++        commands=capture_commands([Site('q',(1,2,3),'minecraft:repeater')])
++        self.assertEqual(commands[0],f'data modify storage {STORAGE} snapshot set value {{}}')
++        for command in commands[1:]:
++            self.assertIn(f'storage {STORAGE} snapshot.',command)
++        client=Mock()
++        client.command.return_value='Unknown function reda_sequential_20261004:capture'
++        with self.assertRaisesRegex(RegionNotReady,'function was not executed'):TickCapture(client,[])
++        self.assertEqual(client.command.call_count,1)
++        client=Mock()
++        client.command.side_effect=['Executed 3 command(s) from function',
++                                    'Storage has the following contents: {t0: 7, t1: 7}']
++        capture=TickCapture(client,[])
++        self.assertEqual(capture.current,{'game_tick':7,'values':{}})
++        client.command.assert_called_with(f'data get storage {STORAGE} {SNAPSHOT_PATH}')
++        client=Mock()
++        client.command.side_effect=['Running function reda_sequential_20261004:capture',
++                                    'Storage has the following contents: {t0: 7, t1: 7}']
++        self.assertEqual(TickCapture(client,[]).current,{'game_tick':7,'values':{}})
++
+     def test_literal_oracle_rejects_changed_logic_with_identical_interface(self):
+         import copy
+         path=Path(__file__).resolve().parents[1]/'docs/minecraft-sequential-conformance-2026-10-04/offline/qualified.dump'
+--- a/conformance/circuit_conformance.py
++++ b/conformance/circuit_conformance.py
+@@ -216,8 +216,12 @@
+ from dataclasses import dataclass, field
+ from pathlib import Path
+ 
+-from harness import GAME_TICK_S
+-from rcon import RconClient
++if __package__:
++    from .harness import GAME_TICK_S
++    from .rcon import RconClient
++else:
++    from harness import GAME_TICK_S
++    from rcon import RconClient
+ 
+ # Where the circuit is placed. Deliberately far from both world spawn and
+ # the probes.py region (100000, *, 100000..~101300) so the two suites can
+--- a/conformance/harness.py
++++ b/conformance/harness.py
+@@ -151,7 +151,10 @@
+ import time
+ from dataclasses import dataclass, field
+ 
+-from rcon import RconClient
++if __package__:
++    from .rcon import RconClient
++else:
++    from rcon import RconClient
+ 
+ # Slot geometry. Each probe owns a box SLOT_SPAN blocks wide (X), SLOT_DEPTH
+ # deep (Z), starting SLOT_SPAN*index blocks east of the region origin. Given

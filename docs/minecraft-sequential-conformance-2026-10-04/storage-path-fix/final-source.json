@@ -1,0 +1,15 @@
+{
+  "status": "offline_pass",
+  "python_tests": 18,
+  "unknown_function_rejected": true,
+  "minecraft_26_2_running_function_response_accepted": true,
+  "module_and_script_help_without_pythonpath_pass": true,
+  "cleanup_errors_reported": true,
+  "new_game_execution": false,
+  "source_sha256": {
+    "conformance/sequential_conformance.py": "32ea43b0602f531dab11ee87c52df516af343ba26e46fb8c9337bcd3df985215",
+    "conformance/test_sequential_conformance.py": "2a6558c22400ae18b180a2e5059fa632215dcc92a0d8a4fccf2cf54d7731c5a4",
+    "conformance/circuit_conformance.py": "cf613a4e637befe32034b0965c1318fc26a9aa8b764f9377ca5a35c77c7f1545",
+    "conformance/harness.py": "70aec234283b4b33936cda9a75277bc910b85411348684c778a98c095e2fc3f3"
+  }
+}

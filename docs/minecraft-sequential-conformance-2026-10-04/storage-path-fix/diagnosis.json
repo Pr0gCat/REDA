@@ -1,0 +1,49 @@
+{
+  "root_cause": "capture initialization and cleanup omitted required NBT path; Minecraft rejected the whole function",
+  "server_errors": [
+    {
+      "line": 3477,
+      "text": "[10:35:56] [Server thread/ERROR]: Failed to load function reda_sequential_20261004:capture"
+    },
+    {
+      "line": 3478,
+      "text": "java.util.concurrent.CompletionException: java.lang.IllegalArgumentException: Whilst parsing command on line 1: Incorrect argument for command at position 55: ...trace set <--[HERE]"
+    },
+    {
+      "line": 3491,
+      "text": "Caused by: java.lang.IllegalArgumentException: Whilst parsing command on line 1: Incorrect argument for command at position 55: ...trace set <--[HERE]"
+    }
+  ],
+  "cleanup_commands": [
+    {
+      "command": "reload",
+      "response": "Reloading!"
+    },
+    {
+      "command": "tick unfreeze",
+      "response": "The game is running normally"
+    },
+    {
+      "command": "forceload remove 229992 99992 230079 100113",
+      "response": "Unmarked 54 chunks in minecraft:overworld from [14374, 6249] to [14379, 6257] for force loading"
+    },
+    {
+      "command": "datapack disable \"file/reda-sequential-20261004-retry\"",
+      "response": "Disabling data pack [file/reda-sequential-20261004-retry (world)]"
+    },
+    {
+      "command": "data remove storage reda_sequential_20261004:trace",
+      "response": "Unknown or incomplete command. See below for error...1004:trace<--[HERE]"
+    },
+    {
+      "command": "reload",
+      "response": "Reloading!"
+    }
+  ],
+  "owned_pack_directory_removed": true,
+  "new_game_execution": false,
+  "source_sha256": {
+    "conformance/sequential_conformance.py": "39cb05423da653c0ec9f1229daa29c85aaa08086ea4cf2f348a41f5929ad55a0",
+    "conformance/test_sequential_conformance.py": "6108182e233ac9eabf043f872e8463d1c59242a84099395a188dae935e9e56a2"
+  }
+}

@@ -7,10 +7,59 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
 from circuit_conformance import parse_dump,evaluate_expected,expected_block_at,RegionNotReady,CircuitMismatch
-from sequential_conformance import Site,capture_commands,parse_snapshot,protocol,prepare_pack,run,TickCapture,MixedClockOracle
+from sequential_conformance import Site,capture_commands,parse_snapshot,protocol,prepare_pack,run,TickCapture,MixedClockOracle,STORAGE,SNAPSHOT_PATH
 
 
 class SequentialDumpTest(unittest.TestCase):
+    def test_module_and_direct_script_entrypoints_import_without_pythonpath(self):
+        import os,subprocess,sys
+        root=Path(__file__).resolve().parents[1]
+        environment=dict(os.environ);environment.pop('PYTHONPATH',None)
+        for arguments in [('-m','conformance.sequential_conformance'),('conformance/sequential_conformance.py',)]:
+            result=subprocess.run([sys.executable,*arguments,'--help'],cwd=root,env=environment,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_failed_cleanup_responses_are_reported_and_release_still_runs(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);jar=root/'server.jar'
+            with zipfile.ZipFile(jar,'w') as archive:
+                archive.writestr('version.json',json.dumps({'pack_version':{'data_major':107,'data_minor':1}}))
+            source=Path(__file__).resolve().parents[1]/'docs/minecraft-sequential-conformance-2026-10-04/offline/qualified.dump'
+            args=SimpleNamespace(dump=source,origin='0,0,0',out=root/'evidence',pack=root/'new-pack',properties=root/'properties',jar=jar,host='127.0.0.1')
+            client=Mock();client.command.return_value='Unknown or incomplete command'
+            with patch('sequential_conformance.read_properties',return_value={'rcon.password':'test'}),patch('sequential_conformance.RconClient',return_value=client),patch('sequential_conformance.forceload'),patch('sequential_conformance.wait_for_region_loaded'),patch('sequential_conformance.verify_region_is_air'),patch('sequential_conformance.verify_positions_placed',return_value=[]),patch('sequential_conformance.clear_region') as clear:
+                # Placement succeeds in this offline failure injection; cleanup
+                # still uses the actual command reader and rejects raw errors.
+                clear.side_effect=[None,RegionNotReady('synthetic cleanup failure')]
+                with self.assertRaisesRegex(RegionNotReady,'function was not executed'):run(args)
+            report=json.loads((args.out/'report.json').read_text())
+            for key in ['unfreeze_error','cleanup_error','forceload_release_error','datapack_unload_error','storage_remove_error','datapack_reload_error']:
+                self.assertIn(key,report)
+            self.assertIn('Unknown or incomplete command',report['storage_remove_error'])
+            self.assertFalse(args.pack.exists())
+
+    def test_native_snapshot_uses_required_owned_nbt_path_and_refuses_missing_function(self):
+        from unittest.mock import Mock
+        commands=capture_commands([Site('q',(1,2,3),'minecraft:repeater')])
+        self.assertEqual(commands[0],f'data modify storage {STORAGE} snapshot set value {{}}')
+        for command in commands[1:]:
+            self.assertIn(f'storage {STORAGE} snapshot.',command)
+        client=Mock()
+        client.command.return_value='Unknown function reda_sequential_20261004:capture'
+        with self.assertRaisesRegex(RegionNotReady,'function was not executed'):TickCapture(client,[])
+        self.assertEqual(client.command.call_count,1)
+        client=Mock()
+        client.command.side_effect=['Executed 3 command(s) from function',
+                                    'Storage has the following contents: {t0: 7, t1: 7}']
+        capture=TickCapture(client,[])
+        self.assertEqual(capture.current,{'game_tick':7,'values':{}})
+        client.command.assert_called_with(f'data get storage {STORAGE} {SNAPSHOT_PATH}')
+        client=Mock()
+        client.command.side_effect=['Running function reda_sequential_20261004:capture',
+                                    'Storage has the following contents: {t0: 7, t1: 7}']
+        self.assertEqual(TickCapture(client,[]).current,{'game_tick':7,'values':{}})
+
     def test_literal_oracle_rejects_changed_logic_with_identical_interface(self):
         import copy
         path=Path(__file__).resolve().parents[1]/'docs/minecraft-sequential-conformance-2026-10-04/offline/qualified.dump'
