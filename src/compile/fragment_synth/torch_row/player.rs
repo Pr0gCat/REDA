@@ -1138,7 +1138,7 @@ enum ProductImplementation {
 }
 
 // Reuse the ordinary high/low torch construction in a separate output domain.
-fn constant_output(
+pub(super) fn constant_output(
     w: &mut World,
     gates: &mut Vec<Gate>,
     positions: &mut BTreeMap<String, Position>,

@@ -12,6 +12,7 @@ use crate::redstone::world::{
 
 mod player;
 mod four;
+mod literals;
 
 /// Certify a balanced four/five-input matrix from the source truth table.
 /// The default selector and recursive root can use this bounded method.
@@ -120,6 +121,7 @@ fn block(kind: BlockKind) -> BlockState {
         BlockKind::WallTorch => "minecraft:redstone_wall_torch",
         BlockKind::Lever => "minecraft:lever",
         BlockKind::Lamp => "minecraft:redstone_lamp",
+        BlockKind::Repeater => "minecraft:repeater",
         _ => unreachable!(),
     }
     .into();
@@ -1446,4 +1448,12 @@ fn typed_world_candidate_with_library(
     }
     candidate.bind_pin_contracts(&netlist).unwrap();
     (netlist, world, candidate)
+}
+
+/// Certify truth-recognized literals with complete source occurrence bindings.
+pub fn compile_direct_literals(
+    source: &Netlist,
+    limit: u64,
+) -> Result<CertifiedPhysicalRewrite, TorchRowError> {
+    literals::compile(source, limit)
 }

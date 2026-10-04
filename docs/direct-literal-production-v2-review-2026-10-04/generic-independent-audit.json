@@ -1,0 +1,87 @@
+{
+  "cases": [
+    {
+      "case": "mixed",
+      "phases": 512,
+      "independent_truth_sites": 269,
+      "hashes": {
+        "production-mixed-correspondence.json": "c42a1cb1a98aa5d25b40777e54a94e33e9a7e4d95ddd63e659dda139d72235fe",
+        "production-mixed-phases.json": "4882f5122be1f066df528c8748b0913e6c9fe598183a8786d1c527501221263f",
+        "production-mixed-269.jsonl.gz": "730ef08ea0cca76ed2b37a7ddbd2ba985f5b80c3f960e1611afdeabe5ce3af06"
+      }
+    },
+    {
+      "case": "mixed_five",
+      "phases": 2048,
+      "independent_truth_sites": 632,
+      "hashes": {
+        "production-mixed_five-correspondence.json": "60e3a27aae35fae5c4acd31225e190993febcdb76618e8f933641c24cf40cbb7",
+        "production-mixed_five-phases.json": "ae0bccef395dfa04c0a23c34a217c5a48e4d7d45a2947e25798fccf7eabae8bd",
+        "production-mixed_five-632.jsonl.gz": "8e6a354ff837407ead6be1cd92cd4e73968d0d82924f01b69a4b5fa0d70f2c67"
+      }
+    },
+    {
+      "case": "sixteen_direct",
+      "phases": 512,
+      "independent_truth_sites": 337,
+      "hashes": {
+        "production-sixteen_direct-correspondence.json": "d5833b15e0ee0beb15447b7e77096d67434090583656ceb145dfd62f97b34cc2",
+        "production-sixteen_direct-phases.json": "a3a2267387f04512471649e15d7bb1cc2a7672ab70e914aafa23dd31dfed57d1",
+        "production-sixteen_direct-337.jsonl.gz": "23238128f72a6c91bd29c718643d3076798e30d26a4ea0ce425ba96c69ed826d"
+      }
+    },
+    {
+      "case": "sixteen_direct_five",
+      "phases": 2048,
+      "independent_truth_sites": 692,
+      "hashes": {
+        "production-sixteen_direct_five-correspondence.json": "e23d22ff6f33745fdd6df04676f2742dcd3d1df0012cbb43e56730cdd8400ff4",
+        "production-sixteen_direct_five-phases.json": "7d3865da43daf208f4353652730cbcdcc5c297916d160e0e2861ef8f9dc067a2",
+        "production-sixteen_direct_five-692.jsonl.gz": "24e456cd2d12532a14655a1ca7c3ecc47bd935f7c56244f2f82f0979fff2e36c"
+      }
+    },
+    {
+      "case": "sixteen_inverted",
+      "phases": 512,
+      "independent_truth_sites": 337,
+      "hashes": {
+        "production-sixteen_inverted-correspondence.json": "33a3903a2b7f9260b3e42f9a1922e022eb8e1b33c0ff14128545c914b57de2b4",
+        "production-sixteen_inverted-phases.json": "f3604ad8b3ad85d4234b6a58617c28f3752a5e669adbb8a44c4e70c94e3e9a15",
+        "production-sixteen_inverted-337.jsonl.gz": "bb62a3d3c04038e208c9dca1b4249ef4dc8195e0009daaac25116d4c908c1fff"
+      }
+    },
+    {
+      "case": "sixteen_inverted_five",
+      "phases": 2048,
+      "independent_truth_sites": 692,
+      "hashes": {
+        "production-sixteen_inverted_five-correspondence.json": "1b57a323d5dffacdc46e3e319d48f7598cc4dd47dbd45431de62a0ea5067d8a5",
+        "production-sixteen_inverted_five-phases.json": "2710c615b06071bb285ed555a4dd00b1e5c26c420b15f0f61888f39f8831d916",
+        "production-sixteen_inverted_five-692.jsonl.gz": "9cae2a76c0f1f312990da82ef2d0da4053244d59e59e85124b5f5e5da83f6dd6"
+      }
+    },
+    {
+      "case": "unused_inputs_constant",
+      "phases": 512,
+      "independent_truth_sites": 2,
+      "hashes": {
+        "production-unused_inputs_constant-correspondence.json": "e3fd14b74d3c90d44aa2d92898404c409c8784d4a41fa5562f5063d0c4ebef87",
+        "production-unused_inputs_constant-phases.json": "4a4fef1aef7f226d9823b353458b58ca45963b725f6ce9ffe83262cf58bfffe4",
+        "production-unused_inputs_constant-2.jsonl.gz": "1f67fb3c6140870f1fa83faa2efc7945695d06ae66d17063419b08bf61710b8c"
+      }
+    },
+    {
+      "case": "unused_inputs_constant_five",
+      "phases": 2048,
+      "independent_truth_sites": 2,
+      "hashes": {
+        "production-unused_inputs_constant_five-correspondence.json": "14f43ca4c414d8dfe6eb26249593867ca0d0fb0f869dd92346ca7843b20eb12e",
+        "production-unused_inputs_constant_five-phases.json": "766657e0bca3c56b3c2c01d0cb4723c3dec4a16b0e13a9d8a23b05a9aedc55ad",
+        "production-unused_inputs_constant_five-2.jsonl.gz": "34697d95e2e503607e92fb7add028ab9239a2529c2e6fd331817fa19368ee2ae"
+      }
+    }
+  ],
+  "total_phases": 10240,
+  "raw_metric_mismatches": 0,
+  "truth_mismatches": 0
+}

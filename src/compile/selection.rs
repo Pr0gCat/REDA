@@ -622,6 +622,8 @@ pub fn compile_selected_with_refresh_budget(
     source: &Netlist,
     budget: usize,
 ) -> Result<CompiledCircuit, CompileError> {
+    #[cfg(test)]
+    LITERAL_PROPOSALS.with(|count| count.set(0));
     let occurrence_boundary = (4..=5).contains(&source.inputs.len())
         && (1..=16).contains(&source.outputs.len())
         && !source.gates.iter().any(|gate| gate.kind.is_sequential())
@@ -644,7 +646,7 @@ pub fn compile_selected_with_refresh_budget(
                 item: "source output boundary".into(),
                 reason: "occurrence-preserving boundary failed complete retained-history qualification".into(),
             })?;
-        return Ok(compiled);
+        return Ok(select_literal_candidate(source, compiled, budget));
     }
     if source.inputs.len() != 2
         || source.outputs.len() != 3
@@ -998,5 +1000,243 @@ mod tests {
                 super::super::compile_without_rewrite(&source).err()
             );
         }
+    }
+}
+
+fn literal_site_truths(source: &Netlist, circuit: &CompiledCircuit) -> Option<Vec<Vec<bool>>> {
+    let implemented = circuit.implementation_netlist(source);
+    let order = implemented.combinational_order()?;
+    let names = circuit
+        .physical_rewrite()?
+        .rewrite_certificate()
+        .rewritten_inputs_in_source_order();
+    let mut tables = vec![Vec::new(); implemented.gates.len()];
+    for address in 0..1usize << source.inputs.len() {
+        let truth = values(
+            implemented,
+            &order,
+            names
+                .iter()
+                .enumerate()
+                .map(|(bit, name)| (name.as_str(), address & (1 << bit) != 0)),
+        )?;
+        for (index, gate) in implemented.gates.iter().enumerate() {
+            tables[index].push(truth[gate.output.as_str()]);
+        }
+    }
+    Some(tables)
+}
+
+fn literal_histories_dominate(
+    outputs: usize,
+    states: usize,
+    old_truth: &[Vec<bool>],
+    new_truth: &[Vec<bool>],
+    old: &[StrictPhase],
+    new: &[StrictPhase],
+) -> bool {
+    let Some(offset) = outputs.checked_mul(2) else {
+        return false;
+    };
+    let Some(phases) = states
+        .checked_mul(states)
+        .and_then(|count| count.checked_mul(2))
+    else {
+        return false;
+    };
+    let Some(old_channels) = offset.checked_add(old_truth.len()) else {
+        return false;
+    };
+    let Some(new_channels) = offset.checked_add(new_truth.len()) else {
+        return false;
+    };
+    if states == 0
+        || outputs == 0
+        || old.len() != phases
+        || new.len() != phases
+        || old.iter().any(|phase| phase.channels.len() != old_channels)
+        || new.iter().any(|phase| phase.channels.len() != new_channels)
+        || old_truth
+            .iter()
+            .chain(new_truth)
+            .any(|truth| truth.len() != states)
+    {
+        return false;
+    }
+    let matches: Vec<Vec<usize>> = new_truth
+        .iter()
+        .map(|truth| {
+            old_truth
+                .iter()
+                .enumerate()
+                .filter(|(_, old)| *old == truth)
+                .map(|(index, _)| index)
+                .collect()
+        })
+        .collect();
+    if matches.iter().any(Vec::is_empty) {
+        return false;
+    }
+    let private = |phase: &StrictPhase| {
+        let channels = &phase.channels[offset..];
+        [
+            channels.iter().map(|channel| channel[0]).sum::<u64>(),
+            channels.iter().map(|channel| channel[1]).sum::<u64>(),
+            channels.iter().map(|channel| channel[2]).max().unwrap_or(0),
+            channels.iter().map(|channel| channel[3]).sum::<u64>(),
+            channels.iter().map(|channel| channel[4]).max().unwrap_or(0),
+        ]
+    };
+    old.iter().zip(new).all(|(old, new)| {
+        new.ticks <= old.ticks
+            && new.work <= old.work
+            && new.cells <= old.cells
+            && old.channels[..offset]
+                .iter()
+                .zip(&new.channels[..offset])
+                .all(|(old, new)| old.iter().zip(new).all(|(old, new)| new <= old))
+            && private(old)
+                .iter()
+                .zip(private(new))
+                .all(|(old, new)| new <= *old)
+            && matches.iter().enumerate().all(|(gate, old_gates)| {
+                old_gates.iter().all(|&prior| {
+                    new.channels[offset + gate]
+                        .iter()
+                        .zip(old.channels[offset + prior])
+                        .all(|(new, old)| *new <= old)
+                })
+            })
+    }) && old.iter().zip(new).any(|(old, new)| {
+        new.ticks < old.ticks
+            || new.work < old.work
+            || new.cells < old.cells
+            || private(new) != private(old)
+    })
+}
+
+#[cfg(test)]
+thread_local! { static LITERAL_PROPOSALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn select_literal_candidate(
+    source: &Netlist,
+    baseline: CompiledCircuit,
+    budget: usize,
+) -> CompiledCircuit {
+    if budget == 0 {
+        return baseline;
+    }
+    let Ok(rewrite) = super::fragment_synth::torch_row::compile_direct_literals(source, 1_000_000)
+    else {
+        return baseline;
+    };
+    #[cfg(test)]
+    LITERAL_PROPOSALS.with(|count| count.set(count.get() + 1));
+    let candidate = CompiledCircuit::from_certified_rewrite(rewrite);
+    let Some(old_truth) = literal_site_truths(source, &baseline) else {
+        return baseline;
+    };
+    let Some(new_truth) = literal_site_truths(source, &candidate) else {
+        return baseline;
+    };
+    let Some(old) = strict_profile(source, &baseline, None) else {
+        return baseline;
+    };
+    let Some(new) = strict_profile(source, &candidate, None) else {
+        return baseline;
+    };
+    if literal_histories_dominate(
+        source.outputs.len(),
+        1usize << source.inputs.len(),
+        &old_truth,
+        &new_truth,
+        &old,
+        &new,
+    ) {
+        candidate
+    } else {
+        baseline
+    }
+}
+
+#[cfg(test)]
+mod literal_comparator_tests {
+    use super::*;
+    fn fixture() -> (Vec<Vec<bool>>, Vec<StrictPhase>, Vec<StrictPhase>) {
+        let phase = StrictPhase {
+            ticks: 10,
+            work: 20,
+            cells: 30,
+            channels: vec![[0; 5]; 17],
+        };
+        let old = vec![phase; 512];
+        let mut new = old.clone();
+        new[0].ticks -= 1;
+        (
+            vec![(0..16).map(|address| address & 1 != 0).collect()],
+            old,
+            new,
+        )
+    }
+    #[test]
+    fn exact_phase_and_public_private_channel_counts_are_required() {
+        let (truth, old, new) = fixture();
+        assert!(literal_histories_dominate(
+            8, 16, &truth, &truth, &old, &new
+        ));
+        for private in [false, true] {
+            for extra in [false, true] {
+                let mut malformed = new.clone();
+                let index = if private { 16 } else { 0 };
+                if extra {
+                    malformed[0].channels.insert(index, [0; 5]);
+                } else {
+                    malformed[0].channels.remove(index);
+                }
+                assert!(!literal_histories_dominate(
+                    8, 16, &truth, &truth, &old, &malformed
+                ));
+                let mut malformed = old.clone();
+                if extra {
+                    malformed[0].channels.insert(index, [0; 5]);
+                } else {
+                    malformed[0].channels.remove(index);
+                }
+                assert!(!literal_histories_dominate(
+                    8, 16, &truth, &truth, &malformed, &new
+                ));
+            }
+        }
+        let mut short = new.clone();
+        short.pop();
+        assert!(!literal_histories_dominate(
+            8, 16, &truth, &truth, &old, &short
+        ));
+        let mut extra = old.clone();
+        extra.push(old[0].clone());
+        assert!(!literal_histories_dominate(
+            8, 16, &truth, &truth, &extra, &new
+        ));
+    }
+    #[test]
+    fn private_metric_regression_and_unmatched_or_incomplete_truth_fail_closed() {
+        let (truth, old, new) = fixture();
+        for metric in 0..5 {
+            let mut bad = new.clone();
+            bad[0].channels[16][metric] = 1;
+            assert!(!literal_histories_dominate(
+                8, 16, &truth, &truth, &old, &bad
+            ));
+        }
+        let mut unmatched = truth.clone();
+        unmatched[0][0] = !unmatched[0][0];
+        assert!(!literal_histories_dominate(
+            8, 16, &truth, &unmatched, &old, &new
+        ));
+        let mut short = truth.clone();
+        short[0].pop();
+        assert!(!literal_histories_dominate(
+            8, 16, &truth, &short, &old, &new
+        ));
     }
 }

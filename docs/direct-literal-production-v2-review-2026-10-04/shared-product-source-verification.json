@@ -1,0 +1,12 @@
+{
+  "verified_shared_product_files": {
+    "src/compile/fragment_synth/torch_row.rs": "f1ad32675bfefb82b12eef4d3d55b86f608495220729e5809ed95fab26d408e4",
+    "src/compile/fragment_synth/torch_row/player.rs": "4b28abe2911835d3686226a9d49d28d33a2e24c415a111f018f5fe66086d361e",
+    "src/compile/fragment_synth/torch_row/literals.rs": "761cdfe59e027280c2ff1e4ee9895e0c0f3d9dd59ebbad03264e108a783ce9de",
+    "src/compile/selection.rs": "033da726023a3ef41ab899ed1ff6d9c6e1113461321a7867f069fc701a78beee"
+  },
+  "frozen_manifest_sha256": "778308a3855f6ef889e744d1cc7fc7bc0509b7bde6d695a498923e78a1335702",
+  "shared_comparator_log_sha256": "2b88a73c2a8d01be8371bca25376a17f8f9e8ffea095217bcd40e50bd8f94f2b",
+  "generic_log_sha256": "ef55e5db5d4f2107afcecd9798a89a34401848cbc360eafee374ba84c61d601b",
+  "adoption": "pending full generic replay audit"
+}
