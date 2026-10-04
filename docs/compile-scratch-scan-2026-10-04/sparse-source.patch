@@ -1,0 +1,43 @@
+diff --git a/src/compile/fragment_synth/legacy_adapter.rs b/src/compile/fragment_synth/legacy_adapter.rs
+index a01a6bd..283a104 100644
+--- a/src/compile/fragment_synth/legacy_adapter.rs
++++ b/src/compile/fragment_synth/legacy_adapter.rs
+@@ -1047,7 +1047,7 @@ fn materialise_gate(
+         }
+     };
+     (
+-        collect_blocks(&world),
++        collect_blocks(&mut world),
+         observed,
+         Anchor {
+             x: pin.x,
+@@ -1106,7 +1106,7 @@ fn materialise_input(
+         Position::new(anchor.x, anchor.y, anchor.z),
+         facing,
+     );
+-    collect_blocks(&world)
++    collect_blocks(&mut world)
+ }
+ 
+ fn materialise_input_terminal(
+@@ -1120,12 +1120,17 @@ fn materialise_input_terminal(
+         Position::new(anchor.x, anchor.y, anchor.z),
+         toward,
+     );
+-    collect_blocks(&world)
++    collect_blocks(&mut world)
+ }
+ 
+-fn collect_blocks(world: &World) -> Vec<PlacedBlock> {
++// All callers construct a fresh, all-air scratch world and leave its write
++// ledger intact. Read only those writes, including overwritten/removed cells,
++// and preserve the dense scan's YZX order. No live simulation world is consumed.
++fn collect_blocks(world: &mut World) -> Vec<PlacedBlock> {
++    let mut written = world.take_dirty();
++    written.sort_unstable();
+     let mut blocks = Vec::new();
+-    for flat in 0..world.cells().len() {
++    for flat in written {
+         let (x, y, z) = world.decode(flat);
+         let state = world.get(x, y, z);
+         if state.kind != BlockKind::Air {

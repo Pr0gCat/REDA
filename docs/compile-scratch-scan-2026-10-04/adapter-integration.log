@@ -1,0 +1,6 @@
+
+running 1 test
+test a_typed_one_to_one_candidate_re_emits_the_exact_legacy_world ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.03s
+

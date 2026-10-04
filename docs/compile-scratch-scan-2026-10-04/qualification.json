@@ -1,0 +1,68 @@
+{
+  "base_commit": "c45bb2e863182ac03ba7b75367bef6e8965dcaff",
+  "baseline_adapter_sha256": "3ebf34b89d8f1359100448dd2be4dd798171add90196ffdbe1c90e1470ea48b4",
+  "baseline_fine_binary_sha256": "a6cab9363ab07dbdf1d5cb6437219d6fc7acb413447d0d9c4be65759417135f2",
+  "fine_instrumentation_sha256": "5745653309dd8b949f67e13f9f7256e7d101a616a7a91b8bd750c7aca5d94a83",
+  "timings_seconds": {
+    "raw_compile": 198.231811712,
+    "first_adapter": 83.79576,
+    "observations_adapter": 83.755036
+  },
+  "acceptance": "Diagnostic timings only; no quality or world equality claim.",
+  "rejected_index_timings_seconds": {
+    "raw_compile": 190.281066064,
+    "first_adapter": 80.091174,
+    "observations_adapter": 80.21975599999999
+  },
+  "original_control": {
+    "handle": 46436,
+    "producer_binary_sha256": "429ab6bd6f048d666e8549d69f7f8d6a32dc0b5594bac205b36b0336917b85af",
+    "world_sha256": "fe6a4f16da2f5ced3e390c86f9cc79ecd507364f64abe6e2f591f5f2e0aacb20",
+    "canonical_fingerprint": "90ad27236b013529f500c04347b760a04e08851abd88a1ee9c657ae9eaafaa37",
+    "capture_claim": "Copied from the path printed by the still-live original control; reloaded independently. No completed waveform claim."
+  },
+  "qualified_timings_seconds": {
+    "raw_compile": 45.450558481,
+    "first_adapter": 7.861176,
+    "observations_adapter": 7.815775000000002
+  },
+  "qualified_evidence": {
+    "integration": "14 passed; 0 failed; 0 ignored; 0 filtered out",
+    "independently_reloaded_original_and_candidate_worlds_identical": true,
+    "canonical_world_fingerprint": "90ad27236b013529f500c04347b760a04e08851abd88a1ee9c657ae9eaafaa37",
+    "qualified_binary_sha256": "f097bf6e6a9d501449d3dfc5f46aaaca5ab40cec225ceb72f936b18d3a486457",
+    "qualified_source_patch_sha256": "991133382d533e67c4de71f14694af79f66b17bcd0329795887930e47a20f968",
+    "qualified_adapter_sha256": "48df395584cb70d3112c81c271b42d4d1f49bd11bc481f578a6b53aa696fc5e9",
+    "timing_limit": "Two baseline observations, one qualified observation, same release profile and background jobs; development evidence, not a controlled speed benchmark.",
+    "waveform_limit": "No new waveform result. Physical world is unchanged; the original ROM64 all-event quality control remains live."
+  },
+  "artifact_sha256": {
+    "adapter-integration.log": "b966883dfa069bd6667f941412b915afbad7b095fef4164bfad1d29d0b6479fa",
+    "adoption.md": "af4677b4a041fdeac3684d5b949a3c25aa424ac720769f1ce3d987046e98ed18",
+    "baseline-probe.rs": "b08c7132c58d6facd178d6f4ce6664df68b423ea8e2b765f6a2257d1091951cf",
+    "baseline-summary.json": "e258196732643a46a83c10a14939cc807ce92d93ba90aba88de1abaf5b4cbd45",
+    "candidate-rom64-terminal.json": "2b11159e30de16903c4c5e7a42b3c56b454ddefd3b95edcf2cc8a8f068f2491d",
+    "candidate-rom64.stderr": "71fc4aed8934530ebbc9a088a5c6087f408dc447d544831351f17b9a50fa21a4",
+    "compile_stage.rs": "36f6a45393621abc9f27e27c0b01469ab5a48340b4e82bf2ac7a36b84f8f547c",
+    "determinism.log": "0a67ea65e9eb7bcce139b207f994cc00a772c3c991c9d40492c43e8d0420aa92",
+    "fine-instrumentation.patch": "5745653309dd8b949f67e13f9f7256e7d101a616a7a91b8bd750c7aca5d94a83",
+    "indexed-test.log": "cec1bc13154bcd4cff9cc21111fb8ed5cb71a4fbca0f6fe6e868fa13df11bd2f",
+    "original-control.litematic": "fe6a4f16da2f5ced3e390c86f9cc79ecd507364f64abe6e2f591f5f2e0aacb20",
+    "qualified.litematic": "1b4a832abb2ab6e5cdfc8fea54019ffb28102248f0aa65c184ce47d7b4ecaa7b",
+    "rejected-index-source-binding.json": "996b2b678f25cca921cc205d0664c25dcb4121d6523ab3bac0a4a8a4b464522c",
+    "rejected-route-index.patch": "7e14f60ad5403e306d895de8e7fd1e8ddd2c39816f7f15fb64550629ce350284",
+    "rom64-fine.stderr": "5108a8a0c0941b2863018ce8751d66b52cecf1e22647ab2270e18bfacee262c1",
+    "rom64.stderr": "55166aa402455a3dbe72c833f3295af083183d051b14106a0f71ce8bb1c9904d",
+    "rom64_matrix.sv": "fdcc3cef6b0b19d8b07cd29676f379ca4c74fc00a4df83cce0b072afee237fd4",
+    "source-binding.json": "f6ea2cf03f7ef7cc7fcde4ad92cadb21e70e41e0d11c9be715170a70f64c5265",
+    "sparse-build.stderr": "bce1f4132595746d67bf5597b6049901cae71453422d3a34311f41776e652f71",
+    "sparse-integration-terminal.json": "37c929e32057fb1460e4d1ef37713b577abbcde787b235d38c2110f5109338f8",
+    "sparse-integration.log": "1827a8da4d4a5c0614e7565b5af2345fedfdf3e28ad83e0dfabc666bdebb9f69",
+    "sparse-integration.stderr": "6e7745674eb4de9fc03f7c40dbd3783ad41419f46c21341ce2b469e3e21bc869",
+    "sparse-rom64-terminal.json": "3e3c7fbe2a47b9058d85bd3fd2e331fe04fc172b45ca545fab629495c11608fe",
+    "sparse-rom64.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "sparse-rom64.stderr": "ef82e1171c4fcfc43626c880a35e846cf5a87c12e03d9ef2045e07a4fb431bfd",
+    "sparse-source.patch": "991133382d533e67c4de71f14694af79f66b17bcd0329795887930e47a20f968",
+    "stage-instrumentation.patch": "07222f2989378187a9d7ea7d019ecbcc42396a823bf773af941f6403c9120808"
+  }
+}

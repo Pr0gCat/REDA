@@ -1,0 +1,24 @@
+{
+  "base_commit": "c45bb2e863182ac03ba7b75367bef6e8965dcaff",
+  "baseline_adapter_sha256": "3ebf34b89d8f1359100448dd2be4dd798171add90196ffdbe1c90e1470ea48b4",
+  "baseline_fine_binary_sha256": "a6cab9363ab07dbdf1d5cb6437219d6fc7acb413447d0d9c4be65759417135f2",
+  "fine_instrumentation_sha256": "5745653309dd8b949f67e13f9f7256e7d101a616a7a91b8bd750c7aca5d94a83",
+  "timings_seconds": {
+    "raw_compile": 198.231811712,
+    "first_adapter": 83.79576,
+    "observations_adapter": 83.755036
+  },
+  "acceptance": "Diagnostic timings only; no quality or world equality claim.",
+  "rejected_index_timings_seconds": {
+    "raw_compile": 190.281066064,
+    "first_adapter": 80.091174,
+    "observations_adapter": 80.21975599999999
+  },
+  "original_control": {
+    "handle": 46436,
+    "producer_binary_sha256": "429ab6bd6f048d666e8549d69f7f8d6a32dc0b5594bac205b36b0336917b85af",
+    "world_sha256": "fe6a4f16da2f5ced3e390c86f9cc79ecd507364f64abe6e2f591f5f2e0aacb20",
+    "canonical_fingerprint": "90ad27236b013529f500c04347b760a04e08851abd88a1ee9c657ae9eaafaa37",
+    "capture_claim": "Copied from the path printed by the still-live original control; reloaded independently. No completed waveform claim."
+  }
+}

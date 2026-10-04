@@ -1,0 +1,7 @@
+{
+  "adapter_sha256": "7f4a1706f6f8f2f5bb84da744bee0a614fa7ee30195cd62aba0e09d6b0048b47",
+  "binary_sha256": "7b674145a5d7bc764c51b16d86838ea5eb6b2fb377fee9d97676aa855a2cb228",
+  "patch_sha256": "7e14f60ad5403e306d895de8e7fd1e8ddd2c39816f7f15fb64550629ce350284",
+  "adopted": false,
+  "reason": "Measured adapter remains 80.1 seconds versus 83.8 seconds; full-world materialisation scan remains."
+}

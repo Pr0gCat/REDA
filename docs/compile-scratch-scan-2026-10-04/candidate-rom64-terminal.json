@@ -1,0 +1,9 @@
+{
+  "exit_code": 0,
+  "seconds": 191.145144292037,
+  "command": [
+    "/tmp/reda-compile-stage-target/release/examples/compile_stage",
+    "/tmp/reda-compile-stage-20261004/tests/fixtures/rom64_matrix.sv",
+    "rom64"
+  ]
+}

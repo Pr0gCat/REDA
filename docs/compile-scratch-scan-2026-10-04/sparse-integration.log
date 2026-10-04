@@ -1,0 +1,19 @@
+
+running 14 tests
+test a_cyclic_netlist_is_rejected ... ok
+test a_compiled_not_gate_matches_its_truth_table ... ok
+test extracted_bare_merge_routes_identify_their_merge_sink_and_terminal_style ... ok
+test extracted_fanout_terminal_metadata_keeps_each_sink_identity ... ok
+test a_mixed_pinned_and_gate_computes_through_the_callers_own_cells ... ok
+test a_compiled_and_gate_matches_its_truth_table ... ok
+test a_compiled_circuit_saves_to_a_loadable_litematic ... ok
+test compiling_the_same_netlist_twice_gives_the_same_world ... ok
+test a_seed_names_the_physical_realisation_behind_every_placed_node ... ok
+test extracted_candidate_preserves_each_primitive_anchor_and_route_owner ... ok
+test a_seed_re_emits_every_primitive_exactly_where_the_legacy_emitter_put_it ... ok
+test a_legacy_seed_re_emits_the_exact_world_the_legacy_compiler_built ... ok
+test legacy_and4_extracts_to_a_legal_candidate_with_unit_seed_score ... ok
+test a_typed_one_to_one_candidate_re_emits_the_exact_legacy_world ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

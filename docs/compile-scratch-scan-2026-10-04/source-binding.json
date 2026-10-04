@@ -1,0 +1,9 @@
+{
+  "base_commit": "c45bb2e863182ac03ba7b75367bef6e8965dcaff",
+  "sha256": {
+    "stage-instrumentation.patch": "07222f2989378187a9d7ea7d019ecbcc42396a823bf773af941f6403c9120808",
+    "examples/compile_stage.rs": "b08c7132c58d6facd178d6f4ce6664df68b423ea8e2b765f6a2257d1091951cf",
+    "tests/fixtures/rom64_matrix.sv": "fdcc3cef6b0b19d8b07cd29676f379ca4c74fc00a4df83cce0b072afee237fd4"
+  },
+  "purpose": "Stage timing only. No acceptance, geometry, simulator or verifier changes."
+}

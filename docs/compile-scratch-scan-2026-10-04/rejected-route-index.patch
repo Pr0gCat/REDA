@@ -1,0 +1,151 @@
+diff --git a/src/compile/fragment_synth/legacy_adapter.rs b/src/compile/fragment_synth/legacy_adapter.rs
+index a01a6bd..5d94f06 100644
+--- a/src/compile/fragment_synth/legacy_adapter.rs
++++ b/src/compile/fragment_synth/legacy_adapter.rs
+@@ -405,8 +405,8 @@ impl LegacyCandidateAdapter {
+                 &gate_by_output,
+                 &candidate,
+             )?;
+-            let mut cells = Vec::new();
+-            let mut floors = Vec::new();
++            let mut cells = RecordedBlocks::default();
++            let mut floors = RecordedBlocks::default();
+             for ((&at, _recorded_state), _recorded_floor) in legacy
+                 .anchors()
+                 .iter()
+@@ -415,9 +415,9 @@ impl LegacyCandidateAdapter {
+             {
+                 let final_state = world.get(at.x, at.y, at.z);
+                 if is_route_conductor(final_state) {
+-                    push_block_once(&mut cells, at, final_state.clone())?;
++                    cells.push(at, final_state.clone())?;
+                 } else if final_state.kind != BlockKind::Air {
+-                    push_block_once(&mut floors, at, final_state.clone())?;
++                    floors.push(at, final_state.clone())?;
+                 }
+                 let floor_at = Anchor { y: at.y - 1, ..at };
+                 if floor_at.x >= 0
+@@ -429,7 +429,7 @@ impl LegacyCandidateAdapter {
+                 {
+                     let final_floor = world.get(floor_at.x, floor_at.y, floor_at.z);
+                     if final_floor.kind != BlockKind::Air && !is_route_conductor(final_floor) {
+-                        push_block_once(&mut floors, floor_at, final_floor.clone())?;
++                        floors.push(floor_at, final_floor.clone())?;
+                     }
+                 }
+             }
+@@ -447,12 +447,12 @@ impl LegacyCandidateAdapter {
+                         route: format!("{} branch {ordinal} has no conductor", legacy.id()),
+                     })?;
+                 for &at in &path {
+-                    push_block_once(&mut cells, at, world.get(at.x, at.y, at.z).clone())?;
++                    cells.push(at, world.get(at.x, at.y, at.z).clone())?;
+                     if at.y > 0 {
+                         let floor_at = Anchor { y: at.y - 1, ..at };
+                         let floor = world.get(floor_at.x, floor_at.y, floor_at.z);
+                         if floor.kind != BlockKind::Air && !is_route_conductor(floor) {
+-                            push_block_once(&mut floors, floor_at, floor.clone())?;
++                            floors.push(floor_at, floor.clone())?;
+                         }
+                     }
+                 }
+@@ -539,8 +539,8 @@ impl LegacyCandidateAdapter {
+                 RealisedRouteTree {
+                     id: route,
+                     source,
+-                    cells,
+-                    floors,
++                    cells: cells.blocks,
++                    floors: floors.blocks,
+                     branches,
+                 },
+             );
+@@ -860,17 +860,83 @@ fn push_block_once(
+     state: BlockState,
+ ) -> Result<(), LegacyAdapterError> {
+     if let Some(existing) = blocks.iter().find(|block| block.at == at) {
+-        if existing.state != state {
+-            return Err(LegacyAdapterError::MalformedRoute {
+-                route: format!("conflicting reconstructed block at {at:?}"),
+-            });
+-        }
++        check_recorded_state(at, &existing.state, &state)?;
+     } else {
+         blocks.push(PlacedBlock { at, state });
+     }
+     Ok(())
+ }
+ 
++/// Keep first-write order while indexing the long shared route prefixes.
++/// A repeated coordinate still has to record exactly the same block state.
++#[derive(Default)]
++struct RecordedBlocks {
++    blocks: Vec<PlacedBlock>,
++    positions: BTreeMap<Anchor, usize>,
++}
++
++impl RecordedBlocks {
++    fn push(&mut self, at: Anchor, state: BlockState) -> Result<(), LegacyAdapterError> {
++        if let Some(&index) = self.positions.get(&at) {
++            check_recorded_state(at, &self.blocks[index].state, &state)?;
++        } else {
++            self.positions.insert(at, self.blocks.len());
++            self.blocks.push(PlacedBlock { at, state });
++        }
++        Ok(())
++    }
++}
++
++fn check_recorded_state(
++    at: Anchor,
++    existing: &BlockState,
++    state: &BlockState,
++) -> Result<(), LegacyAdapterError> {
++    if existing != state {
++        return Err(LegacyAdapterError::MalformedRoute {
++            route: format!("conflicting reconstructed block at {at:?}"),
++        });
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod recorded_blocks_tests {
++    use super::*;
++
++    #[test]
++    fn indexed_shared_prefix_preserves_order_states_and_conflict_refusal() {
++        let mut indexed = RecordedBlocks::default();
++        let mut original = Vec::new();
++        // Revisit overlapping prefixes in both directions, including states
++        // whose delay/power fields differ at different coordinates.
++        for end in [37, 9, 64, 37, 64] {
++            for x in (0..end).rev() {
++                let at = Anchor { x, y: 3, z: 7 };
++                let mut state = BlockState::air();
++                state.kind = BlockKind::Repeater;
++                state.delay = 1 + (x % 4) as u8;
++                indexed.push(at, state.clone()).unwrap();
++                push_block_once(&mut original, at, state).unwrap();
++            }
++        }
++        assert_eq!(indexed.blocks, original);
++        assert_eq!(indexed.blocks.len(), 64);
++        assert_eq!(indexed.blocks[0].at.x, 36);
++        let at = indexed.blocks[0].at;
++        let mut conflicting = indexed.blocks[0].state.clone();
++        conflicting.delay = 4;
++        let before = indexed.blocks.clone();
++        assert_eq!(
++            indexed.push(at, conflicting.clone()).unwrap_err().to_string(),
++            push_block_once(&mut original, at, conflicting).unwrap_err().to_string(),
++        );
++        assert_eq!(indexed.blocks, before);
++        indexed.push(at, before[0].state.clone()).unwrap();
++        assert_eq!(indexed.blocks, before);
++    }
++}
++
+ fn retain_unclaimed(
+     blocks: &mut Vec<PlacedBlock>,
+     claimed: &mut BTreeMap<Anchor, BlockState>,

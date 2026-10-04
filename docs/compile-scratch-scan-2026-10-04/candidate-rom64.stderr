@@ -1,0 +1,35 @@
+SOURCE seconds=0.036917044 inputs=6 outputs=16 gates=603
+ATTEMPT spacing=3 share=2 span=true tap=true centered=true
+STAGE 0.000025 validate
+STAGE 0.001181 floorplan
+STAGE 0.002057 reserve_columns
+STAGE 0.003187 bypass_geometry
+STAGE 1.087089 baseline_world
+STAGE 1.087150 baseline_emit
+STAGE 2.051070 terminal_selection
+STAGE 3.200720 record_world
+STAGE 3.200862 record_emit
+STAGE 4.245514 final_world
+STAGE 4.245567 final_emit
+STAGE 4.785094 connectivity
+STAGE 5.076894 torch_merge
+STAGE 8.372734 strength
+STAGE 9.586726 legacy_routes
+STAGE 10.022460 seed
+STAGE 10.462667 realise
+VERIFY 0.000000 check Collision
+VERIFY 0.000016 spacing
+VERIFY 0.255382 nets
+VERIFY 0.260625 emit
+VERIFY 1.036166 check TerminalContract
+VERIFY 1.036213 check RouteTerminals
+VERIFY 1.038748 check RealisedWorld
+VERIFY 5.927592 typed_adapter
+VERIFY 86.018766 structure
+VERIFY 88.526595 emission_adapter
+VERIFY 97.044396 typed_emit
+VERIFY 98.627720 compatibility
+STAGE 109.854118 observations
+STAGE 190.073874 done
+TERMINAL seconds=190.281066064 success=true
+WORLD 90ad27236b013529f500c04347b760a04e08851abd88a1ee9c657ae9eaafaa37

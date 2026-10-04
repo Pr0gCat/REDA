@@ -1,0 +1,22 @@
+SOURCE seconds=0.03744765 inputs=6 outputs=16 gates=603
+ATTEMPT spacing=3 share=2 span=true tap=true centered=true
+STAGE 0.000019 validate
+STAGE 0.001185 floorplan
+STAGE 0.002058 reserve_columns
+STAGE 0.003197 bypass_geometry
+STAGE 1.292513 baseline_world
+STAGE 1.292561 baseline_emit
+STAGE 2.462297 terminal_selection
+STAGE 3.828453 record_world
+STAGE 3.828587 record_emit
+STAGE 5.054901 final_world
+STAGE 5.054952 final_emit
+STAGE 5.660825 connectivity
+STAGE 6.020348 torch_merge
+STAGE 9.946738 strength
+STAGE 11.351286 legacy_routes
+STAGE 11.825473 seed
+STAGE 12.254179 realise
+STAGE 123.673527 observations
+STAGE 208.313274 done
+TERMINAL seconds=208.540810838 success=true

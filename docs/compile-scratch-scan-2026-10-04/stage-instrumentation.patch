@@ -1,0 +1,121 @@
+--- a/src/compile/mod.rs
++++ b/src/compile/mod.rs
+@@ -8119,6 +8119,9 @@
+     tap_only_reserve: bool,
+     centered_ordering: bool,
+ ) -> Result<CompiledCircuit, CompileError> {
++    let diagnostic_started = std::time::Instant::now();
++    eprintln!("ATTEMPT spacing={track_spacing} share={track_share_gap} span={span_aware_feedthrough} tap={tap_only_reserve} centered={centered_ordering}");
++    eprintln!("STAGE {:.6} validate", diagnostic_started.elapsed().as_secs_f64());
+     let order = checked_topological_order(netlist)?;
+     if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
+         return Err(CompileError::CandidateMetadataViolation {
+@@ -8132,11 +8135,13 @@
+         producer_of.insert(gate.output.as_str(), index);
+     }
+ 
++    eprintln!("STAGE {:.6} floorplan", diagnostic_started.elapsed().as_secs_f64());
+     let plan = build_floorplan(netlist, &order, &producer_of, centered_ordering);
+     let row_count = plan.rows.len();
+     let channel_count = row_count.saturating_sub(1);
+     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
+ 
++    eprintln!("STAGE {:.6} reserve_columns", diagnostic_started.elapsed().as_secs_f64());
+     reserve_columns(
+         &plan,
+         &mut nets,
+@@ -8144,6 +8149,7 @@
+         channel_count,
+         span_aware_feedthrough,
+     );
++    eprintln!("STAGE {:.6} bypass_geometry", diagnostic_started.elapsed().as_secs_f64());
+     let (bypass, row_z, track_z) = resolve_bypass_and_geometry(
+         netlist,
+         &plan,
+@@ -8174,14 +8180,17 @@
+         terminals: &baseline_terminals,
+         tap_only_reserve,
+     };
++    eprintln!("STAGE {:.6} baseline_world", diagnostic_started.elapsed().as_secs_f64());
+     let mut baseline_world = World::new(size_x.max(8), size_y, size_z.max(8));
+     let mut baseline_footprint = Footprint::record();
++    eprintln!("STAGE {:.6} baseline_emit", diagnostic_started.elapsed().as_secs_f64());
+     let baseline_result = emit(
+         &mut baseline_world,
+         netlist,
+         &baseline_geometry,
+         &mut baseline_footprint,
+     );
++    eprintln!("STAGE {:.6} terminal_selection", diagnostic_started.elapsed().as_secs_f64());
+     let terminals = resolve_directed_dust_terminals(
+         &mut baseline_world,
+         &baseline_footprint.reservation,
+@@ -8218,8 +8227,10 @@
+         tap_only_reserve,
+     };
+ 
++    eprintln!("STAGE {:.6} record_world", diagnostic_started.elapsed().as_secs_f64());
+     let mut scratch = World::new(size_x.max(8), size_y, size_z.max(8));
+     let mut footprint = Footprint::record();
++    eprintln!("STAGE {:.6} record_emit", diagnostic_started.elapsed().as_secs_f64());
+     emit(&mut scratch, netlist, &geometry, &mut footprint);
+     drop(scratch);
+ 
+@@ -8229,7 +8240,9 @@
+     // world that actually ships, below.
+     let recorded = footprint;
+     let mut footprint = Footprint::enforce(recorded.reservation.clone());
++    eprintln!("STAGE {:.6} final_world", diagnostic_started.elapsed().as_secs_f64());
+     let mut world = World::new(size_x.max(8), size_y, size_z.max(8));
++    eprintln!("STAGE {:.6} final_emit", diagnostic_started.elapsed().as_secs_f64());
+     let EmitResult {
+         input_positions,
+         output_positions,
+@@ -8242,6 +8255,7 @@
+     // Checked here, unconditionally, on every compile -- not just the ones a
+     // test happens to exercise -- because a violation is a bug in *this*
+     // router, not in the netlist it was given.
++    eprintln!("STAGE {:.6} connectivity", diagnostic_started.elapsed().as_secs_f64());
+     verify_connectivity(
+         &world,
+         &footprint.reservation,
+@@ -8253,6 +8267,7 @@
+     // The torch-merge invariant: connectivity alone never looks at a torch,
+     // so it cannot tell a working NOR from one whose input is wired into
+     // the wrong block. Checked unconditionally too, for the same reason.
++    eprintln!("STAGE {:.6} torch_merge", diagnostic_started.elapsed().as_secs_f64());
+     verify_torch_merge(
+         &world,
+         &footprint.reservation,
+@@ -8268,6 +8283,7 @@
+     // is one clean network, and every declared input structurally reaches
+     // its gate's support) rather than re-deriving them. See this module's
+     // "The signal-strength invariant" section for the full picture.
++    eprintln!("STAGE {:.6} strength", diagnostic_started.elapsed().as_secs_f64());
+     verify_signal_strength(
+         &world,
+         &footprint.reservation,
+@@ -8278,6 +8294,7 @@
+         &output_positions,
+     )?;
+ 
++    eprintln!("STAGE {:.6} legacy_routes", diagnostic_started.elapsed().as_secs_f64());
+     let legacy_routes = recorded.legacy_routes(netlist, &nets, &world);
+     let primitive_nodes = legacy_primitive_nodes(netlist, &primitive_anchors);
+     let legacy_emission = LegacyEmission {
+@@ -8303,11 +8320,15 @@
+     let size = world.size();
+     drop(world);
+ 
++    eprintln!("STAGE {:.6} seed", diagnostic_started.elapsed().as_secs_f64());
+     let seed = planner::seed_from_legacy_parts(netlist, &legacy_emission).map_err(planner_error)?;
++    eprintln!("STAGE {:.6} realise", diagnostic_started.elapsed().as_secs_f64());
+     let realised = planner::realise_and_verify(&seed, netlist, size).map_err(planner_error)?;
++    eprintln!("STAGE {:.6} observations", diagnostic_started.elapsed().as_secs_f64());
+     let (observations, physical_candidate) =
+         observations_from_plan(netlist, &seed, &realised.world)?;
+ 
++    eprintln!("STAGE {:.6} done", diagnostic_started.elapsed().as_secs_f64());
+     Ok(CompiledCircuit {
+         observations,
+         world: realised.world,

@@ -1,0 +1,14 @@
+   Compiling reda v0.1.0 (/tmp/reda-compile-stage-20261004)
+warning: variable does not need to be mutable
+    --> src/compile/fragment_synth/packing.rs:1298:9
+     |
+1298 |     let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib) generated 1 warning (run `cargo fix --lib -p reda` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 3m 02s
+     Running tests/compile_end_to_end.rs (/tmp/reda-compile-stage-target/release/deps/compile_end_to_end-9185ac515751a022)
