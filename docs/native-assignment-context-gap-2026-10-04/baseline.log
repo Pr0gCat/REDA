@@ -1,0 +1,24 @@
+   Compiling reda v0.1.0 (/tmp/reda-root-head-58b4366)
+    Finished `test` profile [unoptimized] target(s) in 1.26s
+     Running tests/assignment_context_diagnostic.rs (/tmp/reda-root-head-target/debug/deps/assignment_context_diagnostic-27374365cf2d849b)
+
+running 1 test
+MISSING signed-parameter-extension: [Diagnostic { kind: Source, severity: Error, message: "assignment width mismatch: the target is 8 bit(s) and the value is 4 bit(s); version 1 never extends or truncates", span: Span { file: FileId(0), start: 66, end: 77, expansion: None } }]
+MISSING unsigned-parameter-extension: [Diagnostic { kind: Source, severity: Error, message: "assignment width mismatch: the target is 8 bit(s) and the value is 4 bit(s); version 1 never extends or truncates", span: Span { file: FileId(0), start: 58, end: 69, expansion: None } }]
+MISSING assignment-truncation: [Diagnostic { kind: Source, severity: Error, message: "assignment width mismatch: the target is 4 bit(s) and the value is 8 bit(s); version 1 never extends or truncates", span: Span { file: FileId(0), start: 59, end: 70, expansion: None } }]
+
+thread 'assignment_context_observation' (99) panicked at tests/assignment_context_diagnostic.rs:17:2:
+assertion `left == right` failed: required contextual sizing cases missing
+  left: 3
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test assignment_context_observation ... FAILED
+
+failures:
+
+failures:
+    assignment_context_observation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test assignment_context_diagnostic`

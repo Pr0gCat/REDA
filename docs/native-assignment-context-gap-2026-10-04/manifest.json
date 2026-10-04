@@ -1,0 +1,13 @@
+{
+  "source_commit": "58b4366",
+  "terminal_exit": 101,
+  "cases": 3,
+  "supported": 0,
+  "files": {
+    "diagnostic.rs": "dbe860f31f3688fd6fa8682a74dd716ca205c1c0476c8d3b87509165ec3ddfe7",
+    "README.md": "575c8a7a20ef89112e7db2e8f3a3118443e82c72253efdc4c8dd7b2f7513b13e",
+    "baseline.log": "a2eb840d590e4015c31600e8eaabf4501c64e38471595693fa77236ebb202ad2",
+    "setup-failure.log": "5f73d85e829f32bc4d2f1a0a5eb2a191947b29d98cbb9574bdc03b83e97275b9"
+  },
+  "source_binding": "same clean source-manifest as clean-head-clippy-2026-10-04; diagnostic supplied separately"
+}
