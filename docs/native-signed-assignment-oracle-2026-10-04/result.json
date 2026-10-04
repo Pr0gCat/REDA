@@ -1,0 +1,13 @@
+{
+  "base": "c1bc590",
+  "native_exit_code": 0,
+  "iverilog_exit_code": 0,
+  "vvp_exit_code": 0,
+  "source_oracle_files_verified": 127,
+  "source_drift": 0,
+  "input_rows": 256,
+  "output_bits_per_row": 80,
+  "public_bits_matched": 20480,
+  "physical_or_game_claim": false,
+  "binary_sha256": "d0bf2e44884221b7177455985bfc12f6ea066a67faefe13723a67e1b3821e018"
+}
