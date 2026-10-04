@@ -1,0 +1,978 @@
+--- a/src/frontend/ast.rs
++++ b/src/frontend/ast.rs
+@@ -132,6 +132,7 @@
+ 
+ #[derive(Debug, Clone)]
+ pub struct PortDecl {
++    pub signed: bool,
+     pub id: SourceNodeId,
+     pub span: Span,
+     pub direction: PortDirection,
+@@ -250,6 +251,7 @@
+ /// assignment arrives and the distinction starts to mean something.
+ #[derive(Debug, Clone)]
+ pub struct NetDecl {
++    pub signed: bool,
+     pub id: SourceNodeId,
+     pub span: Span,
+     pub range: Option<Range>,
+@@ -283,19 +285,6 @@
+     NotEqual,
+ }
+ 
+-impl BinaryOp {
+-    pub fn as_str(self) -> &'static str {
+-        match self {
+-            BinaryOp::And => "&",
+-            BinaryOp::Or => "|",
+-            BinaryOp::Xor => "^",
+-            BinaryOp::LogicalAnd => "&&",
+-            BinaryOp::LogicalOr => "||",
+-            BinaryOp::Equal => "==",
+-            BinaryOp::NotEqual => "!=",
+-        }
+-    }
+-}
+ 
+ #[derive(Debug, Clone)]
+ pub struct Expr {
+@@ -309,7 +298,7 @@
+     Ident(String),
+     /// A sized literal, bits LSB-first.
+     Literal {
+-        width: u32,
++        signed: bool,        width: u32,
+         bits: Vec<bool>,
+     },
+     Unary(UnaryOp, Box<Expr>),
+--- a/src/frontend/parser.rs
++++ b/src/frontend/parser.rs
+@@ -190,10 +190,10 @@
+         let mut ports = Vec::new();
+         if self.eat_punct(Punct::LParen) {
+             if !self.is_punct(Punct::RParen) {
+-                let mut previous: Option<(PortDirection, Option<NetType>, Option<Range>)> = None;
++                let mut previous: Option<(PortDirection, Option<NetType>, Option<Range>, bool)> = None;
+                 loop {
+                     let port = self.port(previous.as_ref())?;
+-                    previous = Some((port.direction, port.net_type, port.range.clone()));
++                    previous = Some((port.direction, port.net_type, port.range.clone(), port.signed));
+                     ports.push(port);
+                     if !self.eat_punct(Punct::Comma) {
+                         break;
+@@ -231,7 +231,7 @@
+ 
+     fn port(
+         &mut self,
+-        previous: Option<&(PortDirection, Option<NetType>, Option<Range>)>,
++        previous: Option<&(PortDirection, Option<NetType>, Option<Range>, bool)>,
+     ) -> Result<PortDecl, Diagnostic> {
+         let start = self.peek().span;
+         let direction = match self.peek().kind {
+@@ -250,16 +250,17 @@
+             _ => None,
+         };
+ 
+-        let (direction, net_type, range) = match direction {
++        let (direction, net_type, range, signed) = match direction {
+             Some(direction) => {
+                 let net_type = self.net_type()?;
++                let signed = self.data_signedness();
+                 let range = self.range()?;
+-                (direction, net_type, range)
++                (direction, net_type, range, signed)
+             }
+             None => match previous {
+                 // `input a, b`: a bare identifier inherits the previous
+                 // port's direction, type, and range.
+-                Some((direction, net_type, range)) => (*direction, *net_type, range.clone()),
++                Some((direction, net_type, range, signed)) => (*direction, *net_type, range.clone(), *signed),
+                 None => return Err(self.error_here("`input` or `output`")),
+             },
+         };
+@@ -268,13 +269,24 @@
+         let span = start.join(name.span);
+         let id = self.node(SourceKind::Port, span, Some(name.name.clone()));
+         Ok(PortDecl {
+-            id,
++            signed,            id,
+             span,
+             direction,
+             net_type,
+             range,
+             name,
+         })
++    }
++
++    fn data_signedness(&mut self) -> bool {
++        match &self.peek().kind {
++            TokenKind::Ident(name) if name == "signed" || name == "unsigned" => {
++                let signed = name == "signed";
++                self.advance();
++                signed
++            }
++            _ => false,
++        }
+     }
+ 
+     fn net_type(&mut self) -> Result<Option<NetType>, Diagnostic> {
+@@ -479,13 +491,14 @@
+             | TokenKind::Keyword(Keyword::Reg) => {
+                 let start = self.peek().span;
+                 self.net_type()?.expect("checked above");
++                let signed = self.data_signedness();
+                 let range = self.range()?;
+                 loop {
+                     let name = self.expect_ident()?;
+                     let span = start.join(name.span);
+                     let id = self.node(SourceKind::Declaration, span, Some(name.name.clone()));
+                     items.push(Item::Declaration(NetDecl {
+-                        id,
++                        signed,                        id,
+                         span,
+                         range: range.clone(),
+                         name,
+@@ -638,12 +651,7 @@
+             }
+         }
+         let mut body = Vec::new();
+-        let block = if legacy {
+-            self.eat_keyword(Keyword::Begin)
+-        } else {
+-            self.expect_keyword(Keyword::Begin)?;
+-            true
+-        };
++        let block = self.eat_keyword(Keyword::Begin);
+         let end = if block {
+             while !self.is_keyword(Keyword::End) {
+                 if self.at_eof() {
+@@ -996,7 +1004,6 @@
+                 base,
+                 digits,
+             }) => {
+-                if signed { return Err(self.unsupported_here("signed data literals are not supported; signed integral parameters are supported")); }
+                 self.advance();
+                 let (width, bits) = parse_sized_literal(&width, base, &digits)
+                     .map_err(|message| self.error_at(token.span, message))?;
+@@ -1004,7 +1011,7 @@
+                 Ok(Expr {
+                     id,
+                     span: token.span,
+-                    kind: ExprKind::Literal { width, bits },
++                    kind: ExprKind::Literal { width, bits, signed },
+                 })
+             }
+             TokenKind::Number(Number::Unsized(_)) => Err(self.error_at(
+--- a/src/frontend/elaborate.rs
++++ b/src/frontend/elaborate.rs
+@@ -71,6 +71,7 @@
+ /// One declared signal of the top module, in declaration order.
+ #[derive(Debug, Clone)]
+ pub struct SignalInfo {
++    pub signed: bool,
+     pub name: String,
+     pub elab: ElabNodeId,
+     pub width: u32,
+@@ -498,6 +499,7 @@
+             };
+             let elab = self.node(port.id, kind, width);
+             self.declare(SignalInfo {
++                signed: port.signed,
+                 name: port.name.name.clone(),
+                 elab,
+                 width,
+@@ -514,6 +516,7 @@
+                 );
+                 let elab = self.node(declaration.id, ElabKind::Net, width);
+                 self.declare(SignalInfo {
++                    signed: declaration.signed,
+                     name: declaration.name.name.clone(),
+                     elab,
+                     width,
+@@ -579,6 +582,15 @@
+                     module.name.name
+                 ),
+             );
++        }
++
++        for assignment in &mut assigns {
++            sync_context_origins(&mut assignment.value, &mut self.nodes);
++        }
++        for block in &mut self.comb_blocks {
++            for assignment in &mut block.assigns {
++                sync_context_origins(&mut assignment.value, &mut self.nodes);
++            }
+         }
+ 
+         Design {
+@@ -761,16 +773,7 @@
+             match port.direction {
+                 PortDirection::Input => {
+                     if let Some(value) = self.expr(connection) {
+-                        if value.width != width {
+-                            self.fail(
+-                                connection.span,
+-                                format!(
+-                                    "instance input `{}` width mismatch: expected {width}, got {}",
+-                                    port.name.name, value.width
+-                                ),
+-                            );
+-                            continue;
+-                        }
++                        let value = value.in_width(width);
+                         let elab = self.node(instance.id, ElabKind::Assign, width);
+                         assigns.push(ElabAssign {
+                             elab,
+@@ -802,14 +805,17 @@
+                 }
+                 PortDirection::Output => {
+                     if let Some(targets) = self.assignment_targets(connection) {
+-                        if targets.iter().map(|t| t.2).sum::<u32>() != width {
+-                            self.fail(
+-                                connection.span,
+-                                format!("instance output `{}` width mismatch", port.name.name),
+-                            );
++                        let Some(total_width) = targets.iter().try_fold(0u32, |sum,t| sum.checked_add(t.2)) else {
++                            self.fail(connection.span, "instance output target width overflows");
+                             continue;
+-                        }
+-                        let mut offset = width;
++                        };
++                        let output_elab = if total_width == width {
++                            self.signals[signal].elab
++                        } else {
++                            self.node(instance.id, ElabKind::Expr, width)
++                        };
++                        let value = RtlExpr::new(RtlKind::Signal { signal, lsb: 0 }, width, output_elab).with_signed(self.signals[signal].signed).in_width(total_width);
++                        let mut offset = total_width;
+                         for (target, lsb, target_width) in targets {
+                             offset -= target_width;
+                             let elab = self.node(instance.id, ElabKind::Assign, target_width);
+@@ -819,14 +825,11 @@
+                                 signal: target,
+                                 lsb,
+                                 width: target_width,
+-                                value: RtlExpr::new(
+-                                    RtlKind::Signal {
+-                                        signal,
+-                                        lsb: offset,
+-                                    },
+-                                    target_width,
+-                                    elab,
+-                                ),
++                                value: if total_width == width {
++                                    RtlExpr::new(RtlKind::Signal { signal, lsb: offset }, target_width, elab)
++                                } else {
++                                    RtlExpr::new(RtlKind::Slice(Box::new(value.clone()), offset), target_width, elab)
++                                },
+                                 clock: None,
+                             });
+                         }
+@@ -924,11 +927,12 @@
+             return Vec::new();
+         };
+         let width = targets.iter().try_fold(0u32, |sum, t| sum.checked_add(t.2));
+-        if width != Some(value.width) {
+-            self.fail(assign.span, "assignment width mismatch: concatenated targets must exactly match the value width");
++        let Some(width) = width else {
++            self.fail(assign.span, "concatenated assignment target width overflows");
+             return Vec::new();
+-        }
+-        let mut offset = value.width;
++        };
++        let value = value.in_width(width);
++        let mut offset = width;
+         targets
+             .into_iter()
+             .map(|(signal, lsb, width)| {
+@@ -942,6 +946,8 @@
+                     width,
+                     clock: None,
+                     value: RtlExpr {
++                        signed: false,
++                        contextual: true,
+                         kind: RtlKind::Slice(Box::new(value.clone()), offset),
+                         width,
+                         elab,
+@@ -955,18 +961,7 @@
+ 
+     fn assign(&mut self, assign: &Assign) -> Option<ElabAssign> {
+         let (signal, lsb, width) = self.target(&assign.lhs)?;
+-        let value = self.expr(&assign.rhs)?;
+-        if value.width != width {
+-            self.fail(
+-                assign.span,
+-                format!(
+-                    "assignment width mismatch: the target is {width} bit(s) and the value is {} \
+-                     bit(s); version 1 never extends or truncates",
+-                    value.width
+-                ),
+-            );
+-            return None;
+-        }
++        let value = self.expr(&assign.rhs)?.in_width(width);
+         let elab = self.node(assign.id, ElabKind::Assign, width);
+         Some(ElabAssign {
+             elab,
+@@ -1051,16 +1046,7 @@
+                 continue;
+             };
+ 
+-            if arm_value.width != arm_target.2 {
+-                self.fail(
+-                    item.statement.span,
+-                    format!(
+-                        "assignment width mismatch: the target is {} bit(s) and the value is {} bit(s); version 1 never extends or truncates",
+-                        arm_target.2, arm_value.width
+-                    ),
+-                );
+-                valid = false;
+-            }
++            let arm_value = arm_value.in_width(arm_target.2);
+ 
+             if let Some(expected) = target {
+                 if arm_target != expected {
+@@ -1111,6 +1097,8 @@
+ 
+             let condition_elab = self.node(item.id, ElabKind::Expr, 1);
+             let condition = RtlExpr {
++                        signed: false,
++                        contextual: true,
+                 kind: RtlKind::Equal(Box::new(selector.clone()), Box::new(label)),
+                 width: 1,
+                 elab: condition_elab,
+@@ -1169,6 +1157,8 @@
+         {
+             let elab = self.node(always.id, ElabKind::Expr, width);
+             RtlExpr {
++                        signed: false,
++                        contextual: true,
+                 kind: RtlKind::Table {
+                     selector: Box::new(selector),
+                     arms: arms
+@@ -1199,6 +1189,8 @@
+                 .fold(default.clone(), |acc, (source, select, when_true)| {
+                     let elab = self.node(source, ElabKind::Expr, width);
+                     let gated = RtlExpr {
++                        signed: false,
++                        contextual: true,
+                         kind: RtlKind::Mux {
+                             select: Box::new(select),
+                             when_true: Box::new(when_true),
+@@ -1210,6 +1202,8 @@
+                         synthetic: Some(SyntheticOrigin::BranchJoin),
+                     };
+                     RtlExpr {
++                        signed: false,
++                        contextual: true,
+                         kind: RtlKind::Binary(RtlBinaryOp::Or, Box::new(acc), Box::new(gated)),
+                         width,
+                         elab,
+@@ -1223,6 +1217,8 @@
+                 .fold(default, |when_false, (source, select, when_true)| {
+                     let elab = self.node(source, ElabKind::Expr, width);
+                     RtlExpr {
++                        signed: false,
++                        contextual: true,
+                         kind: RtlKind::Mux {
+                             select: Box::new(select),
+                             when_true: Box::new(when_true),
+@@ -1322,12 +1318,7 @@
+                     );
+                     return None;
+                 }
+-                let value = self.expr(&assign.rhs)?;
+-                if value.width != width {
+-                    self.fail(assign.span, format!(
+-                        "assignment width mismatch: the DFF target is {width} bit(s) and the value is {} bit(s); version 1 never extends or truncates", value.width));
+-                    return None;
+-                }
++                let value = self.expr(&assign.rhs)?.in_width(width);
+                 Some(value)
+             }
+             Stmt::If(branch) => {
+@@ -1338,6 +1329,8 @@
+                 let when_false = match &branch.when_false {
+                     Some(statement) => self.clocked_value(statement, target)?,
+                     None => RtlExpr {
++                        signed: false,
++                        contextual: true,
+                         kind: RtlKind::Signal { signal, lsb },
+                         width,
+                         elab,
+@@ -1346,6 +1339,8 @@
+                     },
+                 };
+                 Some(RtlExpr {
++                        signed: false,
++                        contextual: true,
+                     kind: RtlKind::Mux {
+                         select: Box::new(condition),
+                         when_true: Box::new(when_true),
+@@ -1507,7 +1502,7 @@
+             ExprKind::Ident(name) => {
+                 if let Some(value) = self.parameters.get(name).copied() {
+                     let elab = self.node(expr.id, ElabKind::Expr, value.width);
+-                    return Some(RtlExpr::new(RtlKind::Const(value.bits()), value.width, elab));
++                    return Some(RtlExpr::new(RtlKind::Const(value.bits()), value.width, elab).with_signed(value.signed));
+                 }
+                 let signal = self.lookup(name, expr.span)?;
+                 let width = self.signals[signal].width;
+@@ -1516,11 +1511,11 @@
+                     RtlKind::Signal { signal, lsb: 0 },
+                     width,
+                     elab,
+-                ))
+-            }
+-            ExprKind::Literal { width, bits } => {
++                ).with_signed(self.signals[signal].signed))
++            }
++            ExprKind::Literal { width, bits, signed } => {
+                 let elab = self.node(expr.id, ElabKind::Expr, *width);
+-                Some(RtlExpr::new(RtlKind::Const(bits.clone()), *width, elab))
++                Some(RtlExpr::new(RtlKind::Const(bits.clone()), *width, elab).with_signed(*signed))
+             }
+             ExprKind::BitSelect(base, index) => {
+                 let ExprKind::Ident(name) = &base.kind else {
+@@ -1592,13 +1587,13 @@
+                 let operand = self.expr(operand)?;
+                 let width = operand.width;
+                 let elab = self.node(expr.id, ElabKind::Expr, width);
+-                Some(RtlExpr::new(RtlKind::Not(Box::new(operand)), width, elab))
++                Some(RtlExpr::new(RtlKind::Not(Box::new(operand.clone())), width, elab).with_signed(operand.signed))
+             }
+             ExprKind::Unary(UnaryOp::LogicalNot, operand) => {
+                 let operand = self.expr(operand)?;
+                 let truth = self.reduce_to_truth(operand);
+                 let elab = self.node(expr.id, ElabKind::Expr, 1);
+-                Some(RtlExpr::new(RtlKind::Not(Box::new(truth)), 1, elab))
++                Some(RtlExpr::new(RtlKind::Not(Box::new(truth)), 1, elab).self_determined())
+             }
+             ExprKind::Binary(op, left, right) => self.binary(expr, *op, left, right),
+             ExprKind::Ternary(select, when_true, when_false) => {
+@@ -1606,18 +1601,10 @@
+                 let select = self.reduce_to_truth(select);
+                 let when_true = self.expr(when_true)?;
+                 let when_false = self.expr(when_false)?;
+-                if when_true.width != when_false.width {
+-                    self.fail(
+-                        expr.span,
+-                        format!(
+-                            "the branches of `?:` are {} and {} bit(s) wide; version 1 requires \
+-                             them to match exactly",
+-                            when_true.width, when_false.width
+-                        ),
+-                    );
+-                    return None;
+-                }
+-                let width = when_true.width;
++                let width = when_true.width.max(when_false.width);
++                let signed = when_true.signed && when_false.signed;
++                let when_true = when_true.in_integral_context(width, signed);
++                let when_false = when_false.in_integral_context(width, signed);
+                 let elab = self.node(expr.id, ElabKind::Expr, width);
+                 Some(RtlExpr::new(
+                     RtlKind::Mux {
+@@ -1627,7 +1614,7 @@
+                     },
+                     width,
+                     elab,
+-                ))
++                ).with_signed(signed))
+             }
+         }
+     }
+@@ -1635,6 +1622,11 @@
+     fn binary(&mut self, expr: &Expr, op: BinaryOp, left: &Expr, right: &Expr) -> Option<RtlExpr> {
+         let left = self.expr(left)?;
+         let right = self.expr(right)?;
++        let common_width = left.width.max(right.width);
++        let signed = left.signed && right.signed;
++        let left = left.in_integral_context(common_width, signed);
++        let right = right.in_integral_context(common_width, signed);
++
+ 
+         let bitwise = |op| match op {
+             BinaryOp::And => Some(RtlBinaryOp::And),
+@@ -1645,19 +1637,6 @@
+ 
+         match op {
+             BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {
+-                if left.width != right.width {
+-                    self.fail(
+-                        expr.span,
+-                        format!(
+-                            "the operands of `{}` are {} and {} bit(s) wide; version 1 requires \
+-                             them to match exactly",
+-                            op.as_str(),
+-                            left.width,
+-                            right.width
+-                        ),
+-                    );
+-                    return None;
+-                }
+                 let width = left.width;
+                 let elab = self.node(expr.id, ElabKind::Expr, width);
+                 Some(RtlExpr::new(
+@@ -1668,29 +1647,16 @@
+                     ),
+                     width,
+                     elab,
+-                ))
++                ).with_signed(signed))
+             }
+             BinaryOp::Equal | BinaryOp::NotEqual => {
+-                if left.width != right.width {
+-                    self.fail(
+-                        expr.span,
+-                        format!(
+-                            "the operands of `{}` are {} and {} bit(s) wide; version 1 requires \
+-                             them to match exactly",
+-                            op.as_str(),
+-                            left.width,
+-                            right.width
+-                        ),
+-                    );
+-                    return None;
+-                }
+                 let elab = self.node(expr.id, ElabKind::Expr, 1);
+                 let equal = RtlExpr::new(RtlKind::Equal(Box::new(left), Box::new(right)), 1, elab);
+                 Some(match op {
+                     BinaryOp::Equal => equal,
+                     // `!=` is the same comparison, inverted; both nodes
+                     // belong to the one `!=` expression.
+-                    _ => RtlExpr::new(RtlKind::Not(Box::new(equal)), 1, elab),
++                    _ => RtlExpr::new(RtlKind::Not(Box::new(equal)), 1, elab).self_determined(),
+                 })
+             }
+             BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
+@@ -1706,7 +1672,7 @@
+                     RtlKind::Binary(op, Box::new(left), Box::new(right)),
+                     1,
+                     elab,
+-                ))
++                ).self_determined())
+             }
+         }
+     }
+@@ -1759,3 +1725,35 @@
+         format!("{name}[{bit}]")
+     }
+ }
++
++/// Context conversion owns expression widths; declarations retain their source types.
++fn sync_context_origins(value: &mut RtlExpr, nodes: &mut Vec<ElabNode>) {
++    let width = value.origin_lsb.checked_add(value.width).expect("validated expression width");
++    if nodes[value.elab.0 as usize].width < width {
++        if nodes[value.elab.0 as usize].kind == ElabKind::Expr {
++            nodes[value.elab.0 as usize].width = width;
++        } else {
++            let mut node = nodes[value.elab.0 as usize].clone();
++            node.kind = ElabKind::Expr;
++            node.width = width;
++            value.elab = ElabNodeId(nodes.len() as u32);
++            nodes.push(node);
++        }
++    }
++    match &mut value.kind {
++        RtlKind::Concat(parts) => for part in parts { sync_context_origins(part, nodes); },
++        RtlKind::Slice(child, _) | RtlKind::Not(child) | RtlKind::ReduceOr(child) => sync_context_origins(child, nodes),
++        RtlKind::Binary(_, left, right) | RtlKind::Equal(left, right) => {
++            sync_context_origins(left, nodes); sync_context_origins(right, nodes);
++        }
++        RtlKind::Mux { select, when_true, when_false } => {
++            sync_context_origins(select, nodes); sync_context_origins(when_true, nodes); sync_context_origins(when_false, nodes);
++        }
++        RtlKind::Table { selector, arms, default } => {
++            sync_context_origins(selector, nodes);
++            for (_, select, value) in arms { sync_context_origins(select, nodes); sync_context_origins(value, nodes); }
++            sync_context_origins(default, nodes);
++        }
++        RtlKind::Const(_) | RtlKind::Signal { .. } => {}
++    }
++}
+--- a/src/frontend/rtl.rs
++++ b/src/frontend/rtl.rs
+@@ -67,6 +67,8 @@
+ pub struct RtlExpr {
+     pub kind: RtlKind,
+     pub width: u32,
++    pub signed: bool,
++    pub contextual: bool,
+     pub elab: ElabNodeId,
+     /// Lowest source-expression bit represented by a procedural projection.
+     pub origin_lsb: u32,
+@@ -79,9 +81,73 @@
+         RtlExpr {
+             kind,
+             width,
++            signed: false,
++            contextual: true,
+             elab,
+             origin_lsb: 0,
+             synthetic: None,
+         }
+     }
++    pub fn self_determined(mut self) -> Self { self.contextual = false; self }
++
++    pub fn with_signed(mut self, signed: bool) -> Self {
++        self.signed = signed;
++        self
++    }
++
++    /// Apply a context width before bitwise evaluation, retaining the RHS type.
++    pub fn in_width(self, width: u32) -> Self {
++        let signed = self.signed;
++        self.in_integral_context(width, signed)
++    }
++
++    pub fn in_integral_context(mut self, width: u32, signed: bool) -> Self {
++        let original = self.width;
++        if width <= original {
++            if width == original { self.signed = signed; return self; }
++            let elab = self.elab;
++            return Self::new(RtlKind::Slice(Box::new(self), 0), width, elab).with_signed(signed);
++        }
++        let kind = std::mem::replace(&mut self.kind, RtlKind::Const(Vec::new()));
++        self.kind = match kind {
++            RtlKind::Not(value) if self.contextual && value.width == original =>
++                RtlKind::Not(Box::new(value.in_integral_context(width, signed))),
++            RtlKind::Binary(op, left, right) if self.contextual && left.width == original && right.width == original =>
++                RtlKind::Binary(op, Box::new(left.in_integral_context(width, signed)),
++                    Box::new(right.in_integral_context(width, signed))),
++            RtlKind::Mux { select, when_true, when_false } if self.contextual => RtlKind::Mux {
++                select, when_true: Box::new(when_true.in_integral_context(width, signed)),
++                when_false: Box::new(when_false.in_integral_context(width, signed)),
++            },
++            RtlKind::Const(mut bits) => {
++                let extension = signed && bits.last().copied().unwrap_or(false);
++                bits.resize(width as usize, extension);
++                RtlKind::Const(bits)
++            },
++            kind => {
++                let base = Self { kind, ..self.clone() };
++                let mut parts = Vec::new();
++                if signed {
++                    for bit in original..width {
++                        let mut extension = Self::new(RtlKind::Slice(Box::new(base.clone()), original - 1), 1, self.elab);
++                        extension.origin_lsb = bit;
++                        extension.synthetic = Some(SyntheticOrigin::Passthrough);
++                        parts.push(extension);
++                    }
++                    parts.insert(0, base);
++                } else {
++                    parts.push(base);
++                    let mut extension = Self::new(RtlKind::Const(vec![false; (width - original) as usize]), width - original, self.elab);
++                    extension.origin_lsb = original;
++                    extension.synthetic = Some(SyntheticOrigin::Passthrough);
++                    parts.push(extension);
++                }
++                RtlKind::Concat(parts)
++            }
++        };
++        self.width = width;
++        self.signed = signed;
++        self
++    }
++
+ }
+--- a/tests/systemverilog_compiler.rs
++++ b/tests/systemverilog_compiler.rs
+@@ -564,24 +564,12 @@
+     assert!(diagnostics[0].message.contains("and2"));
+ }
+ 
+-/// Version 1 has no implicit extension or truncation, no unsized literals,
+-/// no ascending ranges, and no procedural blocks yet. Each rejection is one
+-/// diagnostic at a stable, pointed span.
++/// Unsupported syntax and invalid source retain stable pointed diagnostics.
++/// Integral context conversions and single-statement always_comb are covered
++/// exhaustively in assignment_context_provenance, using the original sources.
+ #[test]
+ fn the_rejection_matrix_has_stable_messages_and_spans() {
+     let cases: &[(&str, &str, usize, &str)] = &[
+-        (
+-            "module m(input logic [1:0] a, output logic y);\n  assign y = a;\nendmodule\n",
+-            "assign y = a;",
+-            0,
+-            "assignment width mismatch",
+-        ),
+-        (
+-            "module m(input logic a, input logic [1:0] b, output logic y);\n  assign y = a & b;\nendmodule\n",
+-            "a & b",
+-            0,
+-            "operands of `&`",
+-        ),
+         (
+             "module m(input logic a, output logic y);\n  assign y = 1;\nendmodule\n",
+             "1",
+@@ -613,12 +601,6 @@
+             "expected `;`",
+         ),
+         (
+-            "module m(input logic a, output logic y);\n  always_comb y = a;\nendmodule\n",
+-            "y",
+-            2,
+-            "expected `begin`",
+-        ),
+-        (
+             "module m(input logic a, output logic y);\n  reg z;\n  assign y = a;\nendmodule\n",
+             "reg z",
+             0,
+@@ -641,12 +623,6 @@
+             "w",
+             1,
+             "is an input port and cannot be assigned",
+-        ),
+-        (
+-            "module m(input logic a, output logic y);\n  assign y = 2'b11;\nendmodule\n",
+-            "assign y = 2'b11;",
+-            0,
+-            "assignment width mismatch",
+         ),
+         (
+             "module m(input logic a, output logic y);\n  assign y = 1'b2;\nendmodule\n",
+@@ -965,10 +941,6 @@
+             "cannot be assigned",
+         ),
+         (
+-            "module m(input [2:0] a, output y,z); assign {y,z} = a; endmodule",
+-            "width mismatch",
+-        ),
+-        (
+             "module m(input [1:0] a, output y,z); assign {y,z[1]} = a; endmodule",
+             "out of range",
+         ),
+--- a/tests/systemverilog_instances.rs
++++ b/tests/systemverilog_instances.rs
+@@ -176,7 +176,6 @@
+         ("word u(a,q),u(a,q);", "duplicate declaration"),
+         ("word a(a,q);", "duplicate declaration"),
+         ("word u(a,a); assign q=a;", "input"),
+-        ("word #(.W(2)) u(a,q);", "width mismatch"),
+         ("word u(a,q),v(a,q);", "more than one assignment"),
+         ("word u(q,q);", "combinational loop"),
+         ("word u(a,q); assign q=a;", "more than one assignment"),
+--- a/tests/systemverilog_reset.rs
++++ b/tests/systemverilog_reset.rs
+@@ -105,7 +105,7 @@
+             "if(reset) q<=2'b00; else q[0]<=1'b1;",
+             "same register slice",
+         ),
+-        ("if(reset) q<=2'b00; else q<=1'b1;", "width mismatch"),
++        ("if(reset) q<=2'b00; else q<=1'b1;", "has no driver"),
+         ("if(reset) q<=2'b00; else q=2'b11;", "nonblocking"),
+         ("if(reset) begin q<=2'b00; q<=2'b11; end", "expected"),
+     ] {
+--- /dev/null
++++ b/tests/assignment_context_diagnostic.rs
+@@ -0,0 +1,116 @@
++use reda::frontend::{compile_systemverilog, CompileOptions, SourceInput};
++use reda::frontend::evaluate::Evaluator;
++#[test]
++fn assignment_context_observation() {
++ let cases=[
++  ("signed-literal", "module m(output [7:0] y); assign y=4'shf; endmodule",255u64),
++  ("mixed-bitwise", "module m(output [7:0] y); assign y=4'shf & 8'hff; endmodule",15),
++  ("signed-bitwise", "module m(output [7:0] y); assign y=4'shf & 8'shff; endmodule",255),
++  ("mixed-comparison", "module m(output [7:0] y); assign y=4'shf == 8'hff; endmodule",0),
++  ("signed-comparison", "module m(output [7:0] y); assign y=4'shf == 8'shff; endmodule",1),
++  ("mixed-ternary", "module m(output [7:0] y); assign y=1'b1 ? 4'shf : 8'h0; endmodule",15),
++  ("signed-ternary", "module m(output [7:0] y); assign y=1'b1 ? 4'shf : 8'sh0; endmodule",255),
++  ("concat-self-determined", "module m(output [7:0] y); assign y={4'shf}; endmodule",15),
++  ("concat-target", "module m(output [7:0] y); assign {y[7:4],y[3:0]}=4'shf; endmodule",255),
++  ("procedural", "module m(output logic [7:0] y); always_comb y=4'shf; endmodule",255),
++  ("case-context", "module m(output logic [7:0] y); always_comb begin case(1'b0) 1'b0:y=4'shf; default:y=4'h0; endcase end endmodule",255),
++  ("hierarchy-output", "module child(output signed [3:0] o); assign o=4'shf; endmodule module m(output [7:0] y); child u(y); endmodule",255),
++  ("hierarchy-input", "module child(input [7:0] a,output [7:0] o); assign o=a; endmodule module m(output [7:0] y); child u(4'shf,y); endmodule",255),
++
++  ("context-bitwise-inversion", "module m #(parameter logic [3:0] P=4'hf)(output [7:0] y); assign y=~P; endmodule",240u64),
++  ("signed-bitwise-inversion", "module m #(parameter logic signed [3:0] P=4'shf)(output [7:0] y); assign y=~P; endmodule",0),
++  ("logical-not-self-determined", "module m #(parameter logic [3:0] P=4'h0)(output [7:0] y); assign y=!P; endmodule",1),
++  ("comparison-self-determined", "module m #(parameter logic [3:0] P=4'h0)(output [7:0] y); assign y=P!=4'hf; endmodule",1),
++  ("signed-parameter-extension", "module m #(parameter logic signed [3:0] P=4'shf)(output [7:0] y); assign y=P; endmodule",255u64),
++  ("unsigned-parameter-extension", "module m #(parameter logic [3:0] P=4'hf)(output [7:0] y); assign y=P; endmodule",15),
++  ("assignment-truncation", "module m #(parameter logic [7:0] P=8'hab)(output [3:0] y); assign y=P; endmodule",11),
++ ];
++ let mut missing=0;
++ for (label,text,expected) in cases {
++  match compile_systemverilog(&[SourceInput{name:"context.sv",text}],&CompileOptions::new("m")) {
++   Err(e)=>{eprintln!("MISSING {label}: {e:?}");missing+=1;},
++   Ok(a)=>{let values=Evaluator::new(&a.netlist).unwrap().evaluate(&Default::default()).unwrap();let mut word=0u64;for (name,signal) in a.output_map(){let bit:usize=name.trim_start_matches("y[").trim_end_matches(']').parse().unwrap();word|=(values[&signal] as u64)<<bit;}assert_eq!(word,expected,"{label}");eprintln!("SUPPORTED {label} {word}");}
++  }
++ }
++ assert_eq!(missing,0,"required contextual sizing cases missing");
++}
++
++#[test]
++fn signal_signedness_and_self_determined_selections() {
++ use std::collections::BTreeMap;
++ for (label,body,sign_extend,invert) in [
++  ("signed signal", "assign y=a;", true,false),
++  ("signed inverse", "assign y=~a;", true,true),
++  ("unsigned mixed inverse", "assign y=~a & 8'hff;", false,true),
++  ("part selection", "assign y=a[3:0];", false,false),
++  ("concatenation", "assign y={a};", false,false),
++  ("internal signed net", "wire signed [3:0] t; assign t=a; assign y=t;",true,false),
++  ("procedural signed net", "logic signed [3:0] t; always_comb begin t=a; y=t; end",true,false),
++ ] {
++  let text=format!("module m(input signed [3:0] a, output logic [7:0] y); {body} endmodule");
++  let a=compile_systemverilog(&[SourceInput{name:"signals.sv",text:&text}],&CompileOptions::new("m")).unwrap();
++  let evaluator=Evaluator::new(&a.netlist).unwrap();
++  for word in 0..16u64 {
++   let inputs:BTreeMap<_,_>=(0..4).map(|bit|(format!("a[{bit}]"),word&(1<<bit)!=0)).collect();
++   let values=evaluator.evaluate(&inputs).unwrap();
++   let actual=(0..8).fold(0u64,|v,bit|v|((values[&a.output_map()[&format!("y[{bit}]")]] as u64)<<bit));
++   let mut expected=if sign_extend && word&8!=0 {word|240}else{word};if invert{expected^=255;}
++   assert_eq!(actual,expected,"{label} input{word}");
++  }
++ }
++}
++
++#[test]
++fn clocked_assignment_context_matches_explicit_source() {
++ for event in ["posedge","negedge"] {
++  let source=format!("module m(input clk,output logic [7:0] y); always_ff @({event} clk) y<=4'shf; endmodule");
++  let reference=source.replace("4'shf","8'hff");
++  let compile=|text:&str|compile_systemverilog(&[SourceInput{name:"dff.sv",text}],&CompileOptions::new("m")).unwrap();
++  assert_eq!(compile(&source).netlist,compile(&reference).netlist);
++ }
++}
++
++#[test]
++fn widened_signed_source_matches_explicit_physical_control() {
++ use reda::compile::{compile,lowering::lower_optimised};
++ use reda::redstone::{simulator::Simulator,world::block::BlockKind};
++ use std::collections::BTreeMap;
++ let source="module m(input signed [3:0] a, output [7:0] y); assign y=a; endmodule";
++ let reference="module m(input [3:0] a, output [7:0] y); assign y={a[3],a[3],a[3],a[3],a}; endmodule";
++ let native=|text:&str|compile_systemverilog(&[SourceInput{name:"physical.sv",text}],&CompileOptions::new("m")).unwrap();
++ let a=native(source);let b=native(reference);
++ let net=lower_optimised(&a.netlist).unwrap();let control_net=lower_optimised(&b.netlist).unwrap();assert_eq!(net,control_net);
++ let physical=compile(&net).unwrap();let control=compile(&control_net).unwrap();
++ let hash=reda::compile::fragment_synth::benchmark::canonical_world_fingerprint;
++ assert_eq!(hash(&physical.world),hash(&control.world));
++ physical.validate_rewrite_view(&net).unwrap();
++ let implementation=physical.implementation_netlist(&net);let oracle=Evaluator::new(implementation).unwrap();
++ let mut sim=Simulator::new(physical.world.clone());sim.run_until_stable(2000).unwrap();
++ for from in 0..16u64 {for to in 0..16u64 {for word in [from,to] {
++  let inputs:BTreeMap<_,_>=(0..4).map(|bit|(format!("a[{bit}]"),word&(1<<bit)!=0)).collect();
++  for (name,at) in &physical.input_positions {let mut state=sim.world().get(at.0,at.1,at.2).clone();state.lit=inputs[name];sim.world_mut().set(at.0,at.1,at.2,state);}
++  sim.run_until_stable(2000).unwrap();
++  assert_eq!(implementation.inputs.len(),net.inputs.len());
++  let actual_inputs:BTreeMap<_,_>=implementation.inputs.iter().zip(&net.inputs).map(|(actual,source)|(actual.clone(),inputs[source])).collect();
++  let values=oracle.settle(&actual_inputs).unwrap();
++  for gate in &implementation.gates {let at=physical.gate_output_positions[&gate.output];let state=sim.world().get(at.0,at.1,at.2);let actual=match state.kind {BlockKind::RedstoneWire=>state.power>0,BlockKind::Torch|BlockKind::WallTorch|BlockKind::Repeater|BlockKind::Comparator=>state.lit,_=>panic!("unknown observation")};assert_eq!(actual,values[&gate.output]);}
++  let expected=if word&8!=0 {word|240}else{word};
++  for bit in 0..8 {let at=physical.output_positions[&a.output_map()[&format!("y[{bit}]")]];assert_eq!(sim.world().get(at.0,at.1,at.2).lit,expected&(1<<bit)!=0);}
++ }}}
++}
++
++#[test]
++fn context_origin_bits_have_real_elaborated_widths() {
++ for text in [
++ "module m(input signed [3:0] a,output [7:0] y); assign y=a; endmodule",
++ "module m(output [7:0] y); assign y=4'shf; endmodule",
++ "module m(input signed [3:0] a,output [7:0] y); assign y=~a; endmodule",
++ "module child(output signed [3:0] o); assign o=4'shf; endmodule module m(output [7:0] y); child u(y); endmodule",
++ ] {
++  let a=compile_systemverilog(&[SourceInput{name:"origins.sv",text}],&CompileOptions::new("m")).unwrap();
++  for origin in a.debug.logic_origins.iter().chain(a.debug.extra_origins.iter().map(|(_,o)|o)) {
++   let node=&a.debug.elab_nodes[origin.elab.0 as usize];
++   assert!(origin.bit<node.width,"source{text}: origin{origin:?} exceeds{node:?}");
++  }
++ }
++}
+--- /dev/null
++++ b/tests/assignment_context_provenance.rs
+@@ -0,0 +1,74 @@
++use reda::frontend::{compile_systemverilog, CompileOptions, SourceInput};
++#[test]
++fn widening_preserves_declaration_types_and_context_ownership() {
++ for text in [
++  "module m(input signed [3:0] a,output [7:0] y); assign y=a; endmodule",
++  "module m(input signed [3:0] a,output [7:0] y); assign y=~a; endmodule",
++  "module child(output signed [3:0] o); assign o=4'shf; endmodule module m(output [7:0] y); child u(y); endmodule",
++ ] {
++  let a=compile_systemverilog(&[SourceInput{name:"ownership.sv",text}],&CompileOptions::new("m")).unwrap();
++  let declarations:Vec<_>=a.debug.elab_nodes.iter().filter(|n| matches!(serde_json::to_value(n.kind).unwrap().as_str(),Some("Input"|"Output"|"Net"))).collect();
++  assert!(declarations.iter().any(|n|n.width==4),"narrow source declaration lost: {text}");
++  assert!(declarations.iter().any(|n|n.width==8),"wide destination declaration lost: {text}");
++  assert_eq!(declarations.len(),2,"context must not invent declarations: {text}");
++  for origin in a.debug.logic_origins.iter().chain(a.debug.extra_origins.iter().map(|(_,o)|o)) {
++   let node=&a.debug.elab_nodes[origin.elab.0 as usize];
++   assert!(origin.bit<node.width);
++   if origin.bit>=4 { assert!(!matches!(serde_json::to_value(node.kind).unwrap().as_str(),Some("Input"|"Net")),"extension attributed to narrow declaration: {origin:?}"); }
++  }
++ }
++}
++
++#[test]
++fn formerly_rejected_sources_have_exhaustive_independent_truth() {
++ use reda::frontend::evaluate::Evaluator;
++ let cases=[
++ ("module m(input logic [1:0] a, output logic y);\n  assign y = a;\nendmodule\n",vec!["a[0]","a[1]"],vec!["y"],0),
++ ("module m(input logic a, input logic [1:0] b, output logic y);\n  assign y = a & b;\nendmodule\n",vec!["a","b[0]","b[1]"],vec!["y"],1),
++ ("module m(input logic a, output logic y);\n  always_comb y = a;\nendmodule\n",vec!["a"],vec!["y"],0),
++ ("module m(input logic a, output logic y);\n  assign y = 2'b11;\nendmodule\n",vec!["a"],vec!["y"],2),
++ ("module m(input [2:0] a, output y,z); assign {y,z} = a; endmodule",vec!["a[0]","a[1]","a[2]"],vec!["z","y"],0),
++ ("module word #(parameter W=1)(input [W-1:0] a,output [W-1:0] q); localparam L=1; assign q=a; endmodule  module m(input a,output q); word #(.W(2)) u(a,q); endmodule",vec!["a"],vec!["q"],0),
++ ];
++ for (text,inputs,outputs,mode) in cases {
++ let a=compile_systemverilog(&[SourceInput{name:"retained.sv",text}],&CompileOptions::new("m")).unwrap();
++ let e=Evaluator::new(&a.netlist).unwrap();
++ for word in 0..(1usize<<inputs.len()) {
++ let values=e.evaluate(&inputs.iter().enumerate().map(|(i,n)|(n.to_string(),word&(1<<i)!=0)).collect()).unwrap();
++ let expected=match mode {1=>(word&1)&((word>>1)&1),2=>1,_=>word};
++ for (bit,name) in outputs.iter().enumerate(){assert_eq!(values[&a.output_map()[*name]],expected&(1<<bit)!=0,"{text}, word {word}, output {name}");}
++ }
++ }
++}
++
++#[test]
++fn integral_context_width_boundaries_preserve_all_output_bits() {
++ use reda::frontend::evaluate::Evaluator;
++ for (text,expected) in [
++ ("module m(output [63:0] y); assign y=1'sb1; endmodule",u64::MAX),
++ ("module m(output [63:0] y); assign y=1'b1; endmodule",1),
++ ("module m(output [63:0] y); assign y=64'sh8000000000000000; endmodule",1u64<<63),
++ ("module child(output signed [63:0] o); assign o=64'sh8000000000000001; endmodule module m(output y); child u(y); endmodule",1),
++ ("module child(output signed o); assign o=1'sb1; endmodule module m(output [63:0] y); child u(y); endmodule",u64::MAX),
++ ] {
++ let a=compile_systemverilog(&[SourceInput{name:"bounds.sv",text}],&CompileOptions::new("m")).unwrap();
++ let values=Evaluator::new(&a.netlist).unwrap().evaluate(&Default::default()).unwrap();
++ for (name,signal) in a.output_map(){let bit=if name=="y"{0}else{name.trim_start_matches("y[").trim_end_matches(']').parse::<usize>().unwrap()};assert_eq!(values[&signal],expected&(1u64<<bit)!=0,"{text}, {name}");}
++ }
++}
++
++#[test]
++fn reset_assignment_extension_preserves_both_edge_state_trajectories() {
++ for edge in ["posedge","negedge"] {
++ let text=format!("module m(input clk,reset,output reg [1:0] q,r); always @({edge} clk) if(reset) q<=2'b00; else q<=1'b1; assign r=2'b00; endmodule");
++ let a=compile_systemverilog(&[SourceInput{name:"reset-context.sv",text:&text}],&CompileOptions::new("m")).unwrap();
++ let mut evaluator=reda::frontend::evaluate::Evaluator::new(&a.netlist).unwrap();let(mut previous,mut q)=(false,0usize);
++ for cycle in 0..32 {for clock in [false,true,true,false] {
++ let reset=cycle%3==0;
++ if (edge=="posedge"&&!previous&&clock)||(edge=="negedge"&&previous&&!clock){q=usize::from(!reset);}
++ let values=evaluator.step(&[("clk".into(),clock),("reset".into(),reset)].into_iter().collect()).unwrap();
++ for bit in 0..2 {assert_eq!(values[&a.output_map()[&format!("q[{bit}]")]],q&(1<<bit)!=0);assert!(!values[&a.output_map()[&format!("r[{bit}]")]]);}
++ previous=clock;
++ }}
++ }
++}
+--- /dev/null
++++ b/tests/assignment_context_inherited.rs
+@@ -0,0 +1,13 @@
++use reda::frontend::{compile_systemverilog,CompileOptions,SourceInput};
++use reda::frontend::evaluate::Evaluator;
++#[test]
++fn inherited_comma_port_signedness_is_exhaustive() {
++ let text="module m(input signed [3:0] a,b,output [7:0] y); assign y=a & b; endmodule";
++ let artifact=compile_systemverilog(&[SourceInput{name:"inherited.sv",text}],&CompileOptions::new("m")).unwrap();
++ let evaluator=Evaluator::new(&artifact.netlist).unwrap();
++ for a in 0usize..16 {for b in 0usize..16 {
++ let inputs=(0..4).flat_map(|bit|[(format!("a[{bit}]"),a&(1<<bit)!=0),(format!("b[{bit}]"),b&(1<<bit)!=0)]).collect();
++ let values=evaluator.evaluate(&inputs).unwrap();let low=a&b;let expected=if low&8!=0{low|240}else{low};
++ for bit in 0..8 {assert_eq!(values[&artifact.output_map()[&format!("y[{bit}]")]],expected&(1<<bit)!=0,"a={a} b={b} bit={bit}");}
++ }}
++}

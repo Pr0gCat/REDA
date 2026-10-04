@@ -1,0 +1,9 @@
+# Qualified clean owned adoption candidate
+
+Exact patch relative to production HEAD8c4c03a; excludes user arithmetic and all backend changes. Four frontend sources, three existing refusal-test migrations, and three new contextual truth/provenance tests. Clean controls79/79 plus inherited comma-port signedness1/1 pass; all256 signed input combinations are covered. Shared integration47/47 also passes, including512 continuous physical phases and the extended reset state trajectory.
+
+Previously unsupported successful source cases remain verbatim in independent exhaustive truth tests. The reset refusal source remains unchanged and still rejects its undriven r output; a valid separately driven variant verifies both edge state trajectories. No negative sources, independent physics controls or original budgets are removed.
+
+Production working files retain existing arithmetic enum/parser/lowering behavior and the original operator-spelling helper; staging applies only owned.patch to HEAD. The now-unused spelling helper remains part of unstaged shared arithmetic and introduces a shared-worktree dead-code warning. It is absent from the clean staged source. Complete lint convergence remains open; no full-project success is claimed.
+
+Supported contexts: packed signed ports/nets and literals, comma declaration inheritance, mixed signed/unsigned bitwise/equality/ternary operands, continuous/process/case/DFF/concatenated-target and hierarchy assignment conversion. Widths remain1..64, destination coercion truncates low bits or sign/zero extends the RHS integral type. Logical result/selection/concat contexts remain self determined. Declaration widths remain source widths; synthetic expression origins own widened context bits. Top-level inout/four-state/full debug consumer coverage remain incomplete.

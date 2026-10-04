@@ -132,6 +132,7 @@ pub struct Module {
 
 #[derive(Debug, Clone)]
 pub struct PortDecl {
+    pub signed: bool,
     pub id: SourceNodeId,
     pub span: Span,
     pub direction: PortDirection,
@@ -250,6 +251,7 @@ pub struct CaseItem {
 /// assignment arrives and the distinction starts to mean something.
 #[derive(Debug, Clone)]
 pub struct NetDecl {
+    pub signed: bool,
     pub id: SourceNodeId,
     pub span: Span,
     pub range: Option<Range>,
@@ -283,19 +285,6 @@ pub enum BinaryOp {
     NotEqual,
 }
 
-impl BinaryOp {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            BinaryOp::And => "&",
-            BinaryOp::Or => "|",
-            BinaryOp::Xor => "^",
-            BinaryOp::LogicalAnd => "&&",
-            BinaryOp::LogicalOr => "||",
-            BinaryOp::Equal => "==",
-            BinaryOp::NotEqual => "!=",
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct Expr {
@@ -309,7 +298,7 @@ pub enum ExprKind {
     Ident(String),
     /// A sized literal, bits LSB-first.
     Literal {
-        width: u32,
+        signed: bool,        width: u32,
         bits: Vec<bool>,
     },
     Unary(UnaryOp, Box<Expr>),

@@ -71,6 +71,7 @@ pub struct ElabNode {
 /// One declared signal of the top module, in declaration order.
 #[derive(Debug, Clone)]
 pub struct SignalInfo {
+    pub signed: bool,
     pub name: String,
     pub elab: ElabNodeId,
     pub width: u32,
@@ -498,6 +499,7 @@ impl Elaborator {
             };
             let elab = self.node(port.id, kind, width);
             self.declare(SignalInfo {
+                signed: port.signed,
                 name: port.name.name.clone(),
                 elab,
                 width,
@@ -514,6 +516,7 @@ impl Elaborator {
                 );
                 let elab = self.node(declaration.id, ElabKind::Net, width);
                 self.declare(SignalInfo {
+                    signed: declaration.signed,
                     name: declaration.name.name.clone(),
                     elab,
                     width,
@@ -579,6 +582,15 @@ impl Elaborator {
                     module.name.name
                 ),
             );
+        }
+
+        for assignment in &mut assigns {
+            sync_context_origins(&mut assignment.value, &mut self.nodes);
+        }
+        for block in &mut self.comb_blocks {
+            for assignment in &mut block.assigns {
+                sync_context_origins(&mut assignment.value, &mut self.nodes);
+            }
         }
 
         Design {
@@ -761,16 +773,7 @@ impl Elaborator {
             match port.direction {
                 PortDirection::Input => {
                     if let Some(value) = self.expr(connection) {
-                        if value.width != width {
-                            self.fail(
-                                connection.span,
-                                format!(
-                                    "instance input `{}` width mismatch: expected {width}, got {}",
-                                    port.name.name, value.width
-                                ),
-                            );
-                            continue;
-                        }
+                        let value = value.in_width(width);
                         let elab = self.node(instance.id, ElabKind::Assign, width);
                         assigns.push(ElabAssign {
                             elab,
@@ -802,14 +805,17 @@ impl Elaborator {
                 }
                 PortDirection::Output => {
                     if let Some(targets) = self.assignment_targets(connection) {
-                        if targets.iter().map(|t| t.2).sum::<u32>() != width {
-                            self.fail(
-                                connection.span,
-                                format!("instance output `{}` width mismatch", port.name.name),
-                            );
+                        let Some(total_width) = targets.iter().try_fold(0u32, |sum,t| sum.checked_add(t.2)) else {
+                            self.fail(connection.span, "instance output target width overflows");
                             continue;
-                        }
-                        let mut offset = width;
+                        };
+                        let output_elab = if total_width == width {
+                            self.signals[signal].elab
+                        } else {
+                            self.node(instance.id, ElabKind::Expr, width)
+                        };
+                        let value = RtlExpr::new(RtlKind::Signal { signal, lsb: 0 }, width, output_elab).with_signed(self.signals[signal].signed).in_width(total_width);
+                        let mut offset = total_width;
                         for (target, lsb, target_width) in targets {
                             offset -= target_width;
                             let elab = self.node(instance.id, ElabKind::Assign, target_width);
@@ -819,14 +825,11 @@ impl Elaborator {
                                 signal: target,
                                 lsb,
                                 width: target_width,
-                                value: RtlExpr::new(
-                                    RtlKind::Signal {
-                                        signal,
-                                        lsb: offset,
-                                    },
-                                    target_width,
-                                    elab,
-                                ),
+                                value: if total_width == width {
+                                    RtlExpr::new(RtlKind::Signal { signal, lsb: offset }, target_width, elab)
+                                } else {
+                                    RtlExpr::new(RtlKind::Slice(Box::new(value.clone()), offset), target_width, elab)
+                                },
                                 clock: None,
                             });
                         }
@@ -924,11 +927,12 @@ impl Elaborator {
             return Vec::new();
         };
         let width = targets.iter().try_fold(0u32, |sum, t| sum.checked_add(t.2));
-        if width != Some(value.width) {
-            self.fail(assign.span, "assignment width mismatch: concatenated targets must exactly match the value width");
+        let Some(width) = width else {
+            self.fail(assign.span, "concatenated assignment target width overflows");
             return Vec::new();
-        }
-        let mut offset = value.width;
+        };
+        let value = value.in_width(width);
+        let mut offset = width;
         targets
             .into_iter()
             .map(|(signal, lsb, width)| {
@@ -942,6 +946,8 @@ impl Elaborator {
                     width,
                     clock: None,
                     value: RtlExpr {
+                        signed: false,
+                        contextual: true,
                         kind: RtlKind::Slice(Box::new(value.clone()), offset),
                         width,
                         elab,
@@ -955,18 +961,7 @@ impl Elaborator {
 
     fn assign(&mut self, assign: &Assign) -> Option<ElabAssign> {
         let (signal, lsb, width) = self.target(&assign.lhs)?;
-        let value = self.expr(&assign.rhs)?;
-        if value.width != width {
-            self.fail(
-                assign.span,
-                format!(
-                    "assignment width mismatch: the target is {width} bit(s) and the value is {} \
-                     bit(s); version 1 never extends or truncates",
-                    value.width
-                ),
-            );
-            return None;
-        }
+        let value = self.expr(&assign.rhs)?.in_width(width);
         let elab = self.node(assign.id, ElabKind::Assign, width);
         Some(ElabAssign {
             elab,
@@ -1051,16 +1046,7 @@ impl Elaborator {
                 continue;
             };
 
-            if arm_value.width != arm_target.2 {
-                self.fail(
-                    item.statement.span,
-                    format!(
-                        "assignment width mismatch: the target is {} bit(s) and the value is {} bit(s); version 1 never extends or truncates",
-                        arm_target.2, arm_value.width
-                    ),
-                );
-                valid = false;
-            }
+            let arm_value = arm_value.in_width(arm_target.2);
 
             if let Some(expected) = target {
                 if arm_target != expected {
@@ -1111,6 +1097,8 @@ impl Elaborator {
 
             let condition_elab = self.node(item.id, ElabKind::Expr, 1);
             let condition = RtlExpr {
+                        signed: false,
+                        contextual: true,
                 kind: RtlKind::Equal(Box::new(selector.clone()), Box::new(label)),
                 width: 1,
                 elab: condition_elab,
@@ -1169,6 +1157,8 @@ impl Elaborator {
         {
             let elab = self.node(always.id, ElabKind::Expr, width);
             RtlExpr {
+                        signed: false,
+                        contextual: true,
                 kind: RtlKind::Table {
                     selector: Box::new(selector),
                     arms: arms
@@ -1199,6 +1189,8 @@ impl Elaborator {
                 .fold(default.clone(), |acc, (source, select, when_true)| {
                     let elab = self.node(source, ElabKind::Expr, width);
                     let gated = RtlExpr {
+                        signed: false,
+                        contextual: true,
                         kind: RtlKind::Mux {
                             select: Box::new(select),
                             when_true: Box::new(when_true),
@@ -1210,6 +1202,8 @@ impl Elaborator {
                         synthetic: Some(SyntheticOrigin::BranchJoin),
                     };
                     RtlExpr {
+                        signed: false,
+                        contextual: true,
                         kind: RtlKind::Binary(RtlBinaryOp::Or, Box::new(acc), Box::new(gated)),
                         width,
                         elab,
@@ -1223,6 +1217,8 @@ impl Elaborator {
                 .fold(default, |when_false, (source, select, when_true)| {
                     let elab = self.node(source, ElabKind::Expr, width);
                     RtlExpr {
+                        signed: false,
+                        contextual: true,
                         kind: RtlKind::Mux {
                             select: Box::new(select),
                             when_true: Box::new(when_true),
@@ -1322,12 +1318,7 @@ impl Elaborator {
                     );
                     return None;
                 }
-                let value = self.expr(&assign.rhs)?;
-                if value.width != width {
-                    self.fail(assign.span, format!(
-                        "assignment width mismatch: the DFF target is {width} bit(s) and the value is {} bit(s); version 1 never extends or truncates", value.width));
-                    return None;
-                }
+                let value = self.expr(&assign.rhs)?.in_width(width);
                 Some(value)
             }
             Stmt::If(branch) => {
@@ -1338,6 +1329,8 @@ impl Elaborator {
                 let when_false = match &branch.when_false {
                     Some(statement) => self.clocked_value(statement, target)?,
                     None => RtlExpr {
+                        signed: false,
+                        contextual: true,
                         kind: RtlKind::Signal { signal, lsb },
                         width,
                         elab,
@@ -1346,6 +1339,8 @@ impl Elaborator {
                     },
                 };
                 Some(RtlExpr {
+                        signed: false,
+                        contextual: true,
                     kind: RtlKind::Mux {
                         select: Box::new(condition),
                         when_true: Box::new(when_true),
@@ -1507,7 +1502,7 @@ impl Elaborator {
             ExprKind::Ident(name) => {
                 if let Some(value) = self.parameters.get(name).copied() {
                     let elab = self.node(expr.id, ElabKind::Expr, value.width);
-                    return Some(RtlExpr::new(RtlKind::Const(value.bits()), value.width, elab));
+                    return Some(RtlExpr::new(RtlKind::Const(value.bits()), value.width, elab).with_signed(value.signed));
                 }
                 let signal = self.lookup(name, expr.span)?;
                 let width = self.signals[signal].width;
@@ -1516,11 +1511,11 @@ impl Elaborator {
                     RtlKind::Signal { signal, lsb: 0 },
                     width,
                     elab,
-                ))
+                ).with_signed(self.signals[signal].signed))
             }
-            ExprKind::Literal { width, bits } => {
+            ExprKind::Literal { width, bits, signed } => {
                 let elab = self.node(expr.id, ElabKind::Expr, *width);
-                Some(RtlExpr::new(RtlKind::Const(bits.clone()), *width, elab))
+                Some(RtlExpr::new(RtlKind::Const(bits.clone()), *width, elab).with_signed(*signed))
             }
             ExprKind::BitSelect(base, index) => {
                 let ExprKind::Ident(name) = &base.kind else {
@@ -1592,13 +1587,13 @@ impl Elaborator {
                 let operand = self.expr(operand)?;
                 let width = operand.width;
                 let elab = self.node(expr.id, ElabKind::Expr, width);
-                Some(RtlExpr::new(RtlKind::Not(Box::new(operand)), width, elab))
+                Some(RtlExpr::new(RtlKind::Not(Box::new(operand.clone())), width, elab).with_signed(operand.signed))
             }
             ExprKind::Unary(UnaryOp::LogicalNot, operand) => {
                 let operand = self.expr(operand)?;
                 let truth = self.reduce_to_truth(operand);
                 let elab = self.node(expr.id, ElabKind::Expr, 1);
-                Some(RtlExpr::new(RtlKind::Not(Box::new(truth)), 1, elab))
+                Some(RtlExpr::new(RtlKind::Not(Box::new(truth)), 1, elab).self_determined())
             }
             ExprKind::Binary(op, left, right) => self.binary(expr, *op, left, right),
             ExprKind::Ternary(select, when_true, when_false) => {
@@ -1606,18 +1601,10 @@ impl Elaborator {
                 let select = self.reduce_to_truth(select);
                 let when_true = self.expr(when_true)?;
                 let when_false = self.expr(when_false)?;
-                if when_true.width != when_false.width {
-                    self.fail(
-                        expr.span,
-                        format!(
-                            "the branches of `?:` are {} and {} bit(s) wide; version 1 requires \
-                             them to match exactly",
-                            when_true.width, when_false.width
-                        ),
-                    );
-                    return None;
-                }
-                let width = when_true.width;
+                let width = when_true.width.max(when_false.width);
+                let signed = when_true.signed && when_false.signed;
+                let when_true = when_true.in_integral_context(width, signed);
+                let when_false = when_false.in_integral_context(width, signed);
                 let elab = self.node(expr.id, ElabKind::Expr, width);
                 Some(RtlExpr::new(
                     RtlKind::Mux {
@@ -1627,7 +1614,7 @@ impl Elaborator {
                     },
                     width,
                     elab,
-                ))
+                ).with_signed(signed))
             }
         }
     }
@@ -1635,6 +1622,11 @@ impl Elaborator {
     fn binary(&mut self, expr: &Expr, op: BinaryOp, left: &Expr, right: &Expr) -> Option<RtlExpr> {
         let left = self.expr(left)?;
         let right = self.expr(right)?;
+        let common_width = left.width.max(right.width);
+        let signed = left.signed && right.signed;
+        let left = left.in_integral_context(common_width, signed);
+        let right = right.in_integral_context(common_width, signed);
+
 
         let bitwise = |op| match op {
             BinaryOp::And => Some(RtlBinaryOp::And),
@@ -1645,19 +1637,6 @@ impl Elaborator {
 
         match op {
             BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {
-                if left.width != right.width {
-                    self.fail(
-                        expr.span,
-                        format!(
-                            "the operands of `{}` are {} and {} bit(s) wide; version 1 requires \
-                             them to match exactly",
-                            op.as_str(),
-                            left.width,
-                            right.width
-                        ),
-                    );
-                    return None;
-                }
                 let width = left.width;
                 let elab = self.node(expr.id, ElabKind::Expr, width);
                 Some(RtlExpr::new(
@@ -1668,29 +1647,16 @@ impl Elaborator {
                     ),
                     width,
                     elab,
-                ))
+                ).with_signed(signed))
             }
             BinaryOp::Equal | BinaryOp::NotEqual => {
-                if left.width != right.width {
-                    self.fail(
-                        expr.span,
-                        format!(
-                            "the operands of `{}` are {} and {} bit(s) wide; version 1 requires \
-                             them to match exactly",
-                            op.as_str(),
-                            left.width,
-                            right.width
-                        ),
-                    );
-                    return None;
-                }
                 let elab = self.node(expr.id, ElabKind::Expr, 1);
                 let equal = RtlExpr::new(RtlKind::Equal(Box::new(left), Box::new(right)), 1, elab);
                 Some(match op {
                     BinaryOp::Equal => equal,
                     // `!=` is the same comparison, inverted; both nodes
                     // belong to the one `!=` expression.
-                    _ => RtlExpr::new(RtlKind::Not(Box::new(equal)), 1, elab),
+                    _ => RtlExpr::new(RtlKind::Not(Box::new(equal)), 1, elab).self_determined(),
                 })
             }
             BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
@@ -1706,7 +1672,7 @@ impl Elaborator {
                     RtlKind::Binary(op, Box::new(left), Box::new(right)),
                     1,
                     elab,
-                ))
+                ).self_determined())
             }
         }
     }
@@ -1757,5 +1723,37 @@ pub fn bit_name(name: &str, width: u32, bit: u32) -> String {
         name.to_string()
     } else {
         format!("{name}[{bit}]")
+    }
+}
+
+/// Context conversion owns expression widths; declarations retain their source types.
+fn sync_context_origins(value: &mut RtlExpr, nodes: &mut Vec<ElabNode>) {
+    let width = value.origin_lsb.checked_add(value.width).expect("validated expression width");
+    if nodes[value.elab.0 as usize].width < width {
+        if nodes[value.elab.0 as usize].kind == ElabKind::Expr {
+            nodes[value.elab.0 as usize].width = width;
+        } else {
+            let mut node = nodes[value.elab.0 as usize].clone();
+            node.kind = ElabKind::Expr;
+            node.width = width;
+            value.elab = ElabNodeId(nodes.len() as u32);
+            nodes.push(node);
+        }
+    }
+    match &mut value.kind {
+        RtlKind::Concat(parts) => for part in parts { sync_context_origins(part, nodes); },
+        RtlKind::Slice(child, _) | RtlKind::Not(child) | RtlKind::ReduceOr(child) => sync_context_origins(child, nodes),
+        RtlKind::Binary(_, left, right) | RtlKind::Equal(left, right) => {
+            sync_context_origins(left, nodes); sync_context_origins(right, nodes);
+        }
+        RtlKind::Mux { select, when_true, when_false } => {
+            sync_context_origins(select, nodes); sync_context_origins(when_true, nodes); sync_context_origins(when_false, nodes);
+        }
+        RtlKind::Table { selector, arms, default } => {
+            sync_context_origins(selector, nodes);
+            for (_, select, value) in arms { sync_context_origins(select, nodes); sync_context_origins(value, nodes); }
+            sync_context_origins(default, nodes);
+        }
+        RtlKind::Const(_) | RtlKind::Signal { .. } => {}
     }
 }

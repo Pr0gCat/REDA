@@ -190,10 +190,10 @@ impl<'n> Parser<'n> {
         let mut ports = Vec::new();
         if self.eat_punct(Punct::LParen) {
             if !self.is_punct(Punct::RParen) {
-                let mut previous: Option<(PortDirection, Option<NetType>, Option<Range>)> = None;
+                let mut previous: Option<(PortDirection, Option<NetType>, Option<Range>, bool)> = None;
                 loop {
                     let port = self.port(previous.as_ref())?;
-                    previous = Some((port.direction, port.net_type, port.range.clone()));
+                    previous = Some((port.direction, port.net_type, port.range.clone(), port.signed));
                     ports.push(port);
                     if !self.eat_punct(Punct::Comma) {
                         break;
@@ -231,7 +231,7 @@ impl<'n> Parser<'n> {
 
     fn port(
         &mut self,
-        previous: Option<&(PortDirection, Option<NetType>, Option<Range>)>,
+        previous: Option<&(PortDirection, Option<NetType>, Option<Range>, bool)>,
     ) -> Result<PortDecl, Diagnostic> {
         let start = self.peek().span;
         let direction = match self.peek().kind {
@@ -250,16 +250,17 @@ impl<'n> Parser<'n> {
             _ => None,
         };
 
-        let (direction, net_type, range) = match direction {
+        let (direction, net_type, range, signed) = match direction {
             Some(direction) => {
                 let net_type = self.net_type()?;
+                let signed = self.data_signedness();
                 let range = self.range()?;
-                (direction, net_type, range)
+                (direction, net_type, range, signed)
             }
             None => match previous {
                 // `input a, b`: a bare identifier inherits the previous
                 // port's direction, type, and range.
-                Some((direction, net_type, range)) => (*direction, *net_type, range.clone()),
+                Some((direction, net_type, range, signed)) => (*direction, *net_type, range.clone(), *signed),
                 None => return Err(self.error_here("`input` or `output`")),
             },
         };
@@ -268,13 +269,24 @@ impl<'n> Parser<'n> {
         let span = start.join(name.span);
         let id = self.node(SourceKind::Port, span, Some(name.name.clone()));
         Ok(PortDecl {
-            id,
+            signed,            id,
             span,
             direction,
             net_type,
             range,
             name,
         })
+    }
+
+    fn data_signedness(&mut self) -> bool {
+        match &self.peek().kind {
+            TokenKind::Ident(name) if name == "signed" || name == "unsigned" => {
+                let signed = name == "signed";
+                self.advance();
+                signed
+            }
+            _ => false,
+        }
     }
 
     fn net_type(&mut self) -> Result<Option<NetType>, Diagnostic> {
@@ -479,13 +491,14 @@ impl<'n> Parser<'n> {
             | TokenKind::Keyword(Keyword::Reg) => {
                 let start = self.peek().span;
                 self.net_type()?.expect("checked above");
+                let signed = self.data_signedness();
                 let range = self.range()?;
                 loop {
                     let name = self.expect_ident()?;
                     let span = start.join(name.span);
                     let id = self.node(SourceKind::Declaration, span, Some(name.name.clone()));
                     items.push(Item::Declaration(NetDecl {
-                        id,
+                        signed,                        id,
                         span,
                         range: range.clone(),
                         name,
@@ -638,12 +651,7 @@ impl<'n> Parser<'n> {
             }
         }
         let mut body = Vec::new();
-        let block = if legacy {
-            self.eat_keyword(Keyword::Begin)
-        } else {
-            self.expect_keyword(Keyword::Begin)?;
-            true
-        };
+        let block = self.eat_keyword(Keyword::Begin);
         let end = if block {
             while !self.is_keyword(Keyword::End) {
                 if self.at_eof() {
@@ -996,7 +1004,6 @@ impl<'n> Parser<'n> {
                 base,
                 digits,
             }) => {
-                if signed { return Err(self.unsupported_here("signed data literals are not supported; signed integral parameters are supported")); }
                 self.advance();
                 let (width, bits) = parse_sized_literal(&width, base, &digits)
                     .map_err(|message| self.error_at(token.span, message))?;
@@ -1004,7 +1011,7 @@ impl<'n> Parser<'n> {
                 Ok(Expr {
                     id,
                     span: token.span,
-                    kind: ExprKind::Literal { width, bits },
+                    kind: ExprKind::Literal { width, bits, signed },
                 })
             }
             TokenKind::Number(Number::Unsized(_)) => Err(self.error_at(

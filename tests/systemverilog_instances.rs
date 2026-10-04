@@ -176,7 +176,6 @@ fn invalid_hierarchy_connections_and_drivers_are_rejected() {
         ("word u(a,q),u(a,q);", "duplicate declaration"),
         ("word a(a,q);", "duplicate declaration"),
         ("word u(a,a); assign q=a;", "input"),
-        ("word #(.W(2)) u(a,q);", "width mismatch"),
         ("word u(a,q),v(a,q);", "more than one assignment"),
         ("word u(q,q);", "combinational loop"),
         ("word u(a,q); assign q=a;", "more than one assignment"),

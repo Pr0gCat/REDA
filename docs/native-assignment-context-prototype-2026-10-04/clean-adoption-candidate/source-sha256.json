@@ -1,0 +1,12 @@
+{
+  "src/frontend/ast.rs": "8cfd4b350c8ed989b89d42d89dca791ffbcfe1d84e81ea7df792e62d3d491226",
+  "src/frontend/parser.rs": "37c61cb436ea802927bc3e71c8a08784206de7052411b915bf81e04e11d1b25e",
+  "src/frontend/elaborate.rs": "bced5f0d860d0f926d71078f03ad5bd4689ee5d0e04caffab4af55a68a494dd8",
+  "src/frontend/rtl.rs": "012c00cca78f114b52e18e8fc52fa1512221437b968b00b480daec59e0dfc7ed",
+  "tests/systemverilog_compiler.rs": "9ac248663ba9c721807087215d58ae156f8b155466104af1edd5fbba99da116e",
+  "tests/systemverilog_instances.rs": "6319448fd3f73e59fd795d0030a920faada7ff6e70937f8ee26d455b325699fa",
+  "tests/systemverilog_reset.rs": "11231487953f27bf0bc7f581dd89bbbce6aa7dae437a67f3eeacec611fb7d5e3",
+  "tests/assignment_context_diagnostic.rs": "fa54b855ea6837f715920946b068223e813c720d1761070a09e79ddd0a44508f",
+  "tests/assignment_context_provenance.rs": "eba8afcc7215662e3fda8dd063621c7bb81b9eba44727ad20c635eb75316f5f6",
+  "tests/assignment_context_inherited.rs": "cd32af55ae3c1decf06794c1089f854495306bfe74172263640c66c2a6b4770a"
+}

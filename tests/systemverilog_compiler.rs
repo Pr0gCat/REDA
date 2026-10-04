@@ -564,24 +564,12 @@ fn a_missing_top_module_names_what_is_there() {
     assert!(diagnostics[0].message.contains("and2"));
 }
 
-/// Version 1 has no implicit extension or truncation, no unsized literals,
-/// no ascending ranges, and no procedural blocks yet. Each rejection is one
-/// diagnostic at a stable, pointed span.
+/// Unsupported syntax and invalid source retain stable pointed diagnostics.
+/// Integral context conversions and single-statement always_comb are covered
+/// exhaustively in assignment_context_provenance, using the original sources.
 #[test]
 fn the_rejection_matrix_has_stable_messages_and_spans() {
     let cases: &[(&str, &str, usize, &str)] = &[
-        (
-            "module m(input logic [1:0] a, output logic y);\n  assign y = a;\nendmodule\n",
-            "assign y = a;",
-            0,
-            "assignment width mismatch",
-        ),
-        (
-            "module m(input logic a, input logic [1:0] b, output logic y);\n  assign y = a & b;\nendmodule\n",
-            "a & b",
-            0,
-            "operands of `&`",
-        ),
         (
             "module m(input logic a, output logic y);\n  assign y = 1;\nendmodule\n",
             "1",
@@ -613,12 +601,6 @@ fn the_rejection_matrix_has_stable_messages_and_spans() {
             "expected `;`",
         ),
         (
-            "module m(input logic a, output logic y);\n  always_comb y = a;\nendmodule\n",
-            "y",
-            2,
-            "expected `begin`",
-        ),
-        (
             "module m(input logic a, output logic y);\n  reg z;\n  assign y = a;\nendmodule\n",
             "reg z",
             0,
@@ -641,12 +623,6 @@ fn the_rejection_matrix_has_stable_messages_and_spans() {
             "w",
             1,
             "is an input port and cannot be assigned",
-        ),
-        (
-            "module m(input logic a, output logic y);\n  assign y = 2'b11;\nendmodule\n",
-            "assign y = 2'b11;",
-            0,
-            "assignment width mismatch",
         ),
         (
             "module m(input logic a, output logic y);\n  assign y = 1'b2;\nendmodule\n",
@@ -963,10 +939,6 @@ fn concatenated_targets_preserve_order_slices_and_driver_validation() {
         (
             "module m(input a, output y); assign {a,y} = 2'b00; endmodule",
             "cannot be assigned",
-        ),
-        (
-            "module m(input [2:0] a, output y,z); assign {y,z} = a; endmodule",
-            "width mismatch",
         ),
         (
             "module m(input [1:0] a, output y,z); assign {y,z[1]} = a; endmodule",

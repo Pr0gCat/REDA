@@ -67,6 +67,8 @@ pub enum RtlKind {
 pub struct RtlExpr {
     pub kind: RtlKind,
     pub width: u32,
+    pub signed: bool,
+    pub contextual: bool,
     pub elab: ElabNodeId,
     /// Lowest source-expression bit represented by a procedural projection.
     pub origin_lsb: u32,
@@ -79,9 +81,73 @@ impl RtlExpr {
         RtlExpr {
             kind,
             width,
+            signed: false,
+            contextual: true,
             elab,
             origin_lsb: 0,
             synthetic: None,
         }
     }
+    pub fn self_determined(mut self) -> Self { self.contextual = false; self }
+
+    pub fn with_signed(mut self, signed: bool) -> Self {
+        self.signed = signed;
+        self
+    }
+
+    /// Apply a context width before bitwise evaluation, retaining the RHS type.
+    pub fn in_width(self, width: u32) -> Self {
+        let signed = self.signed;
+        self.in_integral_context(width, signed)
+    }
+
+    pub fn in_integral_context(mut self, width: u32, signed: bool) -> Self {
+        let original = self.width;
+        if width <= original {
+            if width == original { self.signed = signed; return self; }
+            let elab = self.elab;
+            return Self::new(RtlKind::Slice(Box::new(self), 0), width, elab).with_signed(signed);
+        }
+        let kind = std::mem::replace(&mut self.kind, RtlKind::Const(Vec::new()));
+        self.kind = match kind {
+            RtlKind::Not(value) if self.contextual && value.width == original =>
+                RtlKind::Not(Box::new(value.in_integral_context(width, signed))),
+            RtlKind::Binary(op, left, right) if self.contextual && left.width == original && right.width == original =>
+                RtlKind::Binary(op, Box::new(left.in_integral_context(width, signed)),
+                    Box::new(right.in_integral_context(width, signed))),
+            RtlKind::Mux { select, when_true, when_false } if self.contextual => RtlKind::Mux {
+                select, when_true: Box::new(when_true.in_integral_context(width, signed)),
+                when_false: Box::new(when_false.in_integral_context(width, signed)),
+            },
+            RtlKind::Const(mut bits) => {
+                let extension = signed && bits.last().copied().unwrap_or(false);
+                bits.resize(width as usize, extension);
+                RtlKind::Const(bits)
+            },
+            kind => {
+                let base = Self { kind, ..self.clone() };
+                let mut parts = Vec::new();
+                if signed {
+                    for bit in original..width {
+                        let mut extension = Self::new(RtlKind::Slice(Box::new(base.clone()), original - 1), 1, self.elab);
+                        extension.origin_lsb = bit;
+                        extension.synthetic = Some(SyntheticOrigin::Passthrough);
+                        parts.push(extension);
+                    }
+                    parts.insert(0, base);
+                } else {
+                    parts.push(base);
+                    let mut extension = Self::new(RtlKind::Const(vec![false; (width - original) as usize]), width - original, self.elab);
+                    extension.origin_lsb = original;
+                    extension.synthetic = Some(SyntheticOrigin::Passthrough);
+                    parts.push(extension);
+                }
+                RtlKind::Concat(parts)
+            }
+        };
+        self.width = width;
+        self.signed = signed;
+        self
+    }
+
 }

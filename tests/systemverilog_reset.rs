@@ -105,7 +105,7 @@ fn conditional_branches_validate_targets_widths_and_nonblocking_writes() {
             "if(reset) q<=2'b00; else q[0]<=1'b1;",
             "same register slice",
         ),
-        ("if(reset) q<=2'b00; else q<=1'b1;", "width mismatch"),
+        ("if(reset) q<=2'b00; else q<=1'b1;", "has no driver"),
         ("if(reset) q<=2'b00; else q=2'b11;", "nonblocking"),
         ("if(reset) begin q<=2'b00; q<=2'b11; end", "expected"),
     ] {
