@@ -1,0 +1,18 @@
+{
+  "status": "offline_pass",
+  "phases": 264,
+  "gates": 15,
+  "dff_cells": 10,
+  "real_minecraft_executed": false,
+  "sha256": {
+    "/tmp/reda-mixed-clock-minecraft-20261004.dump": "9847ec39d319dd272f846c8ebaf71b39f9265c113d9b9e78b75d22341bf10bd5",
+    "docs/mixed-clock-reset-feedback-2026-10-04/repeat1.log.gz": "bdeb7a903a3975d095e12c14a0b7ce37ca1aea7115e99ab664f7e4238017b300",
+    "/home/seith/REDA/docs/minecraft-sequential-conformance-2026-10-04/offline/verify_oracle.py": "b1d217330a8098c2a3832efbaee6c39263eb5c14361d478ec675c3e638a8160b",
+    "src/bin/mc_dump.rs": "efad1825697b0c7fecc86d7248b1f5075a3b54310a3956091e16b4ef5efe87db",
+    "conformance/circuit_conformance.py": "bb072d837fbb305f9bcfba76e4118e6b82ad702531e5eb35e0845941a4848a19",
+    "conformance/sequential_conformance.py": "723c51fe21f12f15e0b64b6dfe1894e59ff79bfafff72c5882ab00323529dab2",
+    "conformance/test_sequential_conformance.py": "e2cebb2b6d03d2f1f8be7b113970f12f4df11d8c1da999a8da8b2d507e48b22a",
+    "/tmp/reda-mc-dump-qualified-sequential-final-20261004": "fd1fcc040bbff5a7eab65652bf6b8421a230c1221bc13614cd81771f324f2702",
+    "/tmp/reda-sequential-head-target-20261004/debug/deps/libreda-b866e79be48eeab8.rlib": "c4cdb8b66e1e5b2d4aff0e76711e689efba27ed4ee9a448e731bf1ddb503bd35"
+  }
+}

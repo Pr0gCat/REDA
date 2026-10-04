@@ -1,0 +1,9 @@
+
+running 3 tests
+frontend: native
+test tests::dump_uses_proved_permuted_bindings ... ok
+test tests::rewritten_dumps_keep_actual_gates_components_and_ordered_alias_ports ... ok
+test tests::dff_dump_exposes_actual_rotated_cells_and_repeater_outputs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s
+

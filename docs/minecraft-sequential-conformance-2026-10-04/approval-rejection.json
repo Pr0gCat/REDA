@@ -1,0 +1,6 @@
+{
+  "action": "native datapack setup, frozen-tick mixed-clock/reset-feedback actual Minecraft run",
+  "execution": "CreateProcess rejected; no world mutation, RCON connection, credential read or datapack load occurred",
+  "reason": "Trusted transcript did not explicitly authorize this exact server-side experiment or establish owner consent; persistent-world mutation and protected server credentials",
+  "boundary": "No workaround or indirect execution; parent requested exact user approval and offline work continues"
+}

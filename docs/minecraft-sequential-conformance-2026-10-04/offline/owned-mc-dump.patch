@@ -1,0 +1,124 @@
+--- a/src/bin/mc_dump.rs
++++ b/src/bin/mc_dump.rs
+@@ -40,6 +40,7 @@
+ //!   OUTPUTPORT ordinal source_name implemented_signal x y z [label]
+ //!   GATEOUT name x y z [component_kind]
+ //!   GATE   output_name input1,input2,... kind
++//!   DFFCELL output_name role x y z component_kind
+ //!
+ //! `INPUT` and `OUTPUT` retain source boundary names. For a certified rewrite,
+ //! `OUTPUTPORT` preserves each source-ordered physical lamp and its actual signal,
+@@ -52,7 +53,10 @@
+ //! consumers read comparator, repeater, torch or dust without inferring geometry
+ //! from a logical gate kind. `BLOCKPROP` retains comparator mode.
+ //!
+-//! The conformance reader accepts `nor`, `merge`, `buf` and `andnot`; a `merge` gate is a
++//! The conformance parser also accepts `dff_p`, observed at its slave repeater.
++//! `DFFCELL` records expose the five rotated Design H sites; stateful truth
++//! requires the separate sequential trajectory driver.
++//! The combinational evaluator accepts `nor`, `merge`, `buf` and `andnot`; a `merge` gate is a
+ //! **wired OR**, not a NOR, so a consumer that assumes every gate inverts
+ //! computes the wrong expected value for that gate *and for everything
+ //! downstream of it*. Every hand-written reference circuit is pure NOR and
+@@ -380,7 +384,12 @@
+         }
+     }
+     for (name, &(x, y, z)) in &compiled.gate_output_positions {
+-        let component = if compiled.physical_rewrite().is_some() {
++        let component = if compiled.physical_rewrite().is_some()
++            || implementation
++                .gates
++                .iter()
++                .any(|gate| gate.output == *name && gate.kind.is_sequential())
++        {
+             format!(" {}", kind_str(compiled.world.get(x, y, z).kind))
+         } else {
+             String::new()
+@@ -410,6 +419,25 @@
+             signal(&gate.output),
+             gate.kind.wire_name()
+         ));
++        if gate.kind.is_sequential() {
++            let &(x, y, z) = &compiled.gate_output_positions[&gate.output];
++            for (role, offset) in [
++                ("MData", (0, 0, 1)),
++                ("SData", (0, 0, 0)),
++                ("MLock", (1, 0, 1)),
++                ("SLock", (1, 0, 0)),
++                ("InvC", (2, 0, 0)),
++            ] {
++                let (dx, dy, dz) =
++                    reda::compile::geometry::rotate(offset, compiled.gate_facings[index]);
++                let (cx, cy, cz) = (x + dx, y + dy, z + dz);
++                records.push(format!(
++                    "DFFCELL {} {role} {cx} {cy} {cz} {}",
++                    signal(&gate.output),
++                    kind_str(compiled.world.get(cx, cy, cz).kind)
++                ));
++            }
++        }
+     }
+     records
+ }
+@@ -679,4 +707,60 @@
+             std::fs::write(Path::new(&directory).join("permuted.txt"), bytes).unwrap();
+         }
+     }
+-}
++    #[test]
++    fn dff_dump_exposes_actual_rotated_cells_and_repeater_outputs() {
++        let (netlist, labels) = verilog::synthesize_with_frontend(
++            include_str!("../../tests/fixtures/mixed_clock_reset_feedback.sv"),
++            "mixed_clock_reset_feedback.sv",
++            "mixed_clock_reset_feedback",
++            reda::frontend::FrontendMode::Native,
++        )
++        .unwrap();
++        let lowered = lower_optimised(&netlist).unwrap();
++        let physical = compile(&lowered).unwrap();
++        let records = circuit_records(&lowered, &physical, &labels);
++        let cells: Vec<_> = records
++            .iter()
++            .filter(|record| record.starts_with("DFFCELL "))
++            .collect();
++        assert_eq!(cells.len(), 10);
++        for record in &cells {
++            let fields: Vec<_> = record.split_whitespace().collect();
++            let (x, y, z) = (
++                fields[3].parse::<i32>().unwrap(),
++                fields[4].parse::<i32>().unwrap(),
++                fields[5].parse::<i32>().unwrap(),
++            );
++            assert_eq!(fields[6], kind_str(physical.world.get(x, y, z).kind));
++            if fields[2] == "SData" {
++                assert_eq!((x, y, z), physical.gate_output_positions[fields[1]]);
++            }
++        }
++        for gate in lowered
++            .gates
++            .iter()
++            .filter(|gate| gate.kind.is_sequential())
++        {
++            assert!(records.iter().any(|record| record
++                .starts_with(&format!("GATEOUT {} ", gate.output))
++                && record.ends_with(" Repeater")));
++            assert_eq!(
++                cells
++                    .iter()
++                    .filter(|record| record.split_whitespace().nth(1) == Some(gate.output.as_str()))
++                    .count(),
++                5
++            );
++        }
++        if let Ok(directory) = std::env::var("REDA_DUMP_FIXTURE_DIR") {
++            let mut bytes = Vec::new();
++            write_world(&physical.world, &mut bytes).unwrap();
++            for record in records {
++                bytes.extend_from_slice(record.as_bytes());
++                bytes.push(b'\n');
++            }
++            std::fs::create_dir_all(&directory).unwrap();
++            std::fs::write(Path::new(&directory).join("mixed-clock.txt"), bytes).unwrap();
++        }
++    }
++}

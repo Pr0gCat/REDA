@@ -1,0 +1,33 @@
+{
+  "scope": "Clean 1b8eed4-equivalent source plus precise DFF producer/parser patch; no real-game sequential execution",
+  "producer": {
+    "passed": 3,
+    "failed": 0,
+    "ignored": 0,
+    "REDA_PYTHON": "/nonexistent/reda-python"
+  },
+  "python": {
+    "passed": 17,
+    "failed": 0,
+    "skipped": 0,
+    "REDA_DUMP_FIXTURE_DIR": "/tmp/reda-seq-tools-fixtures-20261004"
+  },
+  "sources": {
+    "src/bin/mc_dump.rs": "efad1825697b0c7fecc86d7248b1f5075a3b54310a3956091e16b4ef5efe87db",
+    "conformance/circuit_conformance.py": "bb072d837fbb305f9bcfba76e4118e6b82ad702531e5eb35e0845941a4848a19",
+    "conformance/sequential_conformance.py": "723c51fe21f12f15e0b64b6dfe1894e59ff79bfafff72c5882ab00323529dab2",
+    "conformance/test_sequential_conformance.py": "e2cebb2b6d03d2f1f8be7b113970f12f4df11d8c1da999a8da8b2d507e48b22a"
+  },
+  "files": {
+    "clean-producer-tests.log.gz": "82d59003d07e9b6059ef90ead5656f176a03017e5a56961a3645c3effef0d148",
+    "root-python-tests.log": "7a0e36a08118a05887e1da5a6e3b8f5bcb876c20b36af37c589f839117d3eeb3",
+    "python-tests.log": "e25e20d72ff1e67cb6db16f928fd05a4ef025fba3d223c20ad487ecf8e54b910",
+    "owned-mc-dump.patch": "fd59d31160bb0f5b1bc9c2d69c3a6ca6657cd1903f08b30217c97f5b9625e8d6",
+    "qualified.dump": "9847ec39d319dd272f846c8ebaf71b39f9265c113d9b9e78b75d22341bf10bd5",
+    "owned-parser.patch": "185c048bf648b5af73faf712c96ef3fc641c5e8e318feb430870ea1ce9652a7d",
+    "producer-tests.log": "8d913ad372af058afabf38f468bc0396b9ad573c6d11cb44a1e24f8effadae50",
+    "verify_oracle.py": "b1d217330a8098c2a3832efbaee6c39263eb5c14361d478ec675c3e638a8160b",
+    "capture.mcfunction": "8ca79ea078ecf0b9012928f6c0d22ff7b0cb2e11de6f66107197255ec6d1f9b4",
+    "oracle-parity.json": "2dc373a6b2b5fdcd4ae0e945797990b4c450e19b7af5f41771b7e9cab13de601"
+  }
+}
