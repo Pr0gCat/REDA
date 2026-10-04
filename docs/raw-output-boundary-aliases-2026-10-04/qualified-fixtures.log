@@ -1,0 +1,33 @@
+   Compiling reda v0.1.0 (/tmp/reda-output-occurrences-20261004)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 58.79s
+     Running tests/output_occurrences.rs (/tmp/reda-output-occurrence-target-20261004/debug/deps/output_occurrences-6b3cc36f9ad6f411)
+
+running 2 tests
+test rewrite_occurrences_keep_sealed_distinct_alias_lamps_and_truth ... ok
+test raw_occurrences_follow_source_order_instead_of_map_order ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/physical_rewrite_views.rs (/tmp/reda-output-occurrence-target-20261004/debug/deps/physical_rewrite_views-2b25d0827229176c)
+
+running 6 tests
+test primary_output_aliases_keep_distinct_terminals_and_one_honest_observation_label ... ok
+test certified_flat_graph_keeps_selected_comparators_and_merge_contributors ... ok
+test rewrite_equivalence_and_partition_require_the_exact_sealed_view ... ok
+test compiled_and_flat_views_follow_proved_permuted_port_bindings ... ok
+test rewritten_compiled_views_measure_actual_nets_without_source_name_collisions ... ok
+test flat_projection_covers_qualified_generation_techniques_and_constants ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+     Running tests/raw_output_aliases.rs (/tmp/reda-output-occurrence-target-20261004/debug/deps/raw_output_aliases-5f8266381d739b38)
+
+running 5 tests
+test pinned_aliases_preserve_the_same_actual_external_port_and_world ... ok
+test raw_occurrences_follow_source_order_instead_of_map_order ... ok
+test rewrite_occurrences_keep_sealed_distinct_alias_lamps_and_truth ... ok
+test raw_output_aliases_keep_both_occurrences_at_the_actual_shared_lamp ... ok
+test explicit_alias_ownership_rejects_independent_corruptions ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+

@@ -4061,6 +4061,7 @@ mod tests {
             },
             placements: BTreeMap::new(),
             boundaries: BTreeMap::new(),
+            output_boundary_aliases: BTreeMap::new(),
             connections: BTreeMap::new(),
             routes: BTreeMap::from([
                 (

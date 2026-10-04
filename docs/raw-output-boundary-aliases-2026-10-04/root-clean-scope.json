@@ -1,0 +1,11 @@
+{
+  "base": "94b2eaf",
+  "patch": "owned.patch",
+  "clean_tree": "/tmp/reda-raw-alias-clean-20261004",
+  "tests": 14,
+  "status": "pass",
+  "physics_changed": false,
+  "whole_gap_complete": false,
+  "final_log": "root-clean-final-tests.log",
+  "exact_frozen_default_case": true
+}

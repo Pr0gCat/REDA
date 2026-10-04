@@ -1,0 +1,4 @@
+{
+  "accepted": false,
+  "error": "CandidateMetadataViolation { item: \"candidate\", reason: \"cannot realise node durable-physical-candidate: typed adapter failed: legacy route `declared output PortId(4) has no observation` has malformed block/floor metadata\" }"
+}

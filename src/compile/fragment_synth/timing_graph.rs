@@ -267,6 +267,14 @@ impl RealisedTimingGraph {
                 )?;
             }
         }
+        for (&alias, &owner) in &candidate.output_boundary_aliases {
+            builder.arc(
+                TimingNodeId::OutputLanding(owner),
+                TimingNodeId::OutputLanding(alias),
+                TimingArcKind::OutputBinding,
+                ExactDelay(0),
+            )?;
+        }
         for &port in &candidate.instances.declared_outputs {
             builder.arc(
                 TimingNodeId::OutputLanding(port),

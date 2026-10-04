@@ -2508,6 +2508,7 @@ mod tests {
             },
             placements: Default::default(),
             boundaries: Default::default(),
+            output_boundary_aliases: Default::default(),
             connections: Default::default(),
             routes: [(route, tree)].into_iter().collect(),
             repeater_handovers: Default::default(),

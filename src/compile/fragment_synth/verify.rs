@@ -1064,7 +1064,7 @@ fn validate_declared_outputs(candidate: &ExpandedPhysicalCandidate) -> Certifica
             .values()
             .flat_map(|route| route.branches.iter().map(move |branch| (route, branch)))
             .filter(|(route, branch)| {
-                route.source == source && branch.target == RouteTarget::DeclaredOutput(port)
+                route.source == source && branch.target == RouteTarget::DeclaredOutput(candidate.output_boundary_owner(port))
             })
             .count();
         if !candidate.boundaries.contains_key(&endpoint)
@@ -1084,6 +1084,7 @@ fn validate_declared_outputs(candidate: &ExpandedPhysicalCandidate) -> Certifica
         .declared_outputs
         .iter()
         .copied()
+        .map(|port| candidate.output_boundary_owner(port))
         .collect::<BTreeSet<_>>();
     if let Some(port) = candidate
         .routes
@@ -1237,6 +1238,16 @@ fn observation_matches_boundary(
     endpoint: PhysicalEndpointId,
     observation: &VerifiedObservation,
 ) -> bool {
+    let endpoint = match endpoint {
+        PhysicalEndpointId::DeclaredOutput(port) => PhysicalEndpointId::DeclaredOutput(
+            candidate
+                .output_boundary_aliases
+                .get(&port)
+                .copied()
+                .unwrap_or(port),
+        ),
+        _ => endpoint,
+    };
     if candidate
         .boundaries
         .get(&endpoint)

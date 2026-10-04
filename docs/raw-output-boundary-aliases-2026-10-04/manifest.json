@@ -1,0 +1,33 @@
+{
+  "production_files": [
+    "src/compile/fragment_synth/candidate.rs",
+    "src/compile/fragment_synth/legacy_adapter.rs",
+    "src/compile/fragment_synth/seed.rs",
+    "src/compile/fragment_synth/timing_graph.rs",
+    "src/compile/fragment_synth/verify.rs",
+    "src/compile/verification.rs"
+  ],
+  "sha256": {
+    "src/compile/fragment_synth/candidate.rs": "b8af498f0bc89e3372ec9dcb35e55f9926823f68bde27ed32b80579fc5f6949a",
+    "src/compile/fragment_synth/legacy_adapter.rs": "e6f7f3c7eddc1f46fe11c40f56bb6b428f36390acadae9da0be8bc80fcab08ba",
+    "src/compile/fragment_synth/seed.rs": "538cec40a1164f136dca606137396b9bd35d32409f6487ef0dc61a9a22a47cb9",
+    "src/compile/fragment_synth/timing_graph.rs": "00cee9b650a3c7d328e54f8b51eea4ff8411e338b78f76aabe02011614633e91",
+    "src/compile/fragment_synth/verify.rs": "24421c2cad7d0752569cdacf6c08f7458ab092d893418193ee0eee9b86f165a1",
+    "src/compile/verification.rs": "55eb2535cb8b7c323d54ebaf91b7179d427f53a9318b284914d43150ae0a477c",
+    "tests/raw_output_aliases.rs": "08eca8a343a1addea404f4c0ee619bba163329983899ab37a35922f953cd3ccc"
+  },
+  "source_snapshot": "/tmp/reda-output-occurrences-20261004",
+  "compiler_incremental": false,
+  "settling_cap": 2000,
+  "qualification": "13 integration tests plus exact frozen default entry positive pass; 8 ownership corruptions rejected; library candidate tests pending",
+  "negative_mutations": 8,
+  "base_commit": "94b2eaf",
+  "frozen_default": {
+    "source_sha256": "9bf7dd1664af70d6f539bb46e79c24caea839e8aebe38d979d41ae26ebb0acc0",
+    "inputs": 6,
+    "output_occurrences": 9,
+    "former_failure": "DeclaredOutput PortId4 no observation",
+    "result": "actual default compile positive",
+    "qor_audit": "separate full 8192-phase whole-default audit required"
+  }
+}

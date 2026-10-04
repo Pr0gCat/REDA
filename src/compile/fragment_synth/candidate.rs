@@ -185,6 +185,8 @@ pub struct ExpandedPhysicalCandidate {
     pub instances: InstanceGraph,
     pub placements: BTreeMap<PrimitiveId, PrimitivePlacement>,
     pub boundaries: BTreeMap<PhysicalEndpointId, BoundaryPlacement>,
+    /// Explicit shared declared-output ownership; aliases never own physical blocks.
+    pub output_boundary_aliases: BTreeMap<PortId, PortId>,
     pub connections: BTreeMap<ConnectionId, ConnectionBinding>,
     pub routes: BTreeMap<RouteId, RealisedRouteTree>,
     pub repeater_handovers: BTreeMap<RoutedSinkId, Vec<RepeaterHandover>>,
@@ -367,6 +369,8 @@ struct CandidateFingerprintPayload<'a> {
     instances: &'a InstanceGraph,
     placements: Vec<PlacementFingerprint<'a>>,
     boundaries: Vec<BoundaryFingerprint<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    output_boundary_aliases: Vec<(&'a PortId, &'a PortId)>,
     connections: Vec<(&'a ConnectionId, &'a ConnectionBinding)>,
     routes: Vec<RouteFingerprint<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -384,6 +388,7 @@ impl ExpandedPhysicalCandidate {
             instances,
             placements: BTreeMap::new(),
             boundaries: BTreeMap::new(),
+            output_boundary_aliases: BTreeMap::new(),
             connections: BTreeMap::new(),
             routes: BTreeMap::new(),
             repeater_handovers: BTreeMap::new(),
@@ -431,6 +436,7 @@ impl ExpandedPhysicalCandidate {
                     blocks: sorted_blocks(&boundary.blocks),
                 })
                 .collect(),
+            output_boundary_aliases: self.output_boundary_aliases.iter().collect(),
             connections: self.connections.iter().collect(),
             routes: self
                 .routes
@@ -476,6 +482,7 @@ impl ExpandedPhysicalCandidate {
     }
 
     pub fn validate_physical_ownership(&self) -> Result<(), CandidateError> {
+        self.validate_output_boundary_aliases()?;
         let mut delayed_at = BTreeMap::new();
         for (&key, placement) in &self.placements {
             if key != placement.id {
@@ -636,7 +643,65 @@ impl ExpandedPhysicalCandidate {
         Ok(())
     }
 
+    pub fn output_boundary_owner(&self, port: PortId) -> PortId {
+        self.output_boundary_aliases.get(&port).copied().unwrap_or(port)
+    }
+
+    pub fn validate_output_boundary_aliases(&self) -> Result<(), CandidateError> {
+        use super::instance_graph::PhysicalSink;
+        for (&alias, &owner) in &self.output_boundary_aliases {
+            let invalid = || CandidateError::CandidateShapeMismatch {
+                collection: "output boundary alias",
+            };
+            if alias == owner || self.output_boundary_aliases.contains_key(&owner) {
+                return Err(invalid());
+            }
+            let alias_endpoint = PhysicalEndpointId::DeclaredOutput(alias);
+            let owner_endpoint = PhysicalEndpointId::DeclaredOutput(owner);
+            let alias_boundary = self.boundaries.get(&alias_endpoint).ok_or_else(invalid)?;
+            let owner_boundary = self.boundaries.get(&owner_endpoint).ok_or_else(invalid)?;
+            if !alias_boundary.blocks.is_empty()
+                || alias_boundary.delayed.is_some()
+                || self.pin_contracts.contains_key(&alias_endpoint)
+            {
+                return Err(invalid());
+            }
+            let driver = |port| {
+                self.instances
+                    .assignments
+                    .iter()
+                    .find(|assignment| assignment.sink == PhysicalSink::DeclaredOutput(port))
+                    .map(|assignment| &assignment.driver)
+            };
+            if driver(alias).is_none() || driver(alias) != driver(owner) {
+                return Err(invalid());
+            }
+            let observation = |port| self.observations.get(&ObservationId::DeclaredOutput(port));
+            let a = observation(alias).ok_or_else(invalid)?;
+            let b = observation(owner).ok_or_else(invalid)?;
+            if a.site.at != b.site.at
+                || a.state != b.state
+                || a.site.logical_owner != b.site.logical_owner
+            {
+                return Err(invalid());
+            }
+            let owned = owner_boundary
+                .blocks
+                .iter()
+                .any(|block| block.at == b.site.at && block.state == b.state);
+            let pinned = self
+                .pin_contracts
+                .get(&owner_endpoint)
+                .is_some_and(|pin| pin.at == b.site.at && b.state.kind == BlockKind::Air);
+            if !owned && !pinned {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate_shape(&self) -> Result<(), CandidateError> {
+        self.validate_output_boundary_aliases()?;
         self.validate_pin_contracts()?;
         let expected_primitives = self
             .instances
@@ -866,7 +931,7 @@ impl ExpandedPhysicalCandidate {
                 .flat_map(|route| route.branches.iter().map(move |branch| (route, branch)))
                 .filter(|(route, branch)| {
                     route.source == expected_source
-                        && branch.target == RouteTarget::DeclaredOutput(port)
+                        && branch.target == RouteTarget::DeclaredOutput(self.output_boundary_owner(port))
                 })
                 .count();
             if matches != 1 {
@@ -884,14 +949,10 @@ impl ExpandedPhysicalCandidate {
                 RouteTarget::Connection(_) => None,
             })
             .collect::<Vec<_>>();
-        if realised_outputs.len() != self.instances.declared_outputs.len()
-            || realised_outputs.iter().copied().collect::<BTreeSet<_>>()
-                != self
-                    .instances
-                    .declared_outputs
-                    .iter()
-                    .copied()
-                    .collect::<BTreeSet<_>>()
+        let expected_outputs = self.instances.declared_outputs.iter().copied()
+            .map(|port| self.output_boundary_owner(port)).collect::<BTreeSet<_>>();
+        if realised_outputs.len() != expected_outputs.len()
+            || realised_outputs.iter().copied().collect::<BTreeSet<_>>() != expected_outputs
         {
             return Err(CandidateError::CandidateShapeMismatch {
                 collection: "declared output route",

@@ -1,0 +1,297 @@
+--- a/src/compile/fragment_synth/candidate.rs
++++ b/src/compile/fragment_synth/candidate.rs
+@@ -185,6 +185,8 @@
+     pub instances: InstanceGraph,
+     pub placements: BTreeMap<PrimitiveId, PrimitivePlacement>,
+     pub boundaries: BTreeMap<PhysicalEndpointId, BoundaryPlacement>,
++    /// Explicit shared declared-output ownership; aliases never own physical blocks.
++    pub output_boundary_aliases: BTreeMap<PortId, PortId>,
+     pub connections: BTreeMap<ConnectionId, ConnectionBinding>,
+     pub routes: BTreeMap<RouteId, RealisedRouteTree>,
+     pub repeater_handovers: BTreeMap<RoutedSinkId, Vec<RepeaterHandover>>,
+@@ -367,6 +369,8 @@
+     instances: &'a InstanceGraph,
+     placements: Vec<PlacementFingerprint<'a>>,
+     boundaries: Vec<BoundaryFingerprint<'a>>,
++    #[serde(skip_serializing_if = "Vec::is_empty")]
++    output_boundary_aliases: Vec<(&'a PortId, &'a PortId)>,
+     connections: Vec<(&'a ConnectionId, &'a ConnectionBinding)>,
+     routes: Vec<RouteFingerprint<'a>>,
+     #[serde(skip_serializing_if = "Vec::is_empty")]
+@@ -384,6 +388,7 @@
+             instances,
+             placements: BTreeMap::new(),
+             boundaries: BTreeMap::new(),
++            output_boundary_aliases: BTreeMap::new(),
+             connections: BTreeMap::new(),
+             routes: BTreeMap::new(),
+             repeater_handovers: BTreeMap::new(),
+@@ -431,6 +436,7 @@
+                     blocks: sorted_blocks(&boundary.blocks),
+                 })
+                 .collect(),
++            output_boundary_aliases: self.output_boundary_aliases.iter().collect(),
+             connections: self.connections.iter().collect(),
+             routes: self
+                 .routes
+@@ -476,6 +482,7 @@
+     }
+ 
+     pub fn validate_physical_ownership(&self) -> Result<(), CandidateError> {
++        self.validate_output_boundary_aliases()?;
+         let mut delayed_at = BTreeMap::new();
+         for (&key, placement) in &self.placements {
+             if key != placement.id {
+@@ -636,7 +643,65 @@
+         Ok(())
+     }
+ 
++    pub fn output_boundary_owner(&self, port: PortId) -> PortId {
++        self.output_boundary_aliases.get(&port).copied().unwrap_or(port)
++    }
++
++    pub fn validate_output_boundary_aliases(&self) -> Result<(), CandidateError> {
++        use super::instance_graph::PhysicalSink;
++        for (&alias, &owner) in &self.output_boundary_aliases {
++            let invalid = || CandidateError::CandidateShapeMismatch {
++                collection: "output boundary alias",
++            };
++            if alias == owner || self.output_boundary_aliases.contains_key(&owner) {
++                return Err(invalid());
++            }
++            let alias_endpoint = PhysicalEndpointId::DeclaredOutput(alias);
++            let owner_endpoint = PhysicalEndpointId::DeclaredOutput(owner);
++            let alias_boundary = self.boundaries.get(&alias_endpoint).ok_or_else(invalid)?;
++            let owner_boundary = self.boundaries.get(&owner_endpoint).ok_or_else(invalid)?;
++            if !alias_boundary.blocks.is_empty()
++                || alias_boundary.delayed.is_some()
++                || self.pin_contracts.contains_key(&alias_endpoint)
++            {
++                return Err(invalid());
++            }
++            let driver = |port| {
++                self.instances
++                    .assignments
++                    .iter()
++                    .find(|assignment| assignment.sink == PhysicalSink::DeclaredOutput(port))
++                    .map(|assignment| &assignment.driver)
++            };
++            if driver(alias).is_none() || driver(alias) != driver(owner) {
++                return Err(invalid());
++            }
++            let observation = |port| self.observations.get(&ObservationId::DeclaredOutput(port));
++            let a = observation(alias).ok_or_else(invalid)?;
++            let b = observation(owner).ok_or_else(invalid)?;
++            if a.site.at != b.site.at
++                || a.state != b.state
++                || a.site.logical_owner != b.site.logical_owner
++            {
++                return Err(invalid());
++            }
++            let owned = owner_boundary
++                .blocks
++                .iter()
++                .any(|block| block.at == b.site.at && block.state == b.state);
++            let pinned = self
++                .pin_contracts
++                .get(&owner_endpoint)
++                .is_some_and(|pin| pin.at == b.site.at && b.state.kind == BlockKind::Air);
++            if !owned && !pinned {
++                return Err(invalid());
++            }
++        }
++        Ok(())
++    }
++
+     pub fn validate_shape(&self) -> Result<(), CandidateError> {
++        self.validate_output_boundary_aliases()?;
+         self.validate_pin_contracts()?;
+         let expected_primitives = self
+             .instances
+@@ -866,7 +931,7 @@
+                 .flat_map(|route| route.branches.iter().map(move |branch| (route, branch)))
+                 .filter(|(route, branch)| {
+                     route.source == expected_source
+-                        && branch.target == RouteTarget::DeclaredOutput(port)
++                        && branch.target == RouteTarget::DeclaredOutput(self.output_boundary_owner(port))
+                 })
+                 .count();
+             if matches != 1 {
+@@ -884,14 +949,10 @@
+                 RouteTarget::Connection(_) => None,
+             })
+             .collect::<Vec<_>>();
+-        if realised_outputs.len() != self.instances.declared_outputs.len()
+-            || realised_outputs.iter().copied().collect::<BTreeSet<_>>()
+-                != self
+-                    .instances
+-                    .declared_outputs
+-                    .iter()
+-                    .copied()
+-                    .collect::<BTreeSet<_>>()
++        let expected_outputs = self.instances.declared_outputs.iter().copied()
++            .map(|port| self.output_boundary_owner(port)).collect::<BTreeSet<_>>();
++        if realised_outputs.len() != expected_outputs.len()
++            || realised_outputs.iter().copied().collect::<BTreeSet<_>>() != expected_outputs
+         {
+             return Err(CandidateError::CandidateShapeMismatch {
+                 collection: "declared output route",
+--- a/src/compile/fragment_synth/legacy_adapter.rs
++++ b/src/compile/fragment_synth/legacy_adapter.rs
+@@ -145,6 +145,7 @@
+             .outputs
+             .iter()
+             .enumerate()
++            .rev()
+             .map(|(index, name)| {
+                 Ok((
+                     name.as_str(),
+@@ -159,7 +160,12 @@
+             let facing = seed.facing_of(index);
+             let (mut blocks, output_at, output_pin) = materialise_gate(gate, anchor, facing, size);
+ 
+-            if let Some(output_port) = netlist.outputs.iter().position(|name| name == &gate.output)
++            let mut output_owner = None;
++            for (output_port, _) in netlist
++                .outputs
++                .iter()
++                .enumerate()
++                .filter(|(_, name)| *name == &gate.output)
+             {
+                 let endpoint = PhysicalEndpointId::DeclaredOutput(PortId(
+                     u32::try_from(output_port).map_err(|_| LegacyAdapterError::IdentityOverflow)?,
+@@ -168,6 +174,23 @@
+                     PhysicalEndpointId::DeclaredOutput(port) => port,
+                     _ => unreachable!(),
+                 };
++                if let Some(owner) = output_owner {
++                    candidate.output_boundary_aliases.insert(port, owner);
++                    candidate.boundaries.insert(
++                        endpoint,
++                        BoundaryPlacement {
++                            endpoint,
++                            delayed: None,
++                            blocks: Vec::new(),
++                        },
++                    );
++                    let mut alias =
++                        candidate.observations[&ObservationId::DeclaredOutput(owner)].clone();
++                    alias.site.id = ObservationId::DeclaredOutput(port);
++                    candidate.observations.insert(alias.site.id, alias);
++                    continue;
++                }
++                output_owner = Some(port);
+                 if let Some(pin) = candidate.pin_contracts.get(&endpoint).copied() {
+                     candidate.boundaries.insert(
+                         endpoint,
+@@ -458,7 +481,7 @@
+                 }
+                 let sink = RoutedSinkId {
+                     route,
+-                    ordinal: u16::try_from(ordinal)
++                    ordinal: u16::try_from(branches.len())
+                         .map_err(|_| LegacyAdapterError::IdentityOverflow)?,
+                 };
+                 let state = legacy
+@@ -477,6 +500,18 @@
+                             route: legacy.id().to_string(),
+                             sink: terminal.sink.gate.clone(),
+                         })?;
++                    if candidate.output_boundary_aliases.values().any(|owner| *owner == port)
++                        && branches.iter().any(|branch: &RealisedRouteBranch|
++                        branch.target == RouteTarget::DeclaredOutput(port)
++                            && branch.root == root && branch.path == path
++                            && branch.terminal.at == terminal.sink.anchor
++                            && branch.terminal.state == state
++                            && branch.terminal.kind == terminal.kind
++                            && branch.terminal.repeaters == terminal.repeaters) {
++                        // Repeated source declarations share this exact physical terminal.
++                        // Keep one physical owner; occurrence identity is explicit above.
++                        continue;
++                    }
+                     branches.push(RealisedRouteBranch {
+                         sink,
+                         target: RouteTarget::DeclaredOutput(port),
+@@ -586,6 +621,9 @@
+     for (port, driver) in assignments {
+         let endpoint = PhysicalEndpointId::DeclaredOutput(port);
+         if candidate.pin_contracts.contains_key(&endpoint) {
++            continue;
++        }
++        if candidate.output_boundary_aliases.contains_key(&port) {
+             continue;
+         }
+         let source =
+--- a/src/compile/fragment_synth/seed.rs
++++ b/src/compile/fragment_synth/seed.rs
+@@ -4061,6 +4061,7 @@
+             },
+             placements: BTreeMap::new(),
+             boundaries: BTreeMap::new(),
++            output_boundary_aliases: BTreeMap::new(),
+             connections: BTreeMap::new(),
+             routes: BTreeMap::from([
+                 (
+--- a/src/compile/fragment_synth/timing_graph.rs
++++ b/src/compile/fragment_synth/timing_graph.rs
+@@ -266,6 +266,14 @@
+                     route_delay(route, branch)?,
+                 )?;
+             }
++        }
++        for (&alias, &owner) in &candidate.output_boundary_aliases {
++            builder.arc(
++                TimingNodeId::OutputLanding(owner),
++                TimingNodeId::OutputLanding(alias),
++                TimingArcKind::OutputBinding,
++                ExactDelay(0),
++            )?;
+         }
+         for &port in &candidate.instances.declared_outputs {
+             builder.arc(
+--- a/src/compile/fragment_synth/verify.rs
++++ b/src/compile/fragment_synth/verify.rs
+@@ -1064,7 +1064,7 @@
+             .values()
+             .flat_map(|route| route.branches.iter().map(move |branch| (route, branch)))
+             .filter(|(route, branch)| {
+-                route.source == source && branch.target == RouteTarget::DeclaredOutput(port)
++                route.source == source && branch.target == RouteTarget::DeclaredOutput(candidate.output_boundary_owner(port))
+             })
+             .count();
+         if !candidate.boundaries.contains_key(&endpoint)
+@@ -1084,6 +1084,7 @@
+         .declared_outputs
+         .iter()
+         .copied()
++        .map(|port| candidate.output_boundary_owner(port))
+         .collect::<BTreeSet<_>>();
+     if let Some(port) = candidate
+         .routes
+@@ -1237,6 +1238,16 @@
+     endpoint: PhysicalEndpointId,
+     observation: &VerifiedObservation,
+ ) -> bool {
++    let endpoint = match endpoint {
++        PhysicalEndpointId::DeclaredOutput(port) => PhysicalEndpointId::DeclaredOutput(
++            candidate
++                .output_boundary_aliases
++                .get(&port)
++                .copied()
++                .unwrap_or(port),
++        ),
++        _ => endpoint,
++    };
+     if candidate
+         .boundaries
+         .get(&endpoint)
+--- a/src/compile/verification.rs
++++ b/src/compile/verification.rs
+@@ -2508,6 +2508,7 @@
+             },
+             placements: Default::default(),
+             boundaries: Default::default(),
++            output_boundary_aliases: Default::default(),
+             connections: Default::default(),
+             routes: [(route, tree)].into_iter().collect(),
+             repeater_handovers: Default::default(),

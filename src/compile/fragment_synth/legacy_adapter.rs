@@ -145,6 +145,7 @@ impl LegacyCandidateAdapter {
             .outputs
             .iter()
             .enumerate()
+            .rev()
             .map(|(index, name)| {
                 Ok((
                     name.as_str(),
@@ -159,7 +160,12 @@ impl LegacyCandidateAdapter {
             let facing = seed.facing_of(index);
             let (mut blocks, output_at, output_pin) = materialise_gate(gate, anchor, facing, size);
 
-            if let Some(output_port) = netlist.outputs.iter().position(|name| name == &gate.output)
+            let mut output_owner = None;
+            for (output_port, _) in netlist
+                .outputs
+                .iter()
+                .enumerate()
+                .filter(|(_, name)| *name == &gate.output)
             {
                 let endpoint = PhysicalEndpointId::DeclaredOutput(PortId(
                     u32::try_from(output_port).map_err(|_| LegacyAdapterError::IdentityOverflow)?,
@@ -168,6 +174,23 @@ impl LegacyCandidateAdapter {
                     PhysicalEndpointId::DeclaredOutput(port) => port,
                     _ => unreachable!(),
                 };
+                if let Some(owner) = output_owner {
+                    candidate.output_boundary_aliases.insert(port, owner);
+                    candidate.boundaries.insert(
+                        endpoint,
+                        BoundaryPlacement {
+                            endpoint,
+                            delayed: None,
+                            blocks: Vec::new(),
+                        },
+                    );
+                    let mut alias =
+                        candidate.observations[&ObservationId::DeclaredOutput(owner)].clone();
+                    alias.site.id = ObservationId::DeclaredOutput(port);
+                    candidate.observations.insert(alias.site.id, alias);
+                    continue;
+                }
+                output_owner = Some(port);
                 if let Some(pin) = candidate.pin_contracts.get(&endpoint).copied() {
                     candidate.boundaries.insert(
                         endpoint,
@@ -458,7 +481,7 @@ impl LegacyCandidateAdapter {
                 }
                 let sink = RoutedSinkId {
                     route,
-                    ordinal: u16::try_from(ordinal)
+                    ordinal: u16::try_from(branches.len())
                         .map_err(|_| LegacyAdapterError::IdentityOverflow)?,
                 };
                 let state = legacy
@@ -477,6 +500,18 @@ impl LegacyCandidateAdapter {
                             route: legacy.id().to_string(),
                             sink: terminal.sink.gate.clone(),
                         })?;
+                    if candidate.output_boundary_aliases.values().any(|owner| *owner == port)
+                        && branches.iter().any(|branch: &RealisedRouteBranch|
+                        branch.target == RouteTarget::DeclaredOutput(port)
+                            && branch.root == root && branch.path == path
+                            && branch.terminal.at == terminal.sink.anchor
+                            && branch.terminal.state == state
+                            && branch.terminal.kind == terminal.kind
+                            && branch.terminal.repeaters == terminal.repeaters) {
+                        // Repeated source declarations share this exact physical terminal.
+                        // Keep one physical owner; occurrence identity is explicit above.
+                        continue;
+                    }
                     branches.push(RealisedRouteBranch {
                         sink,
                         target: RouteTarget::DeclaredOutput(port),
@@ -586,6 +621,9 @@ fn materialise_declared_output_routes(
     for (port, driver) in assignments {
         let endpoint = PhysicalEndpointId::DeclaredOutput(port);
         if candidate.pin_contracts.contains_key(&endpoint) {
+            continue;
+        }
+        if candidate.output_boundary_aliases.contains_key(&port) {
             continue;
         }
         let source =
