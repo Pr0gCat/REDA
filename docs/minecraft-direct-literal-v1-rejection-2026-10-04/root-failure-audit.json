@@ -1,0 +1,8 @@
+{
+  "negative_game_verified": true,
+  "invalid_delay_rejections": 4,
+  "truth_vectors_executed": 0,
+  "air_sites_checked": 99,
+  "chunks_unforced_before_after": 40,
+  "production_adoption": false
+}

@@ -1,0 +1,29 @@
+{
+  "exit_code": 0,
+  "command": [
+    "/tmp/reda-direct-literal-production-target/debug/mc_dump",
+    "--frontend",
+    "native",
+    "verilog",
+    "evidence/original-parameter-hierarchy.sv",
+    "m"
+  ],
+  "environment": {
+    "REDA_PYTHON": "/no/python"
+  },
+  "source_binary_manifest_sha256": "5d48332fb4a3d15eca6f3d206bc1e4872aab6871134394156b4ad782e1b79780",
+  "dump_sha256": "05f313ef1bf2108537bf07b840bc42d62f3b6db4bc3aa788f1656e0eaac86c4f",
+  "source_sha256": "2d3a2eb9c1badf8c066a7c7b83b452b90cd030d47407960207a0908c5199ab4a",
+  "binary_sha256": "9911a96bf53cdd4c2e2168d32241f9217cbebc72f0312aa719801706586657fd",
+  "record_counts": {
+    "SIZE": 1,
+    "BLOCK": 91,
+    "INPUT": 4,
+    "OUTPUT": 6,
+    "OUTLABEL": 8,
+    "OUTPUTPORT": 8,
+    "GATEOUT": 11,
+    "GATE": 11
+  },
+  "source_binary_drift": []
+}

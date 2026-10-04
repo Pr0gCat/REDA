@@ -1,0 +1,140 @@
+SIZE 92 8 52
+BLOCK 72 0 18 Solid - - false 0 minecraft:stone
+BLOCK 73 0 18 Solid - - false 0 minecraft:stone
+BLOCK 74 0 18 Solid - - false 0 minecraft:stone
+BLOCK 75 0 18 Solid - - false 0 minecraft:stone
+BLOCK 76 0 18 Solid - - false 0 minecraft:stone
+BLOCK 72 0 21 Solid - - false 0 minecraft:stone
+BLOCK 73 0 21 Solid - - false 0 minecraft:stone
+BLOCK 74 0 21 Solid - - false 0 minecraft:stone
+BLOCK 75 0 21 Solid - - false 0 minecraft:stone
+BLOCK 72 0 24 Solid - - false 0 minecraft:stone
+BLOCK 73 0 24 Solid - - false 0 minecraft:stone
+BLOCK 74 0 24 Solid - - false 0 minecraft:stone
+BLOCK 75 0 24 Solid - - false 0 minecraft:stone
+BLOCK 72 0 27 Solid - - false 0 minecraft:stone
+BLOCK 73 0 27 Solid - - false 0 minecraft:stone
+BLOCK 74 0 27 Solid - - false 0 minecraft:stone
+BLOCK 75 0 27 Solid - - false 0 minecraft:stone
+BLOCK 4 1 2 Solid - - false 0 minecraft:stone
+BLOCK 14 1 2 Solid - - false 0 minecraft:stone
+BLOCK 24 1 2 Solid - - false 0 minecraft:stone
+BLOCK 34 1 2 Solid - - false 0 minecraft:stone
+BLOCK 4 1 3 Solid - - false 0 minecraft:stone
+BLOCK 14 1 3 Solid - - false 0 minecraft:stone
+BLOCK 24 1 3 Solid - - false 0 minecraft:stone
+BLOCK 34 1 3 Solid - - false 0 minecraft:stone
+BLOCK 4 1 4 Solid - - false 0 minecraft:stone
+BLOCK 5 1 4 Solid - - false 0 minecraft:stone
+BLOCK 6 1 4 Solid - - false 0 minecraft:stone
+BLOCK 14 1 4 Solid - - false 0 minecraft:stone
+BLOCK 15 1 4 Solid - - false 0 minecraft:stone
+BLOCK 16 1 4 Solid - - false 0 minecraft:stone
+BLOCK 24 1 4 Solid - - false 0 minecraft:stone
+BLOCK 25 1 4 Solid - - false 0 minecraft:stone
+BLOCK 26 1 4 Solid - - false 0 minecraft:stone
+BLOCK 34 1 4 Solid - - false 0 minecraft:stone
+BLOCK 35 1 4 Solid - - false 0 minecraft:stone
+BLOCK 36 1 4 Solid - - false 0 minecraft:stone
+BLOCK 72 1 18 Lamp - - false 0 minecraft:redstone_lamp
+BLOCK 73 1 18 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 74 1 18 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 75 1 18 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 76 1 18 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 72 1 21 Lamp - - false 0 minecraft:redstone_lamp
+BLOCK 73 1 21 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 74 1 21 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 75 1 21 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 72 1 24 Lamp - - false 0 minecraft:redstone_lamp
+BLOCK 73 1 24 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 74 1 24 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 75 1 24 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 72 1 27 Lamp - - false 0 minecraft:redstone_lamp
+BLOCK 73 1 27 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 74 1 27 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 75 1 27 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 4 2 2 Lever north floor false 0 minecraft:lever
+BLOCK 14 2 2 Lever north floor false 0 minecraft:lever
+BLOCK 24 2 2 Lever north floor false 0 minecraft:lever
+BLOCK 34 2 2 Lever north floor false 0 minecraft:lever
+BLOCK 4 2 3 Repeater north - false 0 minecraft:repeater
+BLOCK 14 2 3 Repeater north - false 0 minecraft:repeater
+BLOCK 24 2 3 Repeater north - false 0 minecraft:repeater
+BLOCK 34 2 3 Repeater north - false 0 minecraft:repeater
+BLOCK 4 2 4 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 5 2 4 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 6 2 4 Lamp - - false 0 minecraft:redstone_lamp
+BLOCK 14 2 4 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 15 2 4 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 16 2 4 Lamp - - false 0 minecraft:redstone_lamp
+BLOCK 24 2 4 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 25 2 4 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 26 2 4 Lamp - - false 0 minecraft:redstone_lamp
+BLOCK 34 2 4 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 35 2 4 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 36 2 4 Lamp - - false 0 minecraft:redstone_lamp
+BLOCK 76 2 18 WallTorch west - true 0 minecraft:redstone_wall_torch
+BLOCK 77 2 18 Solid - - false 0 minecraft:stone
+BLOCK 75 2 21 WallTorch west - true 0 minecraft:redstone_wall_torch
+BLOCK 76 2 21 Solid - - false 0 minecraft:stone
+BLOCK 75 2 24 WallTorch west - true 0 minecraft:redstone_wall_torch
+BLOCK 76 2 24 Solid - - false 0 minecraft:stone
+BLOCK 75 2 27 WallTorch west - true 0 minecraft:redstone_wall_torch
+BLOCK 76 2 27 Solid - - false 0 minecraft:stone
+BLOCK 76 3 21 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 76 3 24 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 76 3 27 RedstoneWire - - false 0 minecraft:redstone_wire
+BLOCK 76 4 21 WallTorch west - true 0 minecraft:redstone_wall_torch
+BLOCK 77 4 21 Solid - - false 0 minecraft:stone
+BLOCK 76 4 24 WallTorch west - true 0 minecraft:redstone_wall_torch
+BLOCK 77 4 24 Solid - - false 0 minecraft:stone
+BLOCK 76 4 27 WallTorch west - true 0 minecraft:redstone_wall_torch
+BLOCK 77 4 27 Solid - - false 0 minecraft:stone
+INPUT a[0] 4 2 2
+INPUT a[1] 14 2 2
+INPUT a[2] 24 2 2
+INPUT a[3] 34 2 2
+OUTPUT g0 72 1 18
+OUTPUT g1 72 1 27
+OUTPUT g2 6 2 4
+OUTPUT g3 16 2 4
+OUTPUT g4 26 2 4
+OUTPUT g5 36 2 4
+OUTLABEL y[0] g2
+OUTLABEL y[1] g3
+OUTLABEL y[2] g4
+OUTLABEL y[3] g5
+OUTLABEL y[4] g0
+OUTLABEL y[5] g1
+OUTLABEL y[6] g1
+OUTLABEL y[7] g1
+OUTPUTPORT 0 g2 implemented:positive0 6 2 4 y[0]
+OUTPUTPORT 1 g3 implemented:positive1 16 2 4 y[1]
+OUTPUTPORT 2 g4 implemented:positive2 26 2 4 y[2]
+OUTPUTPORT 3 g5 implemented:positive3 36 2 4 y[3]
+OUTPUTPORT 4 g0 implemented:constant_high4 72 1 18 y[4]
+OUTPUTPORT 5 g1 implemented:constant_low5 72 1 21 y[5]
+OUTPUTPORT 6 g1 implemented:constant_low6 72 1 24 y[6]
+OUTPUTPORT 7 g1 implemented:constant_low7 72 1 27 y[7]
+GATEOUT implemented:constant_high4 76 2 18 WallTorch
+GATEOUT implemented:constant_high5 76 4 21 WallTorch
+GATEOUT implemented:constant_high6 76 4 24 WallTorch
+GATEOUT implemented:constant_high7 76 4 27 WallTorch
+GATEOUT implemented:constant_low5 75 2 21 WallTorch
+GATEOUT implemented:constant_low6 75 2 24 WallTorch
+GATEOUT implemented:constant_low7 75 2 27 WallTorch
+GATEOUT implemented:positive0 4 2 3 Repeater
+GATEOUT implemented:positive1 14 2 3 Repeater
+GATEOUT implemented:positive2 24 2 3 Repeater
+GATEOUT implemented:positive3 34 2 3 Repeater
+GATE implemented:positive0 a[0] buf
+GATE implemented:positive1 a[1] buf
+GATE implemented:positive2 a[2] buf
+GATE implemented:positive3 a[3] buf
+GATE implemented:constant_high4 - nor
+GATE implemented:constant_high5 - nor
+GATE implemented:constant_high6 - nor
+GATE implemented:constant_high7 - nor
+GATE implemented:constant_low5 implemented:constant_high5 nor
+GATE implemented:constant_low6 implemented:constant_high6 nor
+GATE implemented:constant_low7 implemented:constant_high7 nor

@@ -1,0 +1,19 @@
+{
+  "origin": [
+    220000,
+    151,
+    180000
+  ],
+  "protocol_files": {
+    "source.sv": "2d3a2eb9c1badf8c066a7c7b83b452b90cd030d47407960207a0908c5199ab4a",
+    "audit-cleanup.py": "be6963b6eb033bd8c641a1800af850acfb29ad2e2fa1b894ca12655c73e68b81",
+    "run-game.py": "b76069c44d7a77858b46db54c314a0bb88a4543c9b52b690d8aefa852ae99aa2",
+    "preflight.py": "337ff78aab62328046a0f2e37e15fede4e968131ab582f53f50770b2c6ebd37c",
+    "protocol/rcon.py": "34a9cc1c9367679a4cef83870bbf04860d04dc767e261fbfc6d8f623a5b4b4d8",
+    "protocol/harness.py": "70aec234283b4b33936cda9a75277bc910b85411348684c778a98c095e2fc3f3",
+    "protocol/circuit_conformance.py": "cf613a4e637befe32034b0965c1318fc26a9aa8b764f9377ca5a35c77c7f1545"
+  },
+  "candidate_dump": "pending source-bound production compiler",
+  "game_started": false,
+  "policy": "same harness and fixed timing defaults; fresh region, no credential copy"
+}

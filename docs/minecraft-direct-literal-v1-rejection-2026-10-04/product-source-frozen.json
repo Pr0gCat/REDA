@@ -1,0 +1,11 @@
+{
+  "baseline": "08733c1ff5cf279084a543390c9146626fb69e80",
+  "files": {
+    "src/compile/fragment_synth/torch_row.rs": "f1ad32675bfefb82b12eef4d3d55b86f608495220729e5809ed95fab26d408e4",
+    "src/compile/fragment_synth/torch_row/player.rs": "4b28abe2911835d3686226a9d49d28d33a2e24c415a111f018f5fe66086d361e",
+    "src/compile/fragment_synth/torch_row/literals.rs": "beef28cc9d0402bdc15ddc4fad7f43b2dd1d39aef5e7e5032b020f4816a0923d",
+    "src/compile/selection.rs": "033da726023a3ef41ab899ed1ff6d9c6e1113461321a7867f069fc701a78beee"
+  },
+  "patch_sha256": "b86ae9d55f2e2a3b66b79109e33299e0a6bd140f8631382d0359fe0d53c84af9",
+  "product_observer_edits": false
+}
