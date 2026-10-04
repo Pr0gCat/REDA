@@ -1,0 +1,13 @@
+{
+  "handle": 46436,
+  "terminal_exit_code": 0,
+  "phases": 8192,
+  "complete_ordered_protocol": true,
+  "all_public_final_values_match_literal_fixture": true,
+  "worst_settle_game_ticks": 690,
+  "record_sha256": "378c5ce39b607fa843a4d617c25682ad77e961e8cb11b9d7ab6154ebfecb77a4",
+  "binary_sha256": "429ab6bd6f048d666e8549d69f7f8d6a32dc0b5594bac205b36b0336917b85af",
+  "world_fingerprint": "90ad27236b013529f500c04347b760a04e08851abd88a1ee9c657ae9eaafaa37",
+  "independent_all_event_comparison": "running on handle 91211; not yet qualified",
+  "production_adoption_qualified": false
+}
