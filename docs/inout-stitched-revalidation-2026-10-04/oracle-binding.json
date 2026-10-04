@@ -1,0 +1,12 @@
+[
+  {
+    "candidate": "target/qualification/gap5-tool-source-recovery/stitched/tests/fixtures/resolved-inout.sv",
+    "oracle": "docs/inout-standard-oracle-2026-10-04/fixture.sv",
+    "sha256": "5e9d6e002868931329f7e1303f57b646e364ddfb4b06ed90ef2f8013353d592c"
+  },
+  {
+    "candidate": "target/qualification/gap5-tool-source-recovery/stitched/tests/fixtures/resolved-inout-standard-oracle.csv",
+    "oracle": "docs/inout-standard-oracle-2026-10-04/standard-oracle.csv",
+    "sha256": "170ba618e6867e9e07d8233d6ce2609e8c28cd2f00e1f01ee55103d697d2eb50"
+  }
+]
