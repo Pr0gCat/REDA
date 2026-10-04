@@ -84,6 +84,100 @@ fn shipping_case(name: &'static str, netlist: Netlist) -> Case {
     }
 }
 
+/// Recover the original regression geometry together with its recorded owners.
+/// Current shipping candidates are still measured by the dynamic tests below.
+struct HistoricalCase {
+    name: &'static str,
+    netlist: Netlist,
+    parts: planner::VerifiedRealisation,
+}
+
+fn historical_case(name: &'static str, netlist: Netlist) -> HistoricalCase {
+    use serde::Deserialize;
+    use sha2::{Digest, Sha256};
+    #[derive(Deserialize)]
+    struct RecordedNet {
+        source: (String, usize),
+        sinks: Vec<(usize, usize)>,
+    }
+    #[derive(Deserialize)]
+    struct RecordedCase {
+        netlist_debug: String,
+        reservation: Vec<(i32, i32, i32, usize)>,
+        nets: Vec<RecordedNet>,
+        input_positions: BTreeMap<String, (i32, i32, i32)>,
+        output_positions: BTreeMap<String, (i32, i32, i32)>,
+        gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+    }
+    let (world_hash, metadata_hash) = match name {
+        "and4" => (
+            "95decc17679f7544cf19786e9822f7c81acf03117114300bb6bf60db05f82a66",
+            "cea7cbfd25074d66e3d941c9aeab0dd11e2bf85db172d066d6d682b9afbc1a61",
+        ),
+        "full_adder" => (
+            "ddc837317ff7baaa2ef5255c4a3a2ab8e7ec77aa5a3b3460ceb8cba035eff033",
+            "b893ed5406a8d290c3c00b8ad291457fd197d87cbfdce5d76117cec912e388eb",
+        ),
+        "full_adder_negotiated" => (
+            "5d69e0e51f31727d5c8985da46bbab83e4f3d22cea52dbc434afe90b4899c29d",
+            "51b7ed19933d6800377e8495c760ce91461e0994b03374b6cf0e32a33cba0f08",
+        ),
+        _ => panic!("unknown historical strength case: {name}"),
+    };
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/strength_history");
+    let checked = |extension: &str, expected: &str| {
+        let bytes = std::fs::read(root.join(format!("{name}.{extension}"))).unwrap();
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&bytes)),
+            expected,
+            "historical strength fixture must remain unchanged"
+        );
+        bytes
+    };
+    checked("litematic", world_hash);
+    let recorded: RecordedCase = serde_json::from_slice(&checked("json", metadata_hash)).unwrap();
+    assert_eq!(
+        format!("{netlist:?}"),
+        recorded.netlist_debug,
+        "historical ownership must refer to exactly the original logical graph"
+    );
+    let world = crate::formats::litematic::load(&root.join(format!("{name}.litematic"))).unwrap();
+    let reservation = recorded
+        .reservation
+        .into_iter()
+        .map(|(x, y, z, owner)| (Position::new(x, y, z), owner))
+        .collect();
+    let nets = recorded
+        .nets
+        .into_iter()
+        .map(|net| {
+            let source = match net.source.0.as_str() {
+                "lever" => Source::Lever(net.source.1),
+                "gate" => Source::Gate(net.source.1),
+                other => panic!("invalid historical source kind: {other}"),
+            };
+            Net::for_verification(source, net.sinks)
+        })
+        .collect();
+    HistoricalCase {
+        name,
+        netlist,
+        parts: planner::VerifiedRealisation {
+            realised: planner::RealisedCandidate {
+                world,
+                ports: planner::CandidatePorts {
+                    input_positions: recorded.input_positions,
+                    output_positions: recorded.output_positions,
+                    gate_output_positions: recorded.gate_output_positions,
+                },
+            },
+            reservation,
+            nets,
+        },
+    }
+}
+
 /// A plan from the negotiated router -- the two cases in dispute.
 ///
 /// The schedule is named rather than assumed: `segment_a` routes only under
@@ -268,14 +362,19 @@ fn the_replica_reaches_the_shipping_verdict() {
 fn the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse() {
     use crate::circuits::full_adder::build_full_adder_netlist;
 
-    let Some(case) = negotiated_case(
-        "full_adder [NEGOTIATED]",
-        build_full_adder_netlist().0,
-        PresentSchedule::SHIPPING,
-    ) else {
-        panic!("negotiated full_adder must route -- it is the case in dispute");
-    };
-    let measurement = measure_case(&case);
+    let case = historical_case("full_adder_negotiated", build_full_adder_netlist().0);
+    let parts = &case.parts;
+    let ports = &parts.realised.ports;
+    let measurement = measure(
+        &parts.realised.world,
+        &parts.reservation,
+        &case.netlist,
+        &parts.nets,
+        &ports.gate_output_positions,
+        &ports.input_positions,
+        &ports.output_positions,
+    )
+    .expect("the historical disputed plan measures");
 
     assert!(
         measurement.shipping_verdict.is_none(),
@@ -1034,22 +1133,15 @@ fn genuine_decay_is_still_refused() {
     use crate::circuits::and4::build_and4_netlist;
     use crate::circuits::full_adder::build_full_adder_netlist;
 
-    let cases: Vec<Case> = vec![
-        shipping_case("and4", build_and4_netlist().0),
-        shipping_case("full_adder", build_full_adder_netlist().0),
-        negotiated_case(
-            "full_adder [NEGOTIATED]",
-            build_full_adder_netlist().0,
-            PresentSchedule::SHIPPING,
-        )
-        .expect("negotiated full_adder routes -- it is the plan the fix is about"),
+    let cases = [
+        historical_case("and4", build_and4_netlist().0),
+        historical_case("full_adder", build_full_adder_netlist().0),
+        historical_case("full_adder_negotiated", build_full_adder_netlist().0),
     ];
 
     let mut bit: BTreeMap<&'static str, usize> = BTreeMap::new();
     for case in &cases {
-        let size = candidate_world_size(&case.candidate);
-        let parts = planner::realise_without_verifying(&case.candidate, &case.netlist, size)
-            .expect("it realises");
+        let parts = &case.parts;
         let world = &parts.realised.world;
         let ports = &parts.realised.ports;
         let run = |w: &World| {

@@ -1,0 +1,31 @@
+--- a/src/compile/strength_differential/tests.rs
++++ b/src/compile/strength_differential/tests.rs
+@@ -1177,3 +1177,28 @@
+     state.name = "minecraft:glass".to_string();
+     state
+ }
++
++#[test]
++fn capture_original_strength_worlds() {
++    use crate::circuits::and4::build_and4_netlist;
++    use crate::circuits::full_adder::build_full_adder_netlist;
++    let root = std::path::Path::new("/tmp/reda-original-strength-worlds-20261004");
++    std::fs::create_dir_all(root).unwrap();
++    for case in [
++        shipping_case("and4", build_and4_netlist().0),
++        shipping_case("full_adder", build_full_adder_netlist().0),
++        negotiated_case("full_adder_negotiated", build_full_adder_netlist().0, PresentSchedule::SHIPPING).unwrap(),
++    ] {
++        let parts = planner::realise_without_verifying(&case.candidate, &case.netlist, candidate_world_size(&case.candidate)).unwrap();
++        let ports = &parts.realised.ports;
++        crate::formats::litematic::save(&root.join(format!("{}.litematic", case.name)), &parts.realised.world, case.name).unwrap();
++        let mut reservation: Vec<_> = parts.reservation.iter().map(|(p,n)| (p.x,p.y,p.z,*n)).collect();
++        reservation.sort();
++        let nets: Vec<_> = parts.nets.iter().map(|net| {
++            let source = match net.source { Source::Lever(index) => ("lever",index), Source::Gate(index) => ("gate",index) };
++            serde_json::json!({"source":source, "sinks":net.sinks.iter().flatten().copied().collect::<Vec<_>>()})
++        }).collect();
++        let metadata = serde_json::json!({"name":case.name,"path":case.path,"netlist_debug":format!("{:?}",case.netlist),"reservation":reservation,"nets":nets,"gate_output_positions":ports.gate_output_positions,"input_positions":ports.input_positions,"output_positions":ports.output_positions});
++        std::fs::write(root.join(format!("{}.json",case.name)), serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
++    }
++}

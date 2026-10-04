@@ -1,0 +1,28 @@
+{
+  "historical_commit": "78d51855dcb2844bbe1a6dded7c9e92395af140b",
+  "current_base": "4be59bac5aeba23f42d8ff5089100c0c60162ef9",
+  "positive_session": 3463,
+  "original_decay_session": 92690,
+  "fixtures": {
+    "tests/fixtures/strength_history/full_adder.litematic": "ddc837317ff7baaa2ef5255c4a3a2ab8e7ec77aa5a3b3460ceb8cba035eff033",
+    "tests/fixtures/strength_history/and4.json": "cea7cbfd25074d66e3d941c9aeab0dd11e2bf85db172d066d6d682b9afbc1a61",
+    "tests/fixtures/strength_history/full_adder.json": "b893ed5406a8d290c3c00b8ad291457fd197d87cbfdce5d76117cec912e388eb",
+    "tests/fixtures/strength_history/full_adder_negotiated.litematic": "5d69e0e51f31727d5c8985da46bbab83e4f3d22cea52dbc434afe90b4899c29d",
+    "tests/fixtures/strength_history/and4.litematic": "95decc17679f7544cf19786e9822f7c81acf03117114300bb6bf60db05f82a66",
+    "tests/fixtures/strength_history/full_adder_negotiated.json": "51b7ed19933d6800377e8495c760ce91461e0994b03374b6cf0e32a33cba0f08"
+  },
+  "negative_session": 10004,
+  "assertions_identical": true,
+  "candidate_test_sha256": "4ea886eee71973952e59e9c23683d28b53bf45a4ff52949f8a6529709032e97a",
+  "historical_capture_exit": 0,
+  "historical_positive_exit": 0,
+  "current_original_failure_exit": 101,
+  "negative_exit": 101,
+  "negative_log_sha256": "12195fefc05c9225cc6d145d03865615baa8156eb007af7a25da58ef1add352f",
+  "positive_exit": 0,
+  "positive_passed": 7,
+  "positive_failed": 0,
+  "existing_ignored": 4,
+  "positive_log_sha256": "8e88d72686c25b5e2232416df2e141f06a281e11f9cd9f72559ca0b2fd3ac14f",
+  "original_decay_status": "live session92690; not used as completed evidence"
+}

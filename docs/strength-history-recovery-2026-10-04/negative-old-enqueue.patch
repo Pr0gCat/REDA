@@ -1,0 +1,23 @@
+--- a/src/compile/mod.rs
++++ b/src/compile/mod.rs
+@@ -7016,19 +7016,7 @@
+             return;
+         }
+ 
+-        let onward = if conductor {
+-            // `own_cells` gates conductors, and nothing else. It is what stops
+-            // this walk crossing into a different net's network where the two
+-            // happen to physically touch.
+-            own_cells.contains(&target)
+-        } else {
+-            // A block re-drives dust exactly when the power that arrived is
+-            // strong -- `mark_powered`'s own `BlockPower::Strong` arm, and
+-            // `recompute_dust_strengths`' own seed condition. Weak power is
+-            // recorded (a torch support reads it, and that is what makes a
+-            // support a sink here) and walked from never.
+-            block_power == BlockPower::Strong
+-        };
++        let onward = own_cells.contains(&target);
+ 
+         let improved = value > strength.get(&target).copied().unwrap_or(0);
+         if improved {

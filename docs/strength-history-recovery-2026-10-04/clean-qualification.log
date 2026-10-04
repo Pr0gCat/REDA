@@ -1,0 +1,44 @@
+   Compiling reda v0.1.0 (/tmp/reda-strength-clean-20261004)
+warning: variable does not need to be mutable
+    --> src/compile/fragment_synth/packing.rs:1298:9
+     |
+1298 |     let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `rank_zero` is never read
+   --> src/compile/fragment_synth/packing.rs:636:9
+    |
+634 |     Exhausted {
+    |     --------- field in this variant
+635 |         attempted: usize,
+636 |         rank_zero: E,
+    |         ^^^^^^^^^
+    |
+    = note: `LayoutSearchError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib test) generated 2 warnings (run `cargo fix --lib -p reda --tests` to apply 1 suggestion)
+    Finished `release` profile [unoptimized] target(s) in 46.23s
+     Running unittests src/lib.rs (/tmp/reda-stale-current-target/release/deps/reda-a263e5ae3cea71fe)
+
+running 11 tests
+test compile::strength_differential::tests::the_geometry_under_every_named_disagreement ... ignored, measurement harness: dumps the geometry around the cells the differential named
+test compile::strength_differential::tests::the_one_shipping_circuit_cell_the_two_answers_differ_on ... ignored, measurement harness: prints one net's whole run, both answers per cell
+test compile::strength_differential::tests::the_walk_against_the_simulator_cell_by_cell ... ignored, measurement harness: compiles, routes and settles six circuits plus two disputed plans
+test compile::strength_differential::tests::which_measured_couplings_the_walk_models ... ignored, measurement harness: prints the step map
+test compile::strength_differential::tests::observed_reads_what_the_simulator_left_behind ... ok
+test compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse ... ok
+test compile::strength_differential::tests::the_replica_reaches_the_shipping_verdict ... ok
+test compile::strength_differential::tests::the_false_pass_count_on_the_plans_as_built ... ok
+test compile::strength_differential::tests::the_measured_plan_is_the_shipped_world ... ok
+test compile::strength_differential::tests::a_gate_input_its_own_net_cannot_reach_is_refused has been running for over 60 seconds
+test compile::strength_differential::tests::genuine_decay_is_still_refused has been running for over 60 seconds
+test compile::strength_differential::tests::a_gate_input_its_own_net_cannot_reach_is_refused ... ok
+test compile::strength_differential::tests::genuine_decay_is_still_refused ... ok
+
+test result: ok. 7 passed; 0 failed; 4 ignored; 0 measured; 1251 filtered out; finished in 245.76s
+

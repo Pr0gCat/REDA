@@ -1,0 +1,50 @@
+   Compiling version_check v0.9.5
+   Compiling generic-array v0.14.7
+   Compiling typenum v1.20.1
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling digest v0.10.7
+   Compiling cpufeatures v0.2.17
+   Compiling sha2 v0.10.9
+   Compiling reda v0.1.0 (/tmp/reda-strength-negative-20261004)
+warning: variable does not need to be mutable
+    --> src/compile/fragment_synth/packing.rs:1298:9
+     |
+1298 |     let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `rank_zero` is never read
+   --> src/compile/fragment_synth/packing.rs:636:9
+    |
+634 |     Exhausted {
+    |     --------- field in this variant
+635 |         attempted: usize,
+636 |         rank_zero: E,
+    |         ^^^^^^^^^
+    |
+    = note: `LayoutSearchError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib test) generated 2 warnings (run `cargo fix --lib -p reda --tests` to apply 1 suggestion)
+    Finished `release` profile [unoptimized] target(s) in 50.03s
+     Running unittests src/lib.rs (/tmp/reda-stale-prefix-target/release/deps/reda-a263e5ae3cea71fe)
+
+running 1 test
+
+thread 'compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse' (160) panicked at src/compile/strength_differential/tests.rs:379:5:
+`verify_signal_strength` must no longer refuse this plan: Some("signal-strength violation: net `cin` never delivers a non-zero signal to gate `g16`'s support block (57, 1, 91) -- the geometry is structurally connected but the real, decayed signal dies out before it arrives")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse ... FAILED
+
+failures:
+
+failures:
+    compile::strength_differential::tests::the_judge_agrees_with_the_simulator_on_the_plan_it_used_to_refuse
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1261 filtered out; finished in 2.00s
+
+error: test failed, to rerun pass `--lib`
