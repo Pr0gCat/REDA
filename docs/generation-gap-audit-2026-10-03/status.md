@@ -21,6 +21,10 @@ Snapshot: 2026-10-04; qualified evidence includes c45bb2e and the scratch-collec
 
 Original historical decay92690 now terminates successfully:1 pass,0 failures,0 ignored,580.96s. This supplements the strength recovery; it does not establish full-project success. Source binding and terminal log are retained beside that recovery.
 
+The paired ROM64 diagnostic now has an independent literal-word and all-event audit:32 continuous phases, all64 source/implementation Boolean words match the fixture, no sample component/phase/channel regressions, settlement646 versus56 game ticks, observed implemented-gate extra transitions5036 versus0. Both worlds reload to the bound original/matrix fingerprints. [Retained diagnostic](../rom64-diagnostic-2026-10-04/finding.md). This sample does not replace the complete original/default controls, observe every physical site, or qualify six-input production admission.
+
+Current-worktree convergence checks: native/WASM library compilation passes; strict library clippy still fails. Boxing seed refusal payloads at their owner reduces measured clippy errors130 to96, with all11 existing repair/fragment checks passing and no selected ignores ([scope and logs](../seed-error-storage-2026-10-04/adoption.md)). This is not a clean-checkout or whole-project result. Both existing native viewer frontend tests fail: DFF-enable source-map drift and historical channel-world/default-entry mismatch. Neither control is repinned and neither failure is ignored.
+
 ## Immutable acceptance rules
 
 Observe actual generated circuit and continuous waveforms, identify root cause, implement a general method, compare independently, adopt only after complete acceptance. No block-count/volume acceptance, simulator/physical-rule weakening, deleted tests, new ignores, repinned historical controls or extra settling allowance. Retain all public occurrences, constants, aliases, implementation observations, determinism and consumer contracts. Preserve user-owned changes; commits are authorized, pushes are not. All eight broad rows remain open until their own complete evidence is present.

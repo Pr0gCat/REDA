@@ -1,0 +1,15 @@
+{
+  "diagnostic_probe_sha256": "16adec037bedc8425a9fd8d6d900a377a25cf442d662987d3270965913473c7e",
+  "six_admission": "Only explicit torch_row/four.rs guard4..5 to4..6 in isolated source. No production/default/recursive guard changes.",
+  "proof_limit": 10000000,
+  "phases": 32,
+  "diagnostic_only": true,
+  "expected_matrix_fingerprint": "f3af4444f9776335f3c51a768a8a7ae3d5e387e66974807feb5009919b459b5a",
+  "binary_sha256": "7317cf6f96c556ec5de3d3d152e4b0daebc990bd249c9118721a9ab12647f6b3",
+  "fixture_sha256": "fdcc3cef6b0b19d8b07cd29676f379ca4c74fc00a4df83cce0b072afee237fd4",
+  "paired_modes": [
+    "--control --trace",
+    "--control --trace --profile-matrix"
+  ],
+  "same_continuous_history": "[0,21,42,63] x [0,21,42,63], each from then to, source start0, no simulator reset between phases"
+}

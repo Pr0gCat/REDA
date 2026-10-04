@@ -1,0 +1,12 @@
+[
+  {
+    "corruption": "unknown_internal_event",
+    "rejected": true,
+    "exit_code": 1
+  },
+  {
+    "corruption": "wrong_literal_word",
+    "rejected": true,
+    "exit_code": 1
+  }
+]
