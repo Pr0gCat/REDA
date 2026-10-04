@@ -1,0 +1,12 @@
+{
+  "game_exit_code": 0,
+  "cleanup_exit_code": 0,
+  "independent_raw_audit_exit_code": 0,
+  "game_session": 60422,
+  "cleanup_session": 23025,
+  "origin": [
+    210000,
+    151,
+    180000
+  ]
+}

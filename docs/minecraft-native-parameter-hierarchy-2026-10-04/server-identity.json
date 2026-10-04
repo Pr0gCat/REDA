@@ -1,0 +1,13 @@
+{
+  "target": "official Minecraft Java26.2 existing running server",
+  "jar_sha1": "823e2250d24b3ddac457a60c92a6a941943fcd6a",
+  "origin": [
+    210000,
+    151,
+    180000
+  ],
+  "version_log_lines": [
+    "[08:44:55] [Server thread/INFO]: Starting minecraft server version 26.2"
+  ],
+  "policy": "Existing tick/physics/settling settings unchanged; credentials remain private."
+}

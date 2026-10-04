@@ -1,0 +1,10 @@
+{
+  "input_words": 16,
+  "public_bits_checked": 128,
+  "all_public_occurrences_retained": true,
+  "distinct_physical_output_positions": 8,
+  "truth_matches_literal_xor_16": true,
+  "implementation_gate_count": 285,
+  "native_auto_dump_sha256": "591823e984f46fe40fcbfbcec3bb28f770cacfe776da206624cc78e8bb632140",
+  "scope": "Offline artifact consumer truth; not physical-wave or game proof. Public occurrence IDs are mapped through output_labels, retaining repeated constants."
+}
