@@ -1,0 +1,23 @@
+{
+  "historical-guards-terminal.json": "266d999dcbe99277a57eb1ea57a8c322440f9f8c44cd4e30a80f2851fe258660",
+  "the_keep_out_footprint_per_circuit_is_what_is_recorded.log": "3b82c6ee873582c44cf2760cf2b567a03fcdbf1be663c41f20084e82c00868ca",
+  "executable.sha256": "161ed0d39f96b4d1f5f25658b2fc505faed1d5f71ac52e129035bfaeb19670da",
+  "the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none.log": "b1d2eb41b0ce901d1d9d8c0f23dd2856ef91cd07e57e36bc284e5a86d33775b9",
+  "a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate.log": "7385871a632daaaed36c8aa91d34a887e546382927a6aa24d19d5aff1605f6d3",
+  "a_gate_sink_sharing_a_net_with_a_pinned_output_asks_for_a_repeater.log": "5809139ec67c7455ff4d48fccb1fdc485280a8046b8385c94d833f4be7a18765",
+  "a_pinned_output_feeding_a_dff_asks_for_a_repeater_too.log": "12d9b61c18c38c1043238f4b1e1833b6db26e8333738d3c59cc99ea92eac4ee2",
+  "terminal.json": "125c78c8972c9dc046b28b9e020becc6da4937f0dd753bf0a8c55894ac664bf6",
+  "clean-build.log": "8f65dadd282803eaa98f88a316d258a00069353b69272cabf83c843c0daf9e11",
+  "a_route_lays_dust_on_its_own_committed_stone.log": "8606f931be4411f9de28f18008f54676f6b854f159c87b89c9185cc9ffdc5483",
+  "sequential_graph_keeps_original_input_footprints.log": "271930a910dbc43faac7d9660965d7dd2262e74f6c522b982832897b32ae8e95",
+  "a_pinned_output_that_also_feeds_a_merge_keeps_its_isolating_repeater.log": "eb439a77ee75af684222529cf8e411ba26627bc3b4f96127ff3b8b2fe604e75b",
+  "observed_output_isolation.exit": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c",
+  "base-commit.txt": "d2527d1908fb668c82261fa5d73f9ab2a5b47b0cbc238c507fda71ca56150f52",
+  "an_unpinned_grown_and4_is_the_world_it_always_shipped.log": "d9aa703215a6445a4210b247aacf42d7cb8f0df7f23157e0b813e205f1421897",
+  "owned.patch": "342a98c0b73feeb87b04c2f9bdb9757171be0d577e7650ecd9d5a8e1fa4030b5",
+  "source-bindings.json": "5e8fa8a488e095f45dd4933623371afa33f59f6191a53f8ddad2301b1704c3e1",
+  "observed_output_isolation.log": "cfd03999610c99753bcc39d251d83d29e43326e6b963fa2376963c4deac3bfa1",
+  "proposal.md": "e332ec67097610a949aa82cd758a71d1818e20e56937102f765357e502659dc7",
+  "the_realised_graph_of_every_circuit_is_what_is_recorded.log": "a2c736c2df69d79ee2076e7e12e4959df96dda546ee4e95bee1f93712bacef46",
+  "selection_recognises_literals_and_preserves_deep_receiver_skew.log": "1ab4621a70275da45b9045eeca38c19b6ce997e5afa4729048feee02ad7ced77"
+}

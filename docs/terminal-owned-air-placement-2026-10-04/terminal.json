@@ -1,0 +1,30 @@
+[
+  {
+    "name": "compile::planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped",
+    "terminal": 0
+  },
+  {
+    "name": "compile::planner::tests::a_gate_sink_sharing_a_net_with_a_pinned_output_asks_for_a_repeater",
+    "terminal": 0
+  },
+  {
+    "name": "compile::planner::tests::a_pinned_output_feeding_a_dff_asks_for_a_repeater_too",
+    "terminal": 0
+  },
+  {
+    "name": "compile::planner::tests::a_pinned_output_that_also_feeds_a_gate_is_isolated_at_that_gate",
+    "terminal": 0
+  },
+  {
+    "name": "compile::planner::tests::a_pinned_output_that_also_feeds_a_merge_keeps_its_isolating_repeater",
+    "terminal": 0
+  },
+  {
+    "name": "compile::relax::build::tests::sequential_graph_keeps_original_input_footprints",
+    "terminal": 0
+  },
+  {
+    "name": "compile::planner::arrival_balance_tests::selection_recognises_literals_and_preserves_deep_receiver_skew",
+    "terminal": 0
+  }
+]

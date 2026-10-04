@@ -1,0 +1,18 @@
+[
+  {
+    "name": "compile::planner::tests::a_route_lays_dust_on_its_own_committed_stone",
+    "terminal": 0
+  },
+  {
+    "name": "compile::planner::tests::the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+    "terminal": 101
+  },
+  {
+    "name": "compile::planner::tests::the_keep_out_footprint_per_circuit_is_what_is_recorded",
+    "terminal": 101
+  },
+  {
+    "name": "compile::coupling::tests::the_realised_graph_of_every_circuit_is_what_is_recorded",
+    "terminal": 101
+  }
+]

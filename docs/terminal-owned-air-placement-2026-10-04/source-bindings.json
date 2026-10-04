@@ -1,0 +1,22 @@
+[
+  {
+    "path": "src/compile/planner.rs",
+    "baseline_sha256": "b05e6d36089e72741e5ddf99f6b3e8b6e6d7acd7767235ee008174eea8f2321b",
+    "candidate_sha256": "786d9cf5075741144d60ac7ee6b1e70c21386774997dd0588f8e941da4f8b63a"
+  },
+  {
+    "path": "src/compile/relax/build.rs",
+    "baseline_sha256": "0503c40f951351dc3031cdbf57c6629ae4a2b505d1ada1eadde691684303a9f8",
+    "candidate_sha256": "680f6242432d19ce0b4c167b99f8ae3ab263f918ee6af2c2b9e999ffbf20cbe6"
+  },
+  {
+    "path": "src/compile/relax/mod.rs",
+    "baseline_sha256": "21ebd5a5cbc3f2c2710d63b63013474fc48add7b26f9478b5ab1ddabecbde34e",
+    "candidate_sha256": "d2102649f4f21196cc1f93aa32a91bee55a4a11eb12134a67d9a8b3a3de9c3fa"
+  },
+  {
+    "path": "src/compile/relax/project.rs",
+    "baseline_sha256": "275e70b1e6173e4ff6f6a04aea2ab03fe7db559de81b625ac4c5dc34729aabec",
+    "candidate_sha256": "35364e69c1b9e15bf39fa1111819e8a631623b4b43bafd0769213ba5c94c0640"
+  }
+]
