@@ -5248,12 +5248,24 @@ fn lay_net(
         candidate,
         reservation,
         prices,
-        crate::compile::routing::ReservePolicy::TotalStairs,
-        match prices.search() {
-            SearchModel::DistanceOnly => SearchModel::DistanceWithGoalHeightDiscount,
-            search => search,
+        LegacyRoutePolicy {
+            reserve: crate::compile::routing::ReservePolicy::TotalStairs,
+            search: match prices.search() {
+                SearchModel::DistanceOnly => SearchModel::DistanceWithGoalHeightDiscount,
+                search => search,
+            },
+            automatic_gate_terminals: true,
         },
     )
+}
+
+/// Independent choices owned by the planner caller. A historical search cost
+/// does not imply permission to remove qualified gate-terminal isolation.
+#[derive(Clone, Copy)]
+struct LegacyRoutePolicy {
+    reserve: crate::compile::routing::ReservePolicy,
+    search: SearchModel,
+    automatic_gate_terminals: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5265,13 +5277,12 @@ fn lay_net_with_policy(
     candidate: &PlanCandidate,
     reservation: &mut Reservation,
     prices: &Prices,
-    reserve: crate::compile::routing::ReservePolicy,
-    search: SearchModel,
+    policy: LegacyRoutePolicy,
 ) -> Result<Route, Box<RoutingFailure>> {
     let route_id = RouteId(0);
     let (typed_source, typed_sinks) =
         typed_legacy_request_parts(route_id, signal, source, consumers, netlist, candidate);
-    let typed_sinks = if search == SearchModel::DistanceWithGoalHeightDiscount {
+    let typed_sinks = if policy.automatic_gate_terminals {
         // The frozen compatibility caller predates qualified arrival runways
         // and observed-output isolation. Preserve its automatic terminal
         // choice, including refreshes demanded by the branch strength budget.
@@ -5297,8 +5308,8 @@ fn lay_net_with_policy(
         netlist,
         reservation,
         prices,
-        reserve,
-        search,
+        policy.reserve,
+        policy.search,
     );
     match adapter.route(RouteRequest {
         id: route_id,
@@ -6587,8 +6598,14 @@ fn negotiate_charging(
                     &candidate,
                     &mut reservation,
                     &prices,
-                    crate::compile::routing::ReservePolicy::TerminalStairs,
-                    prices.search(),
+                    LegacyRoutePolicy {
+                        reserve: crate::compile::routing::ReservePolicy::TotalStairs,
+                        search: match prices.search() {
+                            SearchModel::DistanceOnly => SearchModel::DistanceWithGoalHeightDiscount,
+                            search => search,
+                        },
+                        automatic_gate_terminals: false,
+                    },
                 )
             };
             match outcome {

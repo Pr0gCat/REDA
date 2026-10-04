@@ -1,0 +1,45 @@
+{
+  "binary_sha256": "c06a9a16750746c76f3d6733c257fbd59cec1bcca79aa42633389af5d766129e",
+  "results": [
+    {
+      "filter": "the_strength_verifier_follows_a_repeater_that_feeds_a_climb",
+      "exit_code": 0
+    },
+    {
+      "filter": "a_route_lays_dust_on_its_own_committed_stone",
+      "exit_code": 101
+    },
+    {
+      "filter": "an_unpinned_grown_and4_is_the_world_it_always_shipped",
+      "exit_code": 101
+    },
+    {
+      "filter": "the_keep_out_footprint_per_circuit_is_what_is_recorded",
+      "exit_code": 101
+    },
+    {
+      "filter": "the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none",
+      "exit_code": 101
+    },
+    {
+      "filter": "the_realised_graph_of_every_circuit_is_what_is_recorded",
+      "exit_code": 101
+    },
+    {
+      "filter": "legacy_adapter_",
+      "exit_code": 0
+    },
+    {
+      "filter": "negotiated_legacy_adapter_keeps_single_net_route_byte_exact",
+      "exit_code": 0
+    },
+    {
+      "filter": "lay_net_refuses_the_branch_that_closes_a_ring",
+      "exit_code": 0
+    },
+    {
+      "filter": "arrival_balance_tests",
+      "exit_code": 0
+    }
+  ]
+}

@@ -29,6 +29,8 @@ DFF-enable source-map drift is repaired at the generic clocked-value lowering he
 
 The fixed-graph waveform auditor now reuses Boolean values per address instead of recomputing them at each phase; all event/state/landing checks remain. Four existing auditor tests pass, and the complete ROM64 result is identical to the frozen prior audit ([source, logs and scope](../static-wave-oracle-reuse-2026-10-04/adoption.md)). This improves verification work and does not qualify another generator or close a broad requirement.
 
+Two remaining planner controls are now repaired without changing expectations: original and4 negotiation trace and full-adder climb physical verification/all8 truth rows. Negotiation owns height/reserve/terminal choices independently; qualified isolation stays intact. Five other historical planner/coupling controls still fail. Existing fresh-simulator full-adder56-transition measurement reports36 ticks; complete continuous-wave dominance remains unproved ([owned patch, clean compile and retained failures](../negotiated-policy-recovery-2026-10-04/adoption.md)).
+
 ## Immutable acceptance rules
 
 Observe actual generated circuit and continuous waveforms, identify root cause, implement a general method, compare independently, adopt only after complete acceptance. No block-count/volume acceptance, simulator/physical-rule weakening, deleted tests, new ignores, repinned historical controls or extra settling allowance. Retain all public occurrences, constants, aliases, implementation observations, determinism and consumer contracts. Preserve user-owned changes; commits are authorized, pushes are not. All eight broad rows remain open until their own complete evidence is present.
