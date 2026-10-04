@@ -1,0 +1,19 @@
+{
+  "base_head": "85cfac12064554ab49f855f4fa2a0476b6f66e0f",
+  "consumer_session": 78011,
+  "original_quality_control_session": 46436,
+  "production_adopted": false,
+  "physics_changed": false,
+  "files": {
+    "src/compile/fragment_synth/torch_row/four.rs": "6837dbdb32a74637fa797c4a00c7e9117d4aeb8f9a1f6c95f0b3639b43fee033",
+    "src/compile/selection.rs": "d504b5416c8c895e51313a931928ca1517f51beb122103cbcce035457021a8be",
+    "src/compile/fragment_synth/api.rs": "e1b721a515781841ceb0f385b59aaa5a15bd7865b68168dca3700bfd63ddd2a2",
+    "src/compile/fragment_synth/recursive.rs": "661386128810a3c91760ea3d0d2bd6c84e3547d14de6f2c9fa8e419ab9473bd6",
+    "tests/recursive_six_input_matrix.rs": "011b583e213dc2e36bb407a3ecf92b83a21fd1c343c9abe2c80ea044e876e48a",
+    "tests/fixtures/rom64_matrix.sv": "fdcc3cef6b0b19d8b07cd29676f379ca4c74fc00a4df83cce0b072afee237fd4"
+  },
+  "consumer_exit_code": 0,
+  "consumer_passed": 3,
+  "consumer_failed": 0,
+  "consumer_ignored": 0
+}

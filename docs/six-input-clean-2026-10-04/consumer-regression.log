@@ -1,0 +1,75 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.229
+   Compiling syn v3.0.3
+   Compiling version_check v0.9.5
+   Compiling serde v1.0.229
+   Compiling generic-array v0.14.7
+   Compiling serde_derive v1.0.229
+   Compiling typenum v1.20.1
+   Compiling equivalent v1.0.2
+   Compiling crc32fast v1.5.0
+   Compiling hashbrown v0.17.1
+   Compiling zmij v1.0.23
+   Compiling cfg-if v1.0.4
+   Compiling indexmap v2.14.0
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling adler2 v2.0.1
+   Compiling simd-adler32 v0.3.10
+   Compiling thiserror v2.0.19
+   Compiling serde_json v1.0.151
+   Compiling toml_write v0.1.2
+   Compiling winnow v0.7.15
+   Compiling toml_edit v0.22.27
+   Compiling miniz_oxide v0.8.9
+   Compiling digest v0.10.7
+   Compiling serde_bytes v0.11.19
+   Compiling thiserror-impl v2.0.19
+   Compiling cesu8 v1.1.0
+   Compiling memchr v2.8.3
+   Compiling cpufeatures v0.2.17
+   Compiling byteorder v1.5.0
+   Compiling itoa v1.0.18
+   Compiling fastnbt v2.6.2
+   Compiling sha2 v0.10.9
+   Compiling flate2 v1.1.9
+   Compiling toml v0.8.23
+   Compiling reda v0.1.0 (/tmp/reda-six-clean-20261004)
+warning: variable does not need to be mutable
+    --> src/compile/fragment_synth/packing.rs:1298:9
+     |
+1298 |     let mut offer = |candidates: &mut BTreeMap<Anchor, i32>, translation: Anchor, band: i32| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reda` (lib) generated 1 warning (run `cargo fix --lib -p reda` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 3m 37s
+     Running tests/recursive_five_input_matrix.rs (/tmp/reda-six-clean-target/release/deps/recursive_five_input_matrix-024618e86835f7df)
+
+running 1 test
+test recursive_rom32x16_retains_the_qualified_world_and_consumer_contract ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 43.08s
+
+     Running tests/recursive_six_input_matrix.rs (/tmp/reda-six-clean-target/release/deps/recursive_six_input_matrix-ecbd6328885300f8)
+
+running 1 test
+test recursive_rom64x16_retains_the_qualified_world_and_consumer_contract has been running for over 60 seconds
+test recursive_rom64x16_retains_the_qualified_world_and_consumer_contract ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 363.17s
+
+     Running tests/recursive_wide_matrix.rs (/tmp/reda-six-clean-target/release/deps/recursive_wide_matrix-f6d4c84b35e6d22e)
+
+running 1 test
+test recursive_rom16x16_retains_the_qualified_world_and_consumer_contract ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.39s
+
