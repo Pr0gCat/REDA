@@ -1,0 +1,13 @@
+{
+  "exit_code": 0,
+  "source_sha256": "c5038fc382028d07a12bca01370e258d0d34e8be48f555f2edf140af188b008a",
+  "binary_sha256": "2c6ed3fcd25b77bc0f514ac1809b00c223b41ba2f1c5af0e546a45ddfbcedb11",
+  "observations": [
+    "REFERENCE and4 historical=true own_floor_clashes=0 size=(68, 6, 62) fingerprint=7a59ecbff66e4a73a7e44fb1085e19d859e08b471418eaa39508541d7b8c3a2f verification=Ok(())",
+    "REFERENCE and4 historical=false own_floor_clashes=0 size=(68, 6, 62) fingerprint=15e2c23ab2502c7489db53f5099c8d9846d42172053de013c731ba32dcc3a28f verification=Ok(())",
+    "REFERENCE full_adder historical=true own_floor_clashes=1 size=(72, 7, 149) fingerprint=54c0fc938cb8cbb4884d1e0b01877c6aa4f3bcd05ea24fb227bf757ffe6cba0b verification=Err(PhysicalInvariant(TorchMergeViolation { gate: \"g2\", reason: ForeignNetReachesSupport { torch: (41, 1, 130), support: (41, 1, 131), net: \"g3\" } }))",
+    "REFERENCE full_adder historical=false own_floor_clashes=1 size=(72, 6, 149) fingerprint=b945c9e8a4d232d79008071358fff03eabe179d42dad636cc4ff5e37a6f71789 verification=Ok(())"
+  ],
+  "scope": "existing legacy reference with current shared realization backend; not frozen original compiler",
+  "adopted": false
+}
