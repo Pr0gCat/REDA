@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "cargo",
+    "build",
+    "--offline",
+    "--bin",
+    "mc_dump"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 28.427530015003867
+}

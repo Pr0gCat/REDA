@@ -1,0 +1,21 @@
+{
+  "accepted": true,
+  "vectors": 16,
+  "public_truth_checks": 128,
+  "implemented_gate_truth_checks": 176,
+  "actual_gates": 11,
+  "raw_real_rcon_command_reply_pairs": 2969,
+  "raw_report_gate_and_public_values_reconstructed": true,
+  "frozen_hash_checks": 13,
+  "cleanup_original_positions_verified": 91,
+  "cleanup_air_sites_checked": 99,
+  "cleanup_chunk_queries": 80,
+  "release_acknowledgements": [
+    {
+      "monotonic_seconds": 526382.066659669,
+      "command": "forceload remove 219992 179992 220100 180060",
+      "response": "Unmarked 40 chunks in minecraft:overworld from [13749, 11249] to [13756, 11253] for force loading"
+    }
+  ],
+  "scope": "Real official26.2 stable-state conformance; no intra-tick waveform claim."
+}

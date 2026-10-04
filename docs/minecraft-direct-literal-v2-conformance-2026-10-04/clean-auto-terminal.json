@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/tmp/reda-root-direct-literal-v2-target/debug/mc_dump",
+    "verilog",
+    "/tmp/reda-direct-literal-production-v2-20261004/evidence/original-parameter-hierarchy.sv",
+    "m",
+    "--frontend",
+    "auto"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 57.37539401696995,
+  "path": "",
+  "reda_python": "/definitely/missing/python"
+}

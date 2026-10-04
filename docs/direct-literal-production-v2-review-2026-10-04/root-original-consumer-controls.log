@@ -1,0 +1,31 @@
+   Compiling reda v0.1.0 (/tmp/reda-root-direct-literal-v2-adoption-20261004)
+    Finished `test` profile [unoptimized] target(s) in 4.42s
+     Running tests/output_occurrences.rs (/tmp/reda-root-direct-literal-v2-target/debug/deps/output_occurrences-29054c86743e249d)
+
+running 2 tests
+test rewrite_occurrences_keep_sealed_distinct_alias_lamps_and_truth ... ok
+test raw_occurrences_follow_source_order_instead_of_map_order ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/physical_rewrite_views.rs (/tmp/reda-root-direct-literal-v2-target/debug/deps/physical_rewrite_views-819790c994413c68)
+
+running 6 tests
+test primary_output_aliases_keep_distinct_terminals_and_one_honest_observation_label ... ok
+test certified_flat_graph_keeps_selected_comparators_and_merge_contributors ... ok
+test rewrite_equivalence_and_partition_require_the_exact_sealed_view ... ok
+test rewritten_compiled_views_measure_actual_nets_without_source_name_collisions ... ok
+test compiled_and_flat_views_follow_proved_permuted_port_bindings ... ok
+test flat_projection_covers_qualified_generation_techniques_and_constants ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/systemverilog_output_occurrences.rs (/tmp/reda-root-direct-literal-v2-target/debug/deps/systemverilog_output_occurrences-2e4ec7feb5d9450c)
+
+running 3 tests
+test ordered_vector_bits_keep_their_distinct_source_drivers ... ok
+test public_circuit_adapter_keeps_every_binding_in_source_order ... ok
+test declared_order_bits_and_shared_drivers_survive_native_artifact_and_selection ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

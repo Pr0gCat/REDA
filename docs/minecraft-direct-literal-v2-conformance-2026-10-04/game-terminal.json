@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "python3",
+    "run-game.py",
+    "--dump",
+    "candidate.dump",
+    "--properties",
+    "/home/seith/REDA/minecraft-server-26.2/server/server.properties",
+    "--out",
+    "game-report.json",
+    "--label",
+    "direct-literal-v2-independent-clean-native",
+    "--origin",
+    "220000,151,180000"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 24.15685910603497
+}

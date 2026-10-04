@@ -1,0 +1,404 @@
+{
+  "actual_gate_sites": [
+    {
+      "at": [
+        4,
+        2,
+        3
+      ],
+      "gate": "positive0",
+      "inputs": [
+        "input0"
+      ],
+      "kind": "Buf",
+      "truth_in_source_address_order": [
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true
+      ]
+    },
+    {
+      "at": [
+        14,
+        2,
+        3
+      ],
+      "gate": "positive1",
+      "inputs": [
+        "input1"
+      ],
+      "kind": "Buf",
+      "truth_in_source_address_order": [
+        false,
+        false,
+        true,
+        true,
+        false,
+        false,
+        true,
+        true,
+        false,
+        false,
+        true,
+        true,
+        false,
+        false,
+        true,
+        true
+      ]
+    },
+    {
+      "at": [
+        24,
+        2,
+        3
+      ],
+      "gate": "positive2",
+      "inputs": [
+        "input2"
+      ],
+      "kind": "Buf",
+      "truth_in_source_address_order": [
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "at": [
+        34,
+        2,
+        3
+      ],
+      "gate": "positive3",
+      "inputs": [
+        "input3"
+      ],
+      "kind": "Buf",
+      "truth_in_source_address_order": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "at": [
+        76,
+        2,
+        18
+      ],
+      "gate": "constant_high4",
+      "inputs": [],
+      "kind": "Nor(0)",
+      "truth_in_source_address_order": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "at": [
+        76,
+        4,
+        21
+      ],
+      "gate": "constant_high5",
+      "inputs": [],
+      "kind": "Nor(0)",
+      "truth_in_source_address_order": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "at": [
+        75,
+        2,
+        21
+      ],
+      "gate": "constant_low5",
+      "inputs": [
+        "constant_high5"
+      ],
+      "kind": "Nor(1)",
+      "truth_in_source_address_order": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "at": [
+        76,
+        4,
+        24
+      ],
+      "gate": "constant_high6",
+      "inputs": [],
+      "kind": "Nor(0)",
+      "truth_in_source_address_order": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "at": [
+        75,
+        2,
+        24
+      ],
+      "gate": "constant_low6",
+      "inputs": [
+        "constant_high6"
+      ],
+      "kind": "Nor(1)",
+      "truth_in_source_address_order": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "at": [
+        76,
+        4,
+        27
+      ],
+      "gate": "constant_high7",
+      "inputs": [],
+      "kind": "Nor(0)",
+      "truth_in_source_address_order": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "at": [
+        75,
+        2,
+        27
+      ],
+      "gate": "constant_low7",
+      "inputs": [
+        "constant_high7"
+      ],
+      "kind": "Nor(1)",
+      "truth_in_source_address_order": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  ],
+  "input_bindings": [
+    "input0",
+    "input1",
+    "input2",
+    "input3"
+  ],
+  "public_occurrences": [
+    [
+      "g2",
+      [
+        6,
+        2,
+        4
+      ]
+    ],
+    [
+      "g3",
+      [
+        16,
+        2,
+        4
+      ]
+    ],
+    [
+      "g4",
+      [
+        26,
+        2,
+        4
+      ]
+    ],
+    [
+      "g5",
+      [
+        36,
+        2,
+        4
+      ]
+    ],
+    [
+      "g0",
+      [
+        72,
+        1,
+        18
+      ]
+    ],
+    [
+      "g1",
+      [
+        72,
+        1,
+        21
+      ]
+    ],
+    [
+      "g1",
+      [
+        72,
+        1,
+        24
+      ]
+    ],
+    [
+      "g1",
+      [
+        72,
+        1,
+        27
+      ]
+    ]
+  ],
+  "source_inputs": [
+    "a[0]",
+    "a[1]",
+    "a[2]",
+    "a[3]"
+  ]
+}

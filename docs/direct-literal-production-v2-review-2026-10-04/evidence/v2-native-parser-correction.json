@@ -1,0 +1,13 @@
+{
+  "supersedes_metadata_only": "v2-native-terminal.json",
+  "original_preserved": true,
+  "schema": "BLOCK x y z Kind facing mount powered delay minecraft_id",
+  "repeater_record_count": 4,
+  "repeater_delays": [
+    1,
+    1,
+    1,
+    1
+  ],
+  "dump_sha256": "b2e39ec36db67fee425309493374c45d1cbd51659801ff77c9c63b08677fab99"
+}

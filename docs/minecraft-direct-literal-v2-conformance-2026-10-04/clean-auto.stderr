@@ -1,0 +1,2 @@
+frontend: native
+dumped circuit 'verilog /tmp/reda-direct-literal-production-v2-20261004/evidence/original-parameter-hierarchy.sv:m': 4 inputs, 8 outputs, 11 gate outputs (0 of them wired-OR merges)

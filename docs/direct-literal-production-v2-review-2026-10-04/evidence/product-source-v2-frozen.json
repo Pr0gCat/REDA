@@ -1,0 +1,13 @@
+{
+  "baseline": "08733c1ff5cf279084a543390c9146626fb69e80",
+  "files": {
+    "src/compile/fragment_synth/torch_row.rs": "f1ad32675bfefb82b12eef4d3d55b86f608495220729e5809ed95fab26d408e4",
+    "src/compile/fragment_synth/torch_row/player.rs": "4b28abe2911835d3686226a9d49d28d33a2e24c415a111f018f5fe66086d361e",
+    "src/compile/fragment_synth/torch_row/literals.rs": "761cdfe59e027280c2ff1e4ee9895e0c0f3d9dd59ebbad03264e108a783ce9de",
+    "src/compile/selection.rs": "033da726023a3ef41ab899ed1ff6d9c6e1113461321a7867f069fc701a78beee"
+  },
+  "patch_sha256": "ed3ad5adba4441b2f466c749eb336852d8b4be4451b4ba562b1ad0431e7c2070",
+  "fix": "two valid explicit delay=1 writes only",
+  "v1_adoption": "rejected by actual game block-state grammar",
+  "physics_or_exporter_changes": false
+}

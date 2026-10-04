@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "cargo",
+    "test",
+    "--offline",
+    "--lib",
+    "literal_comparator_tests"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 74.31008024397306
+}

@@ -1,0 +1,38 @@
+{
+  "exit_code": 0,
+  "phases": 512,
+  "raw_phase_counts": {
+    "baseline-285": 512,
+    "selected-11": 512
+  },
+  "baseline_actual_gate_sites": 285,
+  "selected_actual_gate_sites": 11,
+  "same_truth_pairs": 85,
+  "regressions": {
+    "public": 0,
+    "private": 0,
+    "aggregate": 0,
+    "global": 0
+  },
+  "source_binary_drift": [],
+  "metrics": {
+    "ticks": {
+      "baseline_total": 12064,
+      "selected_total": 2484,
+      "baseline_worst": 26,
+      "selected_worst": 6
+    },
+    "work": {
+      "baseline_total": 40502,
+      "selected_total": 2040,
+      "baseline_worst": 145,
+      "selected_worst": 8
+    },
+    "cells": {
+      "baseline_total": 280665,
+      "selected_total": 5100,
+      "baseline_worst": 966,
+      "selected_worst": 20
+    }
+  }
+}

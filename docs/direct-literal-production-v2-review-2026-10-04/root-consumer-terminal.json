@@ -1,0 +1,12 @@
+{
+  "exit_code": 0,
+  "test_targets": [
+    "systemverilog_output_occurrences",
+    "output_occurrences",
+    "physical_rewrite_views"
+  ],
+  "passed": 11,
+  "failed": 0,
+  "source": "independent clean7080bc8 archive plus frozen ownedv2patch",
+  "tool_session": 70808
+}

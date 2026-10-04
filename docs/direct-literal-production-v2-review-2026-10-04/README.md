@@ -1,0 +1,9 @@
+# Independent production-v2 literal waveform review
+
+This retains the isolated production selector patch and its source-bound original qualification. Budget0 preserves the original occurrence matrix; budgets1 and4 choose the same single qualified literal candidate. Selection uses full source truth tables rather than gate names, and every candidate site must match at least one baseline truth class.
+
+Root independently replays both complete 512-phase gzip raw histories, recomputes all channel metrics and physical-site event totals, evaluates all 285 baseline and 11 candidate gate truths from their actual graphs, and checks every public expected value against the source formula a XOR16. The five per-channel metrics, all same-function private-site pairs, every aggregate private metric, queue work and physical event totals have zero pointwise regressions. Worst settlement is26 versus6ticks; total12064 versus2484; queue work40502 versus2040. Counts of implementation sites describe coverage, not QoR acceptance.
+
+The runnable audit verifies all12 retained artifact hashes before replay. Raw filenames are normalized to the earlier audit's names without changing their bytes; production phase JSON uses fields work/cells rather than the prototype's queue_work/physical_site_events. The production generator explicitly declares delay1 at both repeater construction sites after actual Minecraft rejects v1 delay0. No simulator or consumer workaround is used.
+
+Root clean comparator2/2, ordinary native/auto empty-PATH CLI and eleven unchanged output/physical-view consumer controls pass. The new exact world has separately retained real Minecraft stable-state conformance. Generic five-input controls remain pending, so the product patch is not adopted and broad requirements remain open.
