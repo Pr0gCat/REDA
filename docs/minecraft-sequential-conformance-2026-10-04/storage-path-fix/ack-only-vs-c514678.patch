@@ -1,0 +1,46 @@
+--- a/conformance/sequential_conformance.py
++++ b/conformance/sequential_conformance.py
+@@ -124,6 +124,13 @@
+                 raise RegionNotReady('snapshot lock is not zero or one')
+             values[site.label+':locked'] = bool(lock)
+     return {'game_tick': fields['t0'], 'values':values}
++
++
++def cleanup_response_matches(command,response,prefixes):
++    response=response.strip()
++    return response.startswith(prefixes) or (
++        command=='data remove storage '+STORAGE+' '+SNAPSHOT_PATH
++        and response=='Modified storage '+STORAGE)
+ 
+ 
+ def read_site(client, site):
+@@ -371,7 +378,7 @@
+         cleaning_up = True
+         def cleanup_command(command,prefixes):
+             response=client.command(command)
+-            if not response.strip().startswith(prefixes):
++            if not cleanup_response_matches(command,response,prefixes):
+                 raise RegionNotReady('cleanup command was not acknowledged: '+command+': '+response)
+         if frozen:
+             try: cleanup_command('tick unfreeze',('The game is running normally',))
+--- a/conformance/test_sequential_conformance.py
++++ b/conformance/test_sequential_conformance.py
+@@ -7,10 +7,17 @@
+ from unittest.mock import patch
+ from pathlib import Path
+ from circuit_conformance import parse_dump,evaluate_expected,expected_block_at,RegionNotReady,CircuitMismatch
+-from sequential_conformance import Site,capture_commands,parse_snapshot,protocol,prepare_pack,run,TickCapture,MixedClockOracle,STORAGE,SNAPSHOT_PATH
++from sequential_conformance import Site,capture_commands,parse_snapshot,protocol,prepare_pack,run,TickCapture,MixedClockOracle,STORAGE,SNAPSHOT_PATH,cleanup_response_matches
+ 
+ 
+ class SequentialDumpTest(unittest.TestCase):
++    def test_actual_storage_cleanup_ack_is_exact_and_errors_remain_rejected(self):
++        command=f'data remove storage {STORAGE} {SNAPSHOT_PATH}'
++        self.assertTrue(cleanup_response_matches(command,f'Modified storage {STORAGE}',('Removed ',)))
++        for response in ['Unknown or incomplete command','Modified storage another:trace',f'Modified storage {STORAGE} trailing error']:
++            self.assertFalse(cleanup_response_matches(command,response,('Removed ',)))
++        self.assertFalse(cleanup_response_matches('reload',f'Modified storage {STORAGE}',('Reloading!',)))
++
+     def test_module_and_direct_script_entrypoints_import_without_pythonpath(self):
+         import os,subprocess,sys
+         root=Path(__file__).resolve().parents[1]

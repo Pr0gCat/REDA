@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "/home/seith/REDA/conformance/audit_sequential_conformance.py", line 161, in <module>
+    print(json.dumps(audit(arguments.run,arguments.reference),indent=2))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seith/REDA/conformance/audit_sequential_conformance.py", line 52, in audit
+    require(report['status']=='pass', 'terminal status is not pass')
+  File "/home/seith/REDA/conformance/audit_sequential_conformance.py", line 13, in require
+    raise ValueError(message)
+ValueError: terminal status is not pass

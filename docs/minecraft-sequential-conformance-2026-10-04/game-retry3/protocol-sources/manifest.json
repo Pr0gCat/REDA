@@ -1,0 +1,12 @@
+{
+  "/home/seith/REDA/conformance/sequential_conformance.py": {
+    "snapshot": "docs/minecraft-sequential-conformance-2026-10-04/game-retry3/protocol-sources/sequential_conformance.py",
+    "sha256": "32ea43b0602f531dab11ee87c52df516af343ba26e46fb8c9337bcd3df985215",
+    "revision": "c514678"
+  },
+  "/home/seith/REDA/conformance/circuit_conformance.py": {
+    "snapshot": "docs/minecraft-sequential-conformance-2026-10-04/game-retry3/protocol-sources/circuit_conformance.py",
+    "sha256": "cf613a4e637befe32034b0965c1318fc26a9aa8b764f9377ca5a35c77c7f1545",
+    "revision": "c514678"
+  }
+}

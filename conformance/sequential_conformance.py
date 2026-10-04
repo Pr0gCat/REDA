@@ -126,6 +126,13 @@ def parse_snapshot(response, sites):
     return {'game_tick': fields['t0'], 'values':values}
 
 
+def cleanup_response_matches(command,response,prefixes):
+    response=response.strip()
+    return response.startswith(prefixes) or (
+        command=='data remove storage '+STORAGE+' '+SNAPSHOT_PATH
+        and response=='Modified storage '+STORAGE)
+
+
 def read_site(client, site):
     if site.block_id == 'minecraft:redstone_wire': return read_merge_junction(client,site.position)
     if site.block_id == 'minecraft:redstone_lamp': return read_lamp(client,site.position)
@@ -371,7 +378,7 @@ def run(args):
         cleaning_up = True
         def cleanup_command(command,prefixes):
             response=client.command(command)
-            if not response.strip().startswith(prefixes):
+            if not cleanup_response_matches(command,response,prefixes):
                 raise RegionNotReady('cleanup command was not acknowledged: '+command+': '+response)
         if frozen:
             try: cleanup_command('tick unfreeze',('The game is running normally',))

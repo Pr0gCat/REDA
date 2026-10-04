@@ -1,0 +1,10 @@
+{
+  "pack": {
+    "description": "REDA temporary frozen-tick sequential observation",
+    "min_format": [
+      107,
+      1
+    ],
+    "max_format": 107
+  }
+}

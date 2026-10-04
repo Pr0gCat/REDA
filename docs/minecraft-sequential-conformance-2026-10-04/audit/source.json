@@ -1,0 +1,7 @@
+{
+  "audit_source": "conformance/audit_sequential_conformance.py",
+  "sha256": "3d4782ce2e073c6faa3416184e8a3261382dbc11a1be9cc108df9b4e6d988470",
+  "live_run_status": "pending",
+  "partial_status_refused": true,
+  "game_mutation": false
+}

@@ -1,0 +1,28 @@
+{
+  "status": "qualified_with_driver_cleanup_ack_false_positive",
+  "original_report_errors": {
+    "storage_remove_error": "cleanup command was not acknowledged: data remove storage reda_sequential_20261004:trace snapshot: Modified storage reda_sequential_20261004:trace"
+  },
+  "adjudication": "only the exact actual storage acknowledgement was misclassified; original report retained",
+  "source_resolutions": {
+    "/tmp/reda-mixed-clock-minecraft-20261004.dump": "docs/minecraft-sequential-conformance-2026-10-04/game-retry3/protocol-sources/qualified.dump",
+    "/home/seith/REDA/conformance/sequential_conformance.py": "docs/minecraft-sequential-conformance-2026-10-04/game-retry3/protocol-sources/sequential_conformance.py",
+    "/home/seith/REDA/conformance/circuit_conformance.py": "docs/minecraft-sequential-conformance-2026-10-04/game-retry3/protocol-sources/circuit_conformance.py",
+    "/home/seith/REDA/minecraft-server-26.2/server/server.jar": "/home/seith/REDA/minecraft-server-26.2/server/server.jar"
+  },
+  "phases": 264,
+  "sites": 27,
+  "values_and_locks": 37,
+  "tick_frames": 7816,
+  "game_ticks": 7550,
+  "raw_captures": 65399,
+  "cleanup_commands": 9,
+  "observation": "game-tick boundaries; not intra-tick events or simulator heap emptiness",
+  "evidence_sha256": {
+    "docs/minecraft-sequential-conformance-2026-10-04/game-retry3/report.json": "d2f0e12a35a4ccf6dba7d1f0abf2a1b0c8f349ad69d7e348bd5ec863f34486ba",
+    "docs/minecraft-sequential-conformance-2026-10-04/game-retry3/ticks.jsonl.gz": "195d1607b89794313b3a3bbdc9f463b1a260307f446621ce548e600fd45af398",
+    "docs/minecraft-sequential-conformance-2026-10-04/game-retry3/commands.jsonl.gz": "d8f1f101b6b9de02daa3dada38188ab9aa5e1ea5da51de1cf394f1937fb45f78",
+    "docs/mixed-clock-reset-feedback-2026-10-04/repeat1.log.gz": "bdeb7a903a3975d095e12c14a0b7ce37ca1aea7115e99ab664f7e4238017b300",
+    "/home/seith/REDA/conformance/audit_sequential_conformance.py": "85aa9419bc473ffd1878030adcdfe007e90128a1ff5eabfbd0bdae2b1697f5b8"
+  }
+}

@@ -1,0 +1,289 @@
+{
+  "protocol": "mixed-clock-reset-feedback/v1",
+  "status": "fail",
+  "phases": [],
+  "origin": [
+    230000,
+    151,
+    100000
+  ],
+  "sites": [
+    {
+      "label": "gate:g0",
+      "position": [
+        230042,
+        152,
+        100073
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "gate:g1",
+      "position": [
+        230048,
+        152,
+        100072
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:g3",
+      "position": [
+        230053,
+        152,
+        100089
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:g4",
+      "position": [
+        230052,
+        152,
+        100066
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:g5",
+      "position": [
+        230039,
+        152,
+        100095
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:g6",
+      "position": [
+        230043,
+        152,
+        100084
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "gate:g7",
+      "position": [
+        230066,
+        152,
+        100095
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:g8",
+      "position": [
+        230048,
+        152,
+        100079
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n0",
+      "position": [
+        230059,
+        152,
+        100085
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n1",
+      "position": [
+        230046,
+        152,
+        100066
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n2",
+      "position": [
+        230067,
+        152,
+        100073
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n3",
+      "position": [
+        230060,
+        152,
+        100065
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n4",
+      "position": [
+        230059,
+        152,
+        100071
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n5",
+      "position": [
+        230058,
+        152,
+        100059
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n6",
+      "position": [
+        230054,
+        152,
+        100077
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "lamp:q_a",
+      "position": [
+        230043,
+        151,
+        100073
+      ],
+      "block_id": "minecraft:redstone_lamp"
+    },
+    {
+      "label": "lamp:q_b",
+      "position": [
+        230044,
+        151,
+        100084
+      ],
+      "block_id": "minecraft:redstone_lamp"
+    },
+    {
+      "label": "cell:g0:InvC",
+      "position": [
+        230042,
+        152,
+        100075
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "cell:g0:MData",
+      "position": [
+        230041,
+        152,
+        100073
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g0:MLock",
+      "position": [
+        230041,
+        152,
+        100074
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g0:SData",
+      "position": [
+        230042,
+        152,
+        100073
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g0:SLock",
+      "position": [
+        230042,
+        152,
+        100074
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g6:InvC",
+      "position": [
+        230043,
+        152,
+        100086
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "cell:g6:MData",
+      "position": [
+        230042,
+        152,
+        100084
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g6:MLock",
+      "position": [
+        230042,
+        152,
+        100085
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g6:SData",
+      "position": [
+        230043,
+        152,
+        100084
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g6:SLock",
+      "position": [
+        230043,
+        152,
+        100085
+      ],
+      "block_id": "minecraft:repeater"
+    }
+  ],
+  "settle_cap_game_ticks": 2000,
+  "dwell_game_ticks": 16,
+  "settlement_criterion": "full oracle target match, then existing 16 tick dwell with final target match",
+  "observation": "every actual game-tick boundary, frozen atomic capture; not intra-tick transitions",
+  "source_sha256": {
+    "/tmp/reda-mixed-clock-minecraft-20261004.dump": "9847ec39d319dd272f846c8ebaf71b39f9265c113d9b9e78b75d22341bf10bd5",
+    "/home/seith/REDA/conformance/sequential_conformance.py": "723c51fe21f12f15e0b64b6dfe1894e59ff79bfafff72c5882ab00323529dab2",
+    "/home/seith/REDA/conformance/circuit_conformance.py": "bb072d837fbb305f9bcfba76e4118e6b82ad702531e5eb35e0845941a4848a19",
+    "/home/seith/REDA/minecraft-server-26.2/server/server.jar": "cdacdfb25898de5e4b4b0e5ddcc2722f77067e46605709c2d886c000ebb63ec5"
+  },
+  "minecraft": {
+    "id": "26.2",
+    "name": "26.2",
+    "world_version": 4903,
+    "series_id": "main",
+    "protocol_version": 776,
+    "pack_version": {
+      "resource_major": 88,
+      "resource_minor": 0,
+      "data_major": 107,
+      "data_minor": 1
+    },
+    "build_time": "2026-06-16T12:01:27+00:00",
+    "java_component": "java-runtime-epsilon",
+    "java_version": 25,
+    "stable": true,
+    "use_editor": false
+  },
+  "datapack_sha256": {
+    "pack.mcmeta": "6b5409af87f3ada73be9a94c12f7ae64731877ee86f890ce6c6cd883e9c4e76a",
+    "data/reda_sequential_20261004/function/capture.mcfunction": "8ca79ea078ecf0b9012928f6c0d22ff7b0cb2e11de6f66107197255ec6d1f9b4"
+  },
+  "error_type": "RegionNotReady",
+  "error": "snapshot missing fields or spans different game ticks"
+}
