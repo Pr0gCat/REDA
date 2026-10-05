@@ -1,0 +1,39 @@
+{
+  "scope": "Independent CPU prefilter on original b8a39e6 baseline; larger structural candidates remain unqualified",
+  "baseline_physical_seconds": 222.933712,
+  "candidate_physical_seconds": 216.355702,
+  "single_measurement_improvement_percent": 2.9506573685006448,
+  "library_build_seconds": 192,
+  "fixed_seconds": 16.18246,
+  "growth_seconds": 200.134281,
+  "certify_seconds": 0.013955,
+  "bundle_waveform_seconds": 0.455142,
+  "original_checker": "44 phases,16states,every implementation gate and hidden DFF cell passed",
+  "loaded_world": "243040 cells, all complete BlockStates and dimensions equal",
+  "artifact_comparison": {
+    "counter.litematic": {
+      "byte_equal": false,
+      "baseline_sha256": "1dd6bac56b366967bebba606ea0941f6a1944c311a4cd6b274e0141ffab77610",
+      "candidate_sha256": "e21a312fe0d6dfce049a147398357aa356ab8944e7198a95dbee4fe51826aaa8"
+    },
+    "counter.pinout.json": {
+      "byte_equal": true,
+      "baseline_sha256": "c8363c6659f4413f6e2b52215de7d55f52da75fea5ad863b558ef9bf09c17b76",
+      "candidate_sha256": "c8363c6659f4413f6e2b52215de7d55f52da75fea5ad863b558ef9bf09c17b76"
+    },
+    "observations.json": {
+      "byte_equal": true,
+      "baseline_sha256": "50bfd805ef7727853c2d9efc86e7aeabe679ea9cb559d4c5667ac049c215f56e",
+      "candidate_sha256": "50bfd805ef7727853c2d9efc86e7aeabe679ea9cb559d4c5667ac049c215f56e"
+    },
+    "phases.json": {
+      "byte_equal": true,
+      "baseline_sha256": "ff9a2a8e8ae6c8a1d30e9c947435f22df3ab01ba3140dd14f2e58202ccbf2843",
+      "candidate_sha256": "ff9a2a8e8ae6c8a1d30e9c947435f22df3ab01ba3140dd14f2e58202ccbf2843"
+    }
+  },
+  "layout_success_rate": "same successful world and same fixed failure; no improvement claimed",
+  "timing_limit": "one pipeline measurement; small observed speed difference is not a stable distribution estimate",
+  "controls": "126 exact old/new comparisons plus empty and out-of-column rising-successor cases",
+  "budget_and_physics": "unchanged"
+}

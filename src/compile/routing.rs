@@ -2403,9 +2403,21 @@ fn self_obstructs_batch(
 ) {
     debug_assert_eq!(candidates.len(), obstructed.len());
     obstructed.fill(false);
+    let Some(first) = candidates.first() else { return; };
+    let (mut min_x, mut max_x, mut min_z, mut max_z) = (first.x, first.x, first.z, first.z);
+    for candidate in &candidates[1..] {
+        min_x = min_x.min(candidate.x); max_x = max_x.max(candidate.x);
+        min_z = min_z.min(candidate.z); max_z = max_z.max(candidate.z);
+    }
     let mut successor: Option<Anchor> = None;
     for cell in chain {
         let rises_after = successor.is_some_and(|after: Anchor| after.y > cell.y);
+        // Every obstruction predicate requires the same x/z column.
+        // Preserve the successor even when this cell cannot match a candidate.
+        successor = Some(cell);
+        if cell.x < min_x || cell.x > max_x || cell.z < min_z || cell.z > max_z {
+            continue;
+        }
         for (candidate, obstructed) in candidates.iter().zip(obstructed.iter_mut()) {
             if *obstructed || cell.x != candidate.x || cell.z != candidate.z {
                 continue;
@@ -2419,7 +2431,6 @@ fn self_obstructs_batch(
                 *obstructed = true;
             }
         }
-        successor = Some(cell);
     }
 }
 

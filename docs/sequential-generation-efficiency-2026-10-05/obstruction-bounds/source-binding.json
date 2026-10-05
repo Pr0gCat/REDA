@@ -1,0 +1,14 @@
+{
+  "parent": "sequential-efficiency-baseline",
+  "changed_file": "src/compile/routing.rs",
+  "sha256": "6c416d6e075e33d2d96a26690759d271414dc4aaaeecc446ec3d24336966bf27",
+  "invariant": "Only exclude chain cells whose x/z column cannot equal any candidate. Preserve successor and order. No search budget/order/physical rules change.",
+  "job_session": 85379,
+  "status": "terminal0, exact loaded-world and phase equality verified; isolated CPU change qualified",
+  "control": "126 cases, empty and outside-column successor preservation passed",
+  "synthetic_microbenchmark_ms": {
+    "reference": 112.078868,
+    "bounded": 12.224663
+  },
+  "production_helper_sha256": "63dfdb0e64fc3e351c68def464066e4ae90e644e2ff22b7fd9abc6606d218e13"
+}
