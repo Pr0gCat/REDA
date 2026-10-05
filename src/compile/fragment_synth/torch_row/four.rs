@@ -208,7 +208,7 @@ impl Binding {
     }
 }
 pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite, TorchRowError> {
-    if !(4..=5).contains(&source.inputs.len()) || !(1..=16).contains(&source.outputs.len()) {
+    if !(4..=6).contains(&source.inputs.len()) || !(1..=16).contains(&source.outputs.len()) {
         return Err(TorchRowError::UnsupportedBoundary);
     }
     prove_netlist_rewrite(source, source, &source.inputs, &source.outputs, limit)

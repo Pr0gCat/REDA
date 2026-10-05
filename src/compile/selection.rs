@@ -624,6 +624,27 @@ pub fn compile_selected_with_refresh_budget(
 ) -> Result<CompiledCircuit, CompileError> {
     #[cfg(test)]
     LITERAL_PROPOSALS.with(|count| count.set(0));
+    // Six-input matrices use the structurally checked generator directly.
+    // Retained-history quality comparison is an independent experiment, not
+    // a prerequisite repeated by every API/CLI invocation. This path makes
+    // no claim of exhaustive transition-quality dominance over raw routing.
+    if source.inputs.len() == 6
+        && (1..=16).contains(&source.outputs.len())
+        && !source.gates.iter().any(|gate| gate.kind.is_sequential())
+    {
+        super::checked_rewrite_topological_order(source)?;
+        let started = std::time::Instant::now();
+        let rewrite = compile_balanced_torch_matrix(source, 1_000_000)
+            .map_err(|error| CompileError::CandidateMetadataViolation {
+                item: "six-input structural matrix".into(),
+                reason: format!("{error:?}"),
+            })?;
+        if std::env::var_os("REDA_TRACE_MATRIX").is_some() {
+            eprintln!("REDA_MATRIX generation_and_physical_checks elapsed_ms={}",
+                started.elapsed().as_millis());
+        }
+        return Ok(CompiledCircuit::from_certified_rewrite(rewrite));
+    }
     let occurrence_boundary = (4..=5).contains(&source.inputs.len())
         && (1..=16).contains(&source.outputs.len())
         && !source.gates.iter().any(|gate| gate.kind.is_sequential())
