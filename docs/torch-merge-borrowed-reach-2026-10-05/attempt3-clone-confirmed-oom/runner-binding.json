@@ -1,0 +1,9 @@
+{
+  "target/qualification/native-rom64-selection-diagnostic/run.sh": "cd70dde7d3f61103f652138e202ce22401e18f71af04a6448874f7339a89ce64",
+  "target/qualification/native-rom64-selection-diagnostic/bind-binaries.py": "4ecb5b7cf6f67231b66befc07e20751277dca0394c88a5e7c8a687aa450c087a",
+  "target/qualification/native-rom64-selection-diagnostic/diagnostic-only.patch": "d5b61fb2e507f2737150b29e6c5b6b3e5f59f3f601cc3807881a20f27bb5a97f",
+  "target/qualification/native-rom64-selection-diagnostic/current-main-source-binding.json": "890ed29b8c4ef001da2814a71bea2b077a51bd754535f97b40c8b3de39406718",
+  "target/qualification/native-rom64-selection-diagnostic/diagnostic-source-binding.json": "1eeee11a29474b8477f7a465a81830849d8b4bb3d9c0133de138282ca5f4c864",
+  "target/qualification/native-rom64-selection-diagnostic/source-binding-comparison.json": "4a36930680497da4842ea0c15c31c981845728fb0d68afc026c8e16fb06c5514",
+  "tools/run_memory_bounded.sh": "f9fca80c2268b3284c324e8d9e7c56433e0a21cba48ac66f2a672d9bcb7ba229"
+}

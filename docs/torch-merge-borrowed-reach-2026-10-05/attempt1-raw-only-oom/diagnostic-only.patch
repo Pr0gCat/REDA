@@ -1,0 +1,107 @@
+--- a/src/compile/selection.rs
++++ b/src/compile/selection.rs
+@@ -505,6 +505,8 @@
+     compiled: &CompiledCircuit,
+     require_certificate: bool,
+ ) -> Option<RefreshQuality> {
++    #[cfg(test)]
++    eprintln!("ROM64_DIAG refresh_quality entry certificate={require_certificate}");
+     quality_with_ports(source, compiled, require_certificate, None, None)
+ }
+ 
+@@ -525,6 +527,8 @@
+     caller_ports: Option<&super::planner::PortPlacements>,
+     upper: Option<&RefreshQuality>,
+ ) -> Option<RefreshQuality> {
++    #[cfg(test)]
++    eprintln!("ROM64_DIAG quality_with_ports entry certificate={require_certificate} upper={}", upper.is_some());
+     let mut groups = [0; 4];
+     let mut phases = Vec::new();
+     let core = qualify_boundary_ports_while(source, compiled, require_certificate, caller_ports, upper.map(|limit| &limit.core), |phase| {
+@@ -560,8 +564,12 @@
+             { return false; }
+         }
+         phases.push(measured);
++        #[cfg(test)]
++        if phases.len() % 256 == 0 { eprintln!("ROM64_DIAG quality_with_ports phases={}", phases.len()); }
+         true
+     })?;
++    #[cfg(test)]
++    eprintln!("ROM64_DIAG quality_with_ports complete phases={}", phases.len());
+     let measured = RefreshQuality { core, groups, phases };
+     upper.is_none_or(|limit| measured.dominates(limit)).then_some(measured)
+ }
+@@ -652,16 +660,26 @@
+         || source.outputs.len() != 3
+         || source.gates.iter().any(|g| g.kind.is_sequential())
+     {
++        #[cfg(test)]
++        eprintln!("ROM64_DIAG raw_emission start gates={}", source.gates.len());
+         let raw = super::compile_without_rewrite(source)?;
++        #[cfg(test)]
++        eprintln!("ROM64_DIAG raw_emission complete size={:?}", raw.world.size());
+         if !(1..=6).contains(&source.inputs.len())
+             || source.outputs.is_empty()
+             || source.gates.iter().any(|g| g.kind.is_sequential())
+         {
+             return Ok(raw);
+         }
++        #[cfg(test)]
++        eprintln!("ROM64_DIAG raw_refresh_quality start");
+         let Some(mut quality) = refresh_quality(source, &raw, false) else {
++            #[cfg(test)]
++            eprintln!("ROM64_DIAG raw_refresh_quality refused");
+             return Ok(if budget > 0 { strict_refresh_selection(source, raw, budget) } else { raw });
+         };
++        #[cfg(test)]
++        eprintln!("ROM64_DIAG raw_refresh_quality complete");
+         let mut best = raw;
+         let flat_seed = flat_refresh_from_compiled(source, &best);
+         // Compare complete retained histories, using only structural boundary
+@@ -733,6 +751,8 @@
+     }
+ }
+ fn strict_profile(source: &Netlist, circuit: &CompiledCircuit, upper: Option<&[StrictPhase]>) -> Option<Vec<StrictPhase>> {
++    #[cfg(test)]
++    eprintln!("ROM64_DIAG strict_profile entry upper={} gates={}", upper.is_some(), circuit.implementation_netlist(source).gates.len());
+     circuit.validate_rewrite_view(source).ok()?;
+     let implementation = circuit.implementation_netlist(source);
+     let order = implementation.combinational_order()?;
+@@ -799,10 +819,14 @@
+             if !phase.dominates(old) { return None; }
+         }
+         result.push(phase); previous=address;
++        #[cfg(test)]
++        if result.len() % 256 == 0 { eprintln!("ROM64_DIAG strict_profile phases={}", result.len()); }
+     }}}
+     Some(result)
+ }
+ fn strict_refresh_selection(source: &Netlist, mut best: CompiledCircuit, budget: usize) -> CompiledCircuit {
++    #[cfg(test)]
++    eprintln!("ROM64_DIAG strict_refresh_selection entry budget={budget}");
+     use super::fragment_synth::refresh::{removable_flat_refreshes, remove_flat_refresh};
+     let Some(mut quality)=strict_profile(source,&best,None) else { return best; };
+     let Some(initial)=best.physical_candidate() else { return best; };
+@@ -1240,3 +1264,22 @@
+         ));
+     }
+ }
++
++#[cfg(test)]
++mod rom64_selection_diagnostic {
++    #[test]
++    fn ordinary_physical_entry_stage_probe() {
++        let source = crate::frontend::SourceInput {
++            name: "rom64_matrix.sv",
++            text: include_str!("../../tests/fixtures/rom64_matrix.sv"),
++        };
++        eprintln!("ROM64_DIAG public_physical_entry start");
++        let circuit = crate::frontend::compile_systemverilog_physical(
++            &[source], &crate::frontend::CompileOptions::new("rom64"),
++        ).unwrap();
++        eprintln!("ROM64_DIAG public_physical_entry complete");
++        assert_eq!(crate::compile::fragment_synth::benchmark::canonical_world_fingerprint(
++            &circuit.physical.world).as_str(),
++            "f3af4444f9776335f3c51a768a8a7ae3d5e387e66974807feb5009919b459b5a");
++    }
++}

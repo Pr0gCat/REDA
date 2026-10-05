@@ -1,0 +1,8 @@
+{
+  "run.sh": "b86c7a08ee68d822ebc0e28c1c96c272cb6e8ae1565944665c12019a69820334",
+  "verify-source.py": "d524b929d66fa09c55cd444bcf4fbe9d38c20c12d13be0020d5432881d805961",
+  "bind-binaries.py": "4ecb5b7cf6f67231b66befc07e20751277dca0394c88a5e7c8a687aa450c087a",
+  "candidate-only.patch": "e2adeed1381b347a90650afdd41bbf94bf41b1453bc7610e52c5273414d0b916",
+  "candidate-source-binding.json": "9fa9ae747e508e4de07ae7def2b9efd7cbc158a7cfa200405c4da7fa80a53b0d",
+  "baseline-source-binding.json": "1eeee11a29474b8477f7a465a81830849d8b4bb3d9c0133de138282ca5f4c864"
+}

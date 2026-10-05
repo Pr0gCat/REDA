@@ -1,0 +1,15 @@
+{
+  "main_base_sha256": "b46c54124cecde33201ec296d98403a0350ddd75079e1bcc4fcbfd1d581743c3",
+  "main_candidate_sha256": "da5d3f40ddd58cbc8cce099beb5d7661f5d7f16ef24b6a3f7db674e4bd1e16e1",
+  "identical_replaced_block": true,
+  "only_main_block_changed": true,
+  "applied": false,
+  "full_tests": [
+    "compile::tests::torch_merge_accepts_both_branches_of_a_declared_merge_as_g1s_input",
+    "compile::tests::torch_merge_still_rejects_the_same_two_repeaters_without_a_declared_merge",
+    "compile::tests::torch_merge_rejects_a_foreign_net_that_reaches_the_support",
+    "compile::tests::torch_merge_rejects_a_declared_input_whose_net_never_reaches_the_support",
+    "compile::tests::torch_merge_accepts_a_correctly_wired_single_input_gate"
+  ],
+  "zero_test_runtime_guard": "each existing exact test log must contain test result: ok. 1 passed; 0 failed;"
+}

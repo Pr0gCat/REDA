@@ -1,0 +1,11 @@
+{
+  "reviewed_function": "verify_torch_merge",
+  "result": "equivalent membership sets and unchanged net iteration/error order",
+  "existing_mutation": "group_reach is computed once before borrowing; no mutation while borrowed",
+  "present_root": "clone contains(position) equals borrowed original contains(position)",
+  "absent_root": "fresh empty HashSet equals shared immutable empty HashSet",
+  "consumption": "sole reach.iter consumer calls reached.contains(&support)",
+  "caps_and_invariants": "no router cap, simulation rule, connectivity, torch merge, signal-strength or expected-value rule altered",
+  "reviewed_candidate_mod_sha256": "f0bfd52da0e9dc1e33c60bea90240779725a4d1c49005c4404e31b9a2387ec8f",
+  "main_mod_sha256": "da5d3f40ddd58cbc8cce099beb5d7661f5d7f16ef24b6a3f7db674e4bd1e16e1"
+}

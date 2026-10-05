@@ -1,0 +1,11 @@
+{
+  "session": 8874,
+  "exec_exit": 143,
+  "scope": "run-u57.scope",
+  "scope_result": "oom-kill",
+  "scope_confirmation": "root verified journal Oct05 00:13:34",
+  "probe_exit_exists": false,
+  "accepted": false,
+  "original_source_and_binary_hashes_reverified": true,
+  "last_marker": "legacy_allocate world complete (3242,5,810)"
+}

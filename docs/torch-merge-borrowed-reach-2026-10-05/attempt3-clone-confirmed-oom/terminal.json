@@ -1,0 +1,41 @@
+{
+  "session": 94199,
+  "exec_exit": 143,
+  "probe_exit_present": false,
+  "scope": "run-u58.scope",
+  "scope_result": "oom-kill",
+  "scope_failure_time": "Oct 05 00:19:03",
+  "memory_limit_bytes": 4294967296,
+  "swap_limit_bytes": 0,
+  "accepted": false,
+  "source_files_reverified": 262,
+  "source_drift": [],
+  "binaries_reverified": [
+    "binaries/reda-a2b90b27b67dac89"
+  ],
+  "measured_first_clone": {
+    "rss_before_kib": 339148,
+    "rss_after_kib": 3921632,
+    "unique_group_cells": 575385,
+    "per_net_cloned_cells": 147761464,
+    "groups": 10,
+    "nets": 593,
+    "largest_group_cells": 272644
+  },
+  "second_clone_rss_start_kib": 1125924,
+  "failed_stage": "legacy_realise verify_torch_merge per-net group reach cloning",
+  "artifact_sha256": {
+    "binary-binding.json": "8b43a1080f854b67ffcb6b638b2be5f7ab6953000bd350d809120c4d4329abbe",
+    "bind-binaries.py": "4ecb5b7cf6f67231b66befc07e20751277dca0394c88a5e7c8a687aa450c087a",
+    "build.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "build.log": "0a8eec89ccbd28df8c5fcdf337ed78e27e035fdc7ce2e2fc8891ea3c4fae00bb",
+    "current-main-source-binding.json": "890ed29b8c4ef001da2814a71bea2b077a51bd754535f97b40c8b3de39406718",
+    "diagnostic-only.patch": "d5b61fb2e507f2737150b29e6c5b6b3e5f59f3f601cc3807881a20f27bb5a97f",
+    "diagnostic-source-binding.json": "1eeee11a29474b8477f7a465a81830849d8b4bb3d9c0133de138282ca5f4c864",
+    "probe.log": "e712d840757cafcf48ae288b7999d7992218486112749e63f02f2815ffb2c6fc",
+    "run.sh": "cd70dde7d3f61103f652138e202ce22401e18f71af04a6448874f7339a89ce64",
+    "runner-binding.json": "eb766d356f4432c534d97bfdc80184a91ae81022d91951d91fb360e18ba48aca",
+    "scope-journal.log": "193b2c447ef4036a0103b82b11e0e30e26d92fdb00c1d87a5d9d1b27192817a9",
+    "source-binding-comparison.json": "4a36930680497da4842ea0c15c31c981845728fb0d68afc026c8e16fb06c5514"
+  }
+}

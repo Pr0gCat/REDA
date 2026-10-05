@@ -1,0 +1,9 @@
+# Borrowed torch-merge reach evidence
+
+The legacy torch-merge verifier copied the same immutable merge-group reach set once per raw net. Baseline has 10 groups, 593 nets, 575,385 unique reached cells and 147,761,464 cells after per-net duplication. Its first clone raises observed RSS from 339,148 to 3,921,632 KiB; the second verification starts cloning at 1,125,924 KiB and the retained u58 journal confirms OOM-kill. Prior two incomplete diagnostic runs retain source archives and their increasingly precise stage observations. Attempt 1 still has no independently retained scope confirmation; exit143 alone is not treated as proof of OOM.
+
+The candidate borrows each original set instead of cloning it, with one immutable empty-set fallback. Independent review confirms that the sole consumer tests `contains(&support)`: membership, net iteration order and error order remain unchanged. No invariant, cap, expected value, routing or simulation behavior is weakened. The five existing exact torch-merge positive/negative tests are terminal passed with exit0, one test per command; logs and source/binary bindings are retained.
+
+The candidate ordinary ROM64 probe is still live at this evidence snapshot. Its first observed clone retains RSS at 339,376 KiB instead of duplicating the sets. This is evidence of the allocation reduction, not a claim that the full ordinary consumer, all physical controls, CLI or Minecraft passed. Root must update terminal status only after completion.
+
+Compressed complete source snapshots, exact patches, bindings and journal/log snapshots are portable here. Binary manifests retain original executable hashes/paths; huge binary files are deliberately not copied into documentation. Existing immutable source/binary proofs remain in the original target qualification archives. No heavy job was launched to prepare this folder.

@@ -1,0 +1,4 @@
+Oct 05 00:16:43 zenith systemd[2604]: Started run-u58.scope - /usr/bin/bash /home/seith/REDA/target/qualification/native-rom64-selection-diagnostic/run.sh --bounded.
+Oct 05 00:19:03 zenith systemd[2604]: run-u58.scope: A process of this unit has been killed by the OOM killer.
+Oct 05 00:19:03 zenith systemd[2604]: run-u58.scope: Failed with result 'oom-kill'.
+Oct 05 00:19:03 zenith systemd[2604]: run-u58.scope: Consumed 2min 21.076s CPU time.

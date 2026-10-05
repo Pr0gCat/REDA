@@ -1,0 +1,18 @@
+--- a/src/compile/mod.rs
++++ b/src/compile/mod.rs
+@@ -6685,12 +6685,12 @@
+         eprintln!("ROM64_DIAG torch_merge_group_reach groups={} nets={} unique_total={} per_net_clone_total={} max_group={}", group_reach.len(), nets.len(), total, repeated, largest);
+         diagnostic_memory_mark("torch_merge_per_net_clone start");
+     }
+-    let reach: Vec<HashSet<Position>> = (0..nets.len())
++    let empty_reach = HashSet::new();
++    let reach: Vec<&HashSet<Position>> = (0..nets.len())
+         .map(|n| {
+             group_reach
+                 .get(&groups.root(n))
+-                .cloned()
+-                .unwrap_or_default()
++                .unwrap_or(&empty_reach)
+         })
+         .collect();
+     #[cfg(test)]

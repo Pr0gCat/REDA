@@ -1,0 +1,10 @@
+{
+  "session": 30037,
+  "exec_exit": 143,
+  "probe_exit_exists": false,
+  "scope_oom_confirmation": "pending root verified scope result",
+  "last_stage": "raw_emission start gates=603",
+  "accepted": false,
+  "all_original_source_hashes_reverified": true,
+  "binary_archive_reverified": true
+}

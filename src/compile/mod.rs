@@ -6677,12 +6677,12 @@ fn verify_torch_merge(
         .iter()
         .map(|(&root, cells)| (root, net_reach(world, cells)))
         .collect();
-    let reach: Vec<HashSet<Position>> = (0..nets.len())
+    let empty_reach = HashSet::new();
+    let reach: Vec<&HashSet<Position>> = (0..nets.len())
         .map(|n| {
             group_reach
                 .get(&groups.root(n))
-                .cloned()
-                .unwrap_or_default()
+                .unwrap_or(&empty_reach)
         })
         .collect();
 
