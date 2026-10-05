@@ -268,6 +268,8 @@ pub struct Assign {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
+    Positive,
+    Negate,
     /// `~`
     Not,
     /// `!`
@@ -276,6 +278,8 @@ pub enum UnaryOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
+    Add,
+    Subtract,
     And,
     Or,
     Xor,
@@ -285,6 +289,21 @@ pub enum BinaryOp {
     NotEqual,
 }
 
+impl BinaryOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Subtract => "-",
+            BinaryOp::And => "&",
+            BinaryOp::Or => "|",
+            BinaryOp::Xor => "^",
+            BinaryOp::LogicalAnd => "&&",
+            BinaryOp::LogicalOr => "||",
+            BinaryOp::Equal => "==",
+            BinaryOp::NotEqual => "!=",
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Expr {

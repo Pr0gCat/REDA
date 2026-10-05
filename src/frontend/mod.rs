@@ -370,9 +370,19 @@ pub fn compile_systemverilog_physical(
     }
     let artifact = compile_systemverilog(sources, options)
         .map_err(|ds| ds.iter().map(|d| d.render(sources)).collect::<Vec<_>>().join("\n"))?;
-    let lowered = crate::compile::lowering::lower(&artifact.netlist).map_err(|e| e.to_string())?;
+    let stateful = artifact.netlist.gates.iter().any(|gate| gate.kind.is_sequential());
+    // Stateful native sources follow the CLI's optimized lowering. Their
+    // physical observations belong to that implementation, not source gates.
+    let lowered = if stateful {
+        crate::compile::lowering::lower_optimised(&artifact.netlist)
+    } else {
+        crate::compile::lowering::lower(&artifact.netlist)
+    }.map_err(|e| e.to_string())?;
     let mut physical = crate::compile::compile(&lowered).map_err(|e| e.to_string())?;
-    if lowered != artifact.netlist {
+    // The retained Boolean rewrite certificate describes combinational DAGs.
+    // Stateful lowering retains DFF identity and is checked by the ordinary
+    // physical compiler; never label it with a combinational certificate.
+    if lowered != artifact.netlist && !stateful {
         let rewrite = if let Some(mut rewrite) = physical.physical_rewrite().cloned() {
             rewrite.rebind_source(&artifact.netlist, 1_000_000)
                 .map_err(|e| format!("native source lowering proof failed: {e:?}"))?;
@@ -388,7 +398,7 @@ pub fn compile_systemverilog_physical(
         };
         physical = crate::compile::CompiledCircuit::from_certified_rewrite(rewrite);
     }
-    let implementation = physical.implementation_netlist(&artifact.netlist).clone();
+    let implementation = physical.implementation_netlist(&lowered).clone();
     let coordinates = |p: &(i32,i32,i32)| [p.0,p.1,p.2];
     let source_inputs = artifact.ports.iter().filter(|p| p.direction == PortDirection::Input)
         .map(|p| (p.name.clone(), physical.input_positions[&p.signal])).collect::<std::collections::BTreeMap<_,_>>();

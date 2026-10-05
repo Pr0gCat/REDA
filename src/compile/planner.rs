@@ -684,9 +684,10 @@ pub fn emit_candidate(
 }
 
 /// Emit the declared zero-state clock levels, not a startup clock edge.
-/// Ordinary input clocks start low and keep their existing emitted bytes.
-/// An inverted input clock starts high: its route and Design H controls must
-/// already agree, or data-path startup transients can overwrite Q=0.
+/// Raw input clocks start low and inverted clocks start high. Route
+/// repeaters otherwise start lit for geometric strength proofs; leaving
+/// those powered would create a startup edge that can overwrite Q=0.
+/// Both clock levels and Design H controls must agree before simulation.
 fn initialize_clock_power(
     candidate: &PlanCandidate,
     netlist: &Netlist,
@@ -712,22 +713,19 @@ fn initialize_clock_power(
             id: "clock power-on".into(),
             reason: error.to_string(),
         })?;
-    let high: Vec<_> = netlist
+    let registers: Vec<_> = netlist
         .gates
         .iter()
         .enumerate()
-        .filter(|(_, gate)| gate.kind.is_sequential() && values[&gate.inputs[1]])
+        .filter(|(_, gate)| gate.kind.is_sequential())
         .map(|(index, _)| index)
         .collect();
-    if high.is_empty() {
-        return Ok(());
-    }
     let drivers: BTreeMap<_, _> = netlist
         .gates
         .iter()
         .map(|gate| (gate.output.as_str(), gate))
         .collect();
-    let mut pending: Vec<_> = high
+    let mut pending: Vec<_> = registers
         .iter()
         .map(|&index| netlist.gates[index].inputs[1].as_str())
         .collect();
@@ -799,10 +797,11 @@ fn initialize_clock_power(
         }
         realised.world.set(at.x, at.y, at.z, state);
     }
-    for index in high {
+    for index in registers {
         let anchor = candidate.anchors[index];
         let facing = candidate.facing_of(index);
-        for (offset, lit) in [((1, 0, 0), true), ((1, 0, -1), false), ((2, 0, -1), false)] {
+        let clock = values[&netlist.gates[index].inputs[1]];
+        for (offset, lit) in [((1, 0, 0), clock), ((1, 0, -1), !clock), ((2, 0, -1), !clock)] {
             let (x, y, z) = geometry::rotate(offset, facing);
             let at = Position::new(anchor.x + x, anchor.y + y, anchor.z + z);
             let mut state = realised.world.get(at.x, at.y, at.z).clone();

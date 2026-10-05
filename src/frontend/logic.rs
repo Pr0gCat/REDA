@@ -267,7 +267,6 @@ impl LogicGraph {
             origin,
         )
     }
-
     fn table_not(&mut self, node: LogicNodeId, origin: LogicOrigin) -> LogicNodeId {
         use crate::compile::topology::GateKind;
         match self.node(node).clone() {
@@ -494,6 +493,7 @@ pub fn build(design: &Design) -> Result<Blasted, Vec<Diagnostic>> {
             .collect(),
         drivers: HashMap::new(),
         aliases: AliasClasses::new(design),
+        arithmetic_carries: HashMap::new(),
         errors: Vec::new(),
     };
 
@@ -783,6 +783,10 @@ struct Builder<'d> {
     bits: Vec<Vec<BitState>>,
     /// `(signal, bit) -> (assignment index, bit within that assignment)`.
     drivers: HashMap<(usize, u32), (usize, u32)>,
+    /// Carry into a bit of one typed arithmetic expression. Shared slices
+    /// and arbitrary bit requests reuse the same prefix without resolving
+    /// future register bits before their DFF identity exists.
+    arithmetic_carries: HashMap<(ElabNodeId, u32), LogicNodeId>,
     errors: Vec<Diagnostic>,
 }
 
@@ -885,6 +889,46 @@ impl Builder<'_> {
         node
     }
 
+    /// Fixed-width unsigned addition, with subtraction as A + !B + 1.
+    /// Only the required carry prefix is built; overflow is discarded by
+    /// the typed result width, as in an equal-width HDL expression.
+    fn arithmetic_bit(
+        &mut self,
+        expr: &RtlExpr,
+        left: &RtlExpr,
+        right: &RtlExpr,
+        subtract: bool,
+        bit: u32,
+    ) -> LogicNodeId {
+        let mut start = bit;
+        while start > 0 && !self.arithmetic_carries.contains_key(&(expr.elab, start)) {
+            start -= 1;
+        }
+        let mut carry = self
+            .arithmetic_carries
+            .get(&(expr.elab, start))
+            .copied()
+            .unwrap_or_else(|| self.graph.constant(subtract, self.origin(expr, 0)));
+        for index in start..=bit {
+            let origin = self.origin(expr, index);
+            let a = self.blast_bit(left, index);
+            let mut b = self.blast_bit(right, index);
+            if subtract {
+                b = self.graph.not(b, origin.clone());
+            }
+            let propagate = self.graph.xor(a, b, origin.clone());
+            if index == bit {
+                return self.graph.xor(propagate, carry, origin);
+            }
+            let generated = self.graph.and(a, b, origin.clone());
+            let propagated = self.graph.and(propagate, carry, origin.clone());
+            carry = self.graph.or(generated, propagated, origin);
+            self.arithmetic_carries
+                .insert((expr.elab, index + 1), carry);
+        }
+        unreachable!("a carry prefix ends at its requested sum bit")
+    }
+
     fn origin(&self, expr: &RtlExpr, bit: u32) -> LogicOrigin {
         LogicOrigin {
             elab: expr.elab,
@@ -927,12 +971,16 @@ impl Builder<'_> {
                 self.graph.not(inner, origin)
             }
             RtlKind::Binary(op, left, right) => {
+                if matches!(op, RtlBinaryOp::Add | RtlBinaryOp::Subtract) {
+                    return self.arithmetic_bit(expr, left, right, *op == RtlBinaryOp::Subtract, bit);
+                }
                 let a = self.blast_bit(left, bit);
                 let b = self.blast_bit(right, bit);
                 match op {
                     RtlBinaryOp::And => self.graph.and(a, b, origin),
                     RtlBinaryOp::Or => self.graph.or(a, b, origin),
                     RtlBinaryOp::Xor => self.graph.xor(a, b, origin),
+                    RtlBinaryOp::Add | RtlBinaryOp::Subtract => unreachable!("handled above"),
                 }
             }
             RtlKind::ReduceOr(operand) => {

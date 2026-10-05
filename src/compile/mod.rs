@@ -7897,11 +7897,9 @@ pub fn compile_without_rewrite(netlist: &Netlist) -> Result<CompiledCircuit, Com
     // The legacy emitter has no stateful cell. Never turn a planner failure
     // into a silently combinational circuit by sending a DFF through it.
     if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
-        return compile_planned_within(
-            netlist,
-            &planner::PortPlacements::default(),
-            planner::RIP_UP_ROUNDS,
-        );
+        let placements = planner::PortPlacements::default();
+        return compile_planned_within(netlist, &placements, planner::RIP_UP_ROUNDS)
+            .or_else(|_| compile_grown(netlist, &placements));
     }
 
     // The policy, and it is exactly this so it is predictable:

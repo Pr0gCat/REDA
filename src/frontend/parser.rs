@@ -60,7 +60,7 @@ struct Parser<'n> {
 
 /// Binding powers for the Pratt loop, lowest first. Follows IEEE 1800's
 /// table for the operators version 1 accepts: `?:` < `||` < `&&` < `|` <
-/// `^` < `&` < `==`/`!=` < unary.
+/// `^` < `&` < `==`/`!=` < `+`/`-` < unary.
 const BP_TERNARY: u8 = 1;
 const BP_LOGICAL_OR: u8 = 2;
 const BP_LOGICAL_AND: u8 = 3;
@@ -68,6 +68,7 @@ const BP_OR: u8 = 4;
 const BP_XOR: u8 = 5;
 const BP_AND: u8 = 6;
 const BP_EQUALITY: u8 = 7;
+const BP_ADDITIVE: u8 = 8;
 const BP_UNARY: u8 = 9;
 
 impl<'n> Parser<'n> {
@@ -902,7 +903,9 @@ impl<'n> Parser<'n> {
                 TokenKind::Punct(Punct::EqualEqual) => (Some(BinaryOp::Equal), BP_EQUALITY),
                 TokenKind::Punct(Punct::BangEqual) => (Some(BinaryOp::NotEqual), BP_EQUALITY),
                 TokenKind::Punct(Punct::Question) => (None, BP_TERNARY),
-                TokenKind::Punct(Punct::Plus | Punct::Minus | Punct::Star) => return Err(self.unsupported_here("data arithmetic is not supported; integer arithmetic is available in constant expressions")),
+                TokenKind::Punct(Punct::Plus) => (Some(BinaryOp::Add), BP_ADDITIVE),
+                TokenKind::Punct(Punct::Minus) => (Some(BinaryOp::Subtract), BP_ADDITIVE),
+                TokenKind::Punct(Punct::Star) => return Err(self.unsupported_here("data multiplication is not supported; integer multiplication is available in constant expressions")),
                 _ => break,
             };
             if bp < min_bp {
@@ -948,6 +951,8 @@ impl<'n> Parser<'n> {
 
     fn unary(&mut self) -> Result<Expr, Diagnostic> {
         let op = match self.peek().kind {
+            TokenKind::Punct(Punct::Plus) => Some(UnaryOp::Positive),
+            TokenKind::Punct(Punct::Minus) => Some(UnaryOp::Negate),
             TokenKind::Punct(Punct::Tilde) => Some(UnaryOp::Not),
             TokenKind::Punct(Punct::Bang) => Some(UnaryOp::LogicalNot),
             _ => None,

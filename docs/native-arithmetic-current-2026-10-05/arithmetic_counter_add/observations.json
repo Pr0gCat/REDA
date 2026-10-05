@@ -1,0 +1,738 @@
+{
+  "dff_cells": {
+    "g0": {
+      "InvC": [
+        54,
+        1,
+        128
+      ],
+      "MData": [
+        52,
+        1,
+        129
+      ],
+      "MLock": [
+        53,
+        1,
+        129
+      ],
+      "SData": [
+        52,
+        1,
+        128
+      ],
+      "SLock": [
+        53,
+        1,
+        128
+      ]
+    },
+    "g14": {
+      "InvC": [
+        92,
+        1,
+        95
+      ],
+      "MData": [
+        91,
+        1,
+        93
+      ],
+      "MLock": [
+        91,
+        1,
+        94
+      ],
+      "SData": [
+        92,
+        1,
+        93
+      ],
+      "SLock": [
+        92,
+        1,
+        94
+      ]
+    },
+    "g5": {
+      "InvC": [
+        61,
+        1,
+        136
+      ],
+      "MData": [
+        62,
+        1,
+        138
+      ],
+      "MLock": [
+        62,
+        1,
+        137
+      ],
+      "SData": [
+        61,
+        1,
+        138
+      ],
+      "SLock": [
+        61,
+        1,
+        137
+      ]
+    },
+    "g9": {
+      "InvC": [
+        64,
+        1,
+        100
+      ],
+      "MData": [
+        63,
+        1,
+        98
+      ],
+      "MLock": [
+        63,
+        1,
+        99
+      ],
+      "SData": [
+        64,
+        1,
+        98
+      ],
+      "SLock": [
+        64,
+        1,
+        99
+      ]
+    }
+  },
+  "gate_output_positions": {
+    "g0": [
+      52,
+      1,
+      128
+    ],
+    "g1": [
+      44,
+      1,
+      121
+    ],
+    "g13": [
+      70,
+      1,
+      84
+    ],
+    "g14": [
+      92,
+      1,
+      93
+    ],
+    "g18": [
+      91,
+      1,
+      86
+    ],
+    "g3": [
+      51,
+      1,
+      137
+    ],
+    "g4": [
+      60,
+      1,
+      79
+    ],
+    "g5": [
+      61,
+      1,
+      138
+    ],
+    "g8": [
+      62,
+      1,
+      70
+    ],
+    "g9": [
+      64,
+      1,
+      98
+    ],
+    "n0": [
+      52,
+      1,
+      121
+    ],
+    "n1": [
+      37,
+      1,
+      119
+    ],
+    "n10": [
+      64,
+      1,
+      89
+    ],
+    "n11": [
+      86,
+      1,
+      122
+    ],
+    "n12": [
+      81,
+      1,
+      88
+    ],
+    "n13": [
+      62,
+      1,
+      111
+    ],
+    "n14": [
+      43,
+      1,
+      95
+    ],
+    "n15": [
+      49,
+      1,
+      83
+    ],
+    "n16": [
+      52,
+      1,
+      94
+    ],
+    "n17": [
+      50,
+      1,
+      76
+    ],
+    "n18": [
+      102,
+      1,
+      91
+    ],
+    "n19": [
+      63,
+      1,
+      120
+    ],
+    "n2": [
+      48,
+      1,
+      112
+    ],
+    "n20": [
+      73,
+      1,
+      77
+    ],
+    "n21": [
+      90,
+      1,
+      108
+    ],
+    "n22": [
+      80,
+      1,
+      78
+    ],
+    "n23": [
+      119,
+      1,
+      98
+    ],
+    "n24": [
+      111,
+      1,
+      89
+    ],
+    "n25": [
+      117,
+      1,
+      89
+    ],
+    "n26": [
+      107,
+      1,
+      94
+    ],
+    "n27": [
+      111,
+      1,
+      81
+    ],
+    "n28": [
+      99,
+      1,
+      86
+    ],
+    "n29": [
+      128,
+      1,
+      101
+    ],
+    "n3": [
+      44,
+      1,
+      104
+    ],
+    "n30": [
+      104,
+      1,
+      84
+    ],
+    "n4": [
+      52,
+      1,
+      104
+    ],
+    "n5": [
+      75,
+      1,
+      122
+    ],
+    "n6": [
+      105,
+      1,
+      106
+    ],
+    "n7": [
+      76,
+      1,
+      110
+    ],
+    "n8": [
+      73,
+      1,
+      134
+    ],
+    "n9": [
+      75,
+      1,
+      98
+    ]
+  },
+  "implementation": {
+    "gates": [
+      {
+        "inputs": [
+          "reset"
+        ],
+        "kind": "nor",
+        "name": "g3",
+        "output": "g3"
+      },
+      {
+        "inputs": [
+          "g0"
+        ],
+        "kind": "nor",
+        "name": "g1",
+        "output": "g1"
+      },
+      {
+        "inputs": [
+          "g5"
+        ],
+        "kind": "nor",
+        "name": "n0",
+        "output": "n0"
+      },
+      {
+        "inputs": [
+          "g1",
+          "g5"
+        ],
+        "kind": "nor",
+        "name": "n1",
+        "output": "n1"
+      },
+      {
+        "inputs": [
+          "n0",
+          "g0"
+        ],
+        "kind": "nor",
+        "name": "n2",
+        "output": "n2"
+      },
+      {
+        "inputs": [
+          "n1",
+          "n2"
+        ],
+        "kind": "nor",
+        "name": "n3",
+        "output": "n3"
+      },
+      {
+        "inputs": [
+          "g1",
+          "n0"
+        ],
+        "kind": "merge",
+        "name": "n4",
+        "output": "n4"
+      },
+      {
+        "inputs": [
+          "g1"
+        ],
+        "kind": "nor",
+        "name": "n5",
+        "output": "n5"
+      },
+      {
+        "inputs": [
+          "en"
+        ],
+        "kind": "nor",
+        "name": "n6",
+        "output": "n6"
+      },
+      {
+        "inputs": [
+          "n5",
+          "n6"
+        ],
+        "kind": "nor",
+        "name": "n7",
+        "output": "n7"
+      },
+      {
+        "inputs": [
+          "g1",
+          "en"
+        ],
+        "kind": "nor",
+        "name": "n8",
+        "output": "n8"
+      },
+      {
+        "inputs": [
+          "n7",
+          "n8"
+        ],
+        "kind": "nor",
+        "name": "n9",
+        "output": "n9"
+      },
+      {
+        "inputs": [
+          "n3",
+          "n6"
+        ],
+        "kind": "nor",
+        "name": "n10",
+        "output": "n10"
+      },
+      {
+        "inputs": [
+          "n0",
+          "en"
+        ],
+        "kind": "nor",
+        "name": "n11",
+        "output": "n11"
+      },
+      {
+        "inputs": [
+          "n10",
+          "n11"
+        ],
+        "kind": "nor",
+        "name": "n12",
+        "output": "n12"
+      },
+      {
+        "inputs": [
+          "g9"
+        ],
+        "kind": "nor",
+        "name": "n13",
+        "output": "n13"
+      },
+      {
+        "inputs": [
+          "n4"
+        ],
+        "kind": "nor",
+        "name": "n14",
+        "output": "n14"
+      },
+      {
+        "inputs": [
+          "n13",
+          "n14"
+        ],
+        "kind": "nor",
+        "name": "n15",
+        "output": "n15"
+      },
+      {
+        "inputs": [
+          "n4",
+          "g9"
+        ],
+        "kind": "nor",
+        "name": "n16",
+        "output": "n16"
+      },
+      {
+        "inputs": [
+          "n15",
+          "n16"
+        ],
+        "kind": "nor",
+        "name": "n17",
+        "output": "n17"
+      },
+      {
+        "inputs": [
+          "n13",
+          "n4"
+        ],
+        "kind": "merge",
+        "name": "n18",
+        "output": "n18"
+      },
+      {
+        "inputs": [
+          "g3"
+        ],
+        "kind": "nor",
+        "name": "n19",
+        "output": "n19"
+      },
+      {
+        "inputs": [
+          "n9",
+          "n19"
+        ],
+        "kind": "nor",
+        "name": "g4",
+        "output": "g4"
+      },
+      {
+        "inputs": [
+          "n19",
+          "n12"
+        ],
+        "kind": "nor",
+        "name": "g8",
+        "output": "g8"
+      },
+      {
+        "inputs": [
+          "n17",
+          "n6"
+        ],
+        "kind": "nor",
+        "name": "n20",
+        "output": "n20"
+      },
+      {
+        "inputs": [
+          "n13",
+          "en"
+        ],
+        "kind": "nor",
+        "name": "n21",
+        "output": "n21"
+      },
+      {
+        "inputs": [
+          "n20",
+          "n21"
+        ],
+        "kind": "nor",
+        "name": "n22",
+        "output": "n22"
+      },
+      {
+        "inputs": [
+          "g14"
+        ],
+        "kind": "nor",
+        "name": "n23",
+        "output": "n23"
+      },
+      {
+        "inputs": [
+          "n18"
+        ],
+        "kind": "nor",
+        "name": "n24",
+        "output": "n24"
+      },
+      {
+        "inputs": [
+          "n23",
+          "n24"
+        ],
+        "kind": "nor",
+        "name": "n25",
+        "output": "n25"
+      },
+      {
+        "inputs": [
+          "n18",
+          "g14"
+        ],
+        "kind": "nor",
+        "name": "n26",
+        "output": "n26"
+      },
+      {
+        "inputs": [
+          "n25",
+          "n26"
+        ],
+        "kind": "nor",
+        "name": "n27",
+        "output": "n27"
+      },
+      {
+        "inputs": [
+          "n19",
+          "n22"
+        ],
+        "kind": "nor",
+        "name": "g13",
+        "output": "g13"
+      },
+      {
+        "inputs": [
+          "n27",
+          "n6"
+        ],
+        "kind": "nor",
+        "name": "n28",
+        "output": "n28"
+      },
+      {
+        "inputs": [
+          "n23",
+          "en"
+        ],
+        "kind": "nor",
+        "name": "n29",
+        "output": "n29"
+      },
+      {
+        "inputs": [
+          "n28",
+          "n29"
+        ],
+        "kind": "nor",
+        "name": "n30",
+        "output": "n30"
+      },
+      {
+        "inputs": [
+          "n19",
+          "n30"
+        ],
+        "kind": "nor",
+        "name": "g18",
+        "output": "g18"
+      },
+      {
+        "inputs": [
+          "g4",
+          "clk"
+        ],
+        "kind": "dff_p",
+        "name": "g0",
+        "output": "g0"
+      },
+      {
+        "inputs": [
+          "g8",
+          "clk"
+        ],
+        "kind": "dff_p",
+        "name": "g5",
+        "output": "g5"
+      },
+      {
+        "inputs": [
+          "g13",
+          "clk"
+        ],
+        "kind": "dff_p",
+        "name": "g9",
+        "output": "g9"
+      },
+      {
+        "inputs": [
+          "g18",
+          "clk"
+        ],
+        "kind": "dff_p",
+        "name": "g14",
+        "output": "g14"
+      }
+    ],
+    "inputs": [
+      "clk",
+      "reset",
+      "en"
+    ],
+    "outputs": [
+      "g0",
+      "g5",
+      "g9",
+      "g14"
+    ]
+  },
+  "pinout": {
+    "inouts": [],
+    "inputs": {
+      "clk": [
+        91,
+        1,
+        98
+      ],
+      "en": [
+        96,
+        1,
+        120
+      ],
+      "reset": [
+        44,
+        1,
+        149
+      ]
+    },
+    "outputs": {
+      "q[0]": [
+        52,
+        0,
+        127
+      ],
+      "q[1]": [
+        60,
+        0,
+        138
+      ],
+      "q[2]": [
+        65,
+        0,
+        98
+      ],
+      "q[3]": [
+        93,
+        0,
+        93
+      ]
+    }
+  },
+  "source": "module arithmetic_counter_add(input logic clk,reset,en,output logic [3:0] q);\n    always_ff @(posedge clk) begin\n        if (reset) q <= 4'b0000;\n        else if (en) q <= q + 4'b0001;\n    end\nendmodule\n",
+  "top": "arithmetic_counter_add",
+  "world_fingerprint": "6bb8ffe9f4dd0b914f5822f795043ca4fa22bf52a3e669e62110ea3503fc206c"
+}

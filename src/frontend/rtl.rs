@@ -22,6 +22,8 @@ use super::elaborate::ElabNodeId;
 /// (registers, arithmetic, memories) is added when a fixture needs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RtlBinaryOp {
+    Add,
+    Subtract,
     And,
     Or,
     Xor,

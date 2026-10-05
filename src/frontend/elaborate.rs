@@ -1634,6 +1634,20 @@ impl Elaborator {
                 let elab = self.node(expr.id, ElabKind::Expr, width);
                 Some(RtlExpr::new(RtlKind::Concat(lowered), width, elab))
             }
+            ExprKind::Unary(op @ (UnaryOp::Positive | UnaryOp::Negate), operand) => {
+                let operand = self.expr(operand)?;
+                let width = operand.width;
+                let elab = self.node(expr.id, ElabKind::Expr, width);
+                let signed = operand.signed;
+                if *op == UnaryOp::Positive {
+                    let mut value = operand;
+                    value.elab = elab;
+                    Some(value)
+                } else {
+                    let zero = RtlExpr::new(RtlKind::Const(vec![false; width as usize]), width, elab).with_signed(signed);
+                    Some(RtlExpr::new(RtlKind::Binary(RtlBinaryOp::Subtract, Box::new(zero), Box::new(operand)), width, elab).with_signed(signed))
+                }
+            }
             ExprKind::Unary(UnaryOp::Not, operand) => {
                 let operand = self.expr(operand)?;
                 let width = operand.width;
@@ -1687,7 +1701,9 @@ impl Elaborator {
         };
 
 
-        let bitwise = |op| match op {
+        let word_operation = |op| match op {
+            BinaryOp::Add => Some(RtlBinaryOp::Add),
+            BinaryOp::Subtract => Some(RtlBinaryOp::Subtract),
             BinaryOp::And => Some(RtlBinaryOp::And),
             BinaryOp::Or => Some(RtlBinaryOp::Or),
             BinaryOp::Xor => Some(RtlBinaryOp::Xor),
@@ -1695,12 +1711,12 @@ impl Elaborator {
         };
 
         match op {
-            BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {
+            BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Add | BinaryOp::Subtract => {
                 let width = left.width;
                 let elab = self.node(expr.id, ElabKind::Expr, width);
                 Some(RtlExpr::new(
                     RtlKind::Binary(
-                        bitwise(op).expect("checked above"),
+                        word_operation(op).expect("checked above"),
                         Box::new(left),
                         Box::new(right),
                     ),
