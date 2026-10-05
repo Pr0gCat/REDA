@@ -18,6 +18,47 @@ pub(crate) fn needs_occurrence_preserving_boundary(source: &Netlist) -> bool {
             != source.outputs.len()
 }
 
+/// Give aliases real implementation buffers when a specialized boundary does
+/// not apply. The source graph and its declared output identities stay intact.
+pub(crate) fn compile_occurrence_boundary(
+    source: &Netlist,
+) -> Result<CertifiedPhysicalRewrite, crate::compile::CompileError> {
+    use crate::compile::{CompileError, Gate};
+    crate::compile::checked_rewrite_topological_order(source)?;
+    let mut prefix = "__reda_public_output_".to_string();
+    while source.inputs.iter().chain(&source.outputs)
+        .chain(source.gates.iter().flat_map(|g| [&g.name, &g.output]))
+        .any(|name| name.starts_with(&prefix))
+    {
+        prefix.push('_');
+    }
+    let mut implemented = source.clone();
+    let mut seen = std::collections::HashSet::new();
+    for (ordinal, signal) in source.outputs.iter().enumerate() {
+        if !seen.insert(signal) || source.inputs.contains(signal) {
+            let inverse = format!("{prefix}{ordinal}_inverse");
+            let terminal = format!("{prefix}{ordinal}_buffer");
+            implemented.gates.push(Gate::nor(&inverse, &[signal.as_str()]));
+            implemented.gates.push(Gate::nor(&terminal, &[inverse.as_str()]));
+            implemented.outputs[ordinal] = terminal;
+        }
+    }
+    let physical = crate::compile::compile_without_rewrite(&implemented)?;
+    let candidate = physical.physical_candidate().ok_or_else(||
+        CompileError::CandidateMetadataViolation {
+            item: "public output boundary".into(),
+            reason: "physical implementation candidate is missing".into(),
+        })?;
+    realise_physical_rewrite_with_size(
+        source, &implemented, candidate,
+        &Library::default_library(), &implemented.inputs, &implemented.outputs,
+        1_000_000, Some(physical.world.size()),
+    ).map_err(|error| CompileError::CandidateMetadataViolation {
+        item: "public output boundary".into(),
+        reason: format!("{error:?}"),
+    })
+}
+
 #[derive(Debug)]
 pub enum PhysicalRewriteError {
     Rewrite(NetlistRewriteError),
@@ -45,6 +86,25 @@ pub struct CertifiedPhysicalRewrite {
 }
 
 impl CertifiedPhysicalRewrite {
+    /// Compose a Boolean source rewrite with this already-certified hardware.
+    /// Port mappings and physical observations remain tied to the implementation.
+    pub(crate) fn rebind_source(
+        &mut self,
+        source: &Netlist,
+        proof_work_limit: u64,
+    ) -> Result<(), PhysicalRewriteError> {
+        let rewrite = prove_netlist_rewrite(
+            source,
+            &self.implemented,
+            self.rewrite.rewritten_inputs_in_source_order(),
+            self.rewrite.rewritten_outputs_in_source_order(),
+            proof_work_limit,
+        ).map_err(PhysicalRewriteError::Rewrite)?;
+        self.source = source.clone();
+        self.rewrite = rewrite;
+        Ok(())
+    }
+
     /// Measure the retained implementation with its own library and emission
     /// extent. Source gate names are not observations of a rewritten circuit.
     pub fn certify_runtime(

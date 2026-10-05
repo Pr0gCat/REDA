@@ -624,6 +624,18 @@ pub fn compile_selected_with_refresh_budget(
 ) -> Result<CompiledCircuit, CompileError> {
     #[cfg(test)]
     LITERAL_PROPOSALS.with(|count| count.set(0));
+    // Literal wiring is a public boundary obligation, even without inputs.
+    // Reuse the certified generator instead of merging aliased public lamps.
+    if super::fragment_synth::rewrite::needs_occurrence_preserving_boundary(source) {
+        match super::fragment_synth::torch_row::compile_direct_literals(source, 1_000_000) {
+            Ok(rewrite) => return Ok(CompiledCircuit::from_certified_rewrite(rewrite)),
+            Err(super::fragment_synth::torch_row::TorchRowError::UnsupportedBoundary) => {},
+            Err(error) => return Err(CompileError::CandidateMetadataViolation {
+                item: "literal source output boundary".into(),
+                reason: format!("{error:?}"),
+            }),
+        }
+    }
     // Six-input matrices use the structurally checked generator directly.
     // Retained-history quality comparison is an independent experiment, not
     // a prerequisite repeated by every API/CLI invocation. This path makes
@@ -668,6 +680,12 @@ pub fn compile_selected_with_refresh_budget(
                 reason: "occurrence-preserving boundary failed complete retained-history qualification".into(),
             })?;
         return Ok(select_literal_candidate(source, compiled, budget));
+    }
+    if super::fragment_synth::rewrite::needs_occurrence_preserving_boundary(source)
+        && !source.gates.iter().any(|gate| gate.kind.is_sequential())
+    {
+        let rewrite = super::fragment_synth::rewrite::compile_occurrence_boundary(source)?;
+        return Ok(CompiledCircuit::from_certified_rewrite(rewrite));
     }
     if source.inputs.len() != 2
         || source.outputs.len() != 3

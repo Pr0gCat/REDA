@@ -1,0 +1,5 @@
+WIDTH 0 OK output_occurrences=8 unique_public_positions=2
+WIDTH 1 ERROR gate `g3` is a Buf, which is not something redstone builds -- run                  `compile::lowering::lower` on this netlist first
+WIDTH 2 ERROR gate `g3` is a Buf, which is not something redstone builds -- run                  `compile::lowering::lower` on this netlist first
+WIDTH 3 ERROR gate `g3` is a Buf, which is not something redstone builds -- run                  `compile::lowering::lower` on this netlist first
+WIDTH 7 ERROR gate `g3` is a Buf, which is not something redstone builds -- run                  `compile::lowering::lower` on this netlist first

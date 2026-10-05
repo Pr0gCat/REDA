@@ -10,7 +10,7 @@ enum Literal {
 }
 
 pub fn compile(source: &Netlist, limit: u64) -> Result<CertifiedPhysicalRewrite, TorchRowError> {
-    if !(4..=5).contains(&source.inputs.len())
+    if source.inputs.len() > 7
         || !(1..=16).contains(&source.outputs.len())
         || source.gates.iter().any(|g| g.kind.is_sequential())
     {

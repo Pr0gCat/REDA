@@ -370,13 +370,41 @@ pub fn compile_systemverilog_physical(
     }
     let artifact = compile_systemverilog(sources, options)
         .map_err(|ds| ds.iter().map(|d| d.render(sources)).collect::<Vec<_>>().join("\n"))?;
-    let physical = crate::compile::compile(&artifact.netlist).map_err(|e| e.to_string())?;
+    let lowered = crate::compile::lowering::lower(&artifact.netlist).map_err(|e| e.to_string())?;
+    let mut physical = crate::compile::compile(&lowered).map_err(|e| e.to_string())?;
+    if lowered != artifact.netlist {
+        let rewrite = if let Some(mut rewrite) = physical.physical_rewrite().cloned() {
+            rewrite.rebind_source(&artifact.netlist, 1_000_000)
+                .map_err(|e| format!("native source lowering proof failed: {e:?}"))?;
+            rewrite
+        } else {
+            let candidate = physical.physical_candidate()
+                .ok_or("native source lowering requires a complete physical implementation")?;
+            crate::compile::fragment_synth::rewrite::realise_physical_rewrite_with_size(
+                &artifact.netlist, &lowered, candidate,
+                &crate::compile::topology::Library::default_library(),
+                &lowered.inputs, &lowered.outputs, 1_000_000, Some(physical.world.size()),
+            ).map_err(|e| format!("native source lowering proof failed: {e:?}"))?
+        };
+        physical = crate::compile::CompiledCircuit::from_certified_rewrite(rewrite);
+    }
     let implementation = physical.implementation_netlist(&artifact.netlist).clone();
     let coordinates = |p: &(i32,i32,i32)| [p.0,p.1,p.2];
     let source_inputs = artifact.ports.iter().filter(|p| p.direction == PortDirection::Input)
         .map(|p| (p.name.clone(), physical.input_positions[&p.signal])).collect::<std::collections::BTreeMap<_,_>>();
-    let source_outputs = artifact.ports.iter().filter(|p| p.direction == PortDirection::Output)
-        .map(|p| (p.name.clone(), physical.output_positions[&p.signal])).collect::<std::collections::BTreeMap<_,_>>();
+    let occurrences = physical.output_occurrences();
+    if artifact.ordered_output_ports.len() != occurrences.len() {
+        return Err("ordinary physical outputs differ from declared output occurrence count".into());
+    }
+    let mut source_outputs = std::collections::BTreeMap::new();
+    for (port, (signal, position)) in artifact.ordered_output_ports.iter().zip(occurrences) {
+        if &port.signal != signal {
+            return Err(format!("ordinary physical output occurrence differs from source port {}", port.name));
+        }
+        if source_outputs.insert(port.name.clone(), *position).is_some() {
+            return Err(format!("duplicate ordinary source output label {}", port.name));
+        }
+    }
     let pinout = ResolvedPinout {
         inputs: source_inputs.iter().map(|(n,p)| (n.clone(),coordinates(p))).collect(),
         outputs: source_outputs.iter().map(|(n,p)| (n.clone(),coordinates(p))).collect(),
