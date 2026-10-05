@@ -1,0 +1,170 @@
+{
+  "observed_utc": "2026-10-05T00:38:12.690587+00:00",
+  "method": "Read small manifests/audits and first decompressed header line only; no full-wave scan or replay/build/game.",
+  "historical_repeats": [
+    {
+      "repeat": 1,
+      "header_path": "docs/six-input-default-2026-10-04/repeat1/wave.log.gz",
+      "decompressed_first_line_sha256": "c57d9a66a23fab992cf4726ca505da5402a3db3279c13f94837879b4bbaff20e",
+      "archive_hash_record": "646ee2abcdc5f9da5cede22e8068839a195366046cfc728e9c060d55335ee3bb",
+      "world_size": [
+        91,
+        8,
+        263
+      ],
+      "world_fingerprint": "f3af4444f9776335f3c51a768a8a7ae3d5e387e66974807feb5009919b459b5a",
+      "source_gate_count": 603,
+      "implemented_gate_count": 2208,
+      "observed_site_count": 2294,
+      "terminal_exit": 0,
+      "phases": 8192,
+      "fixture_sha256": "fdcc3cef6b0b19d8b07cd29676f379ca4c74fc00a4df83cce0b072afee237fd4",
+      "binary_sha256": "8e2edab7b009f79c4746057fec3de5166c976782bb98eedb19f047e3737ba69b",
+      "historical_quality_compared_field": true,
+      "evidence_scope": "Historical matrix trajectory/three-repeat identity remain valid; not current physical baseline qualification."
+    },
+    {
+      "repeat": 2,
+      "header_path": "docs/six-input-default-2026-10-04/repeat2/wave.log.gz",
+      "decompressed_first_line_sha256": "61e5e6635d2a88052ae1233334d3b5400c80d289ac140d2bac1c09186be3d3d7",
+      "archive_hash_record": "2bfeed335837bcfef1b0be3befe5075a6077a341488bf3ab07b2c7e4d3ff6d88",
+      "world_size": [
+        91,
+        8,
+        263
+      ],
+      "world_fingerprint": "f3af4444f9776335f3c51a768a8a7ae3d5e387e66974807feb5009919b459b5a",
+      "source_gate_count": 603,
+      "implemented_gate_count": 2208,
+      "observed_site_count": 2294,
+      "terminal_exit": 0,
+      "phases": 8192,
+      "fixture_sha256": "fdcc3cef6b0b19d8b07cd29676f379ca4c74fc00a4df83cce0b072afee237fd4",
+      "binary_sha256": "8e2edab7b009f79c4746057fec3de5166c976782bb98eedb19f047e3737ba69b",
+      "historical_quality_compared_field": true,
+      "evidence_scope": "Historical matrix trajectory/three-repeat identity remain valid; not current physical baseline qualification."
+    },
+    {
+      "repeat": 3,
+      "header_path": "docs/six-input-default-2026-10-04/repeat3/wave.log.gz",
+      "decompressed_first_line_sha256": "75d3e24b532f41b31c88ef5f581e3bfd49f149f12ccfb3c68abaad2da929bc76",
+      "archive_hash_record": "542cb0246a14c453ec9849424bd94d879a39e7c4c13598745a7e92b8e905bd3d",
+      "world_size": [
+        91,
+        8,
+        263
+      ],
+      "world_fingerprint": "f3af4444f9776335f3c51a768a8a7ae3d5e387e66974807feb5009919b459b5a",
+      "source_gate_count": 603,
+      "implemented_gate_count": 2208,
+      "observed_site_count": 2294,
+      "terminal_exit": 0,
+      "phases": 8192,
+      "fixture_sha256": "fdcc3cef6b0b19d8b07cd29676f379ca4c74fc00a4df83cce0b072afee237fd4",
+      "binary_sha256": "8e2edab7b009f79c4746057fec3de5166c976782bb98eedb19f047e3737ba69b",
+      "historical_quality_compared_field": true,
+      "evidence_scope": "Historical matrix trajectory/three-repeat identity remain valid; not current physical baseline qualification."
+    }
+  ],
+  "referenced_complete_original_control": {
+    "reference": "docs/six-input-default-2026-10-04/repeat1/scope.md audit command",
+    "paths": [
+      {
+        "path": "/tmp/reda-address-matrix-20261003/rom64-control1.log",
+        "exists_at_observation": false
+      },
+      {
+        "path": "/home/seith/REDA/docs/address-matrix-experiment-2026-10-03/rom64-control1.log.gz",
+        "exists_at_observation": false
+      }
+    ],
+    "conclusion": "Original full8192-phase control artifact cannot be independently reloaded from these referenced locations. historical_quality_compared field alone is not current baseline provenance."
+  },
+  "retained_partial_control": {
+    "path": "docs/rom64-diagnostic-2026-10-04/control-result.jsonl.gz",
+    "scope": "32 phases only,603 observed gates; not complete8192 control",
+    "world_fingerprint": "90ad27236b013529f500c04347b760a04e08851abd88a1ee9c657ae9eaafaa37"
+  },
+  "current_snapshot": {
+    "log_path": "target/qualification/native-rom64-borrowed-reach/probe.log",
+    "captured_prefix_lines": 78,
+    "captured_prefix_bytes": 4241,
+    "captured_prefix_sha256": "57a63a8eef06d61c8f930797faac0f10ff4fac6d8c276acdb2bf3f955c8109f6",
+    "last_diagnostic_stage": "ROM64_DIAG quality_with_ports entry certificate=false upper=false",
+    "diagnostic_stages": [
+      "test compile::selection::rom64_selection_diagnostic::ordinary_physical_entry_stage_probe ... ROM64_DIAG public_physical_entry start",
+      "ROM64_DIAG raw_emission start gates=603",
+      "ROM64_DIAG legacy_channel_fallback start",
+      "ROM64_DIAG legacy_allocate baseline_world start size=(3242, 5, 810)",
+      "ROM64_DIAG legacy_allocate baseline_world complete",
+      "ROM64_DIAG legacy_allocate baseline_world complete VmHWM:\t  191268 kB VmRSS:\t   94968 kB",
+      "ROM64_DIAG legacy_allocate scratch start size=(3242, 5, 810)",
+      "ROM64_DIAG legacy_allocate scratch complete",
+      "ROM64_DIAG legacy_allocate scratch complete VmHWM:\t  291408 kB VmRSS:\t  143828 kB",
+      "ROM64_DIAG legacy_allocate world start size=(3242, 5, 810)",
+      "ROM64_DIAG legacy_allocate world complete",
+      "ROM64_DIAG legacy_allocate world complete VmHWM:\t  291408 kB VmRSS:\t  204364 kB",
+      "ROM64_DIAG legacy_final_emit complete VmHWM:\t  291408 kB VmRSS:\t  267980 kB",
+      "ROM64_DIAG verify_connectivity start VmHWM:\t  291408 kB VmRSS:\t  267980 kB",
+      "ROM64_DIAG verify_connectivity complete VmHWM:\t  291408 kB VmRSS:\t  281292 kB",
+      "ROM64_DIAG verify_torch_merge start VmHWM:\t  291408 kB VmRSS:\t  281292 kB",
+      "ROM64_DIAG torch_merge_group_reach groups=10 nets=593 unique_total=575385 per_net_clone_total=147761464 max_group=272644",
+      "ROM64_DIAG torch_merge_per_net_clone start VmHWM:\t  339376 kB VmRSS:\t  339376 kB",
+      "ROM64_DIAG torch_merge_per_net_clone complete VmHWM:\t  339376 kB VmRSS:\t  339376 kB",
+      "ROM64_DIAG verify_torch_merge complete VmHWM:\t  338472 kB VmRSS:\t  285296 kB",
+      "ROM64_DIAG verify_signal_strength start VmHWM:\t  338472 kB VmRSS:\t  285296 kB",
+      "ROM64_DIAG verify_signal_strength complete VmHWM:\t  361472 kB VmRSS:\t  285800 kB",
+      "ROM64_DIAG legacy_routes start VmHWM:\t  361472 kB VmRSS:\t  285800 kB",
+      "ROM64_DIAG legacy_routes complete VmHWM:\t  488868 kB VmRSS:\t  488868 kB",
+      "ROM64_DIAG legacy_seed start VmHWM:\t  488148 kB VmRSS:\t  462232 kB",
+      "ROM64_DIAG legacy_seed complete VmHWM:\t  899620 kB VmRSS:\t  899620 kB",
+      "ROM64_DIAG legacy_realise start VmHWM:\t  899624 kB VmRSS:\t  899624 kB",
+      "ROM64_DIAG torch_merge_group_reach groups=10 nets=593 unique_total=575385 per_net_clone_total=147761464 max_group=272644",
+      "ROM64_DIAG torch_merge_per_net_clone start VmHWM:\t 1106924 kB VmRSS:\t 1106924 kB",
+      "ROM64_DIAG torch_merge_per_net_clone complete VmHWM:\t 1106924 kB VmRSS:\t 1106924 kB",
+      "ROM64_DIAG legacy_realise complete VmHWM:\t 1656704 kB VmRSS:\t 1428088 kB",
+      "ROM64_DIAG raw_emission complete size=(3242, 5, 810)",
+      "ROM64_DIAG raw_refresh_quality start",
+      "ROM64_DIAG refresh_quality entry certificate=false",
+      "ROM64_DIAG quality_with_ports entry certificate=false upper=false"
+    ],
+    "raw_gates": 603,
+    "raw_world_size": [
+      3242,
+      5,
+      810
+    ],
+    "probe_terminal_file_exists": false,
+    "terminal_qualification": "No terminal available at observation; no success/failure or slowness inference."
+  },
+  "read_file_sha256": {
+    "docs/six-input-default-2026-10-04/repeat1/terminal.json": "a3c3c3ded06d3c7b141b37e93aef77cd110cbc1fdac22ae16b162224c8919168",
+    "docs/six-input-default-2026-10-04/repeat1/independent-audit.json": "5dbaecefd37e59b4591b5e9fb17e2b51fafe4113ab660f0f058333c21a499ff0",
+    "docs/six-input-default-2026-10-04/repeat1/artifact-hashes.json": "404cc3e03e5104c26c15255fabbdf9d42c55470732c6570d4b48f2579229de93",
+    "docs/six-input-default-2026-10-04/repeat1/retention-verification.json": "d47665664361d5653d5ec9c20e1daa37b91c4d80e1e2bb915a9ac5dd11206e27",
+    "docs/six-input-default-2026-10-04/repeat1/scope.md": "fe930e7770cf55e7d5f594f107af5b87dbc1650075e80af77dee584852b45692",
+    "docs/six-input-default-2026-10-04/repeat2/terminal.json": "be5682452f39478c25be28dfafbf6d719a9b00122c9a245ee2d900bc03b1437f",
+    "docs/six-input-default-2026-10-04/repeat2/independent-audit.json": "5dbaecefd37e59b4591b5e9fb17e2b51fafe4113ab660f0f058333c21a499ff0",
+    "docs/six-input-default-2026-10-04/repeat2/artifact-hashes.json": "b97cb2b6377e80751afdc3af0cd026c6c8da37863bd5dffd82a336835f528b58",
+    "docs/six-input-default-2026-10-04/repeat2/retention-verification.json": "12bb01f3671f349b1cc6ccf2df669a3b16591366325c18e140cd8afe796d200d",
+    "docs/six-input-default-2026-10-04/repeat2/scope.md": "1bc7fbd6688e2997667a897ea73e7176bb7df3b8b5ec8c4fc245bc6a4208e503",
+    "docs/six-input-default-2026-10-04/repeat3/terminal.json": "109e8580ae3e590838a6d96e107a687d17acb76b708b3233c9f076b0e582d25f",
+    "docs/six-input-default-2026-10-04/repeat3/independent-audit.json": "5dbaecefd37e59b4591b5e9fb17e2b51fafe4113ab660f0f058333c21a499ff0",
+    "docs/six-input-default-2026-10-04/repeat3/artifact-hashes.json": "0e83a70c60494c8cced0d7d43904240922e7d9c7e2f95ad1318a79dba901ab5d",
+    "docs/six-input-default-2026-10-04/repeat3/retention-verification.json": "1fb3bf097cce29067f7499f3492cdeef56159ba151b72c5b43252f4634da47a9",
+    "docs/six-input-default-2026-10-04/repeat3/scope.md": "93ef8b9d0b825f4edd6035bd5445936e5a6466f6a440054a3ba3b87071af3875",
+    "docs/six-input-default-2026-10-04/repeat3/source-world-verification.json": "5e0b5551c2992db203dc41a0486facdd65d50fddf7097b331980810a2935882e",
+    "docs/six-input-default-2026-10-04/pending-manifest.json": "19b22ab4959918995803059555a522f5ecc80a041c1d66aa779952404aac1248",
+    "docs/address-matrix-experiment-2026-10-03/rom64-wave1-audit.json": "38f4e6a7f712fb97ca49f47fd1633a7799fbdd9998dfaafcafa60a99a0871adb",
+    "docs/address-matrix-experiment-2026-10-03/unbounded-default-and-rom64-control-source-binding.json": "48d7e0751063b9d3f2fe9884831af29af3c1ffb427b6d425794fd9837c874e16",
+    "docs/rom64-diagnostic-2026-10-04/source-binding.json": "9a69651f2ad4f59e9bba2e3ccdcedcad1a3f7a9ddfbb410dd9a6546e58dec39b",
+    "docs/rom64-diagnostic-2026-10-04/control-world-reload.json": "8cece1d8ce25c4d77ec45e0e96dd67cc759e6c49966400b811370a172fafee18",
+    "docs/rom64-diagnostic-2026-10-04/finding.md": "b36c3cde9248922ce2adfcc6ceddb092fdb420c530f4c4261c458f1521303cbb",
+    "docs/rom64-diagnostic-2026-10-04/manifest.json": "74482c1ce263d0808101974ed83499153a91763fd1672d77e410443836dae96d",
+    "target/qualification/native-rom64-borrowed-reach/candidate-source-binding.json": "9fa9ae747e508e4de07ae7def2b9efd7cbc158a7cfa200405c4da7fa80a53b0d",
+    "target/qualification/native-rom64-borrowed-reach/baseline-source-binding.json": "1eeee11a29474b8477f7a465a81830849d8b4bb3d9c0133de138282ca5f4c864",
+    "target/qualification/native-rom64-borrowed-reach/binary-binding.json": "c422e689cd5a4f3e50a3cb48638c40201476c199f1433458df05cd2d868c5761",
+    "target/qualification/native-rom64-borrowed-reach/runner-binding.json": "eb28fbd19f16096dfc0428d7a332b8bee94d29b2a9774930384c559a71b1de0f"
+  },
+  "conclusion": "Historical matrix2208/world91x8x263 is not current raw603/world3242x5x810. Shared source gate count and literal fixture do not prove equal physical path/world/arrival history. Preserve old repeat evidence and require current-source-bound baseline quality."
+}

@@ -1,0 +1,78 @@
+warning: unused import: `SeedRoutingFailure`
+  --> src/compile/fragment_synth/fragment.rs:25:24
+   |
+25 |     SeedRepairRefusal, SeedRoutingFailure, SeedServices, SeedVariant,
+   |                        ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/compile/resolved_circuit.rs:384:13
+    |
+384 |         let mut implementation_evaluator = Evaluator::new(&physical.implementation).unwrap();
+    |             ----^^^^^^^^^^^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `rank_zero` is never read
+   --> src/compile/fragment_synth/packing.rs:636:9
+    |
+634 |     Exhausted {
+    |     --------- field in this variant
+635 |         attempted: usize,
+636 |         rank_zero: E,
+    |         ^^^^^^^^^
+    |
+    = note: `LayoutSearchError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `as_str` is never used
+   --> src/frontend/ast.rs:293:12
+    |
+292 | impl BinaryOp {
+    | ------------- method in this implementation
+293 |     pub fn as_str(self) -> &'static str {
+    |            ^^^^^^
+
+warning: `reda` (lib test) generated 4 warnings (run `cargo fix --lib -p reda --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running unittests src/lib.rs (/home/seith/REDA/target/qualification/native-rom64-borrowed-reach/build/debug/deps/reda-a2b90b27b67dac89)
+
+running 1 test
+test compile::selection::rom64_selection_diagnostic::ordinary_physical_entry_stage_probe ... ROM64_DIAG public_physical_entry start
+ROM64_DIAG raw_emission start gates=603
+ROM64_DIAG legacy_channel_fallback start
+ROM64_DIAG legacy_allocate baseline_world start size=(3242, 5, 810)
+ROM64_DIAG legacy_allocate baseline_world complete
+ROM64_DIAG legacy_allocate baseline_world complete VmHWM:	  191268 kB VmRSS:	   94968 kB
+ROM64_DIAG legacy_allocate scratch start size=(3242, 5, 810)
+ROM64_DIAG legacy_allocate scratch complete
+ROM64_DIAG legacy_allocate scratch complete VmHWM:	  291408 kB VmRSS:	  143828 kB
+ROM64_DIAG legacy_allocate world start size=(3242, 5, 810)
+ROM64_DIAG legacy_allocate world complete
+ROM64_DIAG legacy_allocate world complete VmHWM:	  291408 kB VmRSS:	  204364 kB
+ROM64_DIAG legacy_final_emit complete VmHWM:	  291408 kB VmRSS:	  267980 kB
+ROM64_DIAG verify_connectivity start VmHWM:	  291408 kB VmRSS:	  267980 kB
+ROM64_DIAG verify_connectivity complete VmHWM:	  291408 kB VmRSS:	  281292 kB
+ROM64_DIAG verify_torch_merge start VmHWM:	  291408 kB VmRSS:	  281292 kB
+ROM64_DIAG torch_merge_group_reach groups=10 nets=593 unique_total=575385 per_net_clone_total=147761464 max_group=272644
+ROM64_DIAG torch_merge_per_net_clone start VmHWM:	  339376 kB VmRSS:	  339376 kB
+ROM64_DIAG torch_merge_per_net_clone complete VmHWM:	  339376 kB VmRSS:	  339376 kB
+ROM64_DIAG verify_torch_merge complete VmHWM:	  338472 kB VmRSS:	  285296 kB
+ROM64_DIAG verify_signal_strength start VmHWM:	  338472 kB VmRSS:	  285296 kB
+ROM64_DIAG verify_signal_strength complete VmHWM:	  361472 kB VmRSS:	  285800 kB
+ROM64_DIAG legacy_routes start VmHWM:	  361472 kB VmRSS:	  285800 kB
+ROM64_DIAG legacy_routes complete VmHWM:	  488868 kB VmRSS:	  488868 kB
+ROM64_DIAG legacy_seed start VmHWM:	  488148 kB VmRSS:	  462232 kB
+ROM64_DIAG legacy_seed complete VmHWM:	  899620 kB VmRSS:	  899620 kB
+ROM64_DIAG legacy_realise start VmHWM:	  899624 kB VmRSS:	  899624 kB
+ROM64_DIAG torch_merge_group_reach groups=10 nets=593 unique_total=575385 per_net_clone_total=147761464 max_group=272644
+ROM64_DIAG torch_merge_per_net_clone start VmHWM:	 1106924 kB VmRSS:	 1106924 kB
+ROM64_DIAG torch_merge_per_net_clone complete VmHWM:	 1106924 kB VmRSS:	 1106924 kB
+ROM64_DIAG legacy_realise complete VmHWM:	 1656704 kB VmRSS:	 1428088 kB
+ROM64_DIAG raw_emission complete size=(3242, 5, 810)
+ROM64_DIAG raw_refresh_quality start
+ROM64_DIAG refresh_quality entry certificate=false
+ROM64_DIAG quality_with_ports entry certificate=false upper=false
