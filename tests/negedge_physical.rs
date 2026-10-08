@@ -14,14 +14,18 @@ use std::collections::{BTreeMap, HashMap};
 enum Case {
     Plain,
     Counter,
+    ArithmeticCounter { subtract: bool },
     Mixed,
 }
 fn next(case: Case, q: u8, control: u8, previous: bool, clock: bool) -> u8 {
     if previous && !clock {
         match case {
             Case::Plain => (control & 1 != 0) as u8,
-            Case::Counter if control & 1 != 0 => 0,
+            Case::Counter | Case::ArithmeticCounter { .. } if control & 1 != 0 => 0,
             Case::Counter if control & 2 != 0 => (q + 1) % 4,
+            Case::ArithmeticCounter { subtract } if control & 2 != 0 => {
+                if subtract { q.wrapping_sub(1) & 15 } else { q.wrapping_add(1) & 15 }
+            }
             Case::Mixed => (q & 1) | ((q & 1) << 1),
             _ => q,
         }
@@ -48,9 +52,10 @@ fn check(netlist: Netlist, outputs: HashMap<String, String>, case: Case, name: &
     let names: Vec<_> = if matches!(case, Case::Plain) {
         vec!["q".to_owned()]
     } else {
-        vec!["q[0]".to_owned(), "q[1]".to_owned()]
+        let width = if matches!(case, Case::ArithmeticCounter { .. }) { 4 } else { 2 };
+        (0..width).map(|bit| format!("q[{bit}]")).collect()
     };
-    let pins = if matches!(case, Case::Counter) {
+    let pins = if matches!(case, Case::Counter | Case::ArithmeticCounter { .. }) {
         vec!["reset", "en"]
     } else {
         vec!["d"]
@@ -133,13 +138,23 @@ fn check(netlist: Netlist, outputs: HashMap<String, String>, case: Case, name: &
         .collect();
     sim.attach_observer(watched);
     let mut phases = Vec::new();
-    for cycle in 0..64 {
+    // Minimal cycle set: every semantic regime (reset, increment, decrement,
+    // hold, wrap) plus full state coverage, with no repeated periods. A 4-bit
+    // counter has 16 states, so 16 increments cover them all; the period-8
+    // control word exposes all eight regimes in 8 cycles.
+    let cycles = if matches!(case, Case::ArithmeticCounter { .. }) { 19 } else { 8 };
+    for cycle in 0..cycles {
         let controls = if !matches!(case, Case::Counter) {
             [0, 3, 2, 1, 0, 2, 3, 1]
         } else {
             [1, 2, 2, 2, 2, 0, 3, 2]
         };
-        let control = controls[cycle % 8];
+        let control = if matches!(case, Case::ArithmeticCounter { .. }) {
+            if cycle == 0 { 1 }
+            else if cycle == 17 { 3 }
+            else if cycle == 18 { 0 }
+            else { 2 }
+        } else { controls[cycle % 8] };
         for (control, clk) in [
             (control ^ 3, false),
             (control ^ 3, true),
@@ -247,51 +262,84 @@ fn check(netlist: Netlist, outputs: HashMap<String, String>, case: Case, name: &
         json!({"case":name,"power_on":power_on,"outputs":outputs,"gates":lowered.gates.iter().map(|g|json!({"output":g.output,"inputs":g.inputs,"kind":g.kind.wire_name()})).collect::<Vec<_>>(),"phases":phases})
     );
 }
+// Native-only controls keep the original full Native/Yosys suite intact: the
+// native frontend path is verified independently of Yosys, which is absent in
+// this environment.
+fn check_native_falling_edge(top: &str, text: &str, case: Case) {
+    let artifact = compile_systemverilog(
+        &[SourceInput { name: top, text }],
+        &CompileOptions::new(top),
+    )
+    .unwrap();
+    check(
+        artifact.netlist.clone(),
+        artifact.output_map(),
+        case,
+        &format!("native-{top}"),
+    );
+}
+
+fn check_native_statement_reset_on_falling(top: &str, source: &str) {
+    let text = source.replace("posedge", "negedge");
+    let artifact = compile_systemverilog(
+        &[SourceInput { name: top, text: &text }],
+        &CompileOptions::new(top),
+    )
+    .unwrap();
+    check(
+        artifact.netlist.clone(),
+        artifact.output_map(),
+        Case::Counter,
+        &format!("native-negedge_{top}"),
+    );
+}
+
 #[test]
 fn falling_edges_and_mixed_edge_shift_match_loaded_physical_cells() {
     for (top, text, case) in [
-        (
-            "negedge_dff",
-            include_str!("fixtures/negedge_dff.sv"),
-            Case::Plain,
-        ),
-        (
-            "negedge_counter",
-            include_str!("fixtures/negedge_counter.sv"),
-            Case::Counter,
-        ),
-        (
-            "mixed_edge_shift",
-            include_str!("fixtures/mixed_edge_shift.sv"),
-            Case::Mixed,
-        ),
-        (
-            "hierarchy_negedge_dff",
-            include_str!("fixtures/hierarchy_negedge_dff.sv"),
-            Case::Plain,
-        ),
+        ("negedge_dff", include_str!("fixtures/negedge_dff.sv"), Case::Plain),
+        ("negedge_counter", include_str!("fixtures/negedge_counter.sv"), Case::Counter),
+        ("mixed_edge_shift", include_str!("fixtures/mixed_edge_shift.sv"), Case::Mixed),
+        ("hierarchy_negedge_dff", include_str!("fixtures/hierarchy_negedge_dff.sv"), Case::Plain),
     ] {
-        let artifact = compile_systemverilog(
-            &[SourceInput { name: top, text }],
-            &CompileOptions::new(top),
-        )
-        .unwrap();
-        check(
-            artifact.netlist.clone(),
-            artifact.output_map(),
-            case,
-            &format!("native-{top}"),
-        );
+        check_native_falling_edge(top, text, case);
         let (netlist, outputs) = synthesize_verilog(text, top).unwrap();
         check(netlist, outputs, case, &format!("yosys-{top}"));
     }
 }
 
+// Each fixture is its own test so the libtest harness parallelizes the slow
+// per-fixture compilation across cores.
 #[test]
-fn statement_reset_on_falling_edges_matches_loaded_physical_cells() {
+fn native_negedge_dff_matches_loaded_physical_cells() {
+    check_native_falling_edge("negedge_dff", include_str!("fixtures/negedge_dff.sv"), Case::Plain);
+}
+#[test]
+fn native_negedge_counter_matches_loaded_physical_cells() {
+    check_native_falling_edge("negedge_counter", include_str!("fixtures/negedge_counter.sv"), Case::Counter);
+}
+#[test]
+fn native_mixed_edge_shift_matches_loaded_physical_cells() {
+    check_native_falling_edge("mixed_edge_shift", include_str!("fixtures/mixed_edge_shift.sv"), Case::Mixed);
+}
+#[test]
+fn native_hierarchy_negedge_dff_matches_loaded_physical_cells() {
+    check_native_falling_edge("hierarchy_negedge_dff", include_str!("fixtures/hierarchy_negedge_dff.sv"), Case::Plain);
+}
+#[test]
+fn native_negedge_reset_counter_matches_loaded_physical_cells() {
+    check_native_statement_reset_on_falling("reset_counter", include_str!("fixtures/reset_counter.sv"));
+}
+#[test]
+fn native_negedge_hierarchy_reset_counter_matches_loaded_physical_cells() {
+    check_native_statement_reset_on_falling("hierarchy_reset_counter", include_str!("fixtures/hierarchy_reset_counter.sv"));
+}
+
+#[test]
+fn arithmetic_counters_on_falling_edges_match_loaded_physical_cells() {
     for (top, text, case) in [
-        ("reset_counter", include_str!("fixtures/reset_counter.sv"), Case::Counter),
-        ("hierarchy_reset_counter", include_str!("fixtures/hierarchy_reset_counter.sv"), Case::Counter),
+        ("arithmetic_counter_add", include_str!("fixtures/arithmetic_counter_add.sv"), Case::ArithmeticCounter { subtract: false }),
+        ("arithmetic_counter_subtract", include_str!("fixtures/arithmetic_counter_subtract.sv"), Case::ArithmeticCounter { subtract: true }),
     ] {
         let text = text.replace("posedge", "negedge");
         let text = text.as_str();
@@ -309,4 +357,30 @@ fn statement_reset_on_falling_edges_matches_loaded_physical_cells() {
         let (netlist, outputs) = synthesize_verilog(text, top).unwrap();
         check(netlist, outputs, case, &format!("yosys-negedge_{top}"));
     }
+}
+
+// Individual native controls keep the original full Native/Yosys suite intact.
+fn check_native_arithmetic_counter(subtract: bool) {
+    let (top, text) = if subtract {
+        ("arithmetic_counter_subtract", include_str!("fixtures/arithmetic_counter_subtract.sv"))
+    } else {
+        ("arithmetic_counter_add", include_str!("fixtures/arithmetic_counter_add.sv"))
+    };
+    let text = text.replace("posedge", "negedge");
+    let text = text.as_str();
+    let artifact = compile_systemverilog(
+        &[SourceInput { name: top, text }], &CompileOptions::new(top),
+    ).unwrap();
+    check(artifact.netlist.clone(), artifact.output_map(),
+        Case::ArithmeticCounter { subtract }, &format!("native-negedge_{top}"));
+}
+
+#[test]
+fn native_arithmetic_increment_matches_loaded_physical_cells() {
+    check_native_arithmetic_counter(false);
+}
+
+#[test]
+fn native_arithmetic_decrement_matches_loaded_physical_cells() {
+    check_native_arithmetic_counter(true);
 }

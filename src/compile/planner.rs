@@ -3445,10 +3445,10 @@ pub(crate) const GROWN_SHIPPING_RULE: GrowthRule = GrowthRule {
 /// The congestion-driven growth loop: place, trial-route, and when routing
 /// fails, buy room exactly where the router said it fought, then place again.
 ///
-/// **Built, measurable, and not on the shipping path** -- the same posture
-/// [`SHIPPING_ROUTER`]'s doc records for the negotiated router: `compile()`
-/// and [`plan_from_netlist`] behave exactly as before this existed, and the
-/// four pinned block counts do not move. The measured motivation: the router
+/// `compile()` uses this bounded loop only after a sequential circuit fails
+/// its original full-budget fixed-layout plan. Successful fixed-layout plans
+/// and combinational circuits keep their existing path. The measured
+/// motivation: the router
 /// side of the night of 2026-08-28 is exhausted -- at the relaxed placement
 /// density, segment_a's six big-fanout nets lay under NO combination of
 /// pricing, ordering, and facing (`measure_whether_settle_then_repair_finishes`,
@@ -5542,7 +5542,13 @@ impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
                 };
                 let charge_outright = match &error {
                     TypedRouterFailure::RingClosure { charged, .. } => charged.clone(),
-                    TypedRouterFailure::SignalDecay { path, .. } => path.iter().copied().filter(|cell| cell.y > PLANNER_Y).collect(),
+                    TypedRouterFailure::SignalDecay { path, .. } => {
+                        #[cfg(test)]
+                        let prior = PRIOR_DECAY_PRICING.with(std::cell::Cell::get);
+                        #[cfg(not(test))]
+                        let prior = false;
+                        if prior { Vec::new() } else { path.iter().copied().filter(|cell| cell.y > PLANNER_Y).collect() }
+                    },
                     _ => Vec::new(),
                 };
                 *self.failure.borrow_mut() = Some(Box::new(RoutingFailure {
@@ -29935,6 +29941,98 @@ mod tests {
 
 #[cfg(test)]
 #[test]
+fn arithmetic_counter_grown_plan_routes_and_verifies() {
+    let text = include_str!("../../tests/fixtures/arithmetic_counter_add.sv");
+    let artifact = crate::frontend::compile_systemverilog(
+        &[crate::frontend::SourceInput {
+            name: "arithmetic_counter_add.sv",
+            text,
+        }],
+        &crate::frontend::CompileOptions::new("arithmetic_counter_add"),
+    )
+    .unwrap();
+    let netlist = crate::compile::lowering::lower_optimised(&artifact.netlist).unwrap();
+    let placements = PortPlacements::default();
+    let routed = plan_from_netlist_with_growth(&netlist, &placements, GROWN_SHIPPING_RULE).unwrap();
+    verify_candidate(&routed, &netlist).unwrap();
+}
+
+#[cfg(test)]
+#[test]
+fn low_clock_repeaters_do_not_emit_a_power_on_capture() {
+    use crate::frontend::{compile_systemverilog, CompileOptions, SourceInput};
+    use crate::redstone::simulator::Simulator;
+    use crate::redstone::world::block::BlockKind;
+    let artifact = compile_systemverilog(
+        &[SourceInput {
+            name: "clock-startup.sv",
+            text: "module m(input clk,d,output reg q);always @(posedge clk) q<=~d;endmodule",
+        }],
+        &CompileOptions::new("m"),
+    )
+    .unwrap();
+    let netlist = compile::lowering::lower_optimised(&artifact.netlist).unwrap();
+    let mut anchors: Vec<_> = netlist
+        .gates
+        .iter()
+        .map(|gate| Anchor {
+            x: if gate.kind.is_sequential() { 30 } else { 10 },
+            y: 1,
+            z: 20,
+        })
+        .collect();
+    anchors.extend(netlist.inputs.iter().map(|name| Anchor {
+        x: if name == "clk" { 30 } else { 10 },
+        y: 1,
+        z: if name == "clk" { 120 } else { 40 },
+    }));
+    let facings = vec![geometry::CellFacing::NORTH; anchors.len()];
+    let candidate =
+        candidate_from_anchors_and_facings(&netlist, &PortPlacements::default(), anchors, facings);
+    let routed = route_every_net(candidate, &netlist, RIP_UP_ROUNDS).unwrap();
+    let realised = realise_and_verify(&routed, &netlist, candidate_world_size(&routed)).unwrap();
+    let clock = routed
+        .routes
+        .iter()
+        .find(|route| route.id == "clk")
+        .unwrap();
+    let repeaters: Vec<_> = clock
+        .anchors
+        .iter()
+        .filter(|at| realised.world.get(at.x, at.y, at.z).kind == BlockKind::Repeater)
+        .copied()
+        .collect();
+    assert!(
+        repeaters.len() >= 2,
+        "the regression must contain a clock restoration chain"
+    );
+    assert!(repeaters
+        .iter()
+        .all(|at| !realised.world.get(at.x, at.y, at.z).lit));
+    let mut prior = realised.world.clone();
+    for at in &repeaters {
+        let mut state = prior.get(at.x, at.y, at.z).clone();
+        state.lit = true;
+        prior.set(at.x, at.y, at.z, state);
+    }
+    let q = &artifact.output_map()["q"];
+    let at = realised.ports.output_positions[q];
+    let mut correct = Simulator::new(realised.world);
+    correct.run_until_stable(2000).unwrap();
+    assert!(
+        !correct.world().get(at.0, at.1, at.2).lit,
+        "Q=0 before any external edge, even though D=1"
+    );
+    let mut old = Simulator::new(prior);
+    old.run_until_stable(2000).unwrap();
+    assert!(
+        old.world().get(at.0, at.1, at.2).lit,
+        "the old powered clock chain must reproduce the startup capture"
+    );
+}
+
+#[cfg(test)]
+#[test]
 fn legacy_adapter_preserves_decay_failure_envelope_on_a_high_sink() {
     let netlist = Netlist { inputs: vec!["a".into()], outputs: vec!["q".into()], gates: vec![crate::compile::Gate::nor("q", &["a"])] };
     let candidate = candidate_from_anchors_and_facings(&netlist, &PortPlacements::default(), vec![Anchor { x: 30, y: 20, z: 30 }, Anchor { x: 30, y: 1, z: 50 }], vec![geometry::CellFacing::NORTH; 2]);
@@ -29988,4 +30086,44 @@ fn legacy_adapter_preserves_decay_failure_envelope_on_a_high_sink() {
         assert_eq!(table.price(cell, "a"), HISTORY_WEIGHT);
         assert_eq!(table.price(cell, "unrelated"), HISTORY_WEIGHT);
     }
+}
+
+// Test-only controlled A/B of the old and repaired charging envelope.
+// Thread-local scope prevents another parallel test from inheriting this control.
+#[cfg(test)]
+thread_local! {
+    static PRIOR_DECAY_PRICING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+#[test]
+fn decay_charging_preserves_existing_counter_growth_control() {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) { PRIOR_DECAY_PRICING.with(|flag| flag.set(self.0)); }
+    }
+    let text = include_str!("../../tests/fixtures/arithmetic_counter_add.sv");
+    let artifact = crate::frontend::compile_systemverilog(
+        &[crate::frontend::SourceInput { name: "arithmetic_counter_add.sv", text }],
+        &crate::frontend::CompileOptions::new("arithmetic_counter_add"),
+    ).unwrap();
+    let netlist = crate::compile::lowering::lower_optimised(&artifact.netlist).unwrap();
+    eprintln!("DECAY_CHARGE_AB_NETLIST {netlist:?}");
+    let mut results = Vec::new();
+    for prior in [true, false] {
+        let restore = Restore(PRIOR_DECAY_PRICING.with(|flag| flag.replace(prior)));
+        let start = std::time::Instant::now();
+        let result = plan_from_netlist_with_growth(&netlist, &PortPlacements::default(), GROWN_SHIPPING_RULE)
+            .and_then(|candidate| { verify_candidate(&candidate, &netlist)?; Ok(candidate) });
+        drop(restore);
+        match &result {
+            Ok(candidate) => eprintln!("DECAY_CHARGE_AB prior={prior} seconds={:.3} accepted=true routes={:?}", start.elapsed().as_secs_f64(), candidate.routes),
+            Err(error) => eprintln!("DECAY_CHARGE_AB prior={prior} seconds={:.3} accepted=false error={error}" , start.elapsed().as_secs_f64()),
+        }
+        results.push(result);
+    }
+    assert!(results[0].is_ok(), "the prior accepted routing/verification control must reproduce");
+    assert!(results[1].is_ok(), "retaining diagnostic geometry must preserve the accepted control");
+    assert_eq!(results[0].as_ref().unwrap().routes, results[1].as_ref().unwrap().routes,
+        "recording decay must preserve the complete accepted Route control");
 }

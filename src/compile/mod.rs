@@ -5848,13 +5848,13 @@ fn resolve_bypass_and_geometry(
     netlist: &Netlist,
     plan: &Floorplan,
     nets: &mut [Net],
-    row_count: usize,
-    channel_count: usize,
     query_limit: i32,
     track_spacing: i32,
     track_share_gap: i32,
     tap_only_reserve: bool,
 ) -> (Vec<bool>, Vec<i32>, Vec<Vec<i32>>) {
+    let row_count = plan.rows.len();
+    let channel_count = row_count.saturating_sub(1);
     let bypass_proven = compute_bypass(nets, plan);
     let baseline_terminals = default_terminal_kinds(nets);
     let baseline_track_count =
@@ -7896,6 +7896,9 @@ pub fn compile_without_rewrite(netlist: &Netlist) -> Result<CompiledCircuit, Com
 
     // The legacy emitter has no stateful cell. Never turn a planner failure
     // into a silently combinational circuit by sending a DFF through it.
+    // If its fixed relaxed layout fails, reuse the existing bounded growth
+    // planner to make room where routing fought. Successful plans keep their
+    // existing world; both paths use the same physical verification.
     if netlist.gates.iter().any(|gate| gate.kind.is_sequential()) {
         let placements = planner::PortPlacements::default();
         return compile_planned_within(netlist, &placements, planner::RIP_UP_ROUNDS)
@@ -8159,8 +8162,6 @@ fn compile_channelled_with_reserve(
         netlist,
         &plan,
         &mut nets,
-        row_count,
-        channel_count,
         BYPASS_QUERY_MAX_DISTANCE,
         track_spacing,
         track_share_gap,

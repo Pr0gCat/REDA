@@ -167,44 +167,54 @@ fn check(netlist: Netlist, outputs: HashMap<String, String>, name: &str, crossin
     );
 }
 
+// Native-only control keeps the original full Native/Yosys suite intact: the
+// native frontend path is verified independently of Yosys, which is absent in
+// this environment.
+fn check_native_multiclock(top: &str, text: &str, crossing: bool) {
+    let artifact = compile_systemverilog(
+        &[SourceInput { name: top, text }],
+        &CompileOptions::new(top),
+    )
+    .unwrap();
+    let repeated = compile_systemverilog(
+        &[SourceInput { name: top, text }],
+        &CompileOptions::new(top),
+    )
+    .unwrap();
+    assert_eq!(artifact.netlist, repeated.netlist);
+    assert_eq!(artifact.debug.to_json(), repeated.debug.to_json());
+    check(
+        artifact.netlist.clone(),
+        artifact.output_map(),
+        &format!("native-{top}"),
+        crossing,
+    );
+}
+
 #[test]
 fn native_and_yosys_independent_clock_domains_match_the_physical_state_oracle() {
     for (top, text, crossing) in [
-        (
-            "multiclock_dff",
-            include_str!("fixtures/multiclock_dff.sv"),
-            false,
-        ),
-        (
-            "hierarchy_multiclock_dff",
-            include_str!("fixtures/hierarchy_multiclock_dff.sv"),
-            false,
-        ),
-        (
-            "multiclock_shift",
-            include_str!("fixtures/multiclock_shift.sv"),
-            true,
-        ),
+        ("multiclock_dff", include_str!("fixtures/multiclock_dff.sv"), false),
+        ("hierarchy_multiclock_dff", include_str!("fixtures/hierarchy_multiclock_dff.sv"), false),
+        ("multiclock_shift", include_str!("fixtures/multiclock_shift.sv"), true),
     ] {
-        let artifact = compile_systemverilog(
-            &[SourceInput { name: top, text }],
-            &CompileOptions::new(top),
-        )
-        .unwrap();
-        let repeated = compile_systemverilog(
-            &[SourceInput { name: top, text }],
-            &CompileOptions::new(top),
-        )
-        .unwrap();
-        assert_eq!(artifact.netlist, repeated.netlist);
-        assert_eq!(artifact.debug.to_json(), repeated.debug.to_json());
-        check(
-            artifact.netlist.clone(),
-            artifact.output_map(),
-            &format!("native-{top}"),
-            crossing,
-        );
+        check_native_multiclock(top, text, crossing);
         let (netlist, outputs) = synthesize_verilog(text, top).unwrap();
         check(netlist, outputs, &format!("yosys-{top}"), crossing);
     }
+}
+
+// Each fixture is its own test so the libtest harness parallelizes the slow
+// per-fixture compilation across cores.
+#[test]
+fn native_multiclock_dff_matches_the_physical_state_oracle() {
+    check_native_multiclock("multiclock_dff", include_str!("fixtures/multiclock_dff.sv"), false);
+}
+#[test]
+fn native_hierarchy_multiclock_dff_matches_the_physical_state_oracle() {
+    check_native_multiclock("hierarchy_multiclock_dff", include_str!("fixtures/hierarchy_multiclock_dff.sv"), false);
+}
+#[test]
+fn native_multiclock_shift_matches_the_physical_state_oracle() {
+    check_native_multiclock("multiclock_shift", include_str!("fixtures/multiclock_shift.sv"), true);
 }

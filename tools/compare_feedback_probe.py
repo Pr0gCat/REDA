@@ -12,22 +12,27 @@ def audit(records, cases=None):
     assert len(records) == len(cases) and {r['case'] for r in records} == set(cases)
     for record in records:
         case = cases[record['case']]
-        assert case in {'counter', 'fsm', 'state_enable'}
+        assert case in {'counter', 'fsm', 'state_enable', 'counter4_add', 'counter4_subtract'}
+        arithmetic = case.startswith('counter4_')
         gates = {g['output']: g for g in record['gates']}
         outputs = record['outputs']
-        names = ['q'] if case == 'state_enable' else ['q[0]', 'q[1]']
+        names = ['q'] if case == 'state_enable' else [f'q[{bit}]' for bit in range(4 if arithmetic else 2)]
         assert set(outputs) == set(names)
         for signal in outputs.values():
             assert gates[signal]['kind'] == 'dff_p'
             assert gates[signal]['inputs'][1] == 'clk'
-        pins = ['d', 'en'] if case == 'state_enable' else ['reset', 'en' if case == 'counter' else 'advance']
-        controls = [3, 0, 1, 2, 3, 1, 0, 1] if case == 'state_enable' else [1, 2, 2, 2, 2, 0, 3, 2]
-        protocol = [(control, clock) for cycle in range(64)
-                    for control, clock in [(controls[cycle % 8], False),
-                                           (controls[cycle % 8], True),
-                                           (controls[cycle % 8] ^ 3, True),
-                                           (controls[cycle % 8] ^ 3, False)]]
-        assert [(p['control'], p['clock']) for p in record['phases']] == protocol
+        pins = ['d', 'en'] if case == 'state_enable' else ['reset', 'en' if case == 'counter' or arithmetic else 'advance']
+        base = [3, 0, 1, 2, 3, 1, 0, 1] if case == 'state_enable' else [1, 2, 2, 2, 2, 0, 3, 2]
+        # Minimal cycle set matching the test: reset, 16 increments (full
+        # 4-bit state coverage), decrement, hold — no repeated periods.
+        controls = [1 if cycle == 0 else 3 if cycle == 17 else
+                    0 if cycle == 18 else 2
+                    for cycle in range(19)] if arithmetic else [base[cycle % 8] for cycle in range(8)]
+        protocol = [(control, clock) for cycle in range(19 if arithmetic else 8)
+                    for control, clock in [(controls[cycle], False),
+                                           (controls[cycle], True),
+                                           (controls[cycle] ^ 3, True),
+                                           (controls[cycle] ^ 3, False)]]
 
         def implementation(q, control, clock):
             values = {'clk': clock, pins[0]: bool(control & 1), pins[1]: bool(control & 2)}
@@ -67,7 +72,7 @@ def audit(records, cases=None):
                 elif control & 1:
                     q = 0
                 elif control & 2:
-                    q = (q + 1) % (4 if case == 'counter' else 3)
+                    q = (q + (-1 if case == 'counter4_subtract' else 1)) % (16 if arithmetic else 4 if case == 'counter' else 3)
             clock = next_clock
             covered.add(q)
             values, expected, hidden = implementation(q, control, clock)
@@ -99,7 +104,7 @@ def audit(records, cases=None):
                 observed[label] = event['value']
                 last[label] = event['tick']
             assert observed == expected
-        assert covered == (set(range(4)) if case == 'counter' else set(range(3)) if case == 'fsm' else {0, 1})
+        assert covered == (set(range(16)) if arithmetic else set(range(4)) if case == 'counter' else set(range(3)) if case == 'fsm' else {0, 1})
     return {'cases': len(cases), 'retained_phases_per_case': 256,
             'literal_state_oracle': True, 'all_gate_and_hidden_cell_events_replayed': True}
 

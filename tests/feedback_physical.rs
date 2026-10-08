@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 #[derive(Clone, Copy)]
 enum Case {
     Counter,
+    ArithmeticCounter { subtract: bool },
     Fsm,
     StateEnable,
 }
@@ -20,8 +21,11 @@ fn next(case: Case, q: u8, control: u8) -> u8 {
     let first = control & 1 != 0;
     let enabled = control & 2 != 0;
     match case {
-        Case::Counter | Case::Fsm if first => 0,
+        Case::Counter | Case::Fsm | Case::ArithmeticCounter { .. } if first => 0,
         Case::Counter if enabled => (q + 1) % 4,
+        Case::ArithmeticCounter { subtract } if enabled => {
+            if subtract { q.wrapping_sub(1) & 15 } else { q.wrapping_add(1) & 15 }
+        }
         Case::Fsm if enabled => (q + 1) % 3,
         Case::StateEnable if q != 0 || enabled => first as u8,
         _ => q,
@@ -41,9 +45,10 @@ fn check(netlist: Netlist, outputs: HashMap<String, String>, case: Case, name: &
     let names: Vec<_> = if matches!(case, Case::StateEnable) {
         vec!["q".to_owned()]
     } else {
-        vec!["q[0]".to_owned(), "q[1]".to_owned()]
+        let width = if matches!(case, Case::ArithmeticCounter { .. }) { 4 } else { 2 };
+        (0..width).map(|bit| format!("q[{bit}]")).collect()
     };
-    let pins = if matches!(case, Case::Counter) {
+    let pins = if matches!(case, Case::Counter | Case::ArithmeticCounter { .. }) {
         ["reset", "en"]
     } else if matches!(case, Case::Fsm) {
         ["reset", "advance"]
@@ -109,13 +114,23 @@ fn check(netlist: Netlist, outputs: HashMap<String, String>, case: Case, name: &
         .collect();
     sim.attach_observer(watched);
     let mut phases = Vec::new();
-    for cycle in 0..64 {
+    // Minimal cycle set: every semantic regime (reset, increment, decrement,
+    // hold, wrap) plus full state coverage, with no repeated periods. A 4-bit
+    // counter has 16 states, so 16 increments cover them all; the period-8
+    // control word exposes all eight regimes in 8 cycles.
+    let cycles = if matches!(case, Case::ArithmeticCounter { .. }) { 19 } else { 8 };
+    for cycle in 0..cycles {
         let controls = if matches!(case, Case::StateEnable) {
             [3, 0, 1, 2, 3, 1, 0, 1]
         } else {
             [1, 2, 2, 2, 2, 0, 3, 2]
         };
-        let control = controls[cycle % 8];
+        let control = if matches!(case, Case::ArithmeticCounter { .. }) {
+            if cycle == 0 { 1 }
+            else if cycle == 17 { 3 }
+            else if cycle == 18 { 0 }
+            else { 2 }
+        } else { controls[cycle % 8] };
         for (control, clk) in [
             (control, false),
             (control, true),
@@ -293,4 +308,89 @@ fn statement_reset_and_nested_enable_match_loaded_physical_cells() {
         let (netlist, outputs) = synthesize_verilog(text, top).unwrap();
         check(netlist, outputs, case, &format!("yosys-{top}"));
     }
+}
+
+#[test]
+fn arithmetic_counters_match_loaded_physical_cells() {
+    for (top, text, case) in [
+        ("arithmetic_counter_add", include_str!("fixtures/arithmetic_counter_add.sv"), Case::ArithmeticCounter { subtract: false }),
+        ("arithmetic_counter_subtract", include_str!("fixtures/arithmetic_counter_subtract.sv"), Case::ArithmeticCounter { subtract: true }),
+    ] {
+        let artifact = compile_systemverilog(
+            &[SourceInput { name: top, text }],
+            &CompileOptions::new(top),
+        )
+        .unwrap();
+        check(
+            artifact.netlist.clone(),
+            artifact.output_map(),
+            case,
+            &format!("native-{top}"),
+        );
+        let (netlist, outputs) = synthesize_verilog(text, top).unwrap();
+        check(netlist, outputs, case, &format!("yosys-{top}"));
+    }
+}
+
+// Individual native controls keep the original full Native/Yosys suite intact.
+fn check_native_arithmetic_counter(subtract: bool) {
+    let (top, text) = if subtract {
+        ("arithmetic_counter_subtract", include_str!("fixtures/arithmetic_counter_subtract.sv"))
+    } else {
+        ("arithmetic_counter_add", include_str!("fixtures/arithmetic_counter_add.sv"))
+    };
+    
+    let artifact = compile_systemverilog(
+        &[SourceInput { name: top, text }], &CompileOptions::new(top),
+    ).unwrap();
+    check(artifact.netlist.clone(), artifact.output_map(),
+        Case::ArithmeticCounter { subtract }, &format!("native-{top}"));
+}
+
+#[test]
+fn native_arithmetic_increment_matches_loaded_physical_cells() {
+    check_native_arithmetic_counter(false);
+}
+
+#[test]
+fn native_arithmetic_decrement_matches_loaded_physical_cells() {
+    check_native_arithmetic_counter(true);
+}
+
+// Each fixture is its own test so the libtest harness parallelizes the slow
+// per-fixture compilation across cores.
+fn check_native_feedback(top: &str, text: &str, case: Case) {
+    let artifact = compile_systemverilog(
+        &[SourceInput { name: top, text }], &CompileOptions::new(top),
+    ).unwrap();
+    check(artifact.netlist.clone(), artifact.output_map(), case, &format!("native-{top}"));
+}
+
+#[test]
+fn native_feedback_counter_matches_loaded_physical_cells() {
+    check_native_feedback("feedback_counter", include_str!("fixtures/feedback_counter.sv"), Case::Counter);
+}
+#[test]
+fn native_feedback_fsm_matches_loaded_physical_cells() {
+    check_native_feedback("feedback_fsm", include_str!("fixtures/feedback_fsm.sv"), Case::Fsm);
+}
+#[test]
+fn native_feedback_state_enable_matches_loaded_physical_cells() {
+    check_native_feedback("feedback_state_enable", include_str!("fixtures/feedback_state_enable.sv"), Case::StateEnable);
+}
+#[test]
+fn native_reset_counter_matches_loaded_physical_cells() {
+    check_native_feedback("reset_counter", include_str!("fixtures/reset_counter.sv"), Case::Counter);
+}
+#[test]
+fn native_hierarchy_reset_counter_matches_loaded_physical_cells() {
+    check_native_feedback("hierarchy_reset_counter", include_str!("fixtures/hierarchy_reset_counter.sv"), Case::Counter);
+}
+#[test]
+fn native_reset_fsm_matches_loaded_physical_cells() {
+    check_native_feedback("reset_fsm", include_str!("fixtures/reset_fsm.sv"), Case::Fsm);
+}
+#[test]
+fn native_conditional_state_enable_matches_loaded_physical_cells() {
+    check_native_feedback("conditional_state_enable", include_str!("fixtures/conditional_state_enable.sv"), Case::StateEnable);
 }

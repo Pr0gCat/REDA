@@ -12,9 +12,10 @@ def audit(records, cases=None):
     assert len(records) == len(cases) and {r['case'] for r in records} == set(cases)
     for record in records:
         top = cases[record['case']]
-        assert top in {'negedge_dff', 'negedge_counter', 'mixed_edge_shift', 'hierarchy_negedge_dff'}
-        counter, mixed = top == 'negedge_counter', top == 'mixed_edge_shift'
-        names = ['q[0]', 'q[1]'] if counter or mixed else ['q']
+        assert top in {'negedge_dff', 'negedge_counter', 'mixed_edge_shift', 'hierarchy_negedge_dff', 'negedge_counter4_add', 'negedge_counter4_subtract'}
+        arithmetic = top.startswith('negedge_counter4_')
+        counter, mixed = top == 'negedge_counter' or arithmetic, top == 'mixed_edge_shift'
+        names = [f'q[{bit}]' for bit in range(4 if arithmetic else 2)] if counter or mixed else ['q']
         pins = ['reset', 'en'] if counter else ['d']
         outputs = record['outputs']
         assert set(outputs) == set(names)
@@ -28,12 +29,17 @@ def audit(records, cases=None):
                 assert gate['inputs'][1] in gates, 'missing clock inverter'
                 inverter = gates[gate['inputs'][1]]
                 assert inverter['kind'] == 'nor' and inverter['inputs'] == ['clk']
-        controls = [1, 2, 2, 2, 2, 0, 3, 2] if counter else [0, 3, 2, 1, 0, 2, 3, 1]
-        protocol = [(control, clock) for cycle in range(64)
-                    for control, clock in [(controls[cycle % 8] ^ 3, False),
-                                           (controls[cycle % 8] ^ 3, True),
-                                           (controls[cycle % 8], True),
-                                           (controls[cycle % 8], False)]]
+        base = [1, 2, 2, 2, 2, 0, 3, 2] if counter else [0, 3, 2, 1, 0, 2, 3, 1]
+        # Minimal cycle set matching the test: reset, 16 increments (full
+        # 4-bit state coverage), decrement, hold — no repeated periods.
+        controls = [1 if cycle == 0 else 3 if cycle == 17 else
+                    0 if cycle == 18 else 2
+                    for cycle in range(19)] if arithmetic else [base[cycle % 8] for cycle in range(8)]
+        protocol = [(control, clock) for cycle in range(19 if arithmetic else 8)
+                    for control, clock in [(controls[cycle] ^ 3, False),
+                                           (controls[cycle] ^ 3, True),
+                                           (controls[cycle], True),
+                                           (controls[cycle], False)]]
         assert [(p['control'], p['clock']) for p in record['phases']] == protocol
 
         def implementation(q, control, clock):
@@ -74,7 +80,7 @@ def audit(records, cases=None):
                     if control & 1:
                         q = 0
                     elif control & 2:
-                        q = (q + 1) % 4
+                        q = (q + (-1 if top == 'negedge_counter4_subtract' else 1)) % (16 if arithmetic else 4)
                 elif mixed:
                     q = (q & 1) * 3
                 else:
@@ -94,6 +100,14 @@ def audit(records, cases=None):
                 if role in {'MData', 'SData'}:
                     assert cell['locked'] == (cell_clock if role == 'MData' else not cell_clock)
             assert phase['ticks'] >= 16
+            # A stored bit changes once toward its captured value, or holds.
+            # Final truth alone would miss an extra capture followed by recovery.
+            state_labels = {f'gate:{output}' for output in outputs.values()}
+            state_labels |= {f'cell:{output}:SData' for output in outputs.values()}
+            state_labels |= {f'lamp:{port}' for port in names}
+            for label in state_labels:
+                changes = [event for event in phase['events'] if event['label'] == label]
+                assert len(changes) == int(observed[label] != expected[label]), 'extra storage/public pulse'
             last = {label: 0 for label in observed}
             for event in phase['events']:
                 label = event['label']
@@ -103,9 +117,51 @@ def audit(records, cases=None):
                 observed[label] = event['value']
                 last[label] = event['tick']
             assert observed == expected
-        assert covered == ({0, 1, 2, 3} if counter or mixed else {0, 1})
+        assert covered == (set(range(16)) if arithmetic else {0, 1, 2, 3} if counter or mixed else {0, 1})
     return {'cases': len(cases), 'retained_phases_per_case': 256, 'literal_edge_oracle': True,
             'all_gate_and_hidden_cell_events_replayed': True, 'all_source_states_covered': True}
+
+
+def compare_quality(records, baseline, cases=None):
+    """Compare identical implementations after independently replaying both traces.
+
+    Falling-edge state labels flip exactly once per phase; a faster final public
+    event must not hide a slower earlier output. Check each phase and channel.
+    """
+    audit(records, cases)
+    audit(baseline, cases)
+    old = {record['case']: record for record in baseline}
+    regressions = []
+    for record in records:
+        before = old[record['case']]
+        assert record['gates'] == before['gates'], 'quality control requires identical implemented graph'
+        assert record['outputs'] == before['outputs'], 'quality control requires identical output bindings'
+        assert record['power_on'] == before['power_on']
+        for index, (previous, current) in enumerate(zip(before['phases'], record['phases'])):
+            assert (previous['control'], previous['clock']) == (current['control'], current['clock'])
+            if current['ticks'] > previous['ticks']:
+                regressions.append({'case': record['case'], 'phase': index,
+                                    'metric': 'settlement_ticks',
+                                    'before': previous['ticks'], 'after': current['ticks']})
+            for label in before['power_on']:
+                earlier = [event for event in previous['events'] if event['label'] == label]
+                later = [event for event in current['events'] if event['label'] == label]
+                metrics = [('transitions', len(earlier), len(later)),
+                           ('last_arrival_ticks', earlier[-1]['tick'] if earlier else 0,
+                            later[-1]['tick'] if later else 0)]
+                if [event['value'] for event in earlier] == [event['value'] for event in later]:
+                    metrics.extend((f'pulse_width_ticks:{pulse}',
+                                    earlier[pulse + 1]['tick'] - earlier[pulse]['tick'],
+                                    later[pulse + 1]['tick'] - later[pulse]['tick'])
+                                   for pulse in range(len(earlier) - 1)
+                                   if earlier[pulse]['value'] != earlier[-1]['value'])
+                for metric, first, second in metrics:
+                    if second > first:
+                        regressions.append({'case': record['case'], 'phase': index,
+                                            'channel': label, 'metric': metric,
+                                            'before': first, 'after': second})
+    return {'cases': len(records), 'qualified': not regressions,
+            'regressions': regressions}
 
 
 if __name__ == '__main__':

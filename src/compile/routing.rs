@@ -1711,6 +1711,49 @@ where
             if path.last() != Some(&sink.anchor) {
                 path.push(sink.anchor);
             }
+            let terminal_hosts_refresh = sink
+                .terminal
+                .sink_parts()
+                .is_some_and(|(_, _, requirement)| terminal_hosts_demanded_refresh(requirement));
+            // A missing refresh on retained dust reuses the recorded source
+            // path of the last trunk cell. An already-laid repeater is useful
+            // even when the preview does not demand one; keep that path. The dry run includes the sink,
+            // exactly as the realiser does; it cannot invent refreshes on
+            // retained dust reached through an alternate source path.
+            // Prescribed branch paths remain the caller's contract.
+            if planned.is_empty() {
+                let shared = path.iter().take_while(|cell| cell_states.contains_key(cell)).count();
+                let incoming = path[..shared].iter().fold(source_strength, |carried, cell| {
+                    if cell_states[cell].kind == BlockKind::Repeater {
+                        MAX_SIGNAL_STRENGTH
+                    } else {
+                        carried.saturating_sub(1)
+                    }
+                });
+                let previous = path[..shared].last().copied().unwrap_or(start);
+                let proposed = realise_branch_cells(
+                    previous, incoming, &path[shared..], strict_local,
+                    reserve_policy, terminal_hosts_refresh,
+                );
+                let conflict = path[shared..].iter().zip(&proposed.blocks).any(|(cell, state)| {
+                    state.kind == BlockKind::Repeater
+                        && cell_states.get(cell).is_some_and(|retained| {
+                            retained.kind != BlockKind::Repeater
+                        })
+                });
+                if let Some(join) = conflict.then(|| {
+                    path.iter().rposition(|cell| tree_parent.contains_key(cell))
+                }).flatten() {
+                    let mut prefix = vec![path[join]];
+                    while prefix.last() != Some(&start) {
+                        let parent = tree_parent[prefix.last().unwrap()];
+                        prefix.push(parent);
+                    }
+                    prefix.reverse();
+                    prefix.extend_from_slice(&path[join + 1..]);
+                    path = prefix;
+                }
+            }
             reserve_typed_path(
                 request.id,
                 &path,
@@ -1756,17 +1799,14 @@ where
             // walked back onto the branch instead -- or, when nothing before
             // the terminal may hold one, is refused rather than laid with a
             // terminal that reads zero while the count says it was refreshed.
-            let terminal_hosts_refresh = sink
-                .terminal
-                .sink_parts()
-                .is_some_and(|(_, _, requirement)| terminal_hosts_demanded_refresh(requirement));
-            let mut laid = realise_branch_cells(
+            let mut laid = realise_branch_cells_preserving(
                 previous_cell,
                 carried,
                 &path[shared..],
                 strict_local,
                 reserve_policy,
                 terminal_hosts_refresh,
+                &cell_states,
             );
             let mut promoted = None;
             if strict_local && !laid.carries {
@@ -1786,13 +1826,14 @@ where
                         .expect("a shared refresh candidate has an exact laid state");
                     let (refreshed_previous, refreshed_carried, refreshed_repeaters) =
                         shared_strength(&cell_states);
-                    let refreshed = realise_branch_cells(
+                    let refreshed = realise_branch_cells_preserving(
                         refreshed_previous,
                         refreshed_carried,
                         &path[shared..],
                         strict_local,
                         reserve_policy,
                         terminal_hosts_refresh,
+                        &cell_states,
                     );
                     let certified = refreshed.carries
                         && branches
@@ -3948,6 +3989,23 @@ fn realise_branch_cells(
     reserve_policy: ReservePolicy,
     terminal_hosts_refresh: bool,
 ) -> LaidBranch {
+    realise_branch_cells_preserving(
+        previous_cell, incoming, cells, include_boundary_bend, reserve_policy,
+        terminal_hosts_refresh, &BTreeMap::new(),
+    )
+}
+
+/// A re-entered trunk keeps its exact blocks. Its dust cannot host a new
+/// refresh, and its repeaters retain their direction and delay.
+fn realise_branch_cells_preserving(
+    previous_cell: Anchor,
+    incoming: u8,
+    cells: &[Anchor],
+    include_boundary_bend: bool,
+    reserve_policy: ReservePolicy,
+    terminal_hosts_refresh: bool,
+    retained: &BTreeMap<Anchor, BlockState>,
+) -> LaidBranch {
     let source = previous_cell;
     let mut bends: BTreeSet<usize> = cells
         .windows(3)
@@ -3963,10 +4021,11 @@ fn realise_branch_cells(
     {
         bends.insert(0);
     }
-    // A boundary bend is not a viable refresh even in the legacy policy.
+    // A tail leaving a retained trunk must not invent a boundary refresh.
+    // Empty-map previews keep the caller's original boundary policy.
     // A forward climb can be powered through the next wire's solid floor;
     // a sideways climb cannot receive this repeater's forward output.
-    if cells.len() >= 2 {
+    if retained.contains_key(&source) && cells.len() >= 2 {
         let entered = horizontal_direction(source, cells[0]);
         let next = Anchor { y: cells[0].y, ..cells[1] };
         let forward = cells[1].y >= cells[0].y && cells[1].y <= cells[0].y + 1
@@ -3982,7 +4041,7 @@ fn realise_branch_cells(
         }
         previous = *cell;
     }
-    let (ineligible, reserve) = match reserve_policy {
+    let (mut ineligible, reserve) = match reserve_policy {
         ReservePolicy::TotalStairs | ReservePolicy::TerminalStairs => {
             let stairs = bends
                 .iter()
@@ -4009,6 +4068,9 @@ fn realise_branch_cells(
             (ineligible, 0)
         }
     };
+    ineligible.extend(cells.iter().enumerate().filter_map(|(index, at)| {
+        retained.get(at).filter(|state| state.kind != BlockKind::Repeater).map(|_| index)
+    }));
     let exact = reserve_policy == ReservePolicy::LatestLegalCell;
     let mut is_repeater = if exact {
         exact_refreshes(cells.len(), &ineligible, incoming)
@@ -4043,10 +4105,13 @@ fn realise_branch_cells(
     let mut previous = source;
     for (index, cell) in cells.iter().enumerate() {
         let horizontal = horizontal_direction(previous, *cell);
-        let block = match (is_repeater[index], horizontal) {
-            (true, Some(direction)) => crate::compile::repeater(direction),
-            _ => crate::compile::dust(),
-        };
+        let block = retained.get(cell).cloned().unwrap_or_else(|| {
+            match (is_repeater[index], horizontal) {
+                (true, Some(direction)) => crate::compile::repeater(direction),
+                _ => crate::compile::dust(),
+            }
+        });
+        is_repeater[index] = block.kind == BlockKind::Repeater;
         blocks.push(block);
         previous = *cell;
     }
@@ -7747,6 +7812,51 @@ mod tests {
                 at: at(2, 1, 0),
             })
         );
+    }
+
+    #[test]
+    fn retained_suffix_dust_does_not_erase_a_required_refresh() {
+        use crate::redstone::simulator::Simulator;
+        use crate::redstone::world::storage::World;
+        let source = at(1, 1, 1);
+        let path = (2..=21).map(|x| at(x, 1, 1)).collect::<Vec<_>>();
+        let retained = path[6..18].iter().map(|&cell| (cell, dust())).collect();
+        let laid = realise_branch_cells_preserving(
+            source, MAX_SIGNAL_STRENGTH, &path, false,
+            ReservePolicy::TerminalStairs, true, &retained,
+        );
+        assert!(laid.carries);
+        for (cell, state) in path.iter().zip(&laid.blocks) {
+            if let Some(original) = retained.get(cell) {
+                assert_eq!(state, original);
+            }
+        }
+        let mut world = World::new(24, 4, 3);
+        world.set(source.x, 0, 1, stone());
+        let mut input = BlockState::air();
+        input.kind = BlockKind::Lever;
+        input.name = "minecraft:lever".into();
+        input.face = Some(crate::redstone::world::block::Face::Floor);
+        input.facing = Some(Facing::North);
+        world.set(source.x, 1, 1, input);
+        for ((cell, state), floor) in path.iter().zip(laid.blocks).zip(laid.floors) {
+            world.set(cell.x, 0, 1, floor);
+            world.set(cell.x, 1, 1, state);
+        }
+        let mut lamp = BlockState::air();
+        lamp.kind = BlockKind::Lamp;
+        lamp.name = "minecraft:redstone_lamp".into();
+        world.set(22, 0, 1, stone());
+        world.set(22, 1, 1, lamp);
+        let mut sim = Simulator::new(world);
+        sim.run_until_stable(200).unwrap();
+        for value in [false, true, false, true, false] {
+            let mut input = sim.world().get(1, 1, 1).clone();
+            input.lit = value;
+            sim.world_mut().set(1, 1, 1, input);
+            sim.run_until_stable(200).unwrap();
+            assert_eq!(sim.world().get(22, 1, 1).lit, value);
+        }
     }
 
     #[test]

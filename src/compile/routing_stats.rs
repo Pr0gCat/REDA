@@ -225,8 +225,6 @@ fn recompute_geometry(
         netlist,
         &plan,
         &mut nets,
-        row_count,
-        channel_count,
         BYPASS_QUERY_MAX_DISTANCE,
         track_spacing,
         track_share_gap,

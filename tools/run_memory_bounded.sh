@@ -13,8 +13,8 @@ if ! flock -n 9; then
     exit 75
 fi
 task_available_kib="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
-if [[ ! "$task_available_kib" =~ ^[0-9]+$ ]] || (( task_available_kib < 6291456 )); then
-    echo "Less than 6 GiB available; this job was not started." >&2
+if [[ ! "$task_available_kib" =~ ^[0-9]+$ ]] || (( task_available_kib < 4194304 )); then
+    echo "Less than 4 GiB available; this job was not started." >&2
     exit 75
 fi
 export CARGO_BUILD_JOBS=1

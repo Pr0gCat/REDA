@@ -2127,6 +2127,18 @@ struct BandPlan {
     corridor_edge: Vec<i32>,
 }
 
+/// Crossings share the available gap between one unordered pair of halos.
+struct BandSeam {
+    gap: i32,
+    crossings: Vec<BandCrossing>,
+}
+
+struct BandCrossing {
+    ordinal: usize,
+    source_z: i32,
+    sink_z: i32,
+}
+
 /// **Which band layer each crossing takes.**
 ///
 /// Taken in source-row order, two crossings can share a layer exactly when
@@ -2218,7 +2230,7 @@ fn band_plan(packed: &PackedFreeLeaves, resolved: &[ResolvedPackedTrunk]) -> Opt
         ))
     };
     // Per unordered pair: (trunk ordinal, source z, sink z), plus the gap.
-    let mut seams: BTreeMap<(ChunkId, ChunkId), (i32, Vec<(usize, i32, i32)>)> = BTreeMap::new();
+    let mut seams: BTreeMap<(ChunkId, ChunkId), BandSeam> = BTreeMap::new();
     let mut corridor_edge = Vec::with_capacity(resolved.len());
     for (ordinal, trunk) in resolved.iter().enumerate() {
         let [(sink_id, sink)] = trunk.sinks.as_slice() else {
@@ -2263,31 +2275,39 @@ fn band_plan(packed: &PackedFreeLeaves, resolved: &[ResolvedPackedTrunk]) -> Opt
         } else {
             (sink_chunk.clone(), source_chunk.clone())
         };
-        let seam = seams.entry(key).or_insert((gap, Vec::new()));
-        seam.0 = seam.0.min(gap);
-        seam.1.push((ordinal, trunk.source.anchor.z, sink.anchor.z));
+        let seam = seams.entry(key).or_insert_with(|| BandSeam {
+            gap,
+            crossings: Vec::new(),
+        });
+        seam.gap = seam.gap.min(gap);
+        seam.crossings.push(BandCrossing {
+            ordinal,
+            source_z: trunk.source.anchor.z,
+            sink_z: sink.anchor.z,
+        });
         corridor_edge.push(edge);
     }
     let mut layers = vec![0; resolved.len()];
-    for (gap, crossings) in seams.values_mut() {
-        crossings.sort_by_key(|(ordinal, source_z, _)| (*source_z, *ordinal));
+    for seam in seams.values_mut() {
+        let crossings = &mut seam.crossings;
+        crossings.sort_by_key(|crossing| (crossing.source_z, crossing.ordinal));
         // Terminals on one seam must stand a pitch apart on their own side:
         // two sinks on one row would put one trunk's corridor across the
         // other's runway, which only height can separate.
-        if !rows_a_pitch_apart(crossings.iter().map(|(_, source_z, _)| *source_z))
-            || !rows_a_pitch_apart(crossings.iter().map(|(_, _, sink_z)| *sink_z))
+        if !rows_a_pitch_apart(crossings.iter().map(|crossing| crossing.source_z))
+            || !rows_a_pitch_apart(crossings.iter().map(|crossing| crossing.sink_z))
         {
             return None;
         }
         let assigned = band_layers(
             &crossings
                 .iter()
-                .map(|(_, source_z, sink_z)| (*source_z, *sink_z))
+                .map(|crossing| (crossing.source_z, crossing.sink_z))
                 .collect::<Vec<_>>(),
         );
         let layer_count = i32::try_from(assigned.iter().copied().max().unwrap_or(0)).ok()? + 1;
         let needed = band_min_width(layer_count)?;
-        if *gap < needed {
+        if seam.gap < needed {
             return None;
         }
         // The same cost gate the packer applied, on the same geometry: the
@@ -2295,14 +2315,14 @@ fn band_plan(packed: &PackedFreeLeaves, resolved: &[ResolvedPackedTrunk]) -> Opt
         let lid_y = packed.halo.iter().map(|at| at.y).max()?;
         let terminal_y = crossings
             .iter()
-            .map(|(ordinal, _, _)| resolved[*ordinal].sinks[0].1.anchor.y)
+            .map(|crossing| resolved[crossing.ordinal].sinks[0].1.anchor.y)
             .max()?;
         if !band_pays(&assigned, lid_y, terminal_y)? {
             return None;
         }
-        for ((ordinal, _, _), layer) in crossings.iter().zip(assigned) {
-            let base = resolved[*ordinal].sinks[0].1.anchor.y;
-            layers[*ordinal] =
+        for (crossing, layer) in crossings.iter().zip(assigned) {
+            let base = resolved[crossing.ordinal].sinks[0].1.anchor.y;
+            layers[crossing.ordinal] =
                 base.checked_add(i32::try_from(layer).ok()?.checked_mul(PACKED_LANE_PITCH)?)?;
         }
     }
