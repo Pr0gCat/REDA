@@ -56,8 +56,9 @@ fn check(netlist: Netlist, outputs: HashMap<String, String>, case: Case, name: &
         ["d", "en"]
     };
     let path = std::env::temp_dir().join(format!(
-        "reda-feedback-{}-{name}.litematic",
-        std::process::id()
+        "reda-feedback-{}-{:?}-{name}.litematic",
+        std::process::id(),
+        std::thread::current().id()
     ));
     save(&path, &physical.world, name).unwrap();
     let world = load(&path).unwrap();

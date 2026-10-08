@@ -80,8 +80,9 @@ fn check(netlist: Netlist, outputs: HashMap<String, String>, case: Case, name: &
         }
     }
     let path = std::env::temp_dir().join(format!(
-        "reda-negedge-{}-{name}.litematic",
-        std::process::id()
+        "reda-negedge-{}-{:?}-{name}.litematic",
+        std::process::id(),
+        std::thread::current().id()
     ));
     save(&path, &physical.world, name).unwrap();
     let world = load(&path).unwrap();

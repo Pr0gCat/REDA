@@ -76,6 +76,7 @@ fn check_worlds(top: &str, source: &str, falling: bool, yosys: bool) {
     );
     // Two identical runs prove compile determinism (run 0 baseline, run 1
     // equality) and emitted-vs-loaded equality; a third run repeats run 1.
+    let mut baseline = None;
     for run in 0..2 {
         let netlist = if yosys {
             synthesize_verilog(&text, top).unwrap().0
@@ -97,8 +98,9 @@ fn check_worlds(top: &str, source: &str, falling: bool, yosys: bool) {
         }
         baseline = Some(fingerprint.clone());
         let path = std::env::temp_dir().join(format!(
-            "reda-reset-world-{}-{case}.litematic",
-            std::process::id()
+            "reda-reset-world-{}-{:?}-{case}.litematic",
+            std::process::id(),
+            std::thread::current().id()
         ));
         save(&path, &physical.world, &case).unwrap();
         let loaded = load(&path).unwrap();
