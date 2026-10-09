@@ -23,7 +23,7 @@
 //! from `FrontendError`'s `Display` impl (see the last test below), not a
 //! panic or a stack trace.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use reda::circuits::and4::build_and4_netlist;
 use reda::circuits::seven_segment::{build_seven_segment_netlist, TRUTH_TABLE};
@@ -31,7 +31,8 @@ use reda::circuits::verilog;
 use reda::compile::lowering::{format_histogram, lower, lower_optimised, LowerError};
 use reda::compile::topology::GateKind;
 use reda::compile::{compile, CompiledCircuit, Netlist, PlannerKind};
-use reda::frontend::synthesize_verilog;
+use reda::frontend::evaluate::Evaluator;
+use reda::frontend::{compile_systemverilog, synthesize_verilog, CompileOptions, SourceInput};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::BlockKind;
 use reda::timing::{
@@ -166,15 +167,16 @@ fn report_timing(
             // *why* the model is missing instead of silently skipping the
             // check: a circuit the emitter laid out must always have one, and
             // if one stops having one this goes red.
-            assert_eq!(
+            assert_ne!(
                 compiled.planner_kind(),
-                PlannerKind::Unified3d,
-                "{label}: only a relaxation-placed layout may be without a settle model"
+                PlannerKind::Legacy,
+                "{label}: a layout the emitter laid out must have a settle model; only a \
+                 relaxation- or fragment-placed layout may be without one"
             );
             eprintln!(
-                "{label} timing: critical-path settle model unavailable -- relaxation placed this \
-                 layout and `routing_stats` describes the emitter's; {} gates on the path, \
-                 {} game ticks measured",
+                "{label} timing: critical-path settle model unavailable -- the emitter did not \
+                 lay out this layout and `routing_stats` describes the emitter's; {} gates on \
+                 the path, {} game ticks measured",
                 summary.critical_path_gate_count, summary.worst_settle_game_ticks,
             );
         }
@@ -548,5 +550,261 @@ fn synthesizing_an_unknown_top_module_fails_with_a_clear_error() {
     assert!(
         message.contains("this_module_does_not_exist") || message.contains("not found"),
         "expected the error to name the missing module, got: {message}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Native-frontend variants
+// ---------------------------------------------------------------------
+//
+// The five tests above all go through `synthesize_verilog`, which shells out
+// to Python + `yowasp-yosys`. On a machine with no toolchain they fail with
+// `FrontendError::PythonNotFound` -- an environment limit, not a product
+// fault. The native frontend (`compile_systemverilog`) lowers the very same
+// `.v` fixtures with no Python, no subprocess, and no filesystem, and stops
+// at exactly the same gate-level `Netlist` boundary. These variants run the
+// identical proof standard -- compile, simulate every input combination
+// through the real redstone simulator, check against the same independently
+// written truth table -- through that native entry point, so each feature
+// here is verified natively. They do not replace the Yosys tests: the fresh
+// synthesis comparison is a separate, optional independent check.
+
+/// Lower `path`'s Verilog source with the native frontend, returning the
+/// gate-level netlist plus its `port name -> internal signal` map in the
+/// same shape `synthesize_verilog` returns.
+fn native_netlist(path: &str, top: &str) -> (Netlist, HashMap<String, String>) {
+    let source = std::fs::read_to_string(path).expect("fixture must exist");
+    let artifact = compile_systemverilog(
+        &[SourceInput {
+            name: path,
+            text: &source,
+        }],
+        &CompileOptions::new(top),
+    )
+    .unwrap_or_else(|diags| panic!("{path} must compile natively as {top}: {diags:?}"));
+    (artifact.netlist.clone(), artifact.output_map())
+}
+
+#[test]
+fn native_verilog_and4_matches_its_truth_table() {
+    let (netlist, port_map) = native_netlist("tests/fixtures/and4.v", "and4");
+    let output_signal = port_map["y"].clone();
+
+    let native_stats = compile_simulate_and_check(
+        "native and4",
+        &netlist,
+        lower,
+        true,
+        &["a", "b", "c", "d"],
+        4,
+        |compiled| vec![*compiled.output_positions.get(&output_signal).unwrap()],
+        |bits| vec![(0..4).all(|i| (bits >> (3 - i)) & 1 == 1)],
+    );
+
+    let (hand_netlist, hand_output) = build_and4_netlist();
+    let hand_stats = compile_simulate_and_check(
+        "hand-written and4",
+        &hand_netlist,
+        lower,
+        true,
+        &["a", "b", "c", "d"],
+        4,
+        |compiled| vec![*compiled.output_positions.get(&hand_output).unwrap()],
+        |bits| vec![(0..4).all(|i| (bits >> (3 - i)) & 1 == 1)],
+    );
+
+    eprintln!(
+        "and4 native comparison: native {}g/{}b/{}t vs hand-written {}g/{}b/{}t",
+        native_stats.0, native_stats.1, native_stats.2, hand_stats.0, hand_stats.1, hand_stats.2
+    );
+}
+
+#[test]
+fn native_verilog_dff_reaches_the_physical_simulator() {
+    let (netlist, port_map) = native_netlist("tests/fixtures/dff.v", "dff_example");
+    assert!(netlist
+        .gates
+        .iter()
+        .any(|gate| gate.kind == GateKind::DffPosedge));
+
+    let lowered = lower(&netlist).expect("native DFF netlist must lower");
+    let compiled = compile(&lowered).expect("native DFF netlist must compile");
+    assert_eq!(compiled.planner_kind(), PlannerKind::Unified3d);
+
+    let d = compiled.input_positions["d"];
+    let clk = compiled.input_positions["clk"];
+    let q = compiled.output_positions[&port_map["q"]];
+    let mut simulator = Simulator::new(compiled.world);
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("native DFF must settle");
+
+    let mut apply = |position, on| {
+        set_lever(&mut simulator, position, on);
+        read_output(&simulator, q)
+    };
+    assert!(!apply(clk, true));
+    assert!(!apply(clk, false));
+    assert!(!apply(d, true));
+    assert!(apply(clk, true));
+    assert!(apply(d, false));
+    assert!(apply(clk, false));
+    assert!(!apply(clk, true));
+}
+
+#[test]
+fn native_optimised_lowering_preserves_every_verilog_decoder_vector() {
+    let (netlist, port_map) = native_netlist("tests/fixtures/seven_segment.v", "bcd_seven_segment");
+
+    let segment_names = ["a", "b", "c", "d", "e", "f", "g"];
+    let output_signals: Vec<String> = segment_names.iter().map(|&s| port_map[s].clone()).collect();
+    let output_signals_for_closure = output_signals.clone();
+
+    let expected_segments = |value: u8| -> Vec<bool> {
+        if (value as usize) < TRUTH_TABLE.len() {
+            TRUTH_TABLE[value as usize]
+                .iter()
+                .map(|&bit| bit == 1)
+                .collect()
+        } else {
+            vec![false; 7]
+        }
+    };
+
+    let native_stats = compile_simulate_and_check(
+        "native seven_segment",
+        &netlist,
+        lower_optimised,
+        false,
+        &["d3", "d2", "d1", "d0"],
+        4,
+        move |compiled| {
+            output_signals_for_closure
+                .iter()
+                .map(|s| *compiled.output_positions.get(s).unwrap())
+                .collect()
+        },
+        expected_segments,
+    );
+
+    const BASELINE: (usize, usize, u64) = (56, 12_348, 88);
+    assert!(
+        native_stats.0 <= BASELINE.0 && native_stats.1 <= BASELINE.1 && native_stats.2 <= BASELINE.2,
+        "native optimised lowering regressed the 56 gates / 12,348 blocks / 88 ticks baseline: got {} gates / {} blocks / {} ticks",
+        native_stats.0,
+        native_stats.1,
+        native_stats.2,
+    );
+    assert!(
+        native_stats.0 < BASELINE.0 || native_stats.1 < BASELINE.1 || native_stats.2 < BASELINE.2,
+        "native optimised lowering must improve at least one of the 56 gates / 12,348 blocks / 88 ticks baseline measurements"
+    );
+
+    let (hand_netlist, hand_segment_signal) = build_seven_segment_netlist();
+    let hand_signals: Vec<String> = segment_names
+        .iter()
+        .map(|&s| hand_segment_signal[s].clone())
+        .collect();
+    let hand_stats = compile_simulate_and_check(
+        "hand-written seven_segment",
+        &hand_netlist,
+        lower,
+        true,
+        &["d3", "d2", "d1", "d0"],
+        4,
+        move |compiled| {
+            hand_signals
+                .iter()
+                .map(|s| *compiled.output_positions.get(s).unwrap())
+                .collect()
+        },
+        expected_segments,
+    );
+
+    eprintln!(
+        "seven_segment native comparison: native {}g/{}b/{}t vs hand-written {}g/{}b/{}t",
+        native_stats.0, native_stats.1, native_stats.2, hand_stats.0, hand_stats.1, hand_stats.2
+    );
+}
+
+/// The native frontend's netlist for each shipped Verilog circuit computes
+/// the same function as the baked Yosys netlist, evaluated through the
+/// structural `Evaluator` over every input combination. Native lowering
+/// invents its own gate names (`g0`, `g1`, ...), so byte-for-byte equality
+/// with the baked file is impossible; this is the semantic equivalence that
+/// matters -- same port, same inputs, same output value.
+#[test]
+fn native_baked_netlists_match_semantic_equivalence() {
+    for circuit in verilog::CIRCUITS {
+        let source = std::fs::read_to_string(circuit.source_path).expect("fixture must exist");
+        let native = compile_systemverilog(
+            &[SourceInput {
+                name: circuit.source_path,
+                text: &source,
+            }],
+            &CompileOptions::new(circuit.top_module),
+        )
+        .unwrap_or_else(|diags| panic!("{} must compile natively: {diags:?}", circuit.name));
+        let (baked_netlist, baked_labels) = circuit.baked_netlist();
+
+        let native_map = native.output_map();
+        let baked_map: HashMap<String, String> = baked_labels.into_iter().collect();
+
+        let native_eval = Evaluator::new(&native.netlist).expect("native netlist must evaluate");
+        let baked_eval = Evaluator::new(&baked_netlist).expect("baked netlist must evaluate");
+
+        // Native lowers inputs in declaration order (`d3`..`d0`), baked in
+        // sorted order (`d0`..`d3`); the truth-table evaluation maps by name,
+        // so the set of input names is what must match, not their order.
+        let inputs = native.netlist.inputs.clone();
+        let mut baked_inputs = baked_netlist.inputs.clone();
+        baked_inputs.sort();
+        let mut native_inputs = inputs.clone();
+        native_inputs.sort();
+        assert_eq!(
+            native_inputs,
+            baked_inputs,
+            "{}: native and baked input name sets differ",
+            circuit.name
+        );
+        let n = inputs.len();
+        for combo in 0..(1u32 << n) {
+            let mut map = BTreeMap::new();
+            for (i, name) in inputs.iter().enumerate() {
+                map.insert(name.clone(), (combo >> (n - 1 - i)) & 1 == 1);
+            }
+            let native_out = native_eval.evaluate(&map).expect("native must evaluate");
+            let baked_out = baked_eval.evaluate(&map).expect("baked must evaluate");
+            for port in native_map.keys() {
+                assert_eq!(
+                    native_out[&native_map[port]],
+                    baked_out[&baked_map[port]],
+                    "{} combo {combo} port {port}: native and baked disagree",
+                    circuit.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn native_synthesizing_an_unknown_top_module_fails_with_a_clear_error() {
+    let source = std::fs::read_to_string("tests/fixtures/and4.v").expect("fixture must exist");
+    let diags = compile_systemverilog(
+        &[SourceInput {
+            name: "and4.v",
+            text: &source,
+        }],
+        &CompileOptions::new("this_module_does_not_exist"),
+    )
+    .expect_err("an unknown top module must not compile natively");
+    let message = diags
+        .iter()
+        .map(|d| d.message.clone())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        message.contains("this_module_does_not_exist"),
+        "expected the native error to name the missing module, got: {message}"
     );
 }
