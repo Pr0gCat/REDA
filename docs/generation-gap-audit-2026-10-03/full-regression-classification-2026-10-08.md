@@ -106,8 +106,16 @@ weakened.
 | `native_negedge_dff_matches_loaded_physical_cells` | `tests/negedge_physical.rs:88` | `Os(NotFound)` |
 | `native_reset_counter_worlds_repeat_exactly` | `tests/reset_worlds.rs:105` | `Io(UnexpectedEof)` |
 
-Rerun on `390318b`: `native_feedback_counter` is `ok` (collision gone);
-`native_negedge_dff` and `native_reset_counter_worlds` rerun in progress.
+Rerun on `390318b` (wall 12795 s, exit 101, `--no-fail-fast`): all three
+collision failures are gone. `native_feedback_counter` `ok`,
+`native_negedge_dff` `ok`, `native_reset_counter_worlds` `ok`. Per-binary
+results: feedback 9 passed / 3 failed, negedge 8 passed / 2 failed,
+reset_worlds 10 passed / 2 failed. The 7 remaining failures are the combined
+tests' yosys arms (`PythonNotFound` at `feedback_physical.rs:269/309/331`,
+`negedge_physical.rs:307/358`, `reset_worlds.rs:82`); each combined test's
+native arm runs first and passes (`FEEDBACK_TRACE`/`NEGEDGE_TRACE` emitted,
+`RESET_WORLD loaded_equal:true`). No collision symptom (`Io NotFound` /
+`UnexpectedEof`) recurs.
 
 ## Category 4 — product-signal failures (17, routing fix changed physical output; record for human review, do not re-pin)
 
@@ -148,7 +156,10 @@ Per the amendment these are recorded and deferred; they do not block gap 4.
 
 - Proves: the routing fix (`4e253fb`) makes all 31 native fixtures pass the
   native/auto CLI acceptance (`gap4_complete: True`), and the temp-path
-  collision root cause is fixed (`390318b`, feedback arm verified green).
+  collision root cause is fixed (`390318b`): all three collision failures
+  (`native_feedback_counter`, `native_negedge_dff`,
+  `native_reset_counter_worlds`) are verified `ok` in the rerun, and every
+  combined test's native arm passes.
 - Does **not** prove: a green whole-project suite. 53 failures remain,
   classified above. The 6 lib guards and 17 product-signal failures are
   recorded for human review, not re-pinned. The 25 Yosys/Python failures are
