@@ -193,3 +193,59 @@ Totals: **48 FAILED** = library 6 + integration 42 (was 53 = 6 + 47).
 
 This is still not full-project convergence: 48 failures remain, classified.
 The 6 lib guards and 15 product-signal pins await human review.
+
+## Investigation of the recorded movements (2026-10-10)
+
+Per the human-review decision "investigate before accepting", the 21 recorded
+movements (6 lib guards + 15 product-signal pins) plus the viewer placement
+failures were checked for **functional** regression, not just numeric movement.
+Evidence from the same `a920492` run (`full.log`):
+
+- Every functional/semantic/behavioural test for the affected circuits passes:
+  `compile::equivalence::tests::{segment_a,seven_segment,and4,full_adder}_expansion_matches_its_compiled_world`
+  (library level), `compile::world_partition::tests::*_world_is_fully_explained`,
+  `the_compiled_{segment_a,decoder,full_adder}_matches_its_truth_table`,
+  `seven_segment_frontend_netlist_matches_its_truth_table_through_the_physical_simulator`,
+  `and4_and_seven_segment_are_semantically_equivalent_to_the_baked_yosys_netlist`,
+  `budget_zero_{segment_a,seven_segment,pinned_verilog_seven_segment}`,
+  `false_path_*`/`reconcile_*`, `full_seven_segment_hierarchy_preserves_*`,
+  `seven_segment_compile_is_deterministic_and_provenance_is_joinable`.
+- The failing `tests/primitive_graph_equivalence.rs` copies of
+  `segment_a/seven_segment_expansion_matches_its_compiled_world`
+  (`CertifiedRewriteViewMismatch`) are a *different* view than the passing
+  library-level `compile::equivalence` tests of the same name: the compiled
+  world is functionally equivalent to the expansion; the integration test's
+  pinned rewrite-view representation is stale.
+- `trace_*_decoder_transition` (`NotALegacyLayout`) and the settle-model
+  movement are the decoder/segment circuits now taking the FragmentSynth
+  planner path; their truth-table and physical-state tests pass.
+- `and4` 238→232 blocks: `and4_world_is_fully_explained` and
+  `and4_expansion_matches_its_compiled_world` pass — a size reduction with
+  function preserved.
+
+Conclusion: **no functional regression detected.** All 21 movements and the
+viewer placement failures are structural / measurement / representation pins
+downstream of the routing + fragment_synth work. Whether the smaller layouts
+and the FragmentSynth path are the desired new baseline is the open human
+decision (accept → regenerate pins/fixtures/docs; reject → gap-3 root cause).
+
+## Gap-8 tools/viewer/WASM/runtime gates at `a920492` (2026-10-10)
+
+`target/qualification/gap8-gates/evidence/gates.log` (every check.sh stanza
+except the root-test stanza, which the full-suite run above covers). Real
+exits (the first run's `tail`/`tee` masked them; script corrected):
+
+- PASS: budget_zero registration = 6; `cargo check -p reda --target wasm32`;
+  frontend wasm parity (3 = host 3); `wasm-pack build --target web`.
+- FAIL: `cargo clippy --all-targets -D warnings` on the root crate — 10 errors
+  (`clone_on_copy` `src/redstone/simulator/mod.rs:214`, `too_many_arguments`,
+  …); viewer clippy — 1 error (`chunks_exact_to_as_chunks`
+  `viewer/tests/geometry_ordering.rs:216`). Pre-existing lint debt under
+  clippy 1.98.0, not introduced by this branch's test changes.
+- FAIL: viewer `placement_agrees_with_native` — 6 failed on host and 6 failed
+  under wasm (the placement fixtures are stale vs the current compiler
+  placement; same structural-pin class as Category 4).
+
+Gap 8 is therefore NOT closed: it needs (a) the human accept/reject decision
+on the structural movements, (b) the clippy lint debt resolved, and (c) the
+placement fixtures regenerated only if (a) accepts the new layout.
