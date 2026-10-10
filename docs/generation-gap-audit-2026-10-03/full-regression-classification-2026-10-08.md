@@ -166,3 +166,30 @@ Per the amendment these are recorded and deferred; they do not block gap 4.
   environment, not product. Gap 4's Minecraft physical trajectory (status row
   7) is a side-branch requiring user input before investigation.
 - All eight broad rows remain open until their own complete evidence exists.
+
+## Update — re-run at HEAD `a920492` (2026-10-10)
+
+Same full `cargo test --workspace --release --no-fail-fast` on the committed
+tree at `a920492` (`target/qualification/gap4-full-regression/evidence/`,
+source-binding `a920492`, wall 16166 s, exit 101, all 85 targets). The
+`4e253fb` record above is retained unchanged as historical evidence.
+
+Totals: **48 FAILED** = library 6 + integration 42 (was 53 = 6 + 47).
+
+- Category 1 (6 lib source guards): unchanged. Recorded, not re-pinned.
+- Category 2 (25 Yosys/Python environment): unchanged. Not product.
+- Category 3 (temp-path collisions): **0** — the `390318b` fix is now in the
+  tree; `native_feedback_counter`, `native_negedge_dff`,
+  `native_reset_counter_worlds` all `ok`.
+- Category 4 (product-signal pins): **15** (was 17). The two settle-model
+  assertions `the_compiled_segment_a_matches_its_truth_table` and
+  `the_compiled_decoder_matches_its_truth_table` now pass: the helper's
+  no-model arm was generalized from `assert_eq!(Unified3d)` to
+  `assert_ne!(Legacy)` at `a920492` (correctness — `routing_stats::analyze`
+  returns `NotALegacyLayout` for FragmentSynth too). The layout-kind
+  movement itself is still a product signal, recorded below, not re-pinned.
+  The remaining 15 are unchanged from the table above.
+- Category 5 (2 side-branch): unchanged.
+
+This is still not full-project convergence: 48 failures remain, classified.
+The 6 lib guards and 15 product-signal pins await human review.
