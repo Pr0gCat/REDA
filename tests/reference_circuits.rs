@@ -129,15 +129,16 @@ fn report_timing(
             );
         }
         None => {
-            assert_eq!(
+            assert_ne!(
                 compiled.planner_kind(),
-                PlannerKind::Unified3d,
-                "{label}: only a relaxation-placed layout may be without a settle model"
+                PlannerKind::Legacy,
+                "{label}: a layout the emitter laid out must have a settle model; only a \
+                 relaxation- or fragment-placed layout may be without one"
             );
             eprintln!(
-                "{label} timing: critical-path settle model unavailable -- relaxation placed this \
-                 layout and `routing_stats` describes the emitter's; {} gates on the path, \
-                 {} game ticks measured",
+                "{label} timing: critical-path settle model unavailable -- the emitter did not \
+                 lay out this layout and `routing_stats` describes the emitter's; {} gates on \
+                 the path, {} game ticks measured",
                 summary.critical_path_gate_count, summary.worst_settle_game_ticks,
             );
         }
