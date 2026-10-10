@@ -300,14 +300,16 @@ gate names while the tests indexed it by source signal names.
   `four_word_rom_…` no longer panics on the map key (it now fails only on the
   `worst_settle_ticks` QoR pin, gap 3).
 
-**Item 1 (`selection.rs:1037` `undriven_output` fixture) is NOT a regression:**
-the fixture sets `outputs = ["left","left","left"]` where `left` is a driven
-primary input — exactly the occurrence-boundary shape the adopted contract
-accepts (`docs/default-output-occurrences-2026-10-04/adoption.md`,
-`tests/default_output_occurrences.rs`). The assertion encodes the retired
-strict rule. It is the sixth library guard and is held for human authorization;
-the proposed correction keeps the test's intent by using a genuinely undriven
-output (`["zero","zero","undriven"]`) so both paths must still agree.
+- **Item 1 — stale fixture asserting a retired rule (test fix, human-authorized).**
+  `selection.rs:1037` `undriven_output` set `outputs = ["left","left","left"]`
+  where `left` is a driven primary input — the occurrence-boundary shape the
+  adopted contract accepts (`docs/default-output-occurrences-2026-10-04/adoption.md`,
+  `tests/default_output_occurrences.rs`); the assertion encoded the retired
+  strict rule. The fixture now uses a genuinely undriven output
+  (`["zero","zero","undriven"]`, duplicate keeps it on the literal path) so
+  both the selector and the non-rewrite path must still reject it. Verified:
+  `selector_preserves_realisability_cycle_and_driver_errors` now passes, and
+  the other 11 selection tests plus `default_output_occurrences` stay green.
 
 ## Gap-8 tools/viewer/WASM/runtime gates at `a920492` (2026-10-10)
 
