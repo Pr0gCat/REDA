@@ -250,6 +250,31 @@ changes, all downstream of the routing + fragment_synth work. Whether any of
 them is the desired new baseline is the open human decision (accept →
 regenerate pins/fixtures/docs; reject → gap-3 root cause).
 
+### Which movements are genuine regressions, not stale pins
+
+Two classes are NOT "the layout moved, re-pin it" — they are lost behaviour
+that the branch's rewrite/selector path introduced, and cannot be accepted as
+a baseline:
+
+- **Undriven-signal detection lost.** `selection.rs:1037`
+  `selector_preserves_realisability_cycle_and_driver_errors` asserts
+  `compile_selected(src).err() == compile_without_rewrite(src).err()` for an
+  undriven-output netlist; the rewrite path now returns `Ok` while the
+  non-rewrite path still returns `Err(UndrivenSignal("left"))`.
+  `default_output_errors.rs:25` likewise: `nor("missing")` no longer yields
+  `Err(UndrivenSignal("missing"))`. The selector silently accepts an undriven
+  output/signal it must reject.
+- **Output/driver map entries missing.** `constant_drivers.rs:79`,
+  `four_word_rom` (`torch_row_decoder.rs:485`), `torch_row_entry`
+  (`torch_row_decoder.rs:2318`) fail with `no entry found for key`: a
+  constant-output driver / output-map key the tests look up is no longer
+  present.
+
+These are candidate correctness bugs in the rewrite/selector path and should
+be root-caused and fixed, not re-pinned. The remaining movements (block
+counts, footprints, settle ticks, planner path, graph view, layout
+coordinates) are the gap-3 physical-quality program.
+
 ## Gap-8 tools/viewer/WASM/runtime gates at `a920492` (2026-10-10)
 
 `target/qualification/gap8-gates/evidence/gates.log` (every check.sh stanza
