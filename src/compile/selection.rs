@@ -627,6 +627,16 @@ pub fn compile_selected_with_refresh_budget(
     // Literal wiring is a public boundary obligation, even without inputs.
     // Reuse the certified generator instead of merging aliased public lamps.
     if super::fragment_synth::rewrite::needs_occurrence_preserving_boundary(source) {
+        // Validate the source before the literal generator: the literal path
+        // only proves the truth-table rewrite (arity + equivalence), so a
+        // genuinely undriven signal, a cycle, or an unrealisable gate would be
+        // relabeled as CandidateMetadataViolation instead of the netlist-level
+        // error the contract requires. `checked_rewrite_topological_order` is
+        // the boundary validator: it still rejects undriven signals, cycles,
+        // invalid arities and unrealisable gates, while permitting a driven
+        // primary input to appear as an output (the adopted occurrence
+        // contract). Mirrors the validation every other branch runs (647/665/667).
+        super::checked_rewrite_topological_order(source)?;
         match super::fragment_synth::torch_row::compile_direct_literals(source, 1_000_000) {
             Ok(rewrite) => return Ok(CompiledCircuit::from_certified_rewrite(rewrite)),
             Err(super::fragment_synth::torch_row::TorchRowError::UnsupportedBoundary) => {},
