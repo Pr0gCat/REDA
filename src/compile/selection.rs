@@ -1041,8 +1041,13 @@ mod tests {
         cyclic.gates[0].inputs = vec!["mixed".into()];
         let mut undriven = source();
         undriven.gates[0].inputs = vec!["missing".into()];
+        // A genuinely undriven output on an occurrence boundary (duplicate
+        // "zero" keeps it on the literal path): both the selector and the
+        // non-rewrite path must still reject it with UndrivenSignal. (The old
+        // fixture used "left", a driven primary input, which the adopted
+        // occurrence contract now accepts — it tested a retired rule.)
         let mut undriven_output = source();
-        undriven_output.outputs = vec!["left".into(); 3];
+        undriven_output.outputs = vec!["zero".into(), "zero".into(), "undriven".into()];
         for source in [invalid, cyclic, undriven, undriven_output] {
             assert_eq!(
                 compile_selected(&source).err(),
