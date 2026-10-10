@@ -219,21 +219,36 @@ Evidence from the same `a920492` run (`full.log`):
 - `trace_*_decoder_transition` (`NotALegacyLayout`) and the settle-model
   movement are the decoder/segment circuits now taking the FragmentSynth
   planner path; their truth-table and physical-state tests pass.
-- `and4` 238→232 blocks: `and4_world_is_fully_explained` and
-  `and4_expansion_matches_its_compiled_world` pass — a size reduction with
-  function preserved.
+- `and4` block count: the current compiler produces **238** blocks; the pinned
+  value (`realised-graph-extras.md`, `reference_circuits.rs:592`) is **232** —
+  an **increase**, not a reduction. `and4_world_is_fully_explained` and
+  `and4_expansion_matches_its_compiled_world` pass, so function is preserved.
 
 Conclusion: **no functional regression** — every circuit computes correctly
 (truth tables, library-level equivalence, physical-simulator state, world
-partition, determinism all pass). But the movements are NOT purely cosmetic:
-`decoded_rows_match_rom_truth…` `tests/torch_row_decoder.rs:197` pins
-`baseline["worst_settle_ticks"]`, which moved **8 → 10** — a QoR regression
-(slower settling on the smaller layout), the same arrival-balance concern as
-gap 3. The rest are structural / measurement / representation pins (block
-counts, footprints, bboxes, planner path, graph representation, layout
-coordinates). Whether the smaller layouts, the FragmentSynth path, and the
-worse settling are the desired new baseline is the open human decision
-(accept → regenerate pins/fixtures/docs; reject → gap-3 root cause).
+partition, determinism all pass). But the movements are NOT cosmetic and are
+NOT a clean size reduction — the directions are mixed per circuit:
+
+- `and4` blocks 232→**238** (up); `full_adder` dust-on-stone cells 3→**1**
+  (down); `and4` keep-out footprint and derived range move both ways; grown
+  and4 bbox one axis +1.
+- `official_verilog_seven_segment_dump` blocks 47→**206** (up);
+  `verilog_litematic` 206→**32** (down) — the two disagree, so the litematic
+  and mc_dump lowering paths have diverged.
+- `decoded_rows_match_rom_truth…` `tests/torch_row_decoder.rs:197`
+  `worst_settle_ticks` 8→**10** — a QoR regression (slower settling), the
+  gap-3 arrival-balance concern.
+- `selection.rs:1037` and `default_output_errors.rs:25`: the
+  `UndrivenSignal` error **disappears** (now `None`) — a behaviour change.
+- `constant_drivers.rs:79`, `four_word_rom`, `torch_row_entry`: map-key
+  lookups fail; `fragment_synth_baseline.rs:51` world Fingerprint changed;
+  segment/decoder circuits now take the FragmentSynth path.
+
+There is **no clean "size reduction" subset to accept**: the changes are mixed
+increases/decreases plus a QoR regression plus planner-path and behaviour
+changes, all downstream of the routing + fragment_synth work. Whether any of
+them is the desired new baseline is the open human decision (accept →
+regenerate pins/fixtures/docs; reject → gap-3 root cause).
 
 ## Gap-8 tools/viewer/WASM/runtime gates at `a920492` (2026-10-10)
 
