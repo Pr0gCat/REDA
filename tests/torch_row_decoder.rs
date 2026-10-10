@@ -480,9 +480,18 @@ fn four_word_rom_with_physical_literal_decoder_records_full_transition_quality()
         .into_iter()
         .map(|n| position(c.input_positions[n]))
         .collect();
+    let driver_pos: std::collections::BTreeMap<_, _> = match c.physical_rewrite() {
+        Some(r) => netlist
+            .outputs
+            .iter()
+            .zip(r.source_output_driver_positions())
+            .map(|(name, p)| (name.clone(), *p))
+            .collect(),
+        None => c.gate_output_positions.clone(),
+    };
     let drivers = ["y0", "y1", "y2"]
         .into_iter()
-        .map(|n| position(c.gate_output_positions[&outputs[n]]))
+        .map(|n| position(driver_pos[&outputs[n]]))
         .collect();
     let lamps = ["y0", "y1", "y2"]
         .into_iter()
@@ -2305,6 +2314,15 @@ fn torch_row_entry_records_quality_against_current_shipping_layouts() {
         let row = reda::compile::fragment_synth::torch_row::compile_torch_row(&source, 1_000_000)
             .unwrap();
         let position = |p: (i32, i32, i32)| Position::new(p.0, p.1, p.2);
+        let driver_pos: std::collections::BTreeMap<_, _> = match shipping.physical_rewrite() {
+            Some(r) => shipping_netlist
+                .outputs
+                .iter()
+                .zip(r.source_output_driver_positions())
+                .map(|(name, p)| (name.clone(), *p))
+                .collect(),
+            None => shipping.gate_output_positions.clone(),
+        };
         let current = measure_rom(
             shipping.world.clone(),
             source
@@ -2315,7 +2333,7 @@ fn torch_row_entry_records_quality_against_current_shipping_layouts() {
             source
                 .outputs
                 .iter()
-                .map(|n| position(shipping.gate_output_positions[n]))
+                .map(|n| position(driver_pos[n]))
                 .collect(),
             source
                 .outputs
