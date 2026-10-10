@@ -275,6 +275,40 @@ be root-caused and fixed, not re-pinned. The remaining movements (block
 counts, footprints, settle ticks, planner path, graph view, layout
 coordinates) are the gap-3 physical-quality program.
 
+### Fixes applied (2026-10-10, verified)
+
+Root cause (static trace, then confirmed by running the named tests): the
+selector's literal branch (`selection.rs:629`) ran ahead of source validation,
+and `from_certified_rewrite` keys `gate_output_positions` by implementation
+gate names while the tests indexed it by source signal names.
+
+- **Item 2 — error identity (product fix).** `selection.rs:629` now calls
+  `checked_rewrite_topological_order(source)?` before the literal generator.
+  This restores `UndrivenSignal`/`CyclicNetlist`/`NotRealisable` for genuine
+  source defects (the literal path only proved arity+equivalence) while still
+  permitting a driven primary input as an output (the adopted occurrence
+  contract). Verified: `default_output_errors::occurrence_owner_preserves_…`
+  now passes.
+- **Items 3-4 — stale test consumers (test fix).** `constant_drivers.rs`,
+  `torch_row_decoder.rs:485` and `:2318` now resolve drivers through the sealed
+  `physical_rewrite().source_output_driver_positions()` (index-aligned with the
+  lowered/shipping netlist outputs), falling back to the source-keyed map only
+  for legacy circuits — the same pattern the library uses internally
+  (`selection.rs:790`, `torch_row_decoder.rs:2169`). Verified:
+  `constant_drivers::native_constant_outputs_…` and
+  `torch_row_decoder::torch_row_entry_records_quality_…` now pass;
+  `four_word_rom_…` no longer panics on the map key (it now fails only on the
+  `worst_settle_ticks` QoR pin, gap 3).
+
+**Item 1 (`selection.rs:1037` `undriven_output` fixture) is NOT a regression:**
+the fixture sets `outputs = ["left","left","left"]` where `left` is a driven
+primary input — exactly the occurrence-boundary shape the adopted contract
+accepts (`docs/default-output-occurrences-2026-10-04/adoption.md`,
+`tests/default_output_occurrences.rs`). The assertion encodes the retired
+strict rule. It is the sixth library guard and is held for human authorization;
+the proposed correction keeps the test's intent by using a genuinely undriven
+output (`["zero","zero","undriven"]`) so both paths must still agree.
+
 ## Gap-8 tools/viewer/WASM/runtime gates at `a920492` (2026-10-10)
 
 `target/qualification/gap8-gates/evidence/gates.log` (every check.sh stanza
