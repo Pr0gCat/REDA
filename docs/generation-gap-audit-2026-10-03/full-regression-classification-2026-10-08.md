@@ -223,11 +223,17 @@ Evidence from the same `a920492` run (`full.log`):
   `and4_expansion_matches_its_compiled_world` pass — a size reduction with
   function preserved.
 
-Conclusion: **no functional regression detected.** All 21 movements and the
-viewer placement failures are structural / measurement / representation pins
-downstream of the routing + fragment_synth work. Whether the smaller layouts
-and the FragmentSynth path are the desired new baseline is the open human
-decision (accept → regenerate pins/fixtures/docs; reject → gap-3 root cause).
+Conclusion: **no functional regression** — every circuit computes correctly
+(truth tables, library-level equivalence, physical-simulator state, world
+partition, determinism all pass). But the movements are NOT purely cosmetic:
+`decoded_rows_match_rom_truth…` `tests/torch_row_decoder.rs:197` pins
+`baseline["worst_settle_ticks"]`, which moved **8 → 10** — a QoR regression
+(slower settling on the smaller layout), the same arrival-balance concern as
+gap 3. The rest are structural / measurement / representation pins (block
+counts, footprints, bboxes, planner path, graph representation, layout
+coordinates). Whether the smaller layouts, the FragmentSynth path, and the
+worse settling are the desired new baseline is the open human decision
+(accept → regenerate pins/fixtures/docs; reject → gap-3 root cause).
 
 ## Gap-8 tools/viewer/WASM/runtime gates at `a920492` (2026-10-10)
 
