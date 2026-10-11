@@ -1678,6 +1678,7 @@ impl std::error::Error for CompileError {}
 /// key, never the coordinate or display label.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CircuitObservations {
+    pub(crate) gate_inventory: Option<fragment_synth::physical_sites::GateInventory>,
     pub primary_inputs:
         BTreeMap<fragment_synth::identity::PortId, fragment_synth::identity::ObservationSite>,
     pub primitive_outputs:

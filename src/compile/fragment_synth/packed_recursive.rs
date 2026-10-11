@@ -463,6 +463,34 @@ pub(crate) fn synthesise_packed_recursive_fabric<R: PhysicalRouter + Sync>(
     })
 }
 
+/// Compose individually certified leaves selected by the logical cut heuristic.
+/// No physical contract, repair rule or certification budget is changed.
+pub(crate) fn synthesise_minimum_crossing_fabric<R: PhysicalRouter + Sync>(
+    netlist: &Netlist,
+    parent: &ChunkId,
+    router: &R,
+    search: &SearchConfig,
+    certification: &CertificationConfig,
+) -> Result<PackedRecursiveProduct, PackedRecursiveError> {
+    let chunk = node_chunk_id(netlist, parent)?;
+    if netlist.gates.is_empty() { return Err(PackedRecursiveError::NoGates { chunk }); }
+    let parts = super::partition::partition_minimum_crossing(netlist, &chunk, TERMINAL_GATES)?;
+    let mut artifacts = Vec::new();
+    for part in &parts {
+        artifacts.extend(build_leaf_finer(part, packed_contract(search), search, &LEAF_PITCHES)?);
+    }
+    let node = synthesise_packed_node_fabric(netlist, &artifacts, None, router, search,
+        certification, CertificationWorkers::bounded(1))
+        .map_err(|error| PackedRecursiveError::Packed { chunk: chunk.clone(), error: Box::new(error) })?;
+    let artifact = into_parent_connectable(&node, parent)
+        .map_err(|error| PackedRecursiveError::Packed { chunk: chunk.clone(), error: Box::new(error) })?;
+    Ok(PackedRecursiveProduct {
+        leaves: artifacts.iter().map(|leaf| LeafDiagnostic {
+            chunk: leaf.chunk.clone(), gates: leaf.netlist.gates.iter().map(|gate| gate.output.clone()).collect(),
+        }).collect(), node, artifact, depth: 2, peak_workers: 1,
+    })
+}
+
 /// One leaf at `chunk`, or -- when the leaf builder refuses it -- the leaves
 /// of its halves, down to single gates.
 fn build_leaf_finer(
@@ -760,7 +788,7 @@ pub(crate) fn adapt_packed_root(
             lane: *lane,
         })
         .collect();
-    Ok(assemble_product(
+    let mut adapted = assemble_product(
         RootAssembly {
             world,
             trunks: &product.node.trunks,
@@ -778,7 +806,9 @@ pub(crate) fn adapt_packed_root(
         },
         certificate,
         search,
-    ))
+    );
+    adapted.gate_inventory = Some(product.node.gates.inventory.clone());
+    Ok(adapted)
 }
 
 /// Stand a togglable lever in a root input's caller cell.

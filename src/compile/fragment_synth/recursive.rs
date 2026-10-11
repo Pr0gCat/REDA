@@ -20,7 +20,7 @@ use crate::compile::fragment_synth::leaf::{synthesise_leaf, LeafArtifact, LeafEr
 use crate::compile::fragment_synth::leaf::LEAF_PITCHES;
 use crate::compile::fragment_synth::placement::STANDARD_PITCH;
 use crate::compile::fragment_synth::packed_recursive::{
-    adapt_packed_root, synthesise_packed_recursive_fabric, synthesise_packed_recursive_on,
+    adapt_packed_root, synthesise_minimum_crossing_fabric, synthesise_packed_recursive_fabric, synthesise_packed_recursive_on,
     synthesise_packed_recursive_pinned,
     PackedAdapterError, PackedRecursiveError,
 };
@@ -77,6 +77,7 @@ pub(crate) const TERMINAL_GATES: usize = 32;
 const MAX_RECURSIVE_WORKERS: usize = 8;
 
 pub(crate) struct RecursiveProduct {
+    pub gate_inventory: Option<super::physical_sites::GateInventory>,
     pub physical_rewrite: Option<super::rewrite::CertifiedPhysicalRewrite>,
     pub world: World,
     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
@@ -685,6 +686,7 @@ pub(crate) fn assemble_product(
     };
 
     RecursiveProduct {
+        gate_inventory: None,
         physical_rewrite: None,
         world,
         input_positions,
@@ -753,6 +755,7 @@ pub(crate) enum StructuralChoice {
     PackedDense,
     PackedStandard,
     BalancedMatrix,
+    MinimumCrossing,
 }
 
 fn compile_matrix_root(
@@ -772,6 +775,7 @@ fn compile_matrix_root(
     let metrics = certificate.metrics().clone();
     let compiled = compile::CompiledCircuit::from_certified_rewrite(rewrite);
     Ok(RecursiveProduct {
+        gate_inventory: None,
         physical_rewrite: compiled.physical_rewrite,
         world: compiled.world,
         input_positions: compiled.input_positions,
@@ -793,7 +797,18 @@ pub(crate) fn compile_proposal(
     search: &SearchConfig,
     choice: StructuralChoice,
 ) -> Result<RecursiveProduct, RecursiveError> {
+    if matches!(choice, StructuralChoice::MinimumCrossing) {
+        if pins.is_some_and(|pins| !pins.is_empty()) {
+            return Err(RecursiveError::Matrix("cut composition requires a free boundary".into()));
+        }
+        let root = root_chunk_id(lowered)?;
+        let product = synthesise_minimum_crossing_fabric(
+            lowered, &root, &DurablePhysicalRouter, search, &CertificationConfig::from_search(search),
+        )?;
+        return Ok(adapt_packed_root(lowered, &product, None, search, 1)?);
+    }
     let pitches: &[i32] = match choice {
+        StructuralChoice::MinimumCrossing => unreachable!("handled above"),
         StructuralChoice::BalancedMatrix => return compile_matrix_root(lowered, pins, search),
         StructuralChoice::PackedDense => &LEAF_PITCHES,
         StructuralChoice::PackedStandard => &[STANDARD_PITCH],

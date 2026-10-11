@@ -849,6 +849,14 @@ fn synthesise_packed_node_framed(
             )?
         };
         validate_packed_root_boundary(packed, &routed.world, &root_ports)?;
+        for (route, signal) in routed.routes.iter().zip(&routed.signals) {
+            if gates.inventory.add_route(route, signal).is_none() { gates.inventory.complete = false; }
+        }
+        for port in &root_ports {
+            if port.port.role == PortRole::Input && port.interface.is_none()
+                && gates.inventory.add_buffer(port.port.pin.handover(PortRole::Input), &port.port.signal).is_none()
+            { gates.inventory.complete = false; }
+        }
 
         Ok(LayoutOutcome {
             packed: packed.clone(),

@@ -171,10 +171,21 @@ pub enum TopologySemanticsError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum BooleanMeaning {
+#[cfg_attr(test, derive(serde::Serialize))]
+pub(crate) enum BooleanMeaning {
     Input(u16),
     Not(Box<BooleanMeaning>),
     Or(Vec<BooleanMeaning>),
+}
+
+impl BooleanMeaning {
+    pub(crate) fn evaluate(&self, inputs: &[bool]) -> Option<bool> {
+        match self {
+            Self::Input(index) => inputs.get(*index as usize).copied(),
+            Self::Not(inner) => Some(!inner.evaluate(inputs)?),
+            Self::Or(children) => Some(children.iter().map(|child| child.evaluate(inputs)).collect::<Option<Vec<_>>>()?.into_iter().any(|v| v)),
+        }
+    }
 }
 
 fn negate(meaning: BooleanMeaning) -> BooleanMeaning {
@@ -214,10 +225,14 @@ fn source_meaning(
 /// Symbolically compose a validated topology and prove its exact gate meaning.
 /// The expression is canonical for the NOR/OR/BUF primitive vocabulary and
 /// therefore does not enumerate input vectors.
-pub fn prove_topology_semantics(
+pub fn prove_topology_semantics(topology: &ValidatedTopology, kind: GateKind) -> Result<(), TopologySemanticsError> {
+    primitive_meanings(topology, kind).map(|_| ())
+}
+
+pub(crate) fn primitive_meanings(
     topology: &ValidatedTopology,
     kind: GateKind,
-) -> Result<(), TopologySemanticsError> {
+) -> Result<BTreeMap<PrimitiveId, BooleanMeaning>, TopologySemanticsError> {
     if let Some(req) = &topology.comparator_inverter {
         let valid = matches!(
             (kind, req.second_side_input),
@@ -422,7 +437,7 @@ pub fn prove_topology_semantics(
     if output != expected {
         return Err(TopologySemanticsError::GateSemanticsMismatch { kind });
     }
-    Ok(())
+    Ok(values)
 }
 
 #[derive(Serialize)]

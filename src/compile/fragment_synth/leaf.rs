@@ -274,6 +274,7 @@ fn synthesise_free_leaf_at(
 /// that entry translated -- once per level, by the packing translation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct GateMetadata {
+    pub inventory: super::physical_sites::GateInventory,
     pub output_positions: BTreeMap<String, Anchor>,
     pub facings: BTreeMap<String, CellFacing>,
 }
@@ -310,10 +311,9 @@ impl GateMetadata {
             .zip(views.gate_facings)
             .map(|(gate, facing)| (gate.output.clone(), facing))
             .collect();
-        Ok(Self {
-            output_positions,
-            facings,
-        })
+        let inventory = super::physical_sites::GateInventory::from_candidate(candidate, netlist)
+            .unwrap_or_else(|| super::physical_sites::GateInventory { complete: false, sites: BTreeMap::new() });
+        Ok(Self { inventory, output_positions, facings })
     }
 
     /// Fold `child`, translated by `by`, into this frame.
@@ -346,6 +346,7 @@ impl GateMetadata {
             }
             self.facings.insert(gate.clone(), facing);
         }
+        if self.inventory.absorb(&child.inventory, by).is_none() { self.inventory.complete = false; }
         Ok(())
     }
 

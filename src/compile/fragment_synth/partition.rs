@@ -220,11 +220,15 @@ pub fn partition(
             boundary_outputs,
         }]);
     }
-    let producer_of = producers(netlist)?;
+    let groups = order.chunks(max_gates).map(<[usize]>::to_vec).collect::<Vec<_>>();
+    partition_groups(netlist, parent, &groups)
+}
 
-    let chunk_count = order.len().div_ceil(max_gates);
+fn partition_groups(netlist: &Netlist, parent: &ChunkId, groups: &[Vec<usize>]) -> Result<Vec<Chunk>, PartitionError> {
+    let producer_of = producers(netlist)?;
+    let chunk_count = groups.len();
     let mut chunk_of = vec![0usize; netlist.gates.len()];
-    for (chunk, members) in order.chunks(max_gates).enumerate() {
+    for (chunk, members) in groups.iter().enumerate() {
         for &gate in members {
             chunk_of[gate] = chunk;
         }
@@ -270,8 +274,8 @@ pub fn partition(
         }
     }
 
-    Ok(order
-        .chunks(max_gates)
+    Ok(groups
+        .iter()
         .zip(inputs)
         .zip(outputs)
         .map(|((members, inputs), outputs)| {
@@ -290,6 +294,54 @@ pub fn partition(
             }
         })
         .collect())
+}
+
+/// Generate bounded topological cuts with the fewest crossing signal edges.
+/// This is only a candidate construction heuristic; runtime quality admission
+/// still compares every public and actual private site against the incumbent.
+pub(crate) fn partition_minimum_crossing(
+    netlist: &Netlist,
+    parent: &ChunkId,
+    max_gates: usize,
+) -> Result<Vec<Chunk>, PartitionError> {
+    if max_gates == 0 { return Err(PartitionError::ZeroChunkSize); }
+    let order = canonical_order(netlist)?;
+    if order.is_empty() { return partition(netlist, parent, max_gates); }
+    let mut position = vec![0; order.len()];
+    for (at, &gate) in order.iter().enumerate() { position[gate] = at; }
+    let producer = producers(netlist)?;
+    let mut last_use = position.clone();
+    for (consumer, gate) in netlist.gates.iter().enumerate() {
+        for signal in &gate.inputs {
+            let source = producer[signal.as_str()];
+            if source != PRIMARY { last_use[source] = last_use[source].max(position[consumer]); }
+        }
+    }
+    let mut changes = vec![0isize; order.len()+2];
+    for gate in 0..order.len() {
+        if last_use[gate] > position[gate] {
+            changes[position[gate]+1] += 1;
+            changes[last_use[gate]+1] -= 1;
+        }
+    }
+    let mut active = 0isize;
+    let crossing = changes.iter().take(order.len()+1).map(|delta| {
+        active += delta; active as usize
+    }).collect::<Vec<_>>();
+    let mut best = vec![(usize::MAX, usize::MAX); order.len()+1];
+    let mut previous = vec![0; order.len()+1];
+    best[0] = (0, 0);
+    for end in 1..=order.len() {
+        for start in end.saturating_sub(max_gates)..end {
+            let score = (best[start].0 + crossing[start], best[start].1 + 1);
+            if score < best[end] { best[end] = score; previous[end] = start; }
+        }
+    }
+    let mut groups = Vec::new();
+    let mut end = order.len();
+    while end > 0 { let start = previous[end]; groups.push(order[start..end].to_vec()); end = start; }
+    groups.reverse();
+    partition_groups(netlist, parent, &groups)
 }
 
 #[derive(Serialize)]
@@ -343,6 +395,57 @@ fn chunk_id(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn minimum_crossing_cuts_follow_dependencies_and_preserve_all_interfaces() {
+        let mut gates = Vec::new();
+        let mut driver = "input".to_owned();
+        for index in 0..8 {
+            let name = format!("c{index:02}"); gates.push(Gate::nor(&name, &[driver.as_str()])); driver = name;
+        }
+        for index in 0..16 { gates.push(Gate::nor(&format!("f{index:02}"), &[driver.as_str()])); }
+        for index in 0..16 { gates.push(Gate::nor(&format!("h{index:02}"), &[&format!("f{index:02}")])); }
+        let net = Netlist { inputs: vec!["input".into(), "unused".into()],
+            outputs: (0..16).map(|i| format!("h{i:02}")).collect(), gates };
+        let root = root_chunk_id(&net).unwrap();
+        let chunks = partition_minimum_crossing(&net, &root, 32).unwrap();
+        assert_eq!(chunks.iter().map(|c| c.netlist.gates.len()).collect::<Vec<_>>(), vec![8, 32]);
+        assert_eq!(chunks[0].boundary_outputs, vec!["c07"]);
+        assert!(chunks[0].boundary_inputs.contains(&"unused".to_owned()));
+        assert_eq!(chunks[1].boundary_inputs, vec!["c07"]);
+        assert_eq!(chunks[1].boundary_outputs, net.outputs);
+        let mut reverse = net.clone(); reverse.gates.reverse();
+        assert_eq!(partition_minimum_crossing(&reverse, &root, 32).unwrap(), chunks);
+        for chunk in chunks { canonical_order(&chunk.netlist).unwrap(); }
+    }
+
+    #[test]
+    fn minimum_crossing_cuts_match_exhaustive_cut_search() {
+        let gates = vec![Gate::nor("a", &["x"]), Gate::nor("b", &["a"]),
+            Gate::nor("c", &["a"]), Gate::nor("d", &["b", "c"]),
+            Gate::nor("e", &["d"]), Gate::nor("f", &["c"]),
+            Gate::nor("g", &["e", "f"]), Gate::nor("h", &["g"])];
+        let net = Netlist { inputs: vec!["x".into()], outputs: vec!["h".into()], gates };
+        let order = canonical_order(&net).unwrap();
+        let cut_cost = |cut: usize| {
+            let before = order[..cut].iter().map(|&i| net.gates[i].output.as_str()).collect::<BTreeSet<_>>();
+            order[cut..].iter().flat_map(|&i| &net.gates[i].inputs)
+                .filter(|s| before.contains(s.as_str())).collect::<BTreeSet<_>>().len()
+        };
+        let mut optimum = (usize::MAX, usize::MAX);
+        for mask in 0..(1usize << (order.len()-1)) {
+            let mut cuts = vec![0];
+            cuts.extend((1..order.len()).filter(|cut| mask & (1 << (cut-1)) != 0)); cuts.push(order.len());
+            if cuts.windows(2).any(|pair| pair[1]-pair[0]>3) { continue; }
+            optimum = optimum.min((cuts[1..cuts.len()-1].iter().map(|&cut| cut_cost(cut)).sum(), cuts.len()-1));
+        }
+        let root = root_chunk_id(&net).unwrap();
+        let chunks = partition_minimum_crossing(&net, &root, 3).unwrap();
+        let mut end = 0; let mut edges = 0;
+        for chunk in chunks.iter().take(chunks.len()-1) { end += chunk.netlist.gates.len(); edges += cut_cost(end); }
+        assert_eq!((edges, chunks.len()), optimum);
+        assert!(partition_minimum_crossing(&net, &root, 0).is_err());
+    }
+
     #[test]
     fn primary_aliases_keep_a_driver_through_repartitioning() {
         for net in [

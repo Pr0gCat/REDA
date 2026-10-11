@@ -20,6 +20,7 @@ pub mod manifest;
 mod packed_node;
 mod packed_recursive;
 mod packing;
+pub(crate) mod physical_sites;
 mod parent;
 pub(crate) mod partition;
 pub(crate) mod placement;

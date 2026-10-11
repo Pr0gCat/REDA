@@ -138,22 +138,29 @@ fn compile_recursive_contract(
     let mut best_quality = crate::compile::selection::recursive_quality(
         input.lowered, &result.compiled, input.pins,
     );
-    use recursive::StructuralChoice::{BalancedMatrix, PackedDense, PackedStandard};
+    use recursive::StructuralChoice::{BalancedMatrix, MinimumCrossing, PackedDense, PackedStandard};
     // Composition precedes the bounded decoder rewrite in a fixed order.
     // A single gate has no structural partition to improve.
-    let choices: &[recursive::StructuralChoice] = if input.lowered.gates.len() > 1
+    let mut choices = if input.lowered.gates.len() > 1
         && (4..=6).contains(&input.lowered.inputs.len())
         && (1..=16).contains(&input.lowered.outputs.len())
         && input.pins.is_none_or(|pins| pins.is_empty())
     {
-        &[PackedDense, PackedStandard, BalancedMatrix]
+        vec![PackedDense, PackedStandard, BalancedMatrix]
     } else if input.lowered.gates.len() > 1 {
-        &[PackedDense, PackedStandard]
+        vec![PackedDense, PackedStandard]
     } else {
-        &[]
+        vec![]
     };
+    if input.lowered.gates.len() > recursive::TERMINAL_GATES
+        && (1..=6).contains(&input.lowered.inputs.len())
+        && !input.lowered.gates.iter().any(|gate| gate.kind.is_sequential())
+        && input.pins.is_none_or(|pins| pins.is_empty())
+    {
+        choices.push(MinimumCrossing);
+    }
     result.stop_reason = StopReason::ProposalStreamExhausted;
-    for &choice in choices {
+    for choice in choices {
         if spent(result.evaluations_used) {
             result.stop_reason = budget_reason;
             break;
@@ -185,7 +192,11 @@ fn compile_recursive_contract(
             match (quality, best_quality.as_ref()) {
                 (Some(quality), Some(incumbent)) => {
                     trace.terminal = ProposalTerminal::NoImprovement;
-                    if quality.dominates(incumbent) && quality != *incumbent {
+                    if quality.dominates(incumbent) && quality != *incumbent
+                        && (!matches!(choice, MinimumCrossing)
+                            || crate::compile::selection::complete_site_histories_dominate(
+                                input.lowered, &result.compiled, &candidate.compiled))
+                    {
                         trace.accepted = true;
                         trace.terminal = ProposalTerminal::Accepted;
                         best_quality = Some(quality);
@@ -212,7 +223,8 @@ fn result_from_product(
     product: recursive::RecursiveProduct,
     case_fingerprint: SynthesisCaseFingerprint,
 ) -> SynthesisResult {
-    let compiled = if let Some(rewrite) = product.physical_rewrite {
+    let inventory = product.gate_inventory;
+    let mut compiled = if let Some(rewrite) = product.physical_rewrite {
         CompiledCircuit::from_certified_rewrite(rewrite)
     } else {
         CompiledCircuit {
@@ -229,6 +241,7 @@ fn result_from_product(
             planner_kind: PlannerKind::FragmentSynth,
         }
     };
+    compiled.observations.gate_inventory = inventory;
     SynthesisResult {
         compiled,
         metrics: product.metrics,

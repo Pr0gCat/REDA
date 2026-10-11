@@ -782,6 +782,10 @@ impl StrictPhase {
     }
 }
 fn strict_profile(source: &Netlist, circuit: &CompiledCircuit, upper: Option<&[StrictPhase]>) -> Option<Vec<StrictPhase>> {
+    strict_profile_with_inventory(source, circuit, upper, None)
+}
+fn strict_profile_with_inventory(source: &Netlist, circuit: &CompiledCircuit, upper: Option<&[StrictPhase]>,
+    inventory: Option<&super::fragment_synth::physical_sites::GateInventory>) -> Option<Vec<StrictPhase>> {
     circuit.validate_rewrite_view(source).ok()?;
     let implementation = circuit.implementation_netlist(source);
     let order = implementation.combinational_order()?;
@@ -798,7 +802,12 @@ fn strict_profile(source: &Netlist, circuit: &CompiledCircuit, upper: Option<&[S
         if lamps[i] == lamps[j] && source.outputs[i] != source.outputs[j] { return None; }
     }}
     let mut sites: Vec<_> = drivers.iter().chain(&lamps).copied().collect();
-    sites.extend(implementation.gates.iter().map(|g| circuit.gate_output_positions.get(&g.output).copied()).collect::<Option<Vec<_>>>()?);
+    if let Some(inventory) = inventory {
+        if !inventory.covers(&circuit.world) { return None; }
+        sites.extend(inventory.sites.keys().map(|at| (at.x, at.y, at.z)));
+    } else {
+        sites.extend(implementation.gates.iter().map(|g| circuit.gate_output_positions.get(&g.output).copied()).collect::<Option<Vec<_>>>()?);
+    }
     let channel_count = sites.len();
     let mut occupied = Vec::new();
     for (flat, &index) in circuit.world.cells().iter().enumerate() {
@@ -817,7 +826,10 @@ fn strict_profile(source: &Netlist, circuit: &CompiledCircuit, upper: Option<&[S
         let truth = values(source, &source_order, source.inputs.iter().enumerate().map(|(b, s)| (s.as_str(), address & (1 << b) != 0)))?;
         let implemented = values(implementation, &order, bindings.iter().enumerate().map(|(b,s)| (s.as_str(), address & (1 << b) != 0)))?;
         let public: Vec<_> = source.outputs.iter().map(|s| truth[s.as_str()]).collect();
-        targets.push(public.iter().chain(&public).copied().chain(implementation.gates.iter().map(|g| implemented[g.output.as_str()])).collect::<Vec<_>>());
+        let private = if let Some(inventory) = inventory {
+            inventory.sites.values().map(|site| site.function.evaluate(&implemented)).collect::<Option<Vec<_>>>()?
+        } else { implementation.gates.iter().map(|g| implemented[g.output.as_str()]).collect() };
+        targets.push(public.iter().chain(&public).copied().chain(private).collect::<Vec<_>>());
     }
     for from in 0..states { for to in 0..states { for address in [from,to] {
         sim.reset_observer();
@@ -1167,6 +1179,45 @@ fn literal_histories_dominate(
             || new.cells < old.cells
             || private(new) != private(old)
     })
+}
+
+/// Full retained-history admission for a structurally generated composition.
+/// Every actual private site must match every incumbent gate with the same
+/// exact source-address truth vector; public occurrences keep their order.
+pub(crate) fn complete_site_histories_dominate(
+    source: &Netlist,
+    baseline: &CompiledCircuit,
+    candidate: &CompiledCircuit,
+) -> bool {
+    use super::fragment_synth::physical_sites::GateInventory;
+    if !(1..=6).contains(&source.inputs.len()) || source.outputs.is_empty()
+        || source.gates.iter().any(|gate| gate.kind.is_sequential()) { return false; }
+    let inventory = |circuit: &CompiledCircuit| {
+        circuit.observations.gate_inventory.clone().or_else(|| {
+            GateInventory::from_candidate(circuit.physical_candidate()?, circuit.implementation_netlist(source))
+        }).filter(|inventory| inventory.covers(&circuit.world))
+    };
+    let Some(old_inventory) = inventory(baseline) else { return false; };
+    let Some(new_inventory) = inventory(candidate) else { return false; };
+    let tables = |circuit: &CompiledCircuit, inventory: &GateInventory| {
+        let graph = circuit.implementation_netlist(source);
+        let order = graph.combinational_order()?;
+        let bindings = circuit.physical_rewrite().map_or(&source.inputs[..], |rewrite|
+            rewrite.rewrite_certificate().rewritten_inputs_in_source_order());
+        let mut truth = vec![Vec::new(); inventory.sites.len()];
+        for address in 0..(1usize << source.inputs.len()) {
+            let inputs = bindings.iter().enumerate().map(|(bit, name)| (name.as_str(), address & (1 << bit) != 0));
+            let values = values(graph, &order, inputs)?;
+            for (table, site) in truth.iter_mut().zip(inventory.sites.values()) { table.push(site.function.evaluate(&values)?); }
+        }
+        Some(truth)
+    };
+    let Some(old_truth) = tables(baseline, &old_inventory) else { return false; };
+    let Some(new_truth) = tables(candidate, &new_inventory) else { return false; };
+    let Some(old) = strict_profile_with_inventory(source, baseline, None, Some(&old_inventory)) else { return false; };
+    let Some(new) = strict_profile_with_inventory(source, candidate, None, Some(&new_inventory)) else { return false; };
+    literal_histories_dominate(source.outputs.len(), 1usize << source.inputs.len(),
+        &old_truth, &new_truth, &old, &new)
 }
 
 #[cfg(test)]
