@@ -1,0 +1,131 @@
+{
+  "scope": "Top-level shared-inout four-state net-resolution contract (B): exhaustive declared-state transition walk and continuous waveform convergence in actual Minecraft 26.2, on two independent fixtures, against an independent frozen oracle.",
+  "date": "2026-10-13",
+  "public_entry": "frontend::compile_systemverilog_physical",
+  "contract": "Each resolved bus bit is (value,present); a top-level bit contributes an explicit external caller pair. Valid observations return Boolean; Floating (Z), Contention (X) and ProtocolViolation remain explicit errors. Matched representatives (caller == present && declared) are used so every electrical class is exercised through transitions.",
+  "method": {
+    "transition_walk": "Hierholzer Eulerian circuit over the complete digraph on 64 declared states with self-loops: one 4097-vertex walk covers all 4096 ordered (before->after) transitions exactly once.",
+    "representatives": "protocol_matched (caller==present&&declared) per declared state, so the walk lands in every Value/Contention/Floating class rather than masking 16 states as ProtocolViolation.",
+    "oracle": "pure-Python multi-driver resolution reference (no HDL simulator), independent of the Rust compiler; 8192 rows = 64x64x2 (before,after,phase,value).",
+    "waveform_convergence": "reconstruct the driver's per-poll read_state dicts from the raw RCON log (marker-pair grouping on the first lamp read), then require the maximal identical suffix of the poll sequence to be >= REQUIRED_STABLE_POLLS (5). This is the same fixed-point guarantee poll_until_quiescent enforces; no extra settling allowance.",
+    "game_protocol": "frozen circuit_conformance.py (run/poll_until_quiescent/read_state/read_relay_state); driver only monkeypatches read_state (adds channel/readback/external-pad reads) and read_relay_state (bounded re-forceload retry on transient RegionNotReady - an environment retry, not a settling change)."
+  },
+  "frozen_protocol": {
+    "path": "target/qualification/shared-inout-game-producer/final-protocol/circuit_conformance.py",
+    "sha256": "01182c06cc2ed816c9d207039df30d2299bf5e051f9e0c8cba416a08c2c74c88",
+    "required_stable_polls": 5
+  },
+  "oracle_fixture1": {
+    "path": "docs/inout-standard-oracle-2026-10-04/run.py",
+    "sha256": "0a02488a5b7cf1b98152ea3f3bd99c0b887b5b1ee31c46b6fbb8191b061e0d7f",
+    "rows": 8192
+  },
+  "oracle_fixture2": {
+    "path": "fixture2/gen_oracle.py",
+    "sha256": "a069aa6a13766a93dea0affc444955e1c1b15767900f64b661c6ba5433a76281",
+    "csv": "fixture2/standard-oracle.csv",
+    "csv_sha256": "bbc080480ccc30fd3ffb9a843c5d89e17e8fe6e3196e9ec38bb66fefe26cb352",
+    "rows": 8192
+  },
+  "fixtures": {
+    "fixture1": {
+      "source": "tests/fixtures/resolved-inout.sv (two internal tri-state writers + one external writer)",
+      "origin": [230000, 151, 180000],
+      "actual_gate_count": 37,
+      "declared_states": 64,
+      "raw_control_states": 128,
+      "candidate_dump_sha256": "259115458192ade4741ea35fdf1c87fc473a0e04630d5c92fe615ad8a71f0164",
+      "expected_trace_sha256": "8be6b8579d7a8b6eeef9b27e46eafb9653e64cd2b33d24f61438c144384b26d2",
+      "transition_schedule_sha256": "70e2e91ff030dd258e3f7a8bfb80aa22156b9fc9a55688bbd4a1c6427a7e1613",
+      "raw_rcon_log": {
+        "path": "target/qualification/shared-inout-transition-run/transition-rcon.jsonl",
+        "sha256": "3204e2d629c8934f3068c83c6924d16635cc16482c5f8c341b4656a8822b7509",
+        "bytes": 3525287670
+      },
+      "transition_result": {
+        "path": "target/qualification/shared-inout-transition-run/transition-result.json",
+        "sha256": "69681caefcb1b45396cccea2c3d7e100d119f68a849585d9b50e7db9c8efd757",
+        "bytes": 12670930
+      },
+      "driver_log": {
+        "path": "target/qualification/shared-inout-transition-run/full-run-matched.log",
+        "sha256": "437eadde7a0c55214a9b5e1a629d7ea47a02a3588e5fd7a24e5ca591ea89c889",
+        "bytes": 1061666
+      },
+      "transition_audit": {
+        "accepted": true,
+        "transitions_exercised": 4096,
+        "transitions_missing": 0,
+        "visited_states": 64,
+        "distinct_declared_states": 64,
+        "states_not_observed": [],
+        "checked_counts_from_complete_raw_reads": {"Value": 38, "Contention": 18, "Floating": 8},
+        "electrical_failure_count": 0,
+        "raw_rcon_pairs": 23754209,
+        "skipped_unparseable_log_lines": 0
+      },
+      "waveform_audit": {
+        "accepted": true,
+        "settles_analyzed": 4098,
+        "expected_settles": 4097,
+        "settles_converged": 4098,
+        "settles_with_bad_waveform": 0,
+        "required_stable_polls": 5,
+        "settle_ceiling_seconds": 5.8274509803921575,
+        "polls_to_first_stable_max": 10,
+        "skipped_unparseable_log_lines": 0
+      }
+    },
+    "fixture2": {
+      "source": "fixture2/fixture.sv (writer + inverted writer driving ~data + external; same port contract, different netlist and state->class mapping)",
+      "source_sha256": "7c17dd57ae6989663b709b3b0a146019c8a96c8a6f4b90427a452e79abb71ea4",
+      "origin": [231000, 151, 180000],
+      "actual_gate_count": 35,
+      "declared_states": 64,
+      "raw_control_states": 128,
+      "candidate_dump_sha256": "25c2eb86d1d14559a68e670e73455d06402dcd27c8bedf7fed557ec51d91cec9",
+      "expected_trace_sha256": "d834ca5071509a8b48854b9e3fd276793cddc760700f8e3794663259e08f5417",
+      "transition_schedule_sha256": "70e2e91ff030dd258e3f7a8bfb80aa22156b9fc9a55688bbd4a1c6427a7e1613",
+      "raw_rcon_log": {
+        "path": "target/qualification/shared-inout2-transition-run/transition-rcon.jsonl",
+        "sha256": "a449dcb3ffe5ddccd2f5ec6fd3493394f8969be79795c3b06ef42759e8a0904a",
+        "bytes": 3209284956
+      },
+      "transition_result": {
+        "path": "target/qualification/shared-inout2-transition-run/transition-result.json",
+        "sha256": "546ae964979dca018af07649a7af93c5d9ea01ed0ba64085f4797f4af74df4e6",
+        "bytes": 12367753
+      },
+      "driver_log": {
+        "path": "target/qualification/shared-inout2-transition-run/full-run.log",
+        "sha256": "4db16af5d706209b1730210f2c720ba9d2227e10666c3a04c48f98620b591210",
+        "bytes": 1057570
+      },
+      "transition_audit": {
+        "accepted": true,
+        "transitions_exercised": 4096,
+        "transitions_missing": 0,
+        "visited_states": 64,
+        "distinct_declared_states": 64,
+        "states_not_observed": [],
+        "checked_counts_from_complete_raw_reads": {"Value": 38, "Contention": 18, "Floating": 8},
+        "electrical_failure_count": 0,
+        "raw_rcon_pairs": 21624341,
+        "skipped_unparseable_log_lines": 0
+      },
+      "waveform_audit": {
+        "accepted": true,
+        "settles_analyzed": 4098,
+        "expected_settles": 4097,
+        "settles_converged": 4098,
+        "settles_with_bad_waveform": 0,
+        "required_stable_polls": 5,
+        "settle_ceiling_seconds": 5.6571428571428575,
+        "polls_to_first_stable_max": 9,
+        "skipped_unparseable_log_lines": 0
+      }
+    }
+  },
+  "limits": "Qualifies the top-level shared-inout four-state net-resolution contract for the specified binary valid domain (Value/Contention/Floating/ProtocolViolation) across all 4096 declared-state transitions and continuous waveform convergence, on two independent netlists, against an independent oracle. Does not close gap 5 (Native HDL) or any broad row: operators beyond the integral subset, unsized literals, int/integer signals, non-integral/>64-bit parameter types, >32-bit constant arithmetic, and the 128-level hierarchy-depth / no-output-module rejections remain unqualified. Raw RCON logs are retained on disk under target/ (gitignored) and referenced by SHA256; they are not committed due to size.",
+  "raw_log_retention": "The two raw RCON logs (3.53 GB and 3.21 GB) and the per-vector transition results (12.7 MB and 12.4 MB) remain on disk at the paths above with the recorded SHA256. An independent reviewer with the same machine can re-run fixture1/transition-audit.py and fixture1/waveform-audit.py (and the fixture2 copies) against those logs to reproduce every accepted result."
+}

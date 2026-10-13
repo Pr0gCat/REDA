@@ -1,0 +1,19 @@
+{
+  "states": 64,
+  "ordered_transitions": 4096,
+  "settled_endpoint_rows": 8192,
+  "class_counts": {
+    "0": 19,
+    "1": 19,
+    "x": 18,
+    "z": 8
+  },
+  "checked_counts_by_after_state": {
+    "Floating": 512,
+    "Value": 2432,
+    "Contention": 1152
+  },
+  "model_equivalence": true,
+  "standard_simulator_evidence": false,
+  "topology": "writer + inverted writer + external"
+}

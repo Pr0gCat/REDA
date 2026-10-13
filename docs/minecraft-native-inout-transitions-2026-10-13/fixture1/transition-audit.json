@@ -1,0 +1,18 @@
+{
+  "accepted": true,
+  "scope": "all 4096 declared-state transitions through the real game; per-landing-state electrical + checked-kind validation against the frozen trace",
+  "visited_states": 64,
+  "distinct_declared_states": 64,
+  "transitions_exercised": 4096,
+  "transitions_missing": 0,
+  "checked_counts_from_complete_raw_reads": {
+    "Floating": 8,
+    "Value": 38,
+    "Contention": 18
+  },
+  "electrical_failures": [],
+  "electrical_failure_count": 0,
+  "states_not_observed": [],
+  "raw_rcon_pairs": 23754209,
+  "skipped_unparseable_log_lines": 0
+}

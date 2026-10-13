@@ -1,0 +1,16 @@
+{
+  "accepted": true,
+  "scope": "continuous gate/lamp waveform convergence for every settle in the transition walk",
+  "settles_analyzed": 4098,
+  "expected_settles": 4097,
+  "settles_converged": 4098,
+  "required_stable_polls": 5,
+  "settle_ceiling_seconds": 5.8274509803921575,
+  "settles_with_bad_waveform": 0,
+  "skipped_unparseable_log_lines": 0,
+  "examples": [],
+  "polls_to_first_stable": {
+    "min": 0,
+    "max": 10
+  }
+}
