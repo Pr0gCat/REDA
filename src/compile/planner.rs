@@ -13,7 +13,7 @@ use crate::compile::routing::{
     NonEmptyRouteSinks, PhysicalReservationKind, PhysicalReservationOwner, PhysicalReservations,
     PhysicalRouter, RealisedRouteTree, RouteEndpoint, RouteRequest, RouteSink as TypedRouteSink,
     RouteTarget, RouterFailure as TypedRouterFailure, RouterLimits, TerminalContract,
-    TerminalRequirement,
+    TerminalRequirement, long_corridor_present,
 };
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::{self, geometry, relax, CompiledCircuit, LegacyEmission, Netlist};
@@ -4325,7 +4325,23 @@ fn route_every_net_charging(
     rip_up_rounds: usize,
     congestion: &mut Congestion,
 ) -> Result<PlanCandidate, PlannerError> {
-    let mut order: Vec<String> = net_consumers(netlist, &candidate).into_keys().collect();
+    let consumers = net_consumers(netlist, &candidate);
+    let mut order: Vec<String> = consumers.keys().cloned().collect();
+    if long_corridor_present(order.iter().map(|signal| {
+        net_geometric_span(
+            &candidate,
+            signal,
+            consumers.get(signal).expect("the order is built from these very keys"),
+        )
+    })) {
+        order.sort_by_key(|signal| {
+            std::cmp::Reverse(net_geometric_span(
+                &candidate,
+                signal,
+                consumers.get(signal).expect("the order is built from these very keys"),
+            ))
+        });
+    }
     let mut last: Option<PlannerError> = None;
 
     for _ in 0..rip_up_rounds {
@@ -4612,6 +4628,37 @@ fn net_source(candidate: &PlanCandidate, signal: &str) -> Result<Anchor, Box<Rou
                 },
             })
         })
+}
+
+/// The widest Manhattan reach a net's source has to cover to reach any of its
+/// sinks, measured on the candidate's own placement. Long nets are the ones
+/// that need the empty canvas first: a net whose far sink sits thirty cells
+/// away has its approach walled off by every conductor routed before it, so
+/// giving it the first round is the general fix for late-sink dead-ends. The
+/// routers consult [`long_corridor_present`] over the whole canvas and sort
+/// by span only when a net crosses the long-corridor threshold.
+fn net_geometric_span(
+    candidate: &PlanCandidate,
+    signal: &str,
+    consumers: &[NetConsumer],
+) -> u64 {
+    let source = match net_source(candidate, signal) {
+        Ok(anchor) => anchor,
+        Err(_) => return 0,
+    };
+    consumers
+        .iter()
+        .map(|consumer| match consumer {
+            NetConsumer::Gate { gate, input_index } => {
+                let (_, _, approach) = candidate
+                    .input_connection_at(*gate, *input_index)
+                    .expect("a declared gate input has a physical landing");
+                manhattan_distance(source, approach)
+            }
+            NetConsumer::Terminal { net_cell, .. } => manhattan_distance(source, *net_cell),
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// What a merge-sourced net's signal is actually worth at its own pin.
@@ -5542,6 +5589,7 @@ impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
                 };
                 let charge_outright = match &error {
                     TypedRouterFailure::RingClosure { charged, .. } => charged.clone(),
+                    TypedRouterFailure::NoLocalRoute { blocked, .. } => blocked.clone(),
                     TypedRouterFailure::SignalDecay { path, .. } => {
                         #[cfg(test)]
                         let prior = PRIOR_DECAY_PRICING.with(std::cell::Cell::get);
@@ -6570,7 +6618,22 @@ fn negotiate_charging(
     table: &mut Negotiation,
 ) -> Result<PlanCandidate, PlannerError> {
     let sinks = net_consumers(netlist, &candidate);
-    let order: Vec<String> = sinks.keys().cloned().collect();
+    let mut order: Vec<String> = sinks.keys().cloned().collect();
+    if long_corridor_present(order.iter().map(|signal| {
+        net_geometric_span(
+            &candidate,
+            signal,
+            &sinks.get(signal).cloned().unwrap_or_default(),
+        )
+    })) {
+        order.sort_by_key(|signal| {
+            std::cmp::Reverse(net_geometric_span(
+                &candidate,
+                signal,
+                &sinks.get(signal).cloned().unwrap_or_default(),
+            ))
+        });
+    }
     let hard = hard_furniture(&candidate, netlist);
 
     let mut last: Option<PlannerError> = None;

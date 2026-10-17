@@ -47,7 +47,7 @@ use crate::compile::routing::{
     PhysicalReservationKind,
     PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RouteEndpoint, RouteGuidance,
     RouteRequest, RouteSink, RouterFailure, RouterLimitKind, RouterRefusalCategory,
-    TerminalContract, TerminalRequirement,
+    TerminalContract, TerminalRequirement, manhattan,
 };
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::verification::ExpandedPhysicalError;
@@ -2612,6 +2612,19 @@ fn route_all(
                 .map(|target| target.forward_distance)
                 .max()
                 .unwrap_or(0);
+            let geometric_span = targets
+                .iter()
+                .map(|target| {
+                    manhattan(
+                        sources
+                            .get(&source)
+                            .expect("scheduled source has geometry")
+                            .route_anchor,
+                        target.target.geometry().terminal,
+                    )
+                })
+                .max()
+                .unwrap_or(0);
             RouteObligation {
                 source,
                 must_precede: repairs
@@ -2628,6 +2641,7 @@ fn route_all(
                 structural_slack_ticks,
                 fanout: targets.len(),
                 level_span,
+                geometric_span,
                 targets,
             }
         })

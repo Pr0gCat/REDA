@@ -1087,6 +1087,11 @@ pub enum RouterFailure {
         route: RouteId,
         source: PhysicalEndpointId,
         sink: RoutedSinkId,
+        /// The source's neighbours that the reservation itself refused: the
+        /// wall the frontier died against. The planner charges these cells
+        /// so the next attempt prices the furniture instead of guessing a
+        /// corridor box around it.
+        blocked: Vec<Anchor>,
     },
     WrongRepeaterAxis {
         connection: ConnectionId,
@@ -1661,6 +1666,8 @@ where
             let approach = step(sink.anchor, sink.allowed_entry);
             let own_join =
                 TypedOwnJoinCheck::for_branch(join_policy, request.id, &cell_states, &reservations);
+            let preserve_source_exit = ordinal + 1 < request.sinks.as_slice().len();
+            let mut blocked = Vec::new();
             let mut path = search_path(
                 &request,
                 sink,
@@ -1702,11 +1709,14 @@ where
                     })
                     .as_ref(),
                 search,
+                preserve_source_exit,
+                &mut blocked,
             )?
             .ok_or(RouterFailure::NoLocalRoute {
                 route: request.id,
                 source: request.source.id,
                 sink: sink.id,
+                blocked,
             })?;
             if path.last() != Some(&sink.anchor) {
                 path.push(sink.anchor);
@@ -2994,6 +3004,8 @@ fn search_path<Price>(
     sink_runway: &ForcedChain,
     planned_next: Option<&(BTreeMap<Anchor, Anchor>, bool)>,
     search: SearchModel,
+    preserve_source_exit: bool,
+    blocked: &mut Vec<Anchor>,
 ) -> Result<Option<Vec<Anchor>>, RouterFailure>
 where
     Price: FnMut(&Anchor) -> u64,
@@ -3076,11 +3088,46 @@ where
             z: max.z.max(cell.z),
         };
     }
+    let required_source_exit = step(start, request.source.allowed_exit);
+    // The wall the frontier died against: the source's neighbours that the
+    // reservation itself refuses. Reported on exhaustion so the planner
+    // charges the furniture instead of guessing a corridor box around it.
+    let source_wall = || -> Vec<Anchor> {
+        neighbours(start)
+            .into_iter()
+            .filter(|next| {
+                next.x >= min.x
+                    && next.x <= max.x
+                    && next.y >= min.y
+                    && next.y <= max.y
+                    && next.z >= min.z
+                    && next.z <= max.z
+                    && (!anchor_is_free_for_typed(
+                        request.id,
+                        *next,
+                        start,
+                        goal,
+                        sink.anchor,
+                        reservations,
+                    ) || staircase_clearance_typed(start, *next).into_iter().any(|cell| {
+                        staircase_cell_is_blocked(
+                            request.id,
+                            start,
+                            *next,
+                            cell,
+                            reservations,
+                            seed_rules,
+                        )
+                    }))
+            })
+            .collect()
+    };
+
     if search == SearchModel::StrengthAware {
         // Only the legacy planner adapter selects this mode; strict/seed
         // fragment routing retains its existing geometry-aware kernel.
         debug_assert!(!strict_local && !seed_rules && guidance.is_none() && planned_next.is_none());
-        return strength_aware_astar_with_work(
+        let outcome = strength_aware_astar_with_work(
             start,
             goal,
             laid,
@@ -3095,6 +3142,14 @@ where
                 !self_obstructs_typed(parents, at, next, false)
                     && !own_join.blocks(next, at, start, goal, reservations, &chain)
                     && !(forbidden.contains(&next) && next != start && next != goal)
+                    // A climb off the pin whose riser stands on the source's
+                    // mandatory exit turns that exit to stone and strands
+                    // every later branch of a fanout net.
+                    && !(preserve_source_exit
+                        && at == start
+                        && next.y == at.y + 1
+                        && next.x == required_source_exit.x
+                        && next.z == required_source_exit.z)
                     && next.x >= min.x
                     && next.x <= max.x
                     && next.y >= min.y
@@ -3121,7 +3176,11 @@ where
                     work.expand(request, sink.id)
                 }
             },
-        );
+        )?;
+        if outcome.is_none() {
+            *blocked = source_wall();
+        }
+        return Ok(outcome);
     }
     let roots = if seed_rules {
         available_tree_roots(start, laid, forbidden)
@@ -3161,7 +3220,7 @@ where
             .map(|(cell, _)| cell)
             .collect::<Vec<_>>()
     };
-    let required_source_exit = step(start, request.source.allowed_exit);
+    // (`required_source_exit` is defined above the strength-aware arm.)
     let terminal_feedback_keep_out = seed_rules.then(|| terminal_feedback_keep_out(sink));
 
     while let Some(state) = frontier.iter().next().copied() {
@@ -3338,6 +3397,14 @@ where
                         seed_rules,
                     )
                 });
+            let climbs_onto_source_exit = preserve_source_exit
+                && state.at == start
+                && next.y == start.y + 1
+                && next.x == required_source_exit.x
+                && next.z == required_source_exit.z;
+            if !anchor_free || stair_blocked || climbs_onto_source_exit {
+                continue;
+            }
             if !anchor_free || stair_blocked {
                 continue;
             }
@@ -3524,6 +3591,7 @@ where
             ),
         );
     }
+    *blocked = source_wall();
     Ok(None)
 }
 
@@ -3629,6 +3697,7 @@ fn certify_path(
                 route: request.id,
                 source: request.source.id,
                 sink: sink.id,
+                blocked: Vec::new(),
             });
         }
     }
@@ -3736,10 +3805,26 @@ fn neighbours(anchor: Anchor) -> Vec<Anchor> {
     out
 }
 
-fn manhattan(from: Anchor, to: Anchor) -> u64 {
+pub(crate) fn manhattan(from: Anchor, to: Anchor) -> u64 {
     u64::from(from.x.abs_diff(to.x))
         + u64::from(from.y.abs_diff(to.y))
         + u64::from(from.z.abs_diff(to.z))
+}
+
+/// The span past which a net is a long corridor: more than four full dust
+/// runs -- `MAX_DUST_RUN` cells of wire plus a repeater cell, four times --
+/// so the net cannot be carried by local dust and needs four or more
+/// refreshes.
+pub(crate) const LONG_NET_SPAN: u64 = 4 * (crate::compile::MAX_DUST_RUN as u64 + 1);
+
+/// Whether a canvas carries a long corridor. When it does, every net's
+/// approach is walled off by the conductors routed before it, so the whole
+/// order is reorganized by span -- long nets get the empty canvas first. When
+/// no net crosses the threshold, the routers keep the order they have always
+/// used: short nets have never needed promotion, and reordering them is what
+/// breaks the tight pinned-row, isolation, and fallback fixtures.
+pub(crate) fn long_corridor_present(mut spans: impl Iterator<Item = u64>) -> bool {
+    spans.any(|span| span > LONG_NET_SPAN)
 }
 
 fn step(at: Anchor, direction: Facing) -> Anchor {

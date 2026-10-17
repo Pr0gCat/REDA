@@ -5193,6 +5193,7 @@ mod tests {
                     route: request.id,
                     source: request.source.id,
                     sink: request.sinks.as_slice()[0].id,
+                    blocked: Vec::new(),
                 });
             }
             DurablePhysicalRouter.route_guided(request, guidance)

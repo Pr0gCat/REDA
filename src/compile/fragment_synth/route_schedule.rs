@@ -7,6 +7,8 @@ use thiserror::Error;
 
 use crate::compile::fragment_synth::identity::PhysicalEndpointId;
 
+use crate::compile::routing::LONG_NET_SPAN;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TargetObligation<T> {
     pub target: T,
@@ -24,6 +26,7 @@ pub(crate) struct RouteObligation<T> {
     pub structural_slack_ticks: u64,
     pub fanout: usize,
     pub level_span: u64,
+    pub geometric_span: u64,
     pub targets: Vec<TargetObligation<T>>,
 }
 
@@ -55,15 +58,28 @@ pub(crate) enum RouteScheduleError {
 
 impl<T> RouteSchedule<T> {
     pub fn build(mut obligations: Vec<RouteObligation<T>>) -> Result<Self, RouteScheduleError> {
-        obligations.sort_by_key(|route| {
-            (
-                Reverse(route.boundary_escape),
-                route.structural_slack_ticks,
-                Reverse(route.fanout),
-                Reverse(route.level_span),
-                route.source,
-            )
-        });
+        if obligations.iter().any(|route| route.geometric_span > LONG_NET_SPAN) {
+            obligations.sort_by_key(|route| {
+                (
+                    Reverse(route.boundary_escape),
+                    Reverse(route.geometric_span),
+                    route.structural_slack_ticks,
+                    Reverse(route.fanout),
+                    Reverse(route.level_span),
+                    route.source,
+                )
+            });
+        } else {
+            obligations.sort_by_key(|route| {
+                (
+                    Reverse(route.boundary_escape),
+                    route.structural_slack_ticks,
+                    Reverse(route.fanout),
+                    Reverse(route.level_span),
+                    route.source,
+                )
+            });
+        }
 
         let mut source_indices = BTreeMap::new();
         for (index, route) in obligations.iter().enumerate() {
@@ -178,6 +194,7 @@ mod tests {
             structural_slack_ticks: slack,
             fanout,
             level_span: span,
+            geometric_span: span,
             targets: vec![target(0, slack, span, (0, 0, 0))],
         }
     }
@@ -235,6 +252,44 @@ mod tests {
                 .map(|route| route.source)
                 .collect::<Vec<_>>(),
             expected
+        );
+    }
+
+    #[test]
+    fn long_geometric_span_routes_before_short_span_regardless_of_slack_and_fanout() {
+        // A net whose conductors must cross a long corridor is the hardest to
+        // place: routing it late lets earlier nets wall off its sink approach.
+        // A span past the long-net threshold outranks slack and fanout so the
+        // long net gets the empty canvas first; a span at or below it keeps
+        // the slack/fanout order the schedule has always used.
+        let long = RouteObligation {
+            source: source(1),
+            must_precede: BTreeSet::new(),
+            boundary_escape: false,
+            structural_slack_ticks: 8,
+            fanout: 1,
+            level_span: 1,
+            geometric_span: 70,
+            targets: vec![target(0, 8, 1, (0, 0, 0))],
+        };
+        let short = RouteObligation {
+            source: source(2),
+            must_precede: BTreeSet::new(),
+            boundary_escape: false,
+            structural_slack_ticks: 2,
+            fanout: 9,
+            level_span: 1,
+            geometric_span: 5,
+            targets: vec![target(1, 2, 1, (0, 1, 0))],
+        };
+        let schedule = schedule(vec![short, long]);
+        assert_eq!(
+            schedule
+                .routes
+                .iter()
+                .map(|route| route.source)
+                .collect::<Vec<_>>(),
+            vec![source(1), source(2)]
         );
     }
 
@@ -314,6 +369,7 @@ mod tests {
             structural_slack_ticks: 0,
             fanout: 4,
             level_span: 30,
+            geometric_span: 30,
             targets: vec![
                 target(4, 2, 10, (0, 4, 0)),
                 target(32, 1, 20, (0, 32, 0)),
@@ -334,6 +390,7 @@ mod tests {
             structural_slack_ticks: 0,
             fanout: 3,
             level_span: 10,
+            geometric_span: 10,
             targets: vec![
                 target(10, 2, 5, (0, 10, 0)),
                 target(11, 1, 5, (0, 11, 0)),
@@ -347,6 +404,7 @@ mod tests {
             structural_slack_ticks: 3,
             fanout: 2,
             level_span: 10,
+            geometric_span: 10,
             targets: vec![target(20, 1, 4, (0, 20, 0)), target(21, 0, 4, (0, 21, 0))],
         };
 
@@ -383,6 +441,7 @@ mod tests {
                 structural_slack_ticks: 0,
                 fanout: 4,
                 level_span: 30,
+                geometric_span: 30,
                 targets: vec![
                     target(4, 2, 10, (0, 4, 0)),
                     target(32, 1, 20, (0, 32, 0)),
@@ -397,6 +456,7 @@ mod tests {
                 structural_slack_ticks: 5,
                 fanout: 2,
                 level_span: 4,
+                geometric_span: 4,
                 targets: vec![target(7, 3, 2, (0, 7, 0)), target(6, 3, 8, (0, 6, 0))],
             },
         ];
@@ -424,6 +484,7 @@ mod tests {
             structural_slack_ticks: 0,
             fanout: 4,
             level_span: 12,
+            geometric_span: 12,
             targets: vec![
                 target(40, 1, 9, (0, 40, 0)),
                 promoted_target(41, 6, 1, (0, 41, 0)),
