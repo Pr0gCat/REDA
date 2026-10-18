@@ -416,16 +416,26 @@ def parse_dump(path: Path) -> Dump:
         if sorted(p[0] for p in ports) != list(range(len(ports))):
             raise ValueError("output ports must have distinct contiguous ordinals")
         names = {gate.name for gate in gates}
-        if len(names) != len(gates) or names != set(gate_outputs) or names != set(observation_kinds):
+        if len(names) != len(gates) or names != set(gate_outputs):
             raise ValueError("rewrite gate definitions and observations must agree")
+        if not set(observation_kinds) <= names:
+            raise ValueError("observation kinds must name actual gates")
         by_position = {(b.x,b.y,b.z): b for b in blocks}
-        known = set(inputs)
+        # DFF outputs are state, not combinational results: they are known
+        # from the start, so a gate fed by a DFF output is topologically
+        # driven even when the DFF record is emitted after its consumers.
+        known = set(inputs) | {gate.name for gate in gates if gate.kind == "dff_p"}
         for gate in gates:
+            if gate.kind == "dff_p":
+                if not set(gate.inputs) <= known:
+                    raise ValueError("rewrite gates must be unique and topologically driven")
+                continue
             if gate.name in known or not set(gate.inputs) <= known:
                 raise ValueError("rewrite gates must be unique and topologically driven")
             known.add(gate.name)
             block = by_position.get(gate_outputs[gate.name])
-            if block is None or block.kind != gate.observation_kind:
+            default_kind = "RedstoneWire" if gate.is_merge else "WallTorch"
+            if block is None or block.kind != (gate.observation_kind or default_kind):
                 raise ValueError("rewrite gate observation differs from physical block")
         source_outputs, source_labels = outputs, output_labels
         outputs, output_labels = {}, {}

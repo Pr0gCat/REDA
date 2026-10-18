@@ -1,0 +1,4466 @@
+{
+  "protocol": "fsm-counter/v1",
+  "fixture": "negedge_counter",
+  "status": "pass",
+  "phases": [
+    {
+      "phase": 0,
+      "inputs": {
+        "clk": false,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 22,
+      "ticks": 38,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": true,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:n6",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:n8",
+          "value": false
+        },
+        {
+          "tick": 22,
+          "label": "gate:g5",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 1,
+      "inputs": {
+        "clk": true,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": true,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": true,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:MData",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 2,
+      "inputs": {
+        "clk": true,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 24,
+      "ticks": 40,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": false
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": true
+        },
+        {
+          "tick": 14,
+          "label": "gate:n6",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:g5",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:n8",
+          "value": true
+        },
+        {
+          "tick": 24,
+          "label": "cell:g1:MData",
+          "value": false
+        }
+      ]
+    },
+    {
+      "phase": 3,
+      "inputs": {
+        "clk": false,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": false
+        }
+      ]
+    },
+    {
+      "phase": 4,
+      "inputs": {
+        "clk": false,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 0,
+      "ticks": 16,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": []
+    },
+    {
+      "phase": 5,
+      "inputs": {
+        "clk": true,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 6,
+      "inputs": {
+        "clk": true,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 28,
+      "ticks": 44,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": true,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": true,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": true
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:n6",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:n8",
+          "value": false
+        },
+        {
+          "tick": 22,
+          "label": "gate:g5",
+          "value": true
+        },
+        {
+          "tick": 28,
+          "label": "cell:g1:MData",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 7,
+      "inputs": {
+        "clk": false,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        true,
+        false
+      ],
+      "matched_at": 40,
+      "ticks": 56,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": true,
+        "gate:g1:locked": false,
+        "gate:g2": false,
+        "gate:g4": true,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": true,
+        "gate:n0": true,
+        "gate:n1": true,
+        "gate:n10": false,
+        "gate:n11": false,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": false,
+        "gate:n4": true,
+        "gate:n5": false,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": true,
+        "lamp:q[0]": true,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": true,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": true,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g1",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "lamp:q[0]",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g1:SData",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:g2",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:n1",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:n4",
+          "value": true
+        },
+        {
+          "tick": 22,
+          "label": "gate:n6",
+          "value": false
+        },
+        {
+          "tick": 24,
+          "label": "gate:n3",
+          "value": false
+        },
+        {
+          "tick": 26,
+          "label": "gate:n8",
+          "value": true
+        },
+        {
+          "tick": 30,
+          "label": "gate:g5",
+          "value": false
+        },
+        {
+          "tick": 32,
+          "label": "gate:n9",
+          "value": true
+        },
+        {
+          "tick": 36,
+          "label": "gate:n11",
+          "value": false
+        },
+        {
+          "tick": 40,
+          "label": "gate:g9",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 8,
+      "inputs": {
+        "clk": false,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        true,
+        false
+      ],
+      "matched_at": 16,
+      "ticks": 32,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": true,
+        "gate:g1:locked": false,
+        "gate:g2": false,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": true,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": false,
+        "gate:n4": true,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": true,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": true,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": true,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": true,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": false
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "gate:n7",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:n9",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:n11",
+          "value": true
+        },
+        {
+          "tick": 14,
+          "label": "gate:n8",
+          "value": false
+        },
+        {
+          "tick": 16,
+          "label": "gate:g9",
+          "value": false
+        }
+      ]
+    },
+    {
+      "phase": 9,
+      "inputs": {
+        "clk": true,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        true,
+        false
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": true,
+        "gate:g1:locked": true,
+        "gate:g2": false,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": true,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": false,
+        "gate:n4": true,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": true,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": true,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": true,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:MData",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 10,
+      "inputs": {
+        "clk": true,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        true,
+        false
+      ],
+      "matched_at": 28,
+      "ticks": 44,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": true,
+        "gate:g1:locked": true,
+        "gate:g2": false,
+        "gate:g4": true,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": true,
+        "gate:n0": true,
+        "gate:n1": true,
+        "gate:n10": false,
+        "gate:n11": false,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": false,
+        "gate:n4": true,
+        "gate:n5": false,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": true,
+        "lamp:q[0]": true,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": true,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": true,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": true
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "gate:n7",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:n9",
+          "value": true
+        },
+        {
+          "tick": 14,
+          "label": "gate:n11",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:n8",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:g9",
+          "value": true
+        },
+        {
+          "tick": 28,
+          "label": "cell:g6:MData",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 11,
+      "inputs": {
+        "clk": false,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        true
+      ],
+      "matched_at": 30,
+      "ticks": 46,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": true,
+        "gate:g6": true,
+        "gate:g6:locked": false,
+        "gate:g9": true,
+        "gate:n0": false,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": false,
+        "gate:n12": false,
+        "gate:n2": true,
+        "gate:n3": false,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": true,
+        "lamp:q[0]": false,
+        "lamp:q[1]": true,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": true,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": true,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g1",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g1:SData",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": false
+        },
+        {
+          "tick": 12,
+          "label": "gate:g6",
+          "value": true
+        },
+        {
+          "tick": 12,
+          "label": "lamp:q[1]",
+          "value": true
+        },
+        {
+          "tick": 12,
+          "label": "cell:g6:SData",
+          "value": true
+        },
+        {
+          "tick": 14,
+          "label": "gate:g2",
+          "value": true
+        },
+        {
+          "tick": 14,
+          "label": "lamp:q[0]",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:n0",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:n1",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:n4",
+          "value": false
+        },
+        {
+          "tick": 22,
+          "label": "gate:n2",
+          "value": true
+        },
+        {
+          "tick": 22,
+          "label": "gate:n6",
+          "value": true
+        },
+        {
+          "tick": 24,
+          "label": "gate:n3",
+          "value": true
+        },
+        {
+          "tick": 26,
+          "label": "gate:n8",
+          "value": false
+        },
+        {
+          "tick": 28,
+          "label": "gate:n3",
+          "value": false
+        },
+        {
+          "tick": 30,
+          "label": "gate:g5",
+          "value": true
+        },
+        {
+          "tick": 32,
+          "label": "gate:n9",
+          "value": false
+        },
+        {
+          "tick": 36,
+          "label": "gate:n11",
+          "value": true
+        },
+        {
+          "tick": 36,
+          "label": "gate:n9",
+          "value": true
+        },
+        {
+          "tick": 40,
+          "label": "gate:g9",
+          "value": false
+        },
+        {
+          "tick": 40,
+          "label": "gate:n11",
+          "value": false
+        },
+        {
+          "tick": 44,
+          "label": "gate:g9",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 12,
+      "inputs": {
+        "clk": false,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        true
+      ],
+      "matched_at": 18,
+      "ticks": 34,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": true,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": false,
+        "gate:n1": false,
+        "gate:n10": true,
+        "gate:n11": false,
+        "gate:n12": true,
+        "gate:n2": true,
+        "gate:n3": false,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": true,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": true,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": true,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": false
+        },
+        {
+          "tick": 4,
+          "label": "gate:n10",
+          "value": true
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:n9",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:n6",
+          "value": false
+        },
+        {
+          "tick": 16,
+          "label": "gate:g9",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:g5",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:n8",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 13,
+      "inputs": {
+        "clk": true,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        true
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": true,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": false,
+        "gate:n1": false,
+        "gate:n10": true,
+        "gate:n11": false,
+        "gate:n12": true,
+        "gate:n2": true,
+        "gate:n3": false,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": true,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": true,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:MData",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 14,
+      "inputs": {
+        "clk": true,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        true
+      ],
+      "matched_at": 28,
+      "ticks": 44,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": true,
+        "gate:g6": true,
+        "gate:g6:locked": true,
+        "gate:g9": true,
+        "gate:n0": false,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": false,
+        "gate:n12": false,
+        "gate:n2": true,
+        "gate:n3": false,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": true,
+        "lamp:q[0]": false,
+        "lamp:q[1]": true,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": true,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": true,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": true,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": true
+        },
+        {
+          "tick": 4,
+          "label": "gate:n10",
+          "value": false
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:n11",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:n9",
+          "value": true
+        },
+        {
+          "tick": 14,
+          "label": "gate:n11",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:n6",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:g9",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:n8",
+          "value": false
+        },
+        {
+          "tick": 22,
+          "label": "gate:g5",
+          "value": true
+        },
+        {
+          "tick": 28,
+          "label": "cell:g1:MData",
+          "value": true
+        },
+        {
+          "tick": 28,
+          "label": "cell:g6:MData",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 15,
+      "inputs": {
+        "clk": false,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        true,
+        true
+      ],
+      "matched_at": 42,
+      "ticks": 58,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": true,
+        "gate:g1:locked": false,
+        "gate:g2": false,
+        "gate:g4": true,
+        "gate:g5": false,
+        "gate:g6": true,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": false,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": true,
+        "gate:n5": false,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": true,
+        "lamp:q[1]": true,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": true,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": true,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": true,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": true,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g1",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "lamp:q[0]",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g1:SData",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:g2",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:n4",
+          "value": true
+        },
+        {
+          "tick": 20,
+          "label": "gate:n2",
+          "value": false
+        },
+        {
+          "tick": 22,
+          "label": "gate:n6",
+          "value": false
+        },
+        {
+          "tick": 26,
+          "label": "gate:n3",
+          "value": true
+        },
+        {
+          "tick": 26,
+          "label": "gate:n8",
+          "value": true
+        },
+        {
+          "tick": 30,
+          "label": "gate:g5",
+          "value": false
+        },
+        {
+          "tick": 34,
+          "label": "gate:n9",
+          "value": false
+        },
+        {
+          "tick": 38,
+          "label": "gate:n11",
+          "value": true
+        },
+        {
+          "tick": 42,
+          "label": "gate:g9",
+          "value": false
+        }
+      ]
+    },
+    {
+      "phase": 16,
+      "inputs": {
+        "clk": false,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        true,
+        true
+      ],
+      "matched_at": 14,
+      "ticks": 30,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": true,
+        "gate:g1:locked": false,
+        "gate:g2": false,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": true,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": false,
+        "gate:n1": false,
+        "gate:n10": true,
+        "gate:n11": false,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": true,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": true,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": true,
+        "lamp:q[1]": true,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": true,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": true,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": true,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": true,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": false
+        },
+        {
+          "tick": 4,
+          "label": "gate:n10",
+          "value": true
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "gate:n7",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:n11",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:n8",
+          "value": false
+        }
+      ]
+    },
+    {
+      "phase": 17,
+      "inputs": {
+        "clk": true,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        true,
+        true
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": true,
+        "gate:g1:locked": true,
+        "gate:g2": false,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": true,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": false,
+        "gate:n1": false,
+        "gate:n10": true,
+        "gate:n11": false,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": true,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": true,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": true,
+        "lamp:q[1]": true,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": true,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": true,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:MData",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:MData",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 18,
+      "inputs": {
+        "clk": true,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        true,
+        true
+      ],
+      "matched_at": 14,
+      "ticks": 30,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": true,
+        "gate:g1:locked": true,
+        "gate:g2": false,
+        "gate:g4": true,
+        "gate:g5": false,
+        "gate:g6": true,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": false,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": true,
+        "gate:n5": false,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": true,
+        "lamp:q[1]": true,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": true,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": true,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": true
+        },
+        {
+          "tick": 4,
+          "label": "gate:n10",
+          "value": false
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "gate:n7",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:n11",
+          "value": true
+        },
+        {
+          "tick": 14,
+          "label": "gate:n8",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 19,
+      "inputs": {
+        "clk": false,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 30,
+      "ticks": 46,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": true,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g1",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g1:SData",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": false
+        },
+        {
+          "tick": 12,
+          "label": "gate:g6",
+          "value": false
+        },
+        {
+          "tick": 12,
+          "label": "cell:g6:SData",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:g2",
+          "value": true
+        },
+        {
+          "tick": 14,
+          "label": "lamp:q[0]",
+          "value": false
+        },
+        {
+          "tick": 16,
+          "label": "lamp:q[1]",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:n0",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:n4",
+          "value": false
+        },
+        {
+          "tick": 22,
+          "label": "gate:n6",
+          "value": true
+        },
+        {
+          "tick": 26,
+          "label": "gate:n8",
+          "value": false
+        },
+        {
+          "tick": 30,
+          "label": "gate:g5",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 20,
+      "inputs": {
+        "clk": false,
+        "reset": true,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 18,
+      "ticks": 34,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:g5",
+          "value": false
+        }
+      ]
+    },
+    {
+      "phase": 21,
+      "inputs": {
+        "clk": true,
+        "reset": true,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 22,
+      "inputs": {
+        "clk": true,
+        "reset": false,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 22,
+      "ticks": 38,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": true
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:n6",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:g5",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:n8",
+          "value": true
+        },
+        {
+          "tick": 22,
+          "label": "gate:g5",
+          "value": false
+        },
+        {
+          "tick": 24,
+          "label": "cell:g1:MData",
+          "value": true
+        },
+        {
+          "tick": 28,
+          "label": "cell:g1:MData",
+          "value": false
+        }
+      ]
+    },
+    {
+      "phase": 23,
+      "inputs": {
+        "clk": false,
+        "reset": false,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": false
+        }
+      ]
+    },
+    {
+      "phase": 24,
+      "inputs": {
+        "clk": false,
+        "reset": false,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 0,
+      "ticks": 16,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": []
+    },
+    {
+      "phase": 25,
+      "inputs": {
+        "clk": true,
+        "reset": false,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 26,
+      "inputs": {
+        "clk": true,
+        "reset": true,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 18,
+      "ticks": 34,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": false
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": true
+        },
+        {
+          "tick": 14,
+          "label": "gate:n6",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:n8",
+          "value": false
+        }
+      ]
+    },
+    {
+      "phase": 27,
+      "inputs": {
+        "clk": false,
+        "reset": true,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": false
+        }
+      ]
+    },
+    {
+      "phase": 28,
+      "inputs": {
+        "clk": false,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 18,
+      "ticks": 34,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": false,
+        "gate:g1:locked": false,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": true
+        },
+        {
+          "tick": 14,
+          "label": "gate:n6",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:n8",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 29,
+      "inputs": {
+        "clk": true,
+        "reset": true,
+        "en": false
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 10,
+      "ticks": 26,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": false,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": true,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": true,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": false,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 30,
+      "inputs": {
+        "clk": true,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        false,
+        false
+      ],
+      "matched_at": 28,
+      "ticks": 44,
+      "final": {
+        "gate:g0": false,
+        "gate:g1": false,
+        "gate:g1:locked": true,
+        "gate:g2": true,
+        "gate:g4": true,
+        "gate:g5": true,
+        "gate:g6": false,
+        "gate:g6:locked": true,
+        "gate:g9": false,
+        "gate:n0": true,
+        "gate:n1": false,
+        "gate:n10": false,
+        "gate:n11": true,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": true,
+        "gate:n4": false,
+        "gate:n5": false,
+        "gate:n6": true,
+        "gate:n7": false,
+        "gate:n8": false,
+        "gate:n9": false,
+        "lamp:q[0]": false,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": true,
+        "cell:g1:MData": true,
+        "cell:g1:MData:locked": false,
+        "cell:g1:MLock": false,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": false,
+        "cell:g1:SData:locked": true,
+        "cell:g1:SLock": true,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": true,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": false,
+        "cell:g6:MLock": false,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": true,
+        "cell:g6:SLock": true,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 2,
+          "label": "gate:g4",
+          "value": true
+        },
+        {
+          "tick": 4,
+          "label": "gate:n5",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "gate:n12",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:n6",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:n8",
+          "value": false
+        },
+        {
+          "tick": 22,
+          "label": "gate:g5",
+          "value": true
+        },
+        {
+          "tick": 28,
+          "label": "cell:g1:MData",
+          "value": true
+        }
+      ]
+    },
+    {
+      "phase": 31,
+      "inputs": {
+        "clk": false,
+        "reset": false,
+        "en": true
+      },
+      "expected_state": [
+        true,
+        false
+      ],
+      "matched_at": 40,
+      "ticks": 56,
+      "final": {
+        "gate:g0": true,
+        "gate:g1": true,
+        "gate:g1:locked": false,
+        "gate:g2": false,
+        "gate:g4": true,
+        "gate:g5": false,
+        "gate:g6": false,
+        "gate:g6:locked": false,
+        "gate:g9": true,
+        "gate:n0": true,
+        "gate:n1": true,
+        "gate:n10": false,
+        "gate:n11": false,
+        "gate:n12": false,
+        "gate:n2": false,
+        "gate:n3": false,
+        "gate:n4": true,
+        "gate:n5": false,
+        "gate:n6": false,
+        "gate:n7": false,
+        "gate:n8": true,
+        "gate:n9": true,
+        "lamp:q[0]": true,
+        "lamp:q[1]": false,
+        "cell:g1:InvC": false,
+        "cell:g1:MData": true,
+        "cell:g1:MData:locked": true,
+        "cell:g1:MLock": true,
+        "cell:g1:MLock:locked": false,
+        "cell:g1:SData": true,
+        "cell:g1:SData:locked": false,
+        "cell:g1:SLock": false,
+        "cell:g1:SLock:locked": false,
+        "cell:g6:InvC": false,
+        "cell:g6:MData": false,
+        "cell:g6:MData:locked": true,
+        "cell:g6:MLock": true,
+        "cell:g6:MLock:locked": false,
+        "cell:g6:SData": false,
+        "cell:g6:SData:locked": false,
+        "cell:g6:SLock": false,
+        "cell:g6:SLock:locked": false
+      },
+      "events": [
+        {
+          "tick": 4,
+          "label": "gate:g0",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:InvC",
+          "value": false
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 6,
+          "label": "cell:g1:MLock",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "gate:g1:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g1:SLock",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:InvC",
+          "value": false
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MData:locked",
+          "value": true
+        },
+        {
+          "tick": 8,
+          "label": "cell:g6:MLock",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g1",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "gate:g6:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "lamp:q[0]",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g1:SData",
+          "value": true
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SData:locked",
+          "value": false
+        },
+        {
+          "tick": 10,
+          "label": "cell:g6:SLock",
+          "value": false
+        },
+        {
+          "tick": 14,
+          "label": "gate:g2",
+          "value": false
+        },
+        {
+          "tick": 18,
+          "label": "gate:n1",
+          "value": true
+        },
+        {
+          "tick": 18,
+          "label": "gate:n4",
+          "value": true
+        },
+        {
+          "tick": 22,
+          "label": "gate:n6",
+          "value": false
+        },
+        {
+          "tick": 24,
+          "label": "gate:n3",
+          "value": false
+        },
+        {
+          "tick": 26,
+          "label": "gate:n8",
+          "value": true
+        },
+        {
+          "tick": 30,
+          "label": "gate:g5",
+          "value": false
+        },
+        {
+          "tick": 32,
+          "label": "gate:n9",
+          "value": true
+        },
+        {
+          "tick": 36,
+          "label": "gate:n11",
+          "value": false
+        },
+        {
+          "tick": 40,
+          "label": "gate:g9",
+          "value": true
+        }
+      ]
+    }
+  ],
+  "origin": [
+    240000,
+    151,
+    100000
+  ],
+  "sites": [
+    {
+      "label": "gate:g0",
+      "position": [
+        240036,
+        152,
+        100091
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:g1",
+      "position": [
+        240036,
+        152,
+        100081
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "gate:g2",
+      "position": [
+        240037,
+        152,
+        100077
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:g4",
+      "position": [
+        240039,
+        152,
+        100098
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:g5",
+      "position": [
+        240037,
+        152,
+        100066
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:g6",
+      "position": [
+        240050,
+        152,
+        100084
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "gate:g9",
+      "position": [
+        240057,
+        152,
+        100065
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n0",
+      "position": [
+        240056,
+        152,
+        100076
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n1",
+      "position": [
+        240042,
+        152,
+        100075
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n10",
+      "position": [
+        240062,
+        152,
+        100074
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n11",
+      "position": [
+        240065,
+        152,
+        100062
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n12",
+      "position": [
+        240043,
+        152,
+        100081
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n2",
+      "position": [
+        240049,
+        152,
+        100076
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n3",
+      "position": [
+        240051,
+        152,
+        100066
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n4",
+      "position": [
+        240033,
+        152,
+        100071
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n5",
+      "position": [
+        240056,
+        152,
+        100082
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n6",
+      "position": [
+        240042,
+        152,
+        100070
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n7",
+      "position": [
+        240054,
+        152,
+        100071
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n8",
+      "position": [
+        240043,
+        152,
+        100065
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "gate:n9",
+      "position": [
+        240063,
+        152,
+        100067
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "lamp:q[0]",
+      "position": [
+        240037,
+        151,
+        100081
+      ],
+      "block_id": "minecraft:redstone_lamp"
+    },
+    {
+      "label": "lamp:q[1]",
+      "position": [
+        240050,
+        151,
+        100085
+      ],
+      "block_id": "minecraft:redstone_lamp"
+    },
+    {
+      "label": "cell:g1:InvC",
+      "position": [
+        240036,
+        152,
+        100083
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "cell:g1:MData",
+      "position": [
+        240035,
+        152,
+        100081
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g1:MLock",
+      "position": [
+        240035,
+        152,
+        100082
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g1:SData",
+      "position": [
+        240036,
+        152,
+        100081
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g1:SLock",
+      "position": [
+        240036,
+        152,
+        100082
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g6:InvC",
+      "position": [
+        240048,
+        152,
+        100084
+      ],
+      "block_id": "minecraft:redstone_wall_torch"
+    },
+    {
+      "label": "cell:g6:MData",
+      "position": [
+        240050,
+        152,
+        100083
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g6:MLock",
+      "position": [
+        240049,
+        152,
+        100083
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g6:SData",
+      "position": [
+        240050,
+        152,
+        100084
+      ],
+      "block_id": "minecraft:repeater"
+    },
+    {
+      "label": "cell:g6:SLock",
+      "position": [
+        240049,
+        152,
+        100084
+      ],
+      "block_id": "minecraft:repeater"
+    }
+  ],
+  "settle_cap_game_ticks": 2000,
+  "dwell_game_ticks": 16,
+  "settlement_criterion": "power_on: quiescence (16 identical consecutive full snapshots), then the literal oracle is seeded from the observed physical state and full agreement is required; protocol phases: full oracle target match, then existing 16 tick dwell with final target match",
+  "observation": "every actual game-tick boundary, frozen atomic capture; not intra-tick transitions",
+  "source_sha256": {
+    "/tmp/fsm-dumps2/negedge_counter.txt": "f3c47e0453c9cd3336c0ff89b0c7217b76b67d51d26d08da98ba40a8a022ebcf",
+    "/home/seith/REDA/conformance/fsm_counter_conformance.py": "ccf356a27b1886ecac82243ff16ebfc9e854f7a9c21de0834a62456a98c8baa3",
+    "/home/seith/REDA/conformance/circuit_conformance.py": "d3bfb999d08e0211e64961988f2a218a6a08574878007e926bf6821e4d2fac89",
+    "minecraft-server-26.2/server/server.jar": "cdacdfb25898de5e4b4b0e5ddcc2722f77067e46605709c2d886c000ebb63ec5"
+  },
+  "minecraft": {
+    "id": "26.2",
+    "name": "26.2",
+    "world_version": 4903,
+    "series_id": "main",
+    "protocol_version": 776,
+    "pack_version": {
+      "resource_major": 88,
+      "resource_minor": 0,
+      "data_major": 107,
+      "data_minor": 1
+    },
+    "build_time": "2026-06-16T12:01:27+00:00",
+    "java_component": "java-runtime-epsilon",
+    "java_version": 25,
+    "stable": true,
+    "use_editor": false
+  },
+  "datapack_sha256": {
+    "pack.mcmeta": "f416894b57009ab41e74f57344d96586d99913468252eff8751fc1b83266fc12",
+    "data/reda_fsm_counter_20261015/function/capture.mcfunction": "5706a93977dcda09344f20594f18ea4969cad4776fead8b2c91ef9b90ce8ddac"
+  },
+  "batch_direct_reader_parity": {
+    "gate:g0": true,
+    "gate:g1": false,
+    "gate:g1:locked": false,
+    "gate:g2": true,
+    "gate:g4": true,
+    "gate:g5": true,
+    "gate:g6": false,
+    "gate:g6:locked": false,
+    "gate:g9": true,
+    "gate:n0": true,
+    "gate:n1": true,
+    "gate:n10": true,
+    "gate:n11": true,
+    "gate:n12": true,
+    "gate:n2": true,
+    "gate:n3": true,
+    "gate:n4": true,
+    "gate:n5": true,
+    "gate:n6": true,
+    "gate:n7": true,
+    "gate:n8": true,
+    "gate:n9": true,
+    "lamp:q[0]": false,
+    "lamp:q[1]": false,
+    "cell:g1:InvC": true,
+    "cell:g1:MData": false,
+    "cell:g1:MData:locked": false,
+    "cell:g1:MLock": false,
+    "cell:g1:MLock:locked": false,
+    "cell:g1:SData": false,
+    "cell:g1:SData:locked": false,
+    "cell:g1:SLock": false,
+    "cell:g1:SLock:locked": false,
+    "cell:g6:InvC": true,
+    "cell:g6:MData": false,
+    "cell:g6:MData:locked": false,
+    "cell:g6:MLock": false,
+    "cell:g6:MLock:locked": false,
+    "cell:g6:SData": false,
+    "cell:g6:SData:locked": false,
+    "cell:g6:SLock": false,
+    "cell:g6:SLock:locked": false
+  },
+  "power_on": {
+    "phase": "power_on",
+    "inputs": {
+      "clk": false,
+      "en": false,
+      "reset": false
+    },
+    "expected_state": [
+      false,
+      false
+    ],
+    "matched_at": 36,
+    "ticks": 36,
+    "final": {
+      "gate:g0": true,
+      "gate:g1": false,
+      "gate:g1:locked": false,
+      "gate:g2": true,
+      "gate:g4": true,
+      "gate:g5": false,
+      "gate:g6": false,
+      "gate:g6:locked": false,
+      "gate:g9": false,
+      "gate:n0": true,
+      "gate:n1": false,
+      "gate:n10": false,
+      "gate:n11": true,
+      "gate:n12": false,
+      "gate:n2": false,
+      "gate:n3": true,
+      "gate:n4": false,
+      "gate:n5": true,
+      "gate:n6": false,
+      "gate:n7": false,
+      "gate:n8": true,
+      "gate:n9": false,
+      "lamp:q[0]": false,
+      "lamp:q[1]": false,
+      "cell:g1:InvC": false,
+      "cell:g1:MData": false,
+      "cell:g1:MData:locked": true,
+      "cell:g1:MLock": true,
+      "cell:g1:MLock:locked": false,
+      "cell:g1:SData": false,
+      "cell:g1:SData:locked": false,
+      "cell:g1:SLock": false,
+      "cell:g1:SLock:locked": false,
+      "cell:g6:InvC": false,
+      "cell:g6:MData": false,
+      "cell:g6:MData:locked": true,
+      "cell:g6:MLock": true,
+      "cell:g6:MLock:locked": false,
+      "cell:g6:SData": false,
+      "cell:g6:SData:locked": false,
+      "cell:g6:SLock": false,
+      "cell:g6:SLock:locked": false
+    },
+    "events": [
+      {
+        "tick": 2,
+        "label": "gate:g1:locked",
+        "value": true
+      },
+      {
+        "tick": 2,
+        "label": "gate:g6:locked",
+        "value": true
+      },
+      {
+        "tick": 2,
+        "label": "cell:g1:InvC",
+        "value": false
+      },
+      {
+        "tick": 2,
+        "label": "cell:g1:MData:locked",
+        "value": true
+      },
+      {
+        "tick": 2,
+        "label": "cell:g1:MLock",
+        "value": true
+      },
+      {
+        "tick": 2,
+        "label": "cell:g1:SData:locked",
+        "value": true
+      },
+      {
+        "tick": 2,
+        "label": "cell:g1:SLock",
+        "value": true
+      },
+      {
+        "tick": 2,
+        "label": "cell:g6:SData:locked",
+        "value": true
+      },
+      {
+        "tick": 2,
+        "label": "cell:g6:SLock",
+        "value": true
+      },
+      {
+        "tick": 4,
+        "label": "gate:g1:locked",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "gate:g5",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "gate:g9",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "gate:n1",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "gate:n10",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "gate:n11",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "gate:n12",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "gate:n2",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "gate:n4",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "gate:n6",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "gate:n8",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "cell:g1:SData:locked",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "cell:g1:SLock",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "cell:g6:InvC",
+        "value": false
+      },
+      {
+        "tick": 4,
+        "label": "cell:g6:MData:locked",
+        "value": true
+      },
+      {
+        "tick": 4,
+        "label": "cell:g6:MLock",
+        "value": true
+      },
+      {
+        "tick": 6,
+        "label": "gate:g6:locked",
+        "value": false
+      },
+      {
+        "tick": 6,
+        "label": "gate:n3",
+        "value": false
+      },
+      {
+        "tick": 6,
+        "label": "gate:n9",
+        "value": false
+      },
+      {
+        "tick": 6,
+        "label": "cell:g6:SData:locked",
+        "value": false
+      },
+      {
+        "tick": 6,
+        "label": "cell:g6:SLock",
+        "value": false
+      },
+      {
+        "tick": 8,
+        "label": "gate:g5",
+        "value": true
+      },
+      {
+        "tick": 10,
+        "label": "gate:n11",
+        "value": true
+      },
+      {
+        "tick": 10,
+        "label": "gate:n3",
+        "value": true
+      },
+      {
+        "tick": 10,
+        "label": "gate:n7",
+        "value": false
+      },
+      {
+        "tick": 12,
+        "label": "gate:g5",
+        "value": false
+      },
+      {
+        "tick": 16,
+        "label": "gate:g5",
+        "value": true
+      },
+      {
+        "tick": 16,
+        "label": "gate:n8",
+        "value": true
+      },
+      {
+        "tick": 20,
+        "label": "gate:g5",
+        "value": false
+      }
+    ]
+  }
+}

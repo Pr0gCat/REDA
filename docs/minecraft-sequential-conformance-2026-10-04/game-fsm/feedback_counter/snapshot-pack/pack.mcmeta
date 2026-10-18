@@ -1,0 +1,10 @@
+{
+  "pack": {
+    "description": "REDA temporary frozen-tick FSM/counter observation",
+    "min_format": [
+      107,
+      1
+    ],
+    "max_format": 107
+  }
+}
