@@ -294,6 +294,13 @@ pub fn anneal(problem: &Problem) -> Vec<(Vec<(i32, i32)>, f64)> {
     runs.into_iter().map(|(slots, critical, _)| (slots, critical)).collect()
 }
 
+/// A net's bounding box, in slots: low x, high x, low z, high z.
+type Bounds = (f64, f64, f64, f64);
+
+/// Nets this small are measured afresh after a move: cheaper than working
+/// out whether their box survived it.
+const SMALL_NET: usize = 4;
+
 /// One annealing run's slots, their estimated critical delay and their
 /// wire.
 type Run = (Vec<(i32, i32)>, f64, f64);
@@ -448,9 +455,12 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
         }
     }
     let mut nets_of: Vec<Vec<usize>> = vec![Vec::new(); count];
+    // Each element's nets with where on it each attaches.
+    let mut joins: Vec<Vec<(usize, Offset)>> = vec![Vec::new(); count];
     for (net, members) in nets.iter().enumerate() {
-        for &(element, _) in members {
+        for &(element, at) in members {
             nets_of[element].push(net);
+            joins[element].push((net, at));
         }
     }
     let weight = |net: usize| {
@@ -473,7 +483,9 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
             (slot / cols) as f64 + (h - 1) as f64 / 2.0,
         )
     };
-    let span = |slot_of: &[usize], net: usize| -> f64 {
+    // A net's bounding box as (low x, high x, low z, high z), and the wire
+    // it stands for.
+    let bounds = |slot_of: &[usize], net: usize| -> Bounds {
         let (mut low_x, mut low_z, mut high_x, mut high_z) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         for &(element, (dx, dz)) in &nets[net] {
             let (x, z) = centre(slot_of, element);
@@ -483,8 +495,10 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
             low_z = low_z.min(z);
             high_z = high_z.max(z);
         }
-        weight(net) * (high_x - low_x + high_z - low_z)
+        (low_x, high_x, low_z, high_z)
     };
+    let wire_of = |net: usize, (low_x, high_x, low_z, high_z): Bounds| weight(net) * (high_x - low_x + high_z - low_z);
+    let span = |slot_of: &[usize], net: usize| -> f64 { wire_of(net, bounds(slot_of, net)) };
     let delay = |slot_of: &[usize], edge: usize| -> f64 {
         let (from, to) = timing.edges[edge];
         let ((fx, fz), (tx, tz)) = timing.ends[edge];
@@ -503,6 +517,11 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
     let mut window = cols.max(rows);
     let mut touched: Vec<usize> = Vec::new();
     let mut moved_edges: Vec<usize> = Vec::new();
+    // Every net's box and wire as the slots stand, so a move re-measures
+    // only the nets it touches, and those mostly from their boxes alone.
+    let mut boxes: Vec<Bounds> = (0..nets.len()).map(|net| bounds(&slot_of, net)).collect();
+    let mut wires: Vec<f64> = boxes.iter().enumerate().map(|(net, &bounds)| wire_of(net, bounds)).collect();
+    let mut remeasured: Vec<(usize, Bounds, f64)> = Vec::new();
     while temperature > 0.05 && count > 1 {
         // Re-time, and weigh wire and delay by their totals so each counts
         // for its share whatever its scale.
@@ -569,16 +588,14 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
             }
             moved_edges.sort_unstable();
             moved_edges.dedup();
-            let cost = |slot_of: &[usize]| -> (f64, f64) {
-                (
-                    touched.iter().map(|&net| span(slot_of, net)).sum(),
-                    moved_edges
-                        .iter()
-                        .map(|&edge| weight_of[edge] * delay(slot_of, edge))
-                        .sum(),
-                )
+            let timed = |slot_of: &[usize]| -> f64 {
+                moved_edges
+                    .iter()
+                    .map(|&edge| weight_of[edge] * delay(slot_of, edge))
+                    .sum()
             };
-            let before = cost(&slot_of);
+            let before = (touched.iter().map(|&net| wires[net]).sum::<f64>(), timed(&slot_of));
+            let was = (centre(&slot_of, element), other.map(|other| centre(&slot_of, other)));
             let overlapped = if mixed { overlap(&cover, &region) } else { 0.0 };
             slot_of[element] = to;
             if let Some(other) = other {
@@ -592,7 +609,39 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
                     cover[covered] += 1;
                 }
             }
-            let after = cost(&slot_of);
+            // A net whose moved members all stood strictly inside its box
+            // keeps the box, stretched to where they went; any other, and
+            // any small one, is measured afresh.
+            let now = (centre(&slot_of, element), other.map(|other| centre(&slot_of, other)));
+            remeasured.clear();
+            for &net in &touched {
+                let measured = if nets[net].len() <= SMALL_NET {
+                    bounds(&slot_of, net)
+                } else {
+                    let (low_x, high_x, low_z, high_z) = boxes[net];
+                    let mut moved = [((0.0, 0.0), (0.0, 0.0)); 2];
+                    let mut count = 0;
+                    for (who, was, now) in [(Some(element), Some(was.0), Some(now.0)), (other, was.1, now.1)] {
+                        let (Some(who), Some(was), Some(now)) = (who, was, now) else { continue };
+                        for &(joined, (dx, dz)) in &joins[who] {
+                            if joined == net {
+                                moved[count] = ((was.0 + dx, was.1 + dz), (now.0 + dx, now.1 + dz));
+                                count += 1;
+                            }
+                        }
+                    }
+                    let moved = &moved[..count];
+                    if moved.iter().all(|&((x, z), _)| low_x < x && x < high_x && low_z < z && z < high_z) {
+                        moved.iter().fold((low_x, high_x, low_z, high_z), |(lx, hx, lz, hz), &(_, (x, z))| {
+                            (lx.min(x), hx.max(x), lz.min(z), hz.max(z))
+                        })
+                    } else {
+                        bounds(&slot_of, net)
+                    }
+                };
+                remeasured.push((net, measured, wire_of(net, measured)));
+            }
+            let after = (remeasured.iter().map(|&(_, _, wire)| wire).sum::<f64>(), timed(&slot_of));
             let overlapping = if mixed { overlap(&cover, &region) } else { 0.0 };
             let delta = (after.0 - before.0) * wire_scale
                 + (after.1 - before.1) * timing_scale
@@ -601,6 +650,10 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
                 wire += after.0 - before.0;
                 held[to] = Some(element);
                 held[from] = other;
+                for &(net, bounds, measured) in &remeasured {
+                    boxes[net] = bounds;
+                    wires[net] = measured;
+                }
             } else {
                 slot_of[element] = from;
                 if let Some(other) = other {
