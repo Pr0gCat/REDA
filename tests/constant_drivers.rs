@@ -13,8 +13,8 @@ fn disconnected_torch_and_its_inverter_are_certified_constant_drivers() {
         let circuit = compile(&lowered).unwrap();
         let repeat = compile(&lowered).unwrap();
         assert_eq!(
-            reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&circuit.world),
-            reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&repeat.world)
+            reda::compile::metrics::canonical_world_fingerprint(&circuit.world),
+            reda::compile::metrics::canonical_world_fingerprint(&repeat.world)
         );
         let drivers = circuit.gate_output_positions.clone();
         let lamps = circuit.output_positions.clone();
@@ -63,19 +63,7 @@ fn native_constant_outputs_have_real_drivers_and_keep_constant_debug_bindings() 
         let lowered = lower_optimised(&artifact.netlist).unwrap();
         let circuit = compile(&lowered).unwrap();
         let outputs = circuit.output_positions.clone();
-        // The certified rewrite keys gate_output_positions by implementation
-        // gate names, not source signals; resolve drivers through the sealed
-        // source_output_driver_positions() (index-aligned with lowered.outputs),
-        // falling back to the source-keyed map only for legacy circuits.
-        let drivers: std::collections::BTreeMap<_, _> = match circuit.physical_rewrite() {
-            Some(r) => lowered
-                .outputs
-                .iter()
-                .zip(r.source_output_driver_positions())
-                .map(|(name, p)| (name.clone(), *p))
-                .collect(),
-            None => circuit.gate_output_positions.clone(),
-        };
+        let drivers = circuit.gate_output_positions.clone();
         let inputs: Vec<_> = circuit.input_positions.values().copied().collect();
         let mut sim = Simulator::new(circuit.world);
         sim.run_until_stable(2000).unwrap();

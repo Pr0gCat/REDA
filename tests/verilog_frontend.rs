@@ -30,7 +30,7 @@ use reda::circuits::seven_segment::{build_seven_segment_netlist, TRUTH_TABLE};
 use reda::circuits::verilog;
 use reda::compile::lowering::{format_histogram, lower, lower_optimised, LowerError};
 use reda::compile::topology::GateKind;
-use reda::compile::{compile, CompiledCircuit, Netlist, PlannerKind};
+use reda::compile::{compile, CompiledCircuit, Netlist};
 use reda::frontend::evaluate::Evaluator;
 use reda::frontend::{compile_systemverilog, synthesize_verilog, CompileOptions, SourceInput};
 use reda::redstone::simulator::Simulator;
@@ -97,90 +97,30 @@ fn non_air_blocks(compiled: &CompiledCircuit) -> usize {
     count
 }
 
-/// Print the worst case across an instrumented sweep, and assert the
-/// critical-path settle model exactly reconstructs the measured settle
-/// time -- same shape, and the same exactness check, as the hand-written
-/// reference circuits' own tests (`tests/reference_circuits.rs`,
-/// `tests/seven_segment.rs`) so the two are directly comparable in test
-/// output. `require_exact_path_model` is false only for a polarity-assigned
-/// netlist whose `run_until_stable` duration includes an independent,
-/// no-op repeater queue drain after every observable output lamp has settled.
-///
-/// This netlist is the first one this model has been checked against that
-/// was not built by this project's own hand-written NOR-tree generator, and
-/// it genuinely has what none of the hand-written circuits do: reconvergent
-/// fan-out, where a signal splits and one of its own descendants feeds back
-/// into a later gate on the same path. That did surface a real bug (see
-/// `critical_path_settle_model_game_ticks`'s "lamp-turning-on floor" doc
-/// section) -- but the bug was not in how the model handles reconvergence at
-/// all. `summarize_worst_case`'s backward walk already resolves reconvergent
-/// fan-out correctly: it always follows the *measured* latest-arriving input
-/// at each gate, so the path it returns is provably the one whose own
-/// settling gated the gate above it, no matter how many other paths merge
-/// back into it. The bug was that every hand-written reference circuit's
-/// worst-case transition happens to turn its output lamp *off*, so the
-/// model's `LAMP_TURN_ON_DELAY_GAME_TICKS = 0` branch had never been
-/// exercised against a real simulation before this netlist's worst case
-/// turned out to turn its lamp *on*. Now fixed, the model is exact here too.
+/// Print the worst case across an instrumented sweep: settle time, the
+/// logic-depth lower bound and the ratio between them, and the critical path.
 fn report_timing(
     label: &str,
     netlist: &Netlist,
-    compiled: &CompiledCircuit,
     outputs: &[String],
     transitions: &[TransitionResult],
-    require_exact_path_model: bool,
 ) -> u64 {
-    let summary = summarize_worst_case(netlist, compiled, outputs, transitions);
+    let summary = summarize_worst_case(netlist, outputs, transitions);
     eprintln!(
         "{label} timing: worst-case settle = {} game ticks ({:.1} redstone ticks, {:.3}s)",
         summary.worst_settle_game_ticks,
         game_ticks_to_redstone_ticks(summary.worst_settle_game_ticks),
         game_ticks_to_seconds(summary.worst_settle_game_ticks),
     );
-    match (
-        summary.critical_path_repeater_count,
-        summary.critical_path_model_game_ticks,
-    ) {
-        (Some(repeaters), Some(model)) => {
-            eprintln!(
-                "{label} timing: critical-path settle model (this layout) = {} gates + \
-                 {repeaters} repeaters -> {model} game ticks predicted, {} measured",
-                summary.critical_path_gate_count, summary.worst_settle_game_ticks,
-            );
-            if require_exact_path_model {
-                assert_eq!(
-                    model, summary.worst_settle_game_ticks,
-                    "{label}: the critical-path settle model must exactly reconstruct the measured settle time"
-                );
-            }
-        }
-        _ => {
-            // The model's repeater term comes from `routing_stats`, which
-            // recomputes the row/channel/track emitter's geometry and reads
-            // the world along it. A relaxation-placed circuit has no such
-            // geometry, and its routes are not in the `CompiledCircuit` at
-            // all -- realisation consumed the `PlanCandidate` that held them.
-            // So there is no number, and an invented zero would produce a
-            // prediction that agrees with nothing while looking like one.
-            //
-            // This arm asserts rather than merely printing, so that it states
-            // *why* the model is missing instead of silently skipping the
-            // check: a circuit the emitter laid out must always have one, and
-            // if one stops having one this goes red.
-            assert_ne!(
-                compiled.planner_kind(),
-                PlannerKind::Legacy,
-                "{label}: a layout the emitter laid out must have a settle model; only a \
-                 relaxation- or fragment-placed layout may be without one"
-            );
-            eprintln!(
-                "{label} timing: critical-path settle model unavailable -- the emitter did not \
-                 lay out this layout and `routing_stats` describes the emitter's; {} gates on \
-                 the path, {} game ticks measured",
-                summary.critical_path_gate_count, summary.worst_settle_game_ticks,
-            );
-        }
-    }
+    eprintln!(
+        "{label} timing: logic-depth bound (netlist, layout-independent) = {} gates -> {} game ticks; \
+         ratio (measured/bound) = {:.2}x; critical path {} gates: {:?}",
+        summary.logic_depth,
+        summary.logic_depth_bound_game_ticks,
+        summary.ratio,
+        summary.critical_path_gate_count,
+        summary.critical_path,
+    );
     summary.worst_settle_game_ticks
 }
 
@@ -200,7 +140,6 @@ fn compile_simulate_and_check(
     label: &str,
     source_netlist: &Netlist,
     lower_netlist: fn(&Netlist) -> Result<Netlist, LowerError>,
-    require_exact_path_model: bool,
     input_names: &[&str],
     input_count: u32,
     output_positions_of: impl Fn(&CompiledCircuit) -> Vec<(i32, i32, i32)>,
@@ -293,13 +232,9 @@ fn compile_simulate_and_check(
     );
 
     let outputs: Vec<String> = netlist.outputs.clone();
-    let settle = report_timing(
-        label,
-        netlist,
-        &compiled,
+    let settle = report_timing(label, netlist,
         &outputs,
         &transitions,
-        require_exact_path_model,
     );
 
     eprintln!(
@@ -321,7 +256,6 @@ fn the_verilog_and4_matches_its_truth_table() {
         "verilog and4",
         &netlist,
         lower,
-        true,
         &["a", "b", "c", "d"],
         4,
         |compiled| vec![*compiled.output_positions.get(&output_signal).unwrap()],
@@ -333,7 +267,6 @@ fn the_verilog_and4_matches_its_truth_table() {
         "hand-written and4",
         &hand_netlist,
         lower,
-        true,
         &["a", "b", "c", "d"],
         4,
         |compiled| vec![*compiled.output_positions.get(&hand_output).unwrap()],
@@ -358,7 +291,6 @@ fn verilog_dff_reaches_the_physical_simulator() {
 
     let lowered = lower(&netlist).expect("DFF netlist must lower");
     let compiled = compile(&lowered).expect("DFF netlist must compile");
-    assert_eq!(compiled.planner_kind(), PlannerKind::Unified3d);
 
     let d = compiled.input_positions["d"];
     let clk = compiled.input_positions["clk"];
@@ -409,7 +341,6 @@ fn optimised_lowering_preserves_every_verilog_decoder_vector() {
         "verilog seven_segment",
         &netlist,
         lower_optimised,
-        false,
         &["d3", "d2", "d1", "d0"],
         4,
         move |compiled| {
@@ -421,17 +352,12 @@ fn optimised_lowering_preserves_every_verilog_decoder_vector() {
         expected_segments,
     );
 
-    const BASELINE: (usize, usize, u64) = (56, 12_348, 88);
+    // Gates are what lowering decides; blocks and ticks belong to the
+    // generator, which does not optimise them.
     assert!(
-        verilog_stats.0 <= BASELINE.0 && verilog_stats.1 <= BASELINE.1 && verilog_stats.2 <= BASELINE.2,
-        "optimised lowering regressed the 56 gates / 12,348 blocks / 88 ticks baseline: got {} gates / {} blocks / {} ticks",
-        verilog_stats.0,
-        verilog_stats.1,
-        verilog_stats.2,
-    );
-    assert!(
-        verilog_stats.0 < BASELINE.0 || verilog_stats.1 < BASELINE.1 || verilog_stats.2 < BASELINE.2,
-        "optimised lowering must improve at least one of the 56 gates / 12,348 blocks / 88 ticks baseline measurements"
+        verilog_stats.0 < 56,
+        "optimised lowering must beat the 56-gate baseline: got {} gates",
+        verilog_stats.0
     );
 
     let (hand_netlist, hand_segment_signal) = build_seven_segment_netlist();
@@ -443,7 +369,6 @@ fn optimised_lowering_preserves_every_verilog_decoder_vector() {
         "hand-written seven_segment",
         &hand_netlist,
         lower,
-        true,
         &["d3", "d2", "d1", "d0"],
         4,
         move |compiled| {
@@ -594,7 +519,6 @@ fn native_verilog_and4_matches_its_truth_table() {
         "native and4",
         &netlist,
         lower,
-        true,
         &["a", "b", "c", "d"],
         4,
         |compiled| vec![*compiled.output_positions.get(&output_signal).unwrap()],
@@ -606,7 +530,6 @@ fn native_verilog_and4_matches_its_truth_table() {
         "hand-written and4",
         &hand_netlist,
         lower,
-        true,
         &["a", "b", "c", "d"],
         4,
         |compiled| vec![*compiled.output_positions.get(&hand_output).unwrap()],
@@ -629,7 +552,6 @@ fn native_verilog_dff_reaches_the_physical_simulator() {
 
     let lowered = lower(&netlist).expect("native DFF netlist must lower");
     let compiled = compile(&lowered).expect("native DFF netlist must compile");
-    assert_eq!(compiled.planner_kind(), PlannerKind::Unified3d);
 
     let d = compiled.input_positions["d"];
     let clk = compiled.input_positions["clk"];
@@ -675,7 +597,6 @@ fn native_optimised_lowering_preserves_every_verilog_decoder_vector() {
         "native seven_segment",
         &netlist,
         lower_optimised,
-        false,
         &["d3", "d2", "d1", "d0"],
         4,
         move |compiled| {
@@ -687,17 +608,12 @@ fn native_optimised_lowering_preserves_every_verilog_decoder_vector() {
         expected_segments,
     );
 
-    const BASELINE: (usize, usize, u64) = (56, 12_348, 88);
+    // Gates are what lowering decides; blocks and ticks belong to the
+    // generator, which does not optimise them.
     assert!(
-        native_stats.0 <= BASELINE.0 && native_stats.1 <= BASELINE.1 && native_stats.2 <= BASELINE.2,
-        "native optimised lowering regressed the 56 gates / 12,348 blocks / 88 ticks baseline: got {} gates / {} blocks / {} ticks",
-        native_stats.0,
-        native_stats.1,
-        native_stats.2,
-    );
-    assert!(
-        native_stats.0 < BASELINE.0 || native_stats.1 < BASELINE.1 || native_stats.2 < BASELINE.2,
-        "native optimised lowering must improve at least one of the 56 gates / 12,348 blocks / 88 ticks baseline measurements"
+        native_stats.0 < 56,
+        "native optimised lowering must beat the 56-gate baseline: got {} gates",
+        native_stats.0
     );
 
     let (hand_netlist, hand_segment_signal) = build_seven_segment_netlist();
@@ -709,7 +625,6 @@ fn native_optimised_lowering_preserves_every_verilog_decoder_vector() {
         "hand-written seven_segment",
         &hand_netlist,
         lower,
-        true,
         &["d3", "d2", "d1", "d0"],
         4,
         move |compiled| {
@@ -762,8 +677,7 @@ fn native_baked_netlists_match_semantic_equivalence() {
         let mut native_inputs = inputs.clone();
         native_inputs.sort();
         assert_eq!(
-            native_inputs,
-            baked_inputs,
+            native_inputs, baked_inputs,
             "{}: native and baked input name sets differ",
             circuit.name
         );
@@ -777,8 +691,7 @@ fn native_baked_netlists_match_semantic_equivalence() {
             let baked_out = baked_eval.evaluate(&map).expect("baked must evaluate");
             for port in native_map.keys() {
                 assert_eq!(
-                    native_out[&native_map[port]],
-                    baked_out[&baked_map[port]],
+                    native_out[&native_map[port]], baked_out[&baked_map[port]],
                     "{} combo {combo} port {port}: native and baked disagree",
                     circuit.name
                 );

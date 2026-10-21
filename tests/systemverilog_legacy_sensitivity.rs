@@ -224,10 +224,9 @@ fn check_physical(
     assert_eq!(lowered, fixed);
     let physical = compile(&lowered).unwrap();
     let control = compile(&fixed).unwrap();
-    let fingerprint = reda::compile::fragment_synth::benchmark::canonical_world_fingerprint;
+    let fingerprint = reda::compile::metrics::canonical_world_fingerprint;
     assert_eq!(fingerprint(&physical.world), fingerprint(&control.world));
-    physical.validate_rewrite_view(&lowered).unwrap();
-    let implementation = physical.implementation_netlist(&lowered);
+    let implementation = &lowered;
     let evaluator = Evaluator::new(implementation).unwrap();
     let mut sim = Simulator::new(physical.world.clone());
     sim.run_until_stable(2000).unwrap();
@@ -246,15 +245,8 @@ fn check_physical(
                     sim.world_mut().set(at.0, at.1, at.2, lever);
                 }
                 sim.run_until_stable(2000).unwrap();
-                // Rewrites retain separate source and implementation ports.
-                // Observe the certified implementation lever bindings; source
-                // names are independently checked by the public truth oracle.
-                let input_positions = physical
-                    .physical_rewrite()
-                    .map_or(&physical.input_positions, |rewrite| {
-                        &rewrite.implemented_observations().input_positions
-                    });
-                let implemented_inputs = input_positions
+                let implemented_inputs = physical
+                    .input_positions
                     .iter()
                     .map(|(name, at)| {
                         let lever = sim.world().get(at.0, at.1, at.2);

@@ -87,36 +87,6 @@ fn cli_reports_selection_and_preserves_errors_without_yosys() {
 }
 
 #[test]
-fn build_circuit_verification_failure_does_not_retry_frontend() {
-    let path =
-        std::env::temp_dir().join(format!("reda-selection-pins-{}.json", std::process::id()));
-    std::fs::write(&path, "invalid json").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_build_circuit"))
-        .args([
-            "verilog:and4",
-            "--frontend",
-            "auto",
-            "--synth",
-            "--pins",
-            path.to_str().unwrap(),
-        ])
-        .env("REDA_PYTHON", "/definitely/missing/python")
-        .output()
-        .unwrap();
-    std::fs::remove_file(path).unwrap();
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success());
-    assert!(
-        error.contains("frontend: native") && error.contains("pins file"),
-        "{error}"
-    );
-    assert!(
-        !error.contains("fallback") && !error.contains("Python"),
-        "{error}"
-    );
-}
-
-#[test]
 fn cli_exercises_real_yosys_fallback_and_forced_mode() {
     let path = std::env::temp_dir().join(format!("reda-fallback-{}.v", std::process::id()));
     std::fs::write(
@@ -151,22 +121,29 @@ fn legacy_comb_and_dff_cli_run_without_a_yosys_interpreter() {
         include_str!("fixtures/hierarchy_bits.sv").replace("module hierarchy_bits", "module m"),
         include_str!("fixtures/hierarchy_dff.sv").replace("module hierarchy_dff", "module m"),
         include_str!("fixtures/multiclock_dff.sv").replace("module multiclock_dff", "module m"),
-        include_str!("fixtures/hierarchy_multiclock_dff.sv").replace("module hierarchy_multiclock_dff", "module m"),
+        include_str!("fixtures/hierarchy_multiclock_dff.sv")
+            .replace("module hierarchy_multiclock_dff", "module m"),
         include_str!("fixtures/multiclock_shift.sv").replace("module multiclock_shift", "module m"),
         include_str!("fixtures/feedback_counter.sv").replace("module feedback_counter", "module m"),
         include_str!("fixtures/feedback_fsm.sv").replace("module feedback_fsm", "module m"),
-        include_str!("fixtures/feedback_state_enable.sv").replace("module feedback_state_enable", "module m"),
+        include_str!("fixtures/feedback_state_enable.sv")
+            .replace("module feedback_state_enable", "module m"),
         include_str!("fixtures/negedge_dff.sv").replace("module negedge_dff", "module m"),
         include_str!("fixtures/negedge_counter.sv").replace("module negedge_counter", "module m"),
         include_str!("fixtures/reset_counter.sv").replace("module reset_counter", "module m"),
         include_str!("fixtures/arithmetic_pair.sv").replace("module arithmetic_pair", "module m"),
-        include_str!("fixtures/arithmetic_counter_add.sv").replace("module arithmetic_counter_add", "module m"),
-        include_str!("fixtures/arithmetic_counter_subtract.sv").replace("module arithmetic_counter_subtract", "module m"),
-        include_str!("fixtures/hierarchy_reset_counter.sv").replace("module hierarchy_reset_counter", "module m"),
+        include_str!("fixtures/arithmetic_counter_add.sv")
+            .replace("module arithmetic_counter_add", "module m"),
+        include_str!("fixtures/arithmetic_counter_subtract.sv")
+            .replace("module arithmetic_counter_subtract", "module m"),
+        include_str!("fixtures/hierarchy_reset_counter.sv")
+            .replace("module hierarchy_reset_counter", "module m"),
         include_str!("fixtures/reset_fsm.sv").replace("module reset_fsm", "module m"),
-        include_str!("fixtures/conditional_state_enable.sv").replace("module conditional_state_enable", "module m"),
+        include_str!("fixtures/conditional_state_enable.sv")
+            .replace("module conditional_state_enable", "module m"),
         include_str!("fixtures/mixed_edge_shift.sv").replace("module mixed_edge_shift", "module m"),
-        include_str!("fixtures/hierarchy_negedge_dff.sv").replace("module hierarchy_negedge_dff", "module m"),
+        include_str!("fixtures/hierarchy_negedge_dff.sv")
+            .replace("module hierarchy_negedge_dff", "module m"),
     ] {
         std::fs::write(&path, text).unwrap();
         for mode in ["native", "auto"] {

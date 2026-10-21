@@ -170,6 +170,26 @@ world, in 3D, and as a graph of primitives -- see `viewer/README.md`.
 `conformance/` drives a real Minecraft server over RCON; see
 `docs/minecraft-server.md`.
 
+## Prior work
+
+The generator's baseline (`construct::Method::Dewey`, `--dewey` in
+`examples/construct_probe.rs`) is the placement and routing method of
+PERSHING and its C successor dewey, ported onto REDA's tiles and gap rule so
+the two generators are compared on the same synthesis, cells and simulator:
+
+- Quan Nguyen. 2018. *Incremental Improvements on the Placement and Routing of
+  Minecraft Redstone Circuits.* SIGTBD '18, Cambridge, MA.
+  [paper](https://www.ocf.berkeley.edu/~qmn/assets/nguyen_dewey_2018.pdf),
+  [code](https://github.com/qmn/dewey) (BSD licence).
+- Quan Nguyen. 2016. *PERSHING: An Automatic Place-and-Route Tool for
+  Minecraft Redstone Circuits.* [code](https://github.com/qmn/pershing).
+
+dewey in turn builds on TimberWolf placement (Sechen and
+Sangiovanni-Vincentelli, 1985), Lee's maze routing (1961) and the SILK
+router's rip-up by natural selection (Lin, Hsu and Tsai, 1989). What the port
+keeps and where it departs is listed at the top of
+`src/compile/construct/dewey.rs`.
+
 ## The written record
 
 `docs/superpowers/specs/` is one dated document per decision, each with the

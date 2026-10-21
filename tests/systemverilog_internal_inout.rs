@@ -102,10 +102,9 @@ fn internal_inout_hierarchy_matches_fixed_physical_world_for_all_transitions() {
     assert_eq!(lowered, fixed);
     let physical = compile(&lowered).unwrap();
     let control = compile(&fixed).unwrap();
-    let fingerprint = reda::compile::fragment_synth::benchmark::canonical_world_fingerprint;
+    let fingerprint = reda::compile::metrics::canonical_world_fingerprint;
     assert_eq!(fingerprint(&physical.world), fingerprint(&control.world));
-    physical.validate_rewrite_view(&lowered).unwrap();
-    let implementation = physical.implementation_netlist(&lowered);
+    let implementation = &lowered;
     let evaluator = Evaluator::new(implementation).unwrap();
     let mut simulator = Simulator::new(physical.world.clone());
     simulator.run_until_stable(2000).unwrap();

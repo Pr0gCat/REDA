@@ -17,11 +17,10 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::compile::fragment_synth::identity::ObservationSite;
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
-use observer::{Observation, Observer, TypedObservation};
+use observer::{Observation, Observer};
 use position::Position;
 use schedule::{TickPriority, TickQueue};
 
@@ -189,32 +188,6 @@ const COMPONENT_SUPPORT_REGISTRATIONS: [ComponentSupportRegistration; 20] = [
     ComponentSupportRegistration::supported(SimulatorComponentKind::Other),
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct SimulatorRevisionDescriptor {
-    pub schema_version: u64,
-    pub components: Vec<ComponentSupportRegistration>,
-    pub delays: component::ComponentDelaySemantics,
-    pub burnout: component::BurnoutSemantics,
-    pub repeater_priority_rules: Vec<component::RepeaterPriorityRule>,
-    pub comparator_priority_rules: Vec<component::ComparatorPriorityRule>,
-    pub tick_order: schedule::TickOrderSemantics,
-    pub propagation: propagate::PropagationSemantics,
-    pub wire_observation: observer::WireObservationSemantics,
-}
-
-pub(crate) fn revision_descriptor() -> SimulatorRevisionDescriptor {
-    SimulatorRevisionDescriptor {
-        schema_version: 1,
-        components: COMPONENT_SUPPORT_REGISTRATIONS.to_vec(),
-        delays: component::delay_semantics(),
-        burnout: component::burnout_semantics(),
-        repeater_priority_rules: component::REPEATER_PRIORITY_RULES.to_vec(),
-        comparator_priority_rules: component::COMPARATOR_PRIORITY_RULES.to_vec(),
-        tick_order: schedule::tick_order_semantics(),
-        propagation: propagate::PROPAGATION_SEMANTICS.clone(),
-        wire_observation: observer::WIRE_OBSERVATION_SEMANTICS.clone(),
-    }
-}
 
 /// 本階段明確不支援、必須回報而非靜默忽略的元件種類，`find_unsupported_component`
 /// 掃描用。
@@ -314,34 +287,6 @@ impl Simulator {
         simulator
     }
 
-    /// 從一個「紅石粉強度已經算好」的世界建立模擬器。
-    ///
-    /// 和 [`Simulator::new`] 唯一的差別是不再重算一次紅石粉強度 —— 其餘
-    /// 都一樣：全新的 tick 佇列、tick 從零開始、工作量計數從零開始，不
-    /// 支援的元件一樣會警告。
-    ///
-    /// 只有當 `world` 的紅石粉強度已經是重算過的結果、而且那次重算自己
-    /// 寫下的 dirty 記號也已經被清掉時才成立：那時再重算一次不會改動任
-    /// 何一格，跳過它得到的世界一模一樣。拿一個剛被 `set` 動過的世界呼
-    /// 叫這個建構子，它的紅石粉強度就會停留在舊值。
-    pub(crate) fn from_recomputed_world(world: World) -> Self {
-        let simulator = Simulator {
-            world,
-            queue: TickQueue::new(),
-            torch_changes: HashMap::new(),
-            work_done: 0,
-            observer: None,
-        };
-
-        if let Some((position, name)) = find_unsupported_component(&simulator.world) {
-            eprintln!(
-                "reda: 世界在 {position:?} 有本階段不支援的元件 `{name}` —— \
-                 不會被模擬，呼叫 run_until_stable 時會回報 UnsupportedComponent"
-            );
-        }
-
-        simulator
-    }
 
     pub fn world(&self) -> &World {
         &self.world
@@ -372,14 +317,6 @@ impl Simulator {
         self.observer = Some(observer);
     }
 
-    /// Attach an identity-preserving observer. Several sites may share one
-    /// coordinate or one display label and still produce independent events.
-    pub fn attach_typed_observer(&mut self, watched: impl IntoIterator<Item = ObservationSite>) {
-        let mut observer = Observer::typed(watched);
-        observer.reset(&self.world);
-        self.observer = Some(observer);
-    }
-
     /// Re-baseline the attached observer (if any) against the world's
     /// current state and clear its log.
     ///
@@ -396,14 +333,6 @@ impl Simulator {
     /// if no observer is attached.
     pub fn observations(&self) -> &[Observation] {
         self.observer.as_ref().map(Observer::log).unwrap_or(&[])
-    }
-
-    /// Typed log since the last reset. Empty for the compatibility observer.
-    pub fn typed_observations(&self) -> &[TypedObservation] {
-        self.observer
-            .as_ref()
-            .map(Observer::typed_log)
-            .unwrap_or(&[])
     }
 
     /// 推進一個 game tick。回傳這一刻有多少格的狀態改變了。

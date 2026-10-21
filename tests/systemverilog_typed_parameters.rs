@@ -143,13 +143,12 @@ fn typed_hierarchy_matches_fixed_physical_implementation_for_all_transitions() {
     assert_eq!(lowered, fixed_lowered);
     let physical = compile(&lowered).unwrap();
     let fixed_physical = compile(&fixed_lowered).unwrap();
-    let fingerprint = reda::compile::fragment_synth::benchmark::canonical_world_fingerprint;
+    let fingerprint = reda::compile::metrics::canonical_world_fingerprint;
     assert_eq!(
         fingerprint(&physical.world),
         fingerprint(&fixed_physical.world)
     );
-    physical.validate_rewrite_view(&lowered).unwrap();
-    let implementation = physical.implementation_netlist(&lowered);
+    let implementation = &lowered;
     let evaluator = Evaluator::new(implementation).unwrap();
     let mut simulator = Simulator::new(physical.world.clone());
     simulator.run_until_stable(2000).unwrap();

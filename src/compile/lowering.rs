@@ -77,7 +77,7 @@ pub enum LowerError {
     OutputHasNoProducer { output: String },
     /// `lower_optimised` reached a gate that lowering can copy but the
     /// default physical library cannot score or place.
-    MissingDefaultLibraryEntry { kind: GateKind },
+    NoTile { kind: GateKind },
     /// An input was neither a declared primary input nor the output rail of
     /// a source gate that could have been lowered before this gate.
     UnresolvedLogicalSignal { gate: String, signal: String },
@@ -112,7 +112,7 @@ impl std::fmt::Display for LowerError {
                     "declared output `{output}` has no gate or input producer"
                 )
             }
-            LowerError::MissingDefaultLibraryEntry { kind } => {
+            LowerError::NoTile { kind } => {
                 write!(f, "the default library has no entry for {kind:?}")
             }
             LowerError::UnresolvedLogicalSignal { gate, signal } => {
@@ -170,8 +170,8 @@ pub fn lower_optimised(netlist: &Netlist) -> Result<Netlist, LowerError> {
     let assignment = assign_polarities(netlist).map_err(|error| match error {
         PolarityError::CyclicNetlist => LowerError::CyclicNetlist,
         PolarityError::OutputHasNoProducer { output } => LowerError::OutputHasNoProducer { output },
-        PolarityError::MissingDefaultLibraryEntry { kind } => {
-            LowerError::MissingDefaultLibraryEntry { kind }
+        PolarityError::NoTile { kind } => {
+            LowerError::NoTile { kind }
         }
         PolarityError::Lowering(error) => error,
     })?;
@@ -193,8 +193,8 @@ pub fn lower_optimised_with_provenance(
     let assignment = assign_polarities(netlist).map_err(|error| match error {
         PolarityError::CyclicNetlist => LowerError::CyclicNetlist,
         PolarityError::OutputHasNoProducer { output } => LowerError::OutputHasNoProducer { output },
-        PolarityError::MissingDefaultLibraryEntry { kind } => {
-            LowerError::MissingDefaultLibraryEntry { kind }
+        PolarityError::NoTile { kind } => {
+            LowerError::NoTile { kind }
         }
         PolarityError::Lowering(error) => error,
     })?;
@@ -1104,7 +1104,7 @@ mod tests {
 
             assert_eq!(
                 lower_optimised(&source),
-                Err(LowerError::MissingDefaultLibraryEntry { kind }),
+                Err(LowerError::NoTile { kind }),
                 "{kind:?}"
             );
         }

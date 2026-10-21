@@ -30,7 +30,7 @@ use std::time::Instant;
 use reda::circuits::seven_segment::{
     build_seven_segment_netlist, INPUT_NAMES, SEGMENT_NAMES, TRUTH_TABLE,
 };
-use reda::compile::{compile, CompiledCircuit, Netlist, PlannerKind};
+use reda::compile::{compile, Netlist};
 use reda::formats::litematic;
 use reda::redstone::simulator::Simulator;
 use reda::timing::{
@@ -164,21 +164,15 @@ fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
         .lit
 }
 
-/// Print the worst case across an instrumented sweep: settle time (game
-/// ticks / redstone ticks / seconds), the logic-depth lower bound, the ratio
-/// between them, the corrected critical-path settle model (and its exactness
-/// against the measured settle time), the critical path itself, and how many
-/// input vectors glitched which outputs. This is dynamic timing analysis
-/// (`reda::timing`) applied to the same sweep the correctness check above
-/// already ran.
+/// Print the worst case across an instrumented sweep: settle time, the
+/// logic-depth lower bound and the ratio between them, and the critical path.
 fn report_timing(
     label: &str,
     netlist: &Netlist,
-    compiled: &CompiledCircuit,
     outputs: &[String],
     transitions: &[TransitionResult],
 ) {
-    let summary = summarize_worst_case(netlist, compiled, outputs, transitions);
+    let summary = summarize_worst_case(netlist, outputs, transitions);
     eprintln!(
         "{label} timing: worst-case settle = {} game ticks ({:.1} redstone ticks, {:.3}s)",
         summary.worst_settle_game_ticks,
@@ -187,50 +181,12 @@ fn report_timing(
     );
     eprintln!(
         "{label} timing: logic-depth bound (netlist, layout-independent) = {} gates -> {} game ticks; \
-         ratio (measured/bound) = {:.2}x",
-        summary.logic_depth, summary.logic_depth_bound_game_ticks, summary.ratio,
-    );
-    // See `tests/reference_circuits.rs`'s copy for why the model is an
-    // `Option` and why both arms assert. The decoder falls back to the
-    // emitter, so the `Some` arm is the one that runs here today -- which is
-    // exactly why the `None` arm must still say something rather than pass.
-    match summary.critical_path_model_game_ticks {
-        Some(model) => {
-            eprintln!(
-                "{label} timing: critical-path settle model (this layout) = {} gates + {:?} \
-                 repeaters -> {model} game ticks predicted, {} measured",
-                summary.critical_path_gate_count,
-                summary.critical_path_repeater_count,
-                summary.worst_settle_game_ticks,
-            );
-            assert_eq!(
-                model, summary.worst_settle_game_ticks,
-                "{label}: the critical-path settle model must exactly reconstruct the measured settle time"
-            );
-        }
-        None => {
-            assert_ne!(
-                compiled.planner_kind(),
-                PlannerKind::Legacy,
-                "{label}: a layout the emitter laid out must have a settle model; only a \
-                 relaxation- or fragment-placed layout may be without one"
-            );
-            eprintln!(
-                "{label} timing: critical-path settle model unavailable -- the emitter did not \
-                 lay out this layout and `routing_stats` describes the emitter's; {} gates on \
-                 the path, {} game ticks measured",
-                summary.critical_path_gate_count, summary.worst_settle_game_ticks,
-            );
-        }
-    }
-    eprintln!(
-        "{label} timing: critical path to worst output `{}`: {}",
-        summary.critical_output,
-        summary.critical_path.join(" -> ")
-    );
-    eprintln!(
-        "{label} timing: glitches by output (number of input vectors that glitched it): {:?}",
-        summary.glitch_counts
+         ratio (measured/bound) = {:.2}x; critical path {} gates: {:?}",
+        summary.logic_depth,
+        summary.logic_depth_bound_game_ticks,
+        summary.ratio,
+        summary.critical_path_gate_count,
+        summary.critical_path,
     );
 }
 
@@ -359,7 +315,7 @@ fn the_compiled_decoder_matches_its_truth_table() {
         .iter()
         .map(|&name| segment_signal[name].clone())
         .collect();
-    report_timing("seven_segment", &netlist, &compiled, &outputs, &transitions);
+    report_timing("seven_segment", &netlist, &outputs, &transitions);
 }
 
 #[test]

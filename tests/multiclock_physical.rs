@@ -36,8 +36,9 @@ fn check(netlist: Netlist, outputs: HashMap<String, String>, name: &str, crossin
     assert_eq!(physical.input_positions, repeated.input_positions);
     assert_eq!(physical.output_positions, repeated.output_positions);
     let path = std::env::temp_dir().join(format!(
-        "reda-multiclock-{}-{name}.litematic",
-        std::process::id()
+        "reda-multiclock-{}-{:?}-{name}.litematic",
+        std::process::id(),
+        std::thread::current().id()
     ));
     save(&path, &physical.world, name).unwrap();
     let world = load(&path).unwrap();
@@ -194,9 +195,21 @@ fn check_native_multiclock(top: &str, text: &str, crossing: bool) {
 #[test]
 fn native_and_yosys_independent_clock_domains_match_the_physical_state_oracle() {
     for (top, text, crossing) in [
-        ("multiclock_dff", include_str!("fixtures/multiclock_dff.sv"), false),
-        ("hierarchy_multiclock_dff", include_str!("fixtures/hierarchy_multiclock_dff.sv"), false),
-        ("multiclock_shift", include_str!("fixtures/multiclock_shift.sv"), true),
+        (
+            "multiclock_dff",
+            include_str!("fixtures/multiclock_dff.sv"),
+            false,
+        ),
+        (
+            "hierarchy_multiclock_dff",
+            include_str!("fixtures/hierarchy_multiclock_dff.sv"),
+            false,
+        ),
+        (
+            "multiclock_shift",
+            include_str!("fixtures/multiclock_shift.sv"),
+            true,
+        ),
     ] {
         check_native_multiclock(top, text, crossing);
         let (netlist, outputs) = synthesize_verilog(text, top).unwrap();
@@ -208,13 +221,25 @@ fn native_and_yosys_independent_clock_domains_match_the_physical_state_oracle() 
 // per-fixture compilation across cores.
 #[test]
 fn native_multiclock_dff_matches_the_physical_state_oracle() {
-    check_native_multiclock("multiclock_dff", include_str!("fixtures/multiclock_dff.sv"), false);
+    check_native_multiclock(
+        "multiclock_dff",
+        include_str!("fixtures/multiclock_dff.sv"),
+        false,
+    );
 }
 #[test]
 fn native_hierarchy_multiclock_dff_matches_the_physical_state_oracle() {
-    check_native_multiclock("hierarchy_multiclock_dff", include_str!("fixtures/hierarchy_multiclock_dff.sv"), false);
+    check_native_multiclock(
+        "hierarchy_multiclock_dff",
+        include_str!("fixtures/hierarchy_multiclock_dff.sv"),
+        false,
+    );
 }
 #[test]
 fn native_multiclock_shift_matches_the_physical_state_oracle() {
-    check_native_multiclock("multiclock_shift", include_str!("fixtures/multiclock_shift.sv"), true);
+    check_native_multiclock(
+        "multiclock_shift",
+        include_str!("fixtures/multiclock_shift.sv"),
+        true,
+    );
 }

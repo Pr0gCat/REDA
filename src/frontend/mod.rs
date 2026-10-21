@@ -81,7 +81,6 @@ mod logic;
 mod netlist;
 mod parser;
 mod rtl;
-pub(crate) mod resolved;
 mod selection;
 mod yosys_json;
 pub use selection::{synthesize_selected, FrontendMode, SelectedFrontend};
@@ -341,95 +340,81 @@ pub fn compile_systemverilog(
     })
 }
 
-pub use crate::compile::resolved_circuit::{
-    CompiledResolvedCircuit as CompiledNativeCircuit, ResolvedBusPort, ResolvedPinout,
-};
-pub use resolved::InvalidBus;
+/// A native source compiled all the way to a world, with its ports named as
+/// the source declares them.
+#[derive(Debug, Clone)]
+pub struct CompiledNativeCircuit {
+    pub physical: crate::compile::CompiledCircuit,
+    pub pinout: Pinout,
+    /// The lowered netlist the world implements.
+    pub implementation: Netlist,
+}
+
+/// Where each source port is in the world: an input's lever, an output's
+/// lamp.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Pinout {
+    pub inputs: std::collections::BTreeMap<String, [i32; 3]>,
+    pub outputs: std::collections::BTreeMap<String, [i32; 3]>,
+}
 
 /// Inspect the parsed top-level port directions for consumers choosing a physical path.
-pub fn top_has_inout(sources: &[SourceInput<'_>], options: &CompileOptions) -> Result<bool, String> {
-    let files: Vec<_> = sources.iter().enumerate()
-        .map(|(i, s)| (FileId(i as u32), s.text)).collect();
+pub fn top_has_inout(
+    sources: &[SourceInput<'_>],
+    options: &CompileOptions,
+) -> Result<bool, String> {
+    let files: Vec<_> = sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (FileId(i as u32), s.text))
+        .collect();
     let (set, _) = parser::parse_sources_drives(&files, true).map_err(|d| d.render(sources))?;
-    let shared = set.modules.iter().find(|m| m.name.name == options.top)
+    let shared = set
+        .modules
+        .iter()
+        .find(|m| m.name.name == options.top)
         .is_some_and(|m| m.ports.iter().any(|p| p.direction == PortDirection::Inout));
     Ok(shared)
 }
 
-/// Compile native source directly to physical hardware and source-owned ports.
-/// Top-level inout retains one shared terminal and checked X/Z observation.
-/// Ordinary sources reuse the existing native frontend and default compiler.
+/// Compile native source directly to a world and source-named ports.
 pub fn compile_systemverilog_physical(
     sources: &[SourceInput<'_>],
     options: &CompileOptions,
 ) -> Result<CompiledNativeCircuit, String> {
-    let shared = top_has_inout(sources, options)?;
-    if shared {
-        let semantic = resolved::compile_for_materialization(sources, &options.top)?;
-        return crate::compile::resolved_circuit::compile(&semantic);
+    if top_has_inout(sources, options)? {
+        return Err("a top-level inout port has no physical realisation".into());
     }
-    let artifact = compile_systemverilog(sources, options)
-        .map_err(|ds| ds.iter().map(|d| d.render(sources)).collect::<Vec<_>>().join("\n"))?;
-    let stateful = artifact.netlist.gates.iter().any(|gate| gate.kind.is_sequential());
-    // Stateful native sources follow the CLI's optimized lowering. Their
-    // physical observations belong to that implementation, not source gates.
-    let lowered = if stateful {
-        crate::compile::lowering::lower_optimised(&artifact.netlist)
-    } else {
-        crate::compile::lowering::lower(&artifact.netlist)
-    }.map_err(|e| e.to_string())?;
-    let mut physical = crate::compile::compile(&lowered).map_err(|e| e.to_string())?;
-    // The retained Boolean rewrite certificate describes combinational DAGs.
-    // Stateful lowering retains DFF identity and is checked by the ordinary
-    // physical compiler; never label it with a combinational certificate.
-    if lowered != artifact.netlist && !stateful {
-        let rewrite = if let Some(mut rewrite) = physical.physical_rewrite().cloned() {
-            rewrite.rebind_source(&artifact.netlist, 1_000_000)
-                .map_err(|e| format!("native source lowering proof failed: {e:?}"))?;
-            rewrite
-        } else {
-            let candidate = physical.physical_candidate()
-                .ok_or("native source lowering requires a complete physical implementation")?;
-            crate::compile::fragment_synth::rewrite::realise_physical_rewrite_with_size(
-                &artifact.netlist, &lowered, candidate,
-                &crate::compile::topology::Library::default_library(),
-                &lowered.inputs, &lowered.outputs, 1_000_000, Some(physical.world.size()),
-            ).map_err(|e| format!("native source lowering proof failed: {e:?}"))?
-        };
-        physical = crate::compile::CompiledCircuit::from_certified_rewrite(rewrite);
-    }
-    let implementation = physical.implementation_netlist(&lowered).clone();
-    let coordinates = |p: &(i32,i32,i32)| [p.0,p.1,p.2];
-    let source_inputs = artifact.ports.iter().filter(|p| p.direction == PortDirection::Input)
-        .map(|p| (p.name.clone(), physical.input_positions[&p.signal])).collect::<std::collections::BTreeMap<_,_>>();
-    let occurrences = physical.output_occurrences();
-    if artifact.ordered_output_ports.len() != occurrences.len() {
-        return Err("ordinary physical outputs differ from declared output occurrence count".into());
-    }
-    let mut source_outputs = std::collections::BTreeMap::new();
-    for (port, (signal, position)) in artifact.ordered_output_ports.iter().zip(occurrences) {
-        if &port.signal != signal {
-            return Err(format!("ordinary physical output occurrence differs from source port {}", port.name));
-        }
-        if source_outputs.insert(port.name.clone(), *position).is_some() {
-            return Err(format!("duplicate ordinary source output label {}", port.name));
-        }
-    }
-    let pinout = ResolvedPinout {
-        inputs: source_inputs.iter().map(|(n,p)| (n.clone(),coordinates(p))).collect(),
-        outputs: source_outputs.iter().map(|(n,p)| (n.clone(),coordinates(p))).collect(),
-        inouts: Vec::new(),
+    let artifact = compile_systemverilog(sources, options).map_err(|ds| {
+        ds.iter()
+            .map(|d| d.render(sources))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    let implementation =
+        crate::compile::lowering::lower_optimised(&artifact.netlist).map_err(|e| e.to_string())?;
+    let physical = crate::compile::compile(&implementation).map_err(|e| e.to_string())?;
+    let coordinates = |p: &(i32, i32, i32)| [p.0, p.1, p.2];
+    let mut pinout = Pinout {
+        inputs: Default::default(),
+        outputs: Default::default(),
     };
+    for port in &artifact.ports {
+        if port.direction == PortDirection::Input {
+            pinout
+                .inputs
+                .insert(port.name.clone(), coordinates(&physical.input_positions[&port.signal]));
+        }
+    }
+    for port in &artifact.ordered_output_ports {
+        let at = coordinates(&physical.output_positions[&port.signal]);
+        if pinout.outputs.insert(port.name.clone(), at).is_some() {
+            return Err(format!("duplicate source output label {}", port.name));
+        }
+    }
     Ok(CompiledNativeCircuit {
-        physical, pinout,
-        #[cfg(test)]
-        source_inputs,
-        #[cfg(test)]
-        source_outputs,
-        #[cfg(test)]
-        protocol_inputs: std::collections::BTreeMap::new(),
-        #[cfg(test)]
-        terminals: Vec::new(),
+        physical,
+        pinout,
         implementation,
     })
 }
@@ -539,54 +524,7 @@ fn run_synth(
 
 #[cfg(test)]
 mod tests {
-    use crate::compile::topology::{self, GateKind, Library};
-
-    /// The genlib is gone, so the test that used to live here -- checking
-    /// `redstone_nor.genlib`'s hand-written `GATE`/`PIN` numbers against
-    /// `topology::genlib_cost`'s derivation of the same fact -- has nothing
-    /// left to compare. Its successor lives in `topology` itself
-    /// (`entry_cost_and_expansion_cost_agree_for_every_realisable_kind`),
-    /// between the two cost models that remain.
-    ///
-    /// What is still this module's business is the boundary it owns: every
-    /// combinational Yosys cell type the frontend accepts has to be something
-    /// the rest of the pipeline can actually build. Stateful cells are named
-    /// boundaries: they are retained for the sequential compiler phase, not
-    /// expanded through the combinational primitive library.
-    #[test]
-    fn every_accepted_yosys_cell_type_lowers_to_something_the_library_can_place() {
-        let library = Library::default_library();
-        for (cell_type, kind) in topology::known_yosys_cell_types() {
-            if kind.is_sequential() {
-                assert_eq!(
-                    kind,
-                    GateKind::DffPosedge,
-                    "only the named DFF is stateful today"
-                );
-                continue;
-            }
-            let expansion = topology::expansion_for(kind);
-            assert!(
-                !expansion.steps.is_empty(),
-                "{cell_type} ({kind:?}) has no expansion"
-            );
-
-            // Every step of every expansion is a NOR or a merge of an arity
-            // `Library` ships an entry for -- so nothing the frontend
-            // accepts can reach `primitive_graph::expand` with no way to be
-            // turned into primitives.
-            for step in &expansion.steps {
-                let realised = match step {
-                    topology::Step::Nor(operands) => GateKind::Nor(operands.len()),
-                    topology::Step::Merge(operands) => GateKind::Or(operands.len()),
-                };
-                assert!(
-                    library.choose(realised).is_some(),
-                    "{cell_type} ({kind:?}) expands through {realised:?}, which has no library entry"
-                );
-            }
-        }
-    }
+    use crate::compile::topology::{self, GateKind};
 
     /// A cell type the frontend never accepts has no `GateKind` at all. The
     /// positive-edge DFF is deliberately the exception: it has a named

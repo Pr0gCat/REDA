@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::compile::lowering::{lower_with_assignment, LowerError};
-use crate::compile::topology::{entry_cost, GateKind, Library, SignalPolarity};
+use crate::compile::topology::{realisable_area, GateKind, SignalPolarity};
 use crate::compile::Netlist;
 
 /// One requested output polarity for every source gate, in `Netlist::gates`
@@ -19,9 +19,9 @@ pub enum PolarityError {
     /// A declared output must resolve to a source-gate rail or to a primary
     /// input rail before lowering can preserve it.
     OutputHasNoProducer { output: String },
-    /// A directly realisable gate reached scoring, but the default physical
-    /// library has no footprint for its declared kind.
-    MissingDefaultLibraryEntry { kind: GateKind },
+    /// A directly realisable gate reached scoring with a kind or arity no
+    /// tile exists for.
+    NoTile { kind: GateKind },
     /// Validation performed by the assigned lowering itself, such as a bad
     /// gate arity or an unresolved gate input.
     Lowering(LowerError),
@@ -39,8 +39,8 @@ impl std::fmt::Display for PolarityError {
                     "declared output `{output}` has no gate or input producer"
                 )
             }
-            PolarityError::MissingDefaultLibraryEntry { kind } => {
-                write!(f, "the default library has no entry for {kind:?}")
+            PolarityError::NoTile { kind } => {
+                write!(f, "no tile realises {kind:?}")
             }
             PolarityError::Lowering(error) => {
                 write!(f, "cannot score a polarity assignment: {error}")
@@ -55,7 +55,7 @@ impl std::error::Error for PolarityError {
             PolarityError::Lowering(error) => Some(error),
             PolarityError::CyclicNetlist
             | PolarityError::OutputHasNoProducer { .. }
-            | PolarityError::MissingDefaultLibraryEntry { .. } => None,
+            | PolarityError::NoTile { .. } => None,
         }
     }
 }
@@ -174,7 +174,6 @@ fn score(netlist: &Netlist, assignment: &[SignalPolarity]) -> Result<LoweredScor
 }
 
 fn score_realisable_netlist(netlist: &Netlist) -> Result<LoweredScore, PolarityError> {
-    let library = Library::default_library();
     let producer_of: HashMap<&str, usize> = netlist
         .gates
         .iter()
@@ -197,10 +196,7 @@ fn score_realisable_netlist(netlist: &Netlist) -> Result<LoweredScore, PolarityE
             continue;
         }
         debug_assert!(gate.kind.is_realisable());
-        let entry = library
-            .choose(gate.kind)
-            .ok_or(PolarityError::MissingDefaultLibraryEntry { kind: gate.kind })?;
-        area += entry_cost(gate.kind, entry).area;
+        area += realisable_area(gate.kind).ok_or(PolarityError::NoTile { kind: gate.kind })?;
 
         let upstream_depth = gate
             .inputs
@@ -322,7 +318,7 @@ mod tests {
     /// cannot be priced without a default-library entry. Assignment must
     /// report that validation failure instead of panicking while scoring.
     #[test]
-    fn assignment_rejects_realisable_kinds_missing_from_the_default_library() {
+    fn assignment_rejects_realisable_kinds_no_tile_realises() {
         for kind in [GateKind::Nor(4), GateKind::Or(1)] {
             let source = netlist(
                 &["a", "b", "c", "d"],
@@ -332,7 +328,7 @@ mod tests {
 
             assert_eq!(
                 assign_polarities(&source),
-                Err(PolarityError::MissingDefaultLibraryEntry { kind }),
+                Err(PolarityError::NoTile { kind }),
                 "{kind:?}"
             );
         }
@@ -367,7 +363,7 @@ mod tests {
         assert_eq!(
             score(&source, &assignment),
             Ok(LoweredScore {
-                area: 42,
+                area: 65,
                 gates: 6,
                 torch_depth: 2
             })
@@ -404,12 +400,13 @@ mod tests {
         );
         let higher_area = netlist(
             &["a", "b", "c"],
-            &["n0", "n1", "n2", "n3"],
+            &["n0", "n1", "n2", "n3", "n4"],
             vec![
                 gate(GateKind::Nor(3), "n0", &["a", "b", "c"]),
                 gate(GateKind::Nor(3), "n1", &["a", "b", "c"]),
                 gate(GateKind::Nor(3), "n2", &["a", "b", "c"]),
                 gate(GateKind::Nor(3), "n3", &["a", "b", "c"]),
+                gate(GateKind::Nor(3), "n4", &["a", "b", "c"]),
             ],
         );
         let fewer_gates = netlist(
@@ -422,7 +419,7 @@ mod tests {
             &["m0", "m1"],
             vec![
                 gate(GateKind::Or(2), "m0", &["a", "b"]),
-                gate(GateKind::Or(2), "m1", &["a", "b"]),
+                gate(GateKind::Nor(0), "m1", &[]),
             ],
         );
         let shallow = netlist(
@@ -445,7 +442,7 @@ mod tests {
         assert_eq!(
             score_realisable_netlist(&lower_area),
             Ok(LoweredScore {
-                area: 36,
+                area: 72,
                 gates: 6,
                 torch_depth: 0
             })
@@ -453,8 +450,8 @@ mod tests {
         assert_eq!(
             score_realisable_netlist(&higher_area),
             Ok(LoweredScore {
-                area: 48,
-                gates: 4,
+                area: 85,
+                gates: 5,
                 torch_depth: 1
             })
         );
@@ -466,7 +463,7 @@ mod tests {
         assert_eq!(
             score_realisable_netlist(&fewer_gates),
             Ok(LoweredScore {
-                area: 12,
+                area: 17,
                 gates: 1,
                 torch_depth: 1
             })
@@ -474,9 +471,9 @@ mod tests {
         assert_eq!(
             score_realisable_netlist(&more_gates),
             Ok(LoweredScore {
-                area: 12,
+                area: 17,
                 gates: 2,
-                torch_depth: 0
+                torch_depth: 1
             })
         );
         assert!(
@@ -487,7 +484,7 @@ mod tests {
         assert_eq!(
             score_realisable_netlist(&shallow),
             Ok(LoweredScore {
-                area: 12,
+                area: 18,
                 gates: 2,
                 torch_depth: 1
             })
@@ -495,7 +492,7 @@ mod tests {
         assert_eq!(
             score_realisable_netlist(&deep),
             Ok(LoweredScore {
-                area: 12,
+                area: 18,
                 gates: 2,
                 torch_depth: 2
             })
@@ -558,7 +555,7 @@ mod tests {
         assert_eq!(
             score(&source, &all_positive),
             Ok(LoweredScore {
-                area: 30,
+                area: 48,
                 gates: 5,
                 torch_depth: 2
             })
@@ -568,7 +565,7 @@ mod tests {
         assert_eq!(
             score(&source, &pair),
             Ok(LoweredScore {
-                area: 30,
+                area: 48,
                 gates: 5,
                 torch_depth: 1
             })

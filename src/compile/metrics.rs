@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::compile::geometry::Anchor;
-use crate::redstone::world::block::BlockKind;
+use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -48,6 +48,63 @@ pub fn canonical_fingerprint(bytes: &[u8]) -> Fingerprint {
         write!(&mut hex, "{byte:02x}").expect("writing to a String cannot fail");
     }
     Fingerprint(hex)
+}
+
+/// A fingerprint of every non-air block of `world` and the world's size --
+/// what two compiles of the same netlist must agree on.
+pub fn canonical_world_fingerprint(world: &World) -> Fingerprint {
+    let cells: Vec<CanonicalCell> = world
+        .cells()
+        .iter()
+        .enumerate()
+        .filter_map(|(flat, &palette_index)| {
+            let state = world
+                .palette()
+                .get(palette_index)
+                .expect("a world cell must reference its palette");
+            (state.kind != BlockKind::Air).then(|| canonical_cell(world, flat, state))
+        })
+        .collect();
+    let canonical = CanonicalWorld {
+        size: world.size(),
+        cells,
+    };
+    canonical_fingerprint(&serde_json::to_vec(&canonical).expect("a world must serialize"))
+}
+
+#[derive(Serialize)]
+struct CanonicalWorld {
+    size: (i32, i32, i32),
+    cells: Vec<CanonicalCell>,
+}
+
+#[derive(Serialize)]
+struct CanonicalCell {
+    x: i32,
+    y: i32,
+    z: i32,
+    kind: String,
+    facing: Option<String>,
+    power: u8,
+    lit: bool,
+    delay: u8,
+    face: Option<String>,
+}
+
+fn canonical_cell(world: &World, flat: usize, state: &BlockState) -> CanonicalCell {
+    let (x, y, z) = world.decode(flat);
+    let lower = |debug: String| debug.to_lowercase();
+    CanonicalCell {
+        x,
+        y,
+        z,
+        kind: lower(format!("{:?}", state.kind)),
+        facing: state.facing.map(|facing: Facing| lower(format!("{facing:?}"))),
+        power: state.power,
+        lit: state.lit,
+        delay: state.delay,
+        face: state.face.map(|face: Face| lower(format!("{face:?}"))),
+    }
 }
 
 /// Canonical physical size metrics over non-air cells only.
@@ -108,7 +165,7 @@ pub fn physical_metrics(world: &World, lowered_gate_count: u64) -> PhysicalMetri
 #[cfg(test)]
 mod tests {
     use super::{canonical_fingerprint, physical_metrics, Ratio};
-    use crate::compile::{geometry, planner};
+    use crate::compile::geometry;
     use crate::redstone::world::block::{BlockKind, BlockState};
     use crate::redstone::world::storage::World;
 
@@ -178,11 +235,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn planner_anchor_is_the_geometry_anchor_type() {
-        let durable = geometry::Anchor { x: 2, y: 1, z: 3 };
-        let compatible: planner::Anchor = durable;
-
-        assert_eq!(compatible, durable);
-    }
 }

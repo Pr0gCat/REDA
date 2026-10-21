@@ -27,11 +27,10 @@ fn minimum_integer_survives_dependencies_overrides_and_physical_switching() {
     let physical = compile(&lowered).unwrap();
     let again = compile(&lowered).unwrap();
     assert_eq!(
-        reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&physical.world),
-        reda::compile::fragment_synth::benchmark::canonical_world_fingerprint(&again.world)
+        reda::compile::metrics::canonical_world_fingerprint(&physical.world),
+        reda::compile::metrics::canonical_world_fingerprint(&again.world)
     );
-    physical.validate_rewrite_view(&lowered).unwrap();
-    let implementation = physical.implementation_netlist(&lowered);
+    let implementation = &lowered;
     let oracle = Evaluator::new(implementation).unwrap();
     let mut sim = Simulator::new(physical.world.clone());
     sim.run_until_stable(2000).unwrap();
