@@ -15,6 +15,8 @@
 //! (timing-driven placement as in VPR: Marquardt, Betz and Rose, 2000),
 //! re-timed at every temperature.
 
+use std::sync::OnceLock;
+
 use rayon::prelude::*;
 
 /// The xorshift generator the router uses too: deterministic.
@@ -72,7 +74,6 @@ const NEGLIGIBLE: f64 = 0.01;
 /// What timing sees of the elements: every driver-to-reader connection,
 /// and which elements are registers (paths start at their outputs and end
 /// at their inputs).
-#[derive(Clone)]
 pub struct Timing {
     pub edges: Vec<(usize, usize)>,
     pub registered: Vec<bool>,
@@ -85,6 +86,18 @@ pub struct Timing {
     /// Where each connection leaves its driver and reaches its reader,
     /// from each one's middle, in slots: a block's port, not its middle.
     pub ends: Vec<(Offset, Offset)>,
+    /// The graph's shape, worked out once: placement re-times it at every
+    /// move but never changes it.
+    topology: OnceLock<Topology>,
+}
+
+/// The elements in topological order (a register's output starting a
+/// path afresh), and the connections leaving each.
+#[derive(Clone)]
+struct Topology {
+    count: usize,
+    order: Vec<usize>,
+    out: Vec<Vec<usize>>,
 }
 
 /// A point relative to an element's middle, in slots.
@@ -110,7 +123,66 @@ pub enum Pin {
     Point(f64, f64),
 }
 
+impl Clone for Timing {
+    fn clone(&self) -> Timing {
+        Timing::new(self.edges.clone(), self.registered.clone(), self.intrinsic.clone(), self.arrival.clone(), self.ends.clone())
+    }
+}
+
 impl Timing {
+    pub fn new(
+        edges: Vec<(usize, usize)>,
+        registered: Vec<bool>,
+        intrinsic: Vec<f64>,
+        arrival: Vec<f64>,
+        ends: Vec<(Offset, Offset)>,
+    ) -> Timing {
+        Timing {
+            edges,
+            registered,
+            intrinsic,
+            arrival,
+            ends,
+            topology: OnceLock::new(),
+        }
+    }
+
+    /// The graph's topology for `count` elements: worked out once, and
+    /// again only if elements were added since.
+    fn topology(&self, count: usize) -> std::borrow::Cow<'_, Topology> {
+        let fresh = || {
+            let mut fanin = vec![0usize; count];
+            let mut out: Vec<Vec<usize>> = vec![Vec::new(); count];
+            for (edge, &(from, to)) in self.edges.iter().enumerate() {
+                out[from].push(edge);
+                if !self.registered[to] {
+                    fanin[to] += 1;
+                }
+            }
+            let mut order: Vec<usize> = (0..count).filter(|&element| fanin[element] == 0).collect();
+            let mut next = 0;
+            while next < order.len() {
+                for &edge in &out[order[next]] {
+                    let to = self.edges[edge].1;
+                    if !self.registered[to] {
+                        fanin[to] -= 1;
+                        if fanin[to] == 0 {
+                            order.push(to);
+                        }
+                    }
+                }
+                next += 1;
+            }
+            Topology { count, order, out }
+        };
+        let cached = self.topology.get_or_init(fresh);
+        if cached.count == count {
+            std::borrow::Cow::Borrowed(cached)
+        } else {
+            std::borrow::Cow::Owned(fresh())
+        }
+    }
+
     /// Ticks connection `edge` takes once the elements' middles sit at
     /// `centres`.
     pub fn delay_at(&self, centres: &[(f64, f64)], edge: usize) -> f64 {
@@ -139,36 +211,16 @@ impl Timing {
         self.forward(count, &delay).1
     }
 
-    /// The elements in topological order, when each one's output moves,
-    /// when its last input arrives, and the connections leaving each.
-    fn forward(&self, count: usize, delay: &impl Fn(usize) -> f64) -> (Vec<usize>, Vec<f64>, Vec<f64>, Vec<Vec<usize>>) {
+    /// The graph's topology, when each element's output moves, and when its
+    /// last input arrives.
+    fn forward(&self, count: usize, delay: &impl Fn(usize) -> f64) -> (std::borrow::Cow<'_, Topology>, Vec<f64>, Vec<f64>) {
         // Arrival at each element's output, in topological order; a
         // register's output starts afresh.
-        let mut fanin = vec![0usize; count];
-        let mut out: Vec<Vec<usize>> = vec![Vec::new(); count];
-        for (edge, &(from, to)) in self.edges.iter().enumerate() {
-            out[from].push(edge);
-            if !self.registered[to] {
-                fanin[to] += 1;
-            }
-        }
-        let mut order: Vec<usize> = (0..count).filter(|&element| fanin[element] == 0).collect();
-        let mut next = 0;
-        while next < order.len() {
-            for &edge in &out[order[next]] {
-                let to = self.edges[edge].1;
-                if !self.registered[to] {
-                    fanin[to] -= 1;
-                    if fanin[to] == 0 {
-                        order.push(to);
-                    }
-                }
-            }
-            next += 1;
-        }
+        let topology = self.topology(count);
+        let (order, out) = (&topology.order, &topology.out);
         let mut ready = vec![0.0f64; count];
         let mut reached = self.arrival.clone();
-        for &element in &order {
+        for &element in order {
             if !self.registered[element] {
                 ready[element] = reached[element];
             }
@@ -177,14 +229,22 @@ impl Timing {
                 reached[to] = reached[to].max(ready[element] + delay(edge));
             }
         }
-        (order, ready, reached, out)
+        (topology, ready, reached)
+    }
+
+    /// The critical delay alone, for a placement whose connections take
+    /// `delay` ticks: what [`Timing::timed`] gives, for a forward pass only.
+    fn critical(&self, count: usize, delay: impl Fn(usize) -> f64) -> f64 {
+        let (_, _, reached) = self.forward(count, &delay);
+        reached.iter().copied().fold(0.0, f64::max).max(1.0)
     }
 
     /// Each connection's criticality in `0..=1` for a placement whose
     /// connections take `delay` ticks -- one minus its slack over the
     /// critical delay -- and that critical delay.
     fn timed(&self, count: usize, delay: impl Fn(usize) -> f64) -> (Vec<f64>, f64) {
-        let (order, ready, reached, out) = self.forward(count, &delay);
+        let (topology, ready, reached) = self.forward(count, &delay);
+        let (order, out) = (&topology.order, &topology.out);
         let critical = reached.iter().copied().fold(0.0, f64::max).max(1.0);
         // Required time at each element's output, walking back.
         let mut needed = vec![critical; count];
@@ -611,13 +671,14 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
         (critical, near, criticality)
     };
     let (mut critical, mut near, mut criticality) = score(&slot_of);
+    let on = |criticality: &[f64]| -> Vec<usize> {
+        (0..timing.edges.len()).filter(|&edge| criticality[edge] > 0.999).collect()
+    };
+    let mut on_path = on(&criticality);
     for _ in 0..QUENCH_MOVES * count {
         if count < 2 || timing.edges.is_empty() {
             break;
         }
-        let on_path: Vec<usize> = (0..timing.edges.len())
-            .filter(|&edge| criticality[edge] > 0.999)
-            .collect();
         let edge = on_path[rng.below(on_path.len())];
         let element = if rng.below(2) == 0 {
             timing.edges[edge].0
@@ -665,10 +726,14 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
             slot_of[other] = from;
         }
         let after: f64 = touched.iter().map(|&net| span(&slot_of, net)).sum();
-        let (new_critical, new_near, new_criticality) = score(&slot_of);
-        let better = new_critical < critical - 1e-9
-            || (new_critical <= critical + 1e-9 && new_near < near - 1e-9);
-        if better && wire + after - before <= budget {
+        // Cheapest test first: the wire allowed, then the longest path,
+        // then everything near it.
+        let affordable = wire + after - before <= budget;
+        let no_longer = affordable && timing.critical(count, |edge| delay(&slot_of, edge)) <= critical + 1e-9;
+        let scored = no_longer.then(|| score(&slot_of)).filter(|&(new_critical, new_near, _)| {
+            new_critical < critical - 1e-9 || (new_critical <= critical + 1e-9 && new_near < near - 1e-9)
+        });
+        if let Some((new_critical, new_near, new_criticality)) = scored {
             if mixed && other.is_none() {
                 for covered in footprint(element, from) {
                     cover[covered] -= 1;
@@ -681,6 +746,7 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
             held[from] = other;
             wire += after - before;
             (critical, near, criticality) = (new_critical, new_near, new_criticality);
+            on_path = on(&criticality);
         } else {
             slot_of[element] = from;
             if let Some(other) = other {

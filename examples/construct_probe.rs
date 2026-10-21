@@ -218,6 +218,12 @@ fn main() {
             };
         }
         let delay = delay.map_or_else(|| "-".to_string(), |ticks| format!("{ticks}gt"));
+        // `PROBE_HASH=1`: the world's fingerprint, to tell a speedup changed
+        // nothing.
+        if std::env::var_os("PROBE_HASH").is_some() {
+            let fingerprint = reda::compile::metrics::canonical_world_fingerprint(&compiled.world);
+            println!("{top}: fingerprint {}", &fingerprint.as_str()[..16]);
+        }
         println!(
             "{top}: gates={} {}ms delay={delay} world={size:?} blocks={blocks} footprint={footprint} density={:.3} {verdict}",
             lowered.gates.len(),

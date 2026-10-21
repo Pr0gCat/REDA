@@ -768,13 +768,7 @@ fn timing_graph(netlist: &Netlist, blocks: &[BlockUse], whats: &[What], at: Atta
             _ => 0.0,
         })
         .collect();
-    placement::Timing {
-        edges,
-        registered,
-        intrinsic,
-        arrival: vec![0.0; whats.len()],
-        ends,
-    }
+    placement::Timing::new(edges, registered, intrinsic, vec![0.0; whats.len()], ends)
 }
 
 /// The combinational gates in an order that places each one shortly before
@@ -1457,10 +1451,8 @@ pub(super) fn generate(
     }
     // What the block adds to its parent's paths leaves its inputs' lateness
     // out: the parent counts that itself.
-    let bare = placement::Timing {
-        arrival: vec![0.0; whats.len()],
-        ..timing.clone()
-    };
+    let mut bare = timing.clone();
+    bare.arrival = vec![0.0; whats.len()];
     // Ports at given cells: those cells, moved so the lowest stands at the
     // base level and their middle sits over the lattice's, become fixed
     // points among the slots. `shift` takes the caller's coordinates to
