@@ -1084,26 +1084,30 @@ pub(super) fn plan(
         let centres: Vec<(f64, f64)> = (0..spans.len()).map(centre).collect();
         timing.delay_at(&centres, edge)
     };
-    let (spans, slots, _) = RATIOS
-        .iter()
+    // Every ratio at once, then the first of the fastest, so the choice is
+    // the same however the work was spread.
+    let tried: Vec<Tried> = RATIOS
+        .par_iter()
         .map(|&ratio| {
             let spans = shaped(ratio);
-            let (slots, critical) = placement::anneal(
-                whats.len(),
-                &nets,
-                &timing,
-                &pins,
-                &spans,
-                frame.shape,
-                &order,
-            )
+            let (slots, critical) = placement::anneal(&placement::Problem {
+                count: whats.len(),
+                nets: &nets,
+                timing: &timing,
+                pins: &pins,
+                sizes: &spans,
+                shape: frame.shape,
+                order: &order,
+                rough: true,
+            })
             .swap_remove(0);
             (spans, slots, critical)
         })
+        .collect();
+    let (spans, slots, _) = tried
+        .into_iter()
         .min_by(|a, b| a.2.partial_cmp(&b.2).expect("finite delays"))
         .expect("some ratio");
-    // When each element's inputs arrive, by the edges into it from each
-    // driver.
     let centre = |element: usize| {
         let ((x, z), (w, h)) = (slots[element], spans[element]);
         (f64::from(x) + (w - 1) as f64 / 2.0, f64::from(z) + (h - 1) as f64 / 2.0)
@@ -1115,6 +1119,8 @@ pub(super) fn plan(
             joins.entry(signal).or_default().push(element);
         }
     }
+    // When each element's inputs arrive, by the edges into it from each
+    // driver.
     let ready = timing.ready(whats.len(), |edge| delay_at(&spans, &slots, edge));
     let mut arrives: HashMap<(usize, usize), f64> = HashMap::new();
     for (edge, &(from, to)) in timing.edges.iter().enumerate() {
@@ -1191,6 +1197,10 @@ pub(super) fn plan(
         })
         .collect()
 }
+
+/// One ratio's placement in planning: every element's span and slot, and
+/// the estimated critical delay.
+type Tried = (Vec<(usize, usize)>, Vec<(i32, i32)>, f64);
 
 /// Where a placement puts every element: its target origin and its slot.
 type Placement = (Vec<Anchor>, Vec<(i32, i32)>);
@@ -1541,15 +1551,16 @@ pub(super) fn generate(
         }
     }
     let slots = slots.map(|_| {
-        let mut runs = placement::anneal(
-            lean_pins.len(),
-            &nets,
-            &leaning,
-            &lean_pins,
-            &lean_sizes,
-            frame.shape,
-            &(0..lean_pins.len()).collect::<Vec<_>>(),
-        );
+        let mut runs = placement::anneal(&placement::Problem {
+            count: lean_pins.len(),
+            nets: &nets,
+            timing: &leaning,
+            pins: &lean_pins,
+            sizes: &lean_sizes,
+            shape: frame.shape,
+            order: &(0..lean_pins.len()).collect::<Vec<_>>(),
+            rough: false,
+        });
         for (slots, _) in &mut runs {
             slots.truncate(whats.len());
         }

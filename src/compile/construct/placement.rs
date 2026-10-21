@@ -46,6 +46,8 @@ const RUNS: usize = 8;
 const SEED: u64 = 0x2545_F491_4F6C_DD1D;
 /// Moves tried per element at each temperature, and how fast it falls.
 const MOVES: usize = 50;
+/// Moves per element per temperature for a rough placement.
+const ROUGH_MOVES: usize = 10;
 const COOLING: f64 = 0.95;
 /// Nets read by more elements than this weigh less: a wide net's tree
 /// spans the layout whatever the placement does.
@@ -215,38 +217,18 @@ impl Timing {
     }
 }
 
-/// Slot coordinates for `count` elements joined by `nets` (each a list of
-/// element indices, with where on each the net attaches), on a lattice of
-/// about `shape` columns and rows if given, else a square. `order` lists the elements in the order to seed the
-/// lattice with, so related elements start close.
+/// Slot coordinates for each element of `problem`.
 ///
 /// Where annealing lands depends on its dice, so it runs [`RUNS`] times in
 /// parallel (one after another where there are no threads, as on wasm);
-/// the placements come back best first -- shortest
-/// estimated critical delay, then least wire -- with that delay, for the
-/// caller to fall back on when one will not route. A fixed run count, not the core count, keeps
-/// the result the same on every machine.
-pub fn anneal(
-    count: usize,
-    nets: &[Vec<(usize, Offset)>],
-    timing: &Timing,
-    pins: &[Pin],
-    sizes: &[(usize, usize)],
-    shape: Option<(usize, usize)>,
-    order: &[usize],
-) -> Vec<(Vec<(i32, i32)>, f64)> {
-    let problem = Problem {
-        count,
-        nets,
-        timing,
-        pins,
-        sizes,
-        shape,
-        order,
-    };
+/// the placements come back best first -- shortest estimated critical
+/// delay, then least wire -- with that delay, for the caller to fall back on
+/// when one will not route. A fixed run count, not the core count, keeps the
+/// result the same on every machine.
+pub fn anneal(problem: &Problem) -> Vec<(Vec<(i32, i32)>, f64)> {
     let mut runs: Vec<Run> = (0..RUNS as u64)
         .into_par_iter()
-        .map(|run| anneal_once(&problem, SEED ^ run.wrapping_mul(0x9E37_79B9_7F4A_7C15)))
+        .map(|run| anneal_once(problem, SEED ^ run.wrapping_mul(0x9E37_79B9_7F4A_7C15)))
         .collect();
     runs.sort_by(|a, b| (a.1, a.2).partial_cmp(&(b.1, b.2)).expect("finite costs"));
     runs.into_iter().map(|(slots, critical, _)| (slots, critical)).collect()
@@ -256,15 +238,21 @@ pub fn anneal(
 /// wire.
 type Run = (Vec<(i32, i32)>, f64, f64);
 
-/// What [`anneal`] was given.
-struct Problem<'a> {
-    count: usize,
-    nets: &'a [Vec<(usize, Offset)>],
-    timing: &'a Timing,
-    pins: &'a [Pin],
-    sizes: &'a [(usize, usize)],
-    shape: Option<(usize, usize)>,
-    order: &'a [usize],
+/// What to place: `count` elements joined by `nets` (each a list of element
+/// indices, with where on each the net attaches), timed by `timing`, kept
+/// to `pins`, each spanning `sizes` slots, on a lattice of about `shape`
+/// columns and rows if given, else a square. `order` lists the elements in
+/// the order to seed the lattice with, so related elements start close.
+/// A `rough` placement tries fewer moves: enough to plan by.
+pub struct Problem<'a> {
+    pub count: usize,
+    pub nets: &'a [Vec<(usize, Offset)>],
+    pub timing: &'a Timing,
+    pub pins: &'a [Pin],
+    pub sizes: &'a [(usize, usize)],
+    pub shape: Option<(usize, usize)>,
+    pub order: &'a [usize],
+    pub rough: bool,
 }
 
 /// One annealing run from `seed`.
@@ -277,7 +265,9 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
         sizes,
         shape,
         order,
+        rough,
     } = problem;
+    let moves = if rough { ROUGH_MOVES } else { MOVES };
     let pinned = |edge: Side| {
         pins.iter()
             .filter(|&&pin| pin == Pin::Edge(edge))
@@ -480,7 +470,7 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
         // An overlapped slot costs as much wire as a few slots of span, and
         // more as the lattice cools, so blocks end up apart.
         let penalty = OVERLAP * (1.0 + 1.0 / temperature.max(1e-3)) * wire_scale;
-        for _ in 0..MOVES * count {
+        for _ in 0..moves * count {
             let element = rng.below(count);
             let from = slot_of[element];
             let (w, h) = sizes[element];
