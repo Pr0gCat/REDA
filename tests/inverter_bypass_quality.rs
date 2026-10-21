@@ -44,7 +44,7 @@ fn measure_function(source: &Netlist, expected_function: impl Fn(usize) -> Vec<b
         .iter()
         .map(|o| circuit.output_positions[o])
         .collect();
-    let mut sim = Simulator::new(circuit.world);
+    let mut sim = Simulator::new(circuit.bench);
     sim.run_until_stable(2000).unwrap();
     sim.attach_observer(
         drivers

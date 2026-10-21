@@ -51,14 +51,14 @@ fn native_mixed_edges_reset_feedback_matches_loaded_state_trajectory() {
         "reda-mixed-clock-reset-{}.litematic",
         std::process::id()
     ));
-    save(&path, &physical.world, "mixed-clock-reset-feedback").unwrap();
+    save(&path, &physical.bench, "mixed-clock-reset-feedback").unwrap();
     let world = load(&path).unwrap();
     std::fs::remove_file(path).unwrap();
-    assert_eq!(physical.world.size(), world.size());
-    for (flat, &index) in physical.world.cells().iter().enumerate() {
-        let at = physical.world.decode(flat);
+    assert_eq!(physical.bench.size(), world.size());
+    for (flat, &index) in physical.bench.cells().iter().enumerate() {
+        let at = physical.bench.decode(flat);
         assert_eq!(
-            physical.world.palette().get(index).unwrap(),
+            physical.bench.palette().get(index).unwrap(),
             world.get(at.0, at.1, at.2)
         );
     }

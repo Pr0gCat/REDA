@@ -248,7 +248,7 @@ fn the_compiled_decoder_matches_its_truth_table() {
     // states do) so `report_timing` can hand it to
     // `compile::routing_stats::analyze` afterwards to count the actual
     // measured critical path's repeaters.
-    let mut simulator = Simulator::new(compiled.world.clone());
+    let mut simulator = Simulator::new(compiled.bench.clone());
     simulator
         .run_until_stable(MAX_TICKS)
         .expect("circuit must settle before the first reading");

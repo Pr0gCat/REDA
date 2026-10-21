@@ -228,7 +228,7 @@ fn check_physical(
     assert_eq!(fingerprint(&physical.world), fingerprint(&control.world));
     let implementation = &lowered;
     let evaluator = Evaluator::new(implementation).unwrap();
-    let mut sim = Simulator::new(physical.world.clone());
+    let mut sim = Simulator::new(physical.bench.clone());
     sim.run_until_stable(2000).unwrap();
     let mut phases = 0;
     for from in 0..16 {

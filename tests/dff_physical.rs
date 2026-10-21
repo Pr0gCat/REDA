@@ -15,7 +15,7 @@ fn check_trace(netlist: Netlist, outputs: HashMap<String, String>, name: &str) {
     // than applying any simulator-only initialization or reset pulse.
     let path =
         std::env::temp_dir().join(format!("reda-dff-{}-{name}.litematic", std::process::id()));
-    save(&path, &physical.world, name).unwrap();
+    save(&path, &physical.bench, name).unwrap();
     let world = load(&path).unwrap();
     std::fs::remove_file(path).unwrap();
     let mut sim = Simulator::new(world);

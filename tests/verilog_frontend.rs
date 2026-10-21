@@ -167,7 +167,7 @@ fn compile_simulate_and_check(
     let output_positions = output_positions_of(&compiled);
 
     let watched = watch_all_nets(&compiled);
-    let mut simulator = Simulator::new(compiled.world.clone());
+    let mut simulator = Simulator::new(compiled.bench.clone());
     simulator
         .run_until_stable(MAX_TICKS)
         .expect("circuit must settle before the first reading");
@@ -295,7 +295,7 @@ fn verilog_dff_reaches_the_physical_simulator() {
     let d = compiled.input_positions["d"];
     let clk = compiled.input_positions["clk"];
     let q = compiled.output_positions[&port_map["q"]];
-    let mut simulator = Simulator::new(compiled.world);
+    let mut simulator = Simulator::new(compiled.bench);
     simulator
         .run_until_stable(MAX_TICKS)
         .expect("DFF must settle");
@@ -556,7 +556,7 @@ fn native_verilog_dff_reaches_the_physical_simulator() {
     let d = compiled.input_positions["d"];
     let clk = compiled.input_positions["clk"];
     let q = compiled.output_positions[&port_map["q"]];
-    let mut simulator = Simulator::new(compiled.world);
+    let mut simulator = Simulator::new(compiled.bench);
     simulator
         .run_until_stable(MAX_TICKS)
         .expect("native DFF must settle");

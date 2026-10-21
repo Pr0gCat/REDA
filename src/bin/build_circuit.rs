@@ -204,11 +204,11 @@ fn print_pinout(compiled: &CompiledCircuit, output_labels: &[(String, String)]) 
     println!(
         "pinout (schematic-local coordinates: x,y,z from the corner the .litematic is pasted at)"
     );
-    println!("  inputs (lever):");
+    println!("  inputs (drive with a lever or any source at):");
     for (name, &(x, y, z)) in &compiled.input_positions {
         println!("    {name:<12} ({x}, {y}, {z})");
     }
-    println!("  outputs (lamp):");
+    println!("  outputs (read with a lamp or any reader at):");
     for (label, _, (x, y, z)) in output_pinout(compiled, output_labels) {
         println!("    {label:<12} ({x}, {y}, {z})");
     }

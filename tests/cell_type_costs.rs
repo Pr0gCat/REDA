@@ -450,7 +450,7 @@ fn measure_nor_network(
         .collect();
     let output_position = compiled.output_positions[output];
 
-    let mut simulator = Simulator::new(compiled.world.clone());
+    let mut simulator = Simulator::new(compiled.bench.clone());
     simulator
         .run_until_stable(MAX_TICKS)
         .unwrap_or_else(|err| panic!("{label} must settle before the first reading: {err:?}"));

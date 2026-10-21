@@ -167,7 +167,7 @@ fn widened_signed_source_matches_explicit_physical_control() {
     assert_eq!(hash(&physical.world), hash(&control.world));
     let implementation = &net;
     let oracle = Evaluator::new(implementation).unwrap();
-    let mut sim = Simulator::new(physical.world.clone());
+    let mut sim = Simulator::new(physical.bench.clone());
     sim.run_until_stable(2000).unwrap();
     for from in 0..16u64 {
         for to in 0..16u64 {

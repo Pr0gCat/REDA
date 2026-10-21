@@ -68,7 +68,7 @@ fn check(netlist: Netlist, outputs: HashMap<String, String>, case: Case, name: &
         std::process::id(),
         std::thread::current().id()
     ));
-    save(&path, &physical.world, name).unwrap();
+    save(&path, &physical.bench, name).unwrap();
     let world = load(&path).unwrap();
     std::fs::remove_file(path).unwrap();
     let mut sim = Simulator::new(world);

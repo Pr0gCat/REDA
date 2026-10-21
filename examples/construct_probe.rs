@@ -13,8 +13,10 @@
 use std::time::Instant;
 
 use reda::compile::construct::Method;
-use reda::compile::{compile_with, lowering::lower_optimised};
-use reda::frontend::evaluate::{inputs_from_bits, Evaluator};
+use reda::compile::{
+    compile_hierarchical, compile_with, compile_with_places, lowering::lower_optimised_with_provenance, PortPlace, Side,
+};
+use reda::frontend::evaluate::Evaluator;
 use reda::frontend::{compile_systemverilog, CompileOptions, SourceInput};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::BlockKind;
@@ -29,6 +31,13 @@ fn main() {
     if method != Method::Constructive {
         args.remove(0);
     }
+    // `--hier <grain>`: generate along the module tree.
+    let grain = if args.first().is_some_and(|arg| arg == "--hier") {
+        args.remove(0);
+        Some(args.remove(0).parse::<usize>().expect("a grain"))
+    } else {
+        None
+    };
     for pair in args.chunks(2) {
         let (path, top) = (&pair[0], &pair[1]);
         let text = std::fs::read_to_string(path).expect("readable source");
@@ -40,10 +49,37 @@ fn main() {
             &CompileOptions::new(top),
         )
         .expect("frontend");
-        let lowered = lower_optimised(&artifact.netlist).expect("lowering");
+        let provenanced = lower_optimised_with_provenance(&artifact.netlist).expect("lowering");
+        let lowered = provenanced.netlist.clone();
         let sequential = lowered.gates.iter().any(|gate| gate.kind.is_sequential());
         let started = Instant::now();
-        let compiled = match compile_with(&lowered, method) {
+        let generated = match grain {
+            // `PROBE_EDGES=1`: every input on the west edge, every output
+            // on the east, as a block's ports are.
+            None if std::env::var_os("PROBE_EDGES").is_some() => {
+                let mut places = std::collections::BTreeMap::new();
+                for name in &lowered.inputs {
+                    places.insert(name.clone(), PortPlace::Edge(Side::West));
+                }
+                for name in &lowered.outputs {
+                    places.insert(name.clone(), PortPlace::Edge(Side::East));
+                }
+                compile_with_places(&lowered, &places)
+            }
+            None => compile_with(&lowered, method),
+            Some(grain) => {
+                let debug = &artifact.debug;
+                let owner: Vec<usize> = provenanced
+                    .provenance
+                    .iter()
+                    .map(|&source| debug.instance_of_gate(&debug.gates[source]).map_or(0, |instance| instance.0 as usize))
+                    .collect();
+                let parents: Vec<Option<usize>> =
+                    debug.instances.iter().map(|info| info.parent.map(|parent| parent.0 as usize)).collect();
+                compile_hierarchical(&lowered, &owner, &parents, grain)
+            }
+        };
+        let compiled = match generated {
             Ok(compiled) => compiled,
             Err(error) => {
                 println!(
@@ -56,6 +92,20 @@ fn main() {
         };
         let millis = started.elapsed().as_millis();
         let size = compiled.world.size();
+        // `PROBE_LEVELS=1`: how many dust and repeaters each level holds.
+        if std::env::var_os("PROBE_LEVELS").is_some() {
+            for y in 0..size.1 {
+                let mut wires = 0;
+                for x in 0..size.0 {
+                    for z in 0..size.2 {
+                        if matches!(compiled.world.get(x, y, z).kind, BlockKind::RedstoneWire | BlockKind::Repeater) {
+                            wires += 1;
+                        }
+                    }
+                }
+                eprintln!("  level {y}: {wires} wire cells");
+            }
+        }
         let mut blocks = 0usize;
         for y in 0..size.1 {
             for z in 0..size.2 {
@@ -69,16 +119,22 @@ fn main() {
         let footprint = size.0 as usize * size.2 as usize;
         let mut verdict = String::from("not checked (sequential)");
         let mut delay = None;
-        if !sequential && artifact.netlist.inputs.len() <= 12 {
+        if !sequential && artifact.netlist.inputs.len() <= 64 {
             let logical = Evaluator::new(&artifact.netlist).expect("evaluator");
-            let mut sim = Simulator::new(compiled.world.clone());
+            let mut sim = Simulator::new(compiled.bench.clone());
             sim.run_until_stable(4000).expect("settles");
             let mut wrong = 0;
             let mut slowest = 0;
-            let mut slowest_row = 0;
-            let rows = 1u32 << artifact.netlist.inputs.len();
-            for row in 0..rows {
-                let inputs = inputs_from_bits(&artifact.netlist.inputs, row);
+            let mut slowest_rows = (0, 0);
+            let mut rows = rows(artifact.netlist.inputs.len());
+            // `PROBE_ROWS=<hex>,<hex>,...`: rows to run after the sampled
+            // ones, in order -- a known slow transition, say.
+            if let Ok(extra) = std::env::var("PROBE_ROWS") {
+                rows.extend(extra.split(',').map(|row| u64::from_str_radix(row, 16).expect("a hex row")));
+            }
+            let mut previous = 0;
+            for &row in &rows {
+                let inputs = bits(&artifact.netlist.inputs, row);
                 for (name, value) in &inputs {
                     let at = compiled.input_positions[name];
                     let mut state = sim.world().get(at.0, at.1, at.2).clone();
@@ -87,8 +143,9 @@ fn main() {
                 }
                 let ticks = sim.run_until_stable(4000).expect("settles");
                 if ticks > slowest {
-                    (slowest, slowest_row) = (ticks, row);
+                    (slowest, slowest_rows) = (ticks, (previous, row));
                 }
+                previous = row;
                 let expected = logical.evaluate(&inputs).expect("evaluates");
                 for (_, signal) in artifact.output_map() {
                     let at = compiled.output_positions[&signal];
@@ -149,10 +206,13 @@ fn main() {
                 trace(sim.world(), (at[0], at[1], at[2]));
             }
             if std::env::var_os("PROBE_TIMING").is_some() {
-                timing(&compiled, &artifact.netlist.inputs, slowest_row, slowest);
+                timing(&compiled, &artifact.netlist.inputs, slowest_rows, slowest);
             }
-            verdict = if wrong == 0 {
-                format!("truth table OK ({rows} rows)")
+            let every = rows.len() as u64 == 1u64 << artifact.netlist.inputs.len().min(63);
+            verdict = if wrong == 0 && every {
+                format!("truth table OK ({} rows)", rows.len())
+            } else if wrong == 0 {
+                format!("sampled OK ({} rows; delay is a lower bound)", rows.len())
             } else {
                 format!("WRONG in {wrong} output checks")
             };
@@ -169,33 +229,40 @@ fn main() {
 
 /// The game tick each gate output last changed at on the slowest row, in
 /// order, with the distance from the gate before it: where the delay goes.
-fn timing(compiled: &reda::compile::CompiledCircuit, inputs: &[String], row: u32, slowest: u64) {
-    let mut sim = Simulator::new(compiled.world.clone());
-    let set = |sim: &mut Simulator, row: u32| {
-        for (name, value) in inputs_from_bits(inputs, row) {
+fn timing(
+    compiled: &reda::compile::CompiledCircuit,
+    inputs: &[String],
+    (from, row): (u64, u64),
+    slowest: u64,
+) {
+    let mut sim = Simulator::new(compiled.bench.clone());
+    let set = |sim: &mut Simulator, row: u64| {
+        for (name, value) in bits(inputs, row) {
             let at = compiled.input_positions[&name];
             let mut state = sim.world().get(at.0, at.1, at.2).clone();
             state.lit = value;
             sim.world_mut().set(at.0, at.1, at.2, state);
         }
     };
-    set(&mut sim, row.wrapping_sub(1) & ((1 << inputs.len()) - 1));
+    set(&mut sim, from);
     sim.run_until_stable(4000).expect("settles");
     set(&mut sim, row);
+    // Every gate's output and every output lamp.
+    let probes: std::collections::BTreeMap<String, (i32, i32, i32)> = compiled
+        .gate_output_positions
+        .iter()
+        .map(|(name, &at)| (name.clone(), at))
+        .chain(compiled.output_positions.iter().map(|(name, &at)| (format!("lamp:{name}"), at)))
+        .collect();
     let mut last: std::collections::BTreeMap<&String, (u64, bool)> =
         std::collections::BTreeMap::new();
     let read = |sim: &Simulator, at: &(i32, i32, i32)| high(sim.world().get(at.0, at.1, at.2));
-    let before: Vec<bool> = compiled
-        .gate_output_positions
-        .values()
-        .map(|at| read(&sim, at))
-        .collect();
-    for (index, (name, _)) in compiled.gate_output_positions.iter().enumerate() {
-        last.insert(name, (0, before[index]));
+    for (name, at) in &probes {
+        last.insert(name, (0, read(&sim, at)));
     }
     for tick in 1..=slowest + 2 {
         sim.step();
-        for (name, at) in &compiled.gate_output_positions {
+        for (name, at) in &probes {
             let now = read(&sim, at);
             let entry = last.get_mut(name).unwrap();
             if now != entry.1 {
@@ -212,7 +279,7 @@ fn timing(compiled: &reda::compile::CompiledCircuit, inputs: &[String], row: u32
     eprintln!("  timing of row {row:#b} ({slowest}gt):");
     let mut previous: Option<(i32, i32, i32)> = None;
     for (tick, name) in changed {
-        let at = compiled.gate_output_positions[name];
+        let at = probes[name];
         let gap = previous.map_or(0, |p| (p.0 - at.0).abs() + (p.2 - at.2).abs());
         eprintln!("    {tick:4}gt {name} at {at:?} manhattan-from-previous {gap}");
         previous = Some(at);
@@ -328,4 +395,35 @@ fn trace(world: &reda::redstone::world::storage::World, from: (i32, i32, i32)) {
             block.power
         );
     }
+}
+
+/// Every input row up to twelve inputs; beyond that, all-low, all-high and
+/// a fixed pseudo-random sample, each row walked from the one before.
+fn rows(inputs: usize) -> Vec<u64> {
+    if inputs <= 12 {
+        return (0..1u64 << inputs).collect();
+    }
+    let mask = if inputs >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << inputs) - 1
+    };
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut rows = vec![0, mask];
+    rows.extend((0..510).map(|_| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state & mask
+    }));
+    rows
+}
+
+/// One row's input values: input `i` takes bit `i`.
+fn bits(inputs: &[String], row: u64) -> std::collections::BTreeMap<String, bool> {
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (name.clone(), (row >> index) & 1 == 1))
+        .collect()
 }

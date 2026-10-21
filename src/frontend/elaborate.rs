@@ -43,6 +43,16 @@ pub struct InstancePathId(pub u32);
 /// The selected top module is always instance zero.
 pub const ROOT_INSTANCE: InstancePathId = InstancePathId(0);
 
+/// One concrete instance in the module tree: the instance that contains it
+/// (none for the top), the module it instantiates and its instance name.
+/// Indexed by [`InstancePathId`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstanceInfo {
+    pub parent: Option<InstancePathId>,
+    pub module: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ElabKind {
     Module,
@@ -120,6 +130,8 @@ pub struct CombBlock {
 /// The elaborated top module with hierarchy aliases still explicit.
 #[derive(Debug, Clone)]
 pub struct Design {
+    /// The module tree, filled in for the top design only.
+    pub instances: Vec<InstanceInfo>,
     pub comb_blocks: Vec<CombBlock>,
     pub aliases: Vec<SignalAlias>,
     pub nodes: Vec<ElabNode>,
@@ -186,12 +198,16 @@ pub fn elaborate(set: &SourceSet, top: &str) -> Result<Design, Vec<Diagnostic>> 
         )]);
     }
 
-    Hierarchy {
+    let mut hierarchy = Hierarchy {
         set,
         active: Vec::new(),
         next_instance: ROOT_INSTANCE.0,
-    }
-    .build(module, HashMap::new())
+        instances: Vec::new(),
+        enclosing: Vec::new(),
+    };
+    let mut design = hierarchy.build(module, HashMap::new(), "")?;
+    design.instances = hierarchy.instances;
+    Ok(design)
 }
 
 /// Elaborate each scope independently, then link its typed RTL into its parent.
@@ -200,6 +216,9 @@ struct Hierarchy<'a> {
     set: &'a SourceSet,
     active: Vec<String>,
     next_instance: u32,
+    instances: Vec<InstanceInfo>,
+    /// The instances being elaborated, innermost last.
+    enclosing: Vec<InstancePathId>,
 }
 
 impl Hierarchy<'_> {
@@ -207,6 +226,7 @@ impl Hierarchy<'_> {
         &mut self,
         module: &Module,
         parameters: HashMap<String, Constant>,
+        name: &str,
     ) -> Result<Design, Vec<Diagnostic>> {
         if self.active.is_empty() && module.ports.iter().any(|port| port.direction == PortDirection::Inout) {
             let mut diagnostic = error(module.name.span,
@@ -230,6 +250,12 @@ impl Hierarchy<'_> {
         }
         let instance = InstancePathId(self.next_instance);
         self.next_instance += 1;
+        self.instances.push(InstanceInfo {
+            parent: self.enclosing.last().copied(),
+            module: module.name.name.clone(),
+            name: name.to_string(),
+        });
+        self.enclosing.push(instance);
         self.active.push(module.name.name.clone());
         let mut elaborator = Elaborator {
             nodes: Vec::new(),
@@ -243,6 +269,7 @@ impl Hierarchy<'_> {
         };
         let design = elaborator.module(module, self);
         self.active.pop();
+        self.enclosing.pop();
         if elaborator.errors.is_empty() {
             Ok(design)
         } else {
@@ -530,6 +557,7 @@ impl Elaborator {
         // original error classification instead of inventing unknown-name errors.
         if !self.errors.is_empty() {
             return Design {
+                instances: Vec::new(),
                 nodes: std::mem::take(&mut self.nodes),
                 signals: Vec::new(),
                 assigns: Vec::new(),
@@ -645,6 +673,7 @@ impl Elaborator {
         }
 
         Design {
+            instances: Vec::new(),
             aliases: std::mem::take(&mut self.aliases),
             comb_blocks: std::mem::take(&mut self.comb_blocks),
             nodes: std::mem::take(&mut self.nodes),
@@ -739,7 +768,7 @@ impl Elaborator {
         if !self.errors.is_empty() {
             return Vec::new();
         }
-        let mut child = match hierarchy.build(module, parameters) {
+        let mut child = match hierarchy.build(module, parameters, &instance.name.name) {
             Ok(child) => child,
             Err(errors) => {
                 self.errors.extend(errors);

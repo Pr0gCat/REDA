@@ -407,7 +407,7 @@ fn attaching_an_observer_does_not_change_settle_ticks_or_final_state() {
         let output_position = *compiled.output_positions.get(&output_signal).unwrap();
         let watched = watch_all_nets(&compiled);
 
-        let mut simulator = Simulator::new(compiled.world);
+        let mut simulator = Simulator::new(compiled.bench);
         simulator
             .run_until_stable(MAX_TICKS)
             .expect("must settle before the first reading");

@@ -30,7 +30,7 @@ use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
 use crate::compile::Netlist;
 
 pub use super::ast::{SourceKind, SourceNode, SourceNodeId};
-pub use super::elaborate::{ElabKind, ElabNode, ElabNodeId, InstancePathId};
+pub use super::elaborate::{ElabKind, ElabNode, ElabNodeId, InstanceInfo, InstancePathId};
 pub use super::logic::LogicNodeId;
 pub use super::source::{FileId, SourceFileInfo, Span};
 
@@ -163,6 +163,9 @@ pub struct DebugDatabase {
     pub files: Vec<SourceFileInfo>,
     pub source_nodes: Vec<SourceNode>,
     pub elab_nodes: Vec<ElabNode>,
+    /// The module tree, indexed by [`InstancePathId`].
+    #[serde(default)]
+    pub instances: Vec<InstanceInfo>,
     /// Every emitted gate, indexed by its position in `Netlist::gates`.
     ///
     /// The sidecar does not contain the netlist, so without this a
@@ -190,6 +193,7 @@ impl Default for DebugDatabase {
             files: Vec::new(),
             source_nodes: Vec::new(),
             elab_nodes: Vec::new(),
+            instances: Vec::new(),
             gates: Vec::new(),
             logic_origins: Vec::new(),
             extra_origins: Vec::new(),
@@ -278,6 +282,22 @@ impl DebugDatabase {
     }
 
     // ---- reverse: gate -> source --------------------------------------
+
+    /// The instance that built one gate: the instance of its direct origin.
+    /// Extra origins are not counted -- they are every later expression that
+    /// interned into the same logic, which includes each place that merely
+    /// reads the signal through a port -- so logic shared across instances
+    /// belongs to the one that built it first, as lowering credits a shared
+    /// inverter to the gate that built it. `None` when nothing records an
+    /// origin for it.
+    pub fn instance_of_gate(&self, gate: &GateRef) -> Option<InstancePathId> {
+        let origins = self.origins_for_gate(gate);
+        origins
+            .iter()
+            .find(|origin| !origin.extra)
+            .or(origins.first())
+            .map(|origin| self.elab_nodes[origin.elab.0 as usize].instance)
+    }
 
     /// Every direct and extra origin of one gate, ordered by logic node and
     /// then by arrival. A gate several source expressions share reports all

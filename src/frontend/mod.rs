@@ -60,7 +60,7 @@
 //! never falls back, and syntax or semantic errors stay errors. Yosys can
 //! also be requested as an independent oracle. See [`synthesize_selected`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::Path;
 use std::process::Command;
@@ -210,11 +210,32 @@ impl Diagnostic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompileOptions {
     pub top: String,
+    /// Where each top port goes, by port name (every bit of it) or bit
+    /// name (`"q[3]"`, which wins): on an edge of the circuit, or exactly at
+    /// a cell, which only a single bit can take. Ports not named go
+    /// wherever placement puts them.
+    pub ports: BTreeMap<String, crate::compile::PortPlace>,
 }
 
 impl CompileOptions {
     pub fn new(top: impl Into<String>) -> CompileOptions {
-        CompileOptions { top: top.into() }
+        CompileOptions {
+            top: top.into(),
+            ports: BTreeMap::new(),
+        }
+    }
+
+    /// These options with port (or port bit) `port` on edge `side`.
+    pub fn with_side(mut self, port: impl Into<String>, side: crate::compile::Side) -> CompileOptions {
+        self.ports.insert(port.into(), crate::compile::PortPlace::Edge(side));
+        self
+    }
+
+    /// These options with port bit `port` at cell `(x, y, z)`: an input
+    /// driven from there, an output read there.
+    pub fn with_cell(mut self, port: impl Into<String>, (x, y, z): (i32, i32, i32)) -> CompileOptions {
+        self.ports.insert(port.into(), crate::compile::PortPlace::Cell(x, y, z));
+        self
     }
 }
 
@@ -323,6 +344,7 @@ pub fn compile_systemverilog(
             .collect(),
         source_nodes: set.nodes,
         elab_nodes: design.nodes,
+        instances: design.instances,
         gates: emitted.gates,
         logic_origins: blasted.graph.origins,
         extra_origins: blasted.graph.extra_origins,
@@ -350,8 +372,8 @@ pub struct CompiledNativeCircuit {
     pub implementation: Netlist,
 }
 
-/// Where each source port is in the world: an input's lever, an output's
-/// lamp.
+/// Where each source port is in the world: the cell outside it an input is
+/// driven from and an output read at (a bench lever or lamp stands there).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Pinout {
     pub inputs: std::collections::BTreeMap<String, [i32; 3]>,
@@ -393,7 +415,21 @@ pub fn compile_systemverilog_physical(
     })?;
     let implementation =
         crate::compile::lowering::lower_optimised(&artifact.netlist).map_err(|e| e.to_string())?;
-    let physical = crate::compile::compile(&implementation).map_err(|e| e.to_string())?;
+    // Where each port bit goes, by the signal it is.
+    let mut places = BTreeMap::new();
+    for port in &artifact.ports {
+        let whole = port.name.split('[').next().unwrap_or(&port.name);
+        let place = match (options.ports.get(&port.name), options.ports.get(whole)) {
+            (Some(&place), _) => place,
+            (None, Some(crate::compile::PortPlace::Cell(..))) if whole != port.name => {
+                return Err(format!("port {whole} has several bits; give each bit, like {}, its own cell", port.name));
+            }
+            (None, Some(&place)) => place,
+            (None, None) => continue,
+        };
+        places.insert(port.signal.clone(), place);
+    }
+    let physical = crate::compile::compile_with_places(&implementation, &places).map_err(|e| e.to_string())?;
     let coordinates = |p: &(i32, i32, i32)| [p.0, p.1, p.2];
     let mut pinout = Pinout {
         inputs: Default::default(),

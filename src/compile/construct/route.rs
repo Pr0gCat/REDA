@@ -40,7 +40,7 @@ const STAIR: u64 = 2;
 /// Levels below this are where tiles stand; a route crossing them costs
 /// more, so long runs climb to the open levels above and leave the ground
 /// for the connections that have to be made there.
-const OPEN: i32 = 5;
+pub const OPEN: i32 = 5;
 const CROWDED: u64 = 3;
 /// Above the tiles, each net has a home level where travel is cheapest and
 /// pays this much more elsewhere. Without it every long run settles on the
@@ -48,13 +48,13 @@ const CROWDED: u64 = 3;
 /// placed later climbs its ramp into that roof and cannot get out.
 const AWAY: u64 = 2;
 
-/// The level `owner` prefers to travel on.
-fn home_level(owner: Owner) -> i32 {
+/// The level `owner` prefers to travel on, `lift` levels above the usual.
+fn home_level(owner: Owner, lift: i32) -> i32 {
     let levels = (HIGHEST - OPEN) / 3 + 1;
     let index = match owner {
         Owner::Net(net) | Owner::Gate(net) => net as i32,
     };
-    OPEN + 3 * (index.wrapping_mul(7).rem_euclid(levels))
+    lift + OPEN + 3 * (index.wrapping_mul(7).rem_euclid(levels))
 }
 
 /// What one unit of travel costs at level `y` for a net living on `home`.
@@ -140,7 +140,7 @@ impl Search<'_> {
     /// tree cell this move leaves from, if any -- a branch's first cell
     /// necessarily stands beside its own tree there.
     fn can_stand(&self, at: Anchor, tap: Option<Anchor>, recent: &[Anchor]) -> bool {
-        if !(LOWEST..=HIGHEST).contains(&at.y)
+        if !(LOWEST..=HIGHEST + self.grid.raise).contains(&at.y)
             || (!self.forbidden.is_empty() && self.forbidden.contains(&at))
         {
             return false;
@@ -220,7 +220,7 @@ fn search(
     };
     let tree: CellSet<Anchor> = taps.iter().map(|(at, _)| *at).collect();
     let target = goal.approach;
-    let home = home_level(owner);
+    let home = home_level(owner, grid.lift);
     let mut nodes: Vec<Node> = Vec::new();
     // The Pareto front of (cost, strength) reached at each cell: an arrival
     // is kept only if no other is both as cheap and as strong.

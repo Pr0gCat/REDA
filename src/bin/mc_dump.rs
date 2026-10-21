@@ -358,7 +358,7 @@ fn circuit_records(
             .iter()
             .any(|gate| gate.output == *name && gate.kind.is_sequential());
         let component = if sequential {
-            format!(" {}", kind_str(compiled.world.get(x, y, z).kind))
+            format!(" {}", kind_str(compiled.bench.get(x, y, z).kind))
         } else {
             String::new()
         };
@@ -378,7 +378,7 @@ fn circuit_records(
                 records.push(format!(
                     "DFFCELL {} {role} {cx} {cy} {cz} {}",
                     gate.output,
-                    kind_str(compiled.world.get(cx, cy, cz).kind)
+                    kind_str(compiled.bench.get(cx, cy, cz).kind)
                 ));
             }
         }
@@ -439,7 +439,7 @@ fn main() {
         }
     };
 
-    write_world(&compiled.world, &mut std::io::stdout().lock()).expect("dump world");
+    write_world(&compiled.bench, &mut std::io::stdout().lock()).expect("dump world");
 
     for record in circuit_records(&netlist, &compiled, &output_labels) {
         println!("{record}");
@@ -487,7 +487,7 @@ mod tests {
                 fields[4].parse::<i32>().unwrap(),
                 fields[5].parse::<i32>().unwrap(),
             );
-            assert_eq!(fields[6], kind_str(physical.world.get(x, y, z).kind));
+            assert_eq!(fields[6], kind_str(physical.bench.get(x, y, z).kind));
             let component = if fields[2] == "InvC" { "WallTorch" } else { "Repeater" };
             assert_eq!(fields[6], component, "{record}");
         }
@@ -509,7 +509,7 @@ mod tests {
         }
         if let Ok(directory) = std::env::var("REDA_DUMP_FIXTURE_DIR") {
             let mut bytes = Vec::new();
-            write_world(&physical.world, &mut bytes).unwrap();
+            write_world(&physical.bench, &mut bytes).unwrap();
             for record in records {
                 bytes.extend_from_slice(record.as_bytes());
                 bytes.push(b'\n');

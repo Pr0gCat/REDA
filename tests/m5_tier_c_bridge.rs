@@ -97,7 +97,7 @@ fn simulate_combinational(
         .map(|&name| *compiled.output_positions.get(&output_map[name]).unwrap())
         .collect();
 
-    let mut simulator = Simulator::new(compiled.world);
+    let mut simulator = Simulator::new(compiled.bench);
     simulator
         .run_until_stable(2000)
         .expect("must settle before the first reading");
@@ -183,7 +183,7 @@ fn dff_frontend_netlist_captures_edges_and_holds_through_the_physical_simulator(
     let clk = compiled.input_positions[&artifact.port("clk").unwrap().signal];
     let q = compiled.output_positions[&artifact.port("q").unwrap().signal];
 
-    let mut simulator = Simulator::new(compiled.world);
+    let mut simulator = Simulator::new(compiled.bench);
     simulator.run_until_stable(2000).expect("DFF must settle");
 
     set_lever(&mut simulator, clk, false);
@@ -236,7 +236,7 @@ fn dff_enable_frontend_netlist_captures_only_when_enabled_through_the_physical_s
     let en = compiled.input_positions[&artifact.port("en").unwrap().signal];
     let q = compiled.output_positions[&artifact.port("q").unwrap().signal];
 
-    let mut simulator = Simulator::new(compiled.world);
+    let mut simulator = Simulator::new(compiled.bench);
     simulator
         .run_until_stable(2000)
         .expect("DFF-enable must settle");

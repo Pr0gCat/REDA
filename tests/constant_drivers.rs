@@ -19,7 +19,7 @@ fn disconnected_torch_and_its_inverter_are_certified_constant_drivers() {
         let drivers = circuit.gate_output_positions.clone();
         let lamps = circuit.output_positions.clone();
         let inputs: Vec<_> = circuit.input_positions.values().copied().collect();
-        let mut sim = Simulator::new(circuit.world);
+        let mut sim = Simulator::new(circuit.bench);
         sim.run_until_stable(2000).unwrap();
         for vector in 0..(1usize << inputs.len()) {
             for (bit, &(x, y, z)) in inputs.iter().enumerate() {
@@ -65,7 +65,7 @@ fn native_constant_outputs_have_real_drivers_and_keep_constant_debug_bindings() 
         let outputs = circuit.output_positions.clone();
         let drivers = circuit.gate_output_positions.clone();
         let inputs: Vec<_> = circuit.input_positions.values().copied().collect();
-        let mut sim = Simulator::new(circuit.world);
+        let mut sim = Simulator::new(circuit.bench);
         sim.run_until_stable(2000).unwrap();
         for vector in 0..(1usize << inputs.len()) {
             for (bit,&(x,y,z)) in inputs.iter().enumerate() {
@@ -104,7 +104,7 @@ fn native_constant_register_data_survives_clock_edges() {
         let (x, y, z) = circuit.input_positions["clk"];
         let driver = circuit.gate_output_positions[&output];
         let lamp = circuit.output_positions[&output];
-        let mut sim = Simulator::new(circuit.world);
+        let mut sim = Simulator::new(circuit.bench);
         sim.run_until_stable(2000).unwrap();
         for clock in [true, false, true, false] {
             let mut lever = sim.world().get(x, y, z).clone();
@@ -134,7 +134,7 @@ fn fresh_yosys_constant_output_ports_have_real_certified_drivers() {
     let lamps = circuit.output_positions.clone();
     let drivers = circuit.gate_output_positions.clone();
     let inputs: Vec<_> = circuit.input_positions.values().copied().collect();
-    let mut sim = Simulator::new(circuit.world);
+    let mut sim = Simulator::new(circuit.bench);
     sim.run_until_stable(2000).unwrap();
     for vector in 0..4u32 {
         for (bit, &(x, y, z)) in inputs.iter().enumerate() {

@@ -76,6 +76,12 @@ pub struct Grid {
     /// The same for clear cells.
     near_clear: CellMap<Anchor, Vec<(Owner, u32)>>,
     journal: Vec<Entry>,
+    /// Levels routes may climb above the usual ceiling, to reach ports
+    /// placed high or to pass over blocks.
+    pub raise: i32,
+    /// Levels the preferred travel levels sit above the usual ones: a
+    /// parent's routes travel over its blocks, whose own routes keep below.
+    pub lift: i32,
 }
 
 fn add(counts: &mut Vec<(Owner, u32)>, owner: Owner) {
@@ -278,6 +284,11 @@ impl Grid {
                 Entry::Released(at, owner) => tally(&mut self.near_clear, at, owner, true),
             }
         }
+    }
+
+    /// Every occupied cell, reserved air included (`None`).
+    pub fn cells(&self) -> impl Iterator<Item = (Anchor, Owner, Option<&BlockState>)> {
+        self.slots.iter().map(|(at, slot)| (*at, slot.owner, slot.block.as_ref()))
     }
 
     pub fn blocks(&self) -> impl Iterator<Item = (Anchor, Owner, &BlockState)> {

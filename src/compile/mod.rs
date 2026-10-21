@@ -2,13 +2,16 @@
 //!
 //! A netlist of NOR, OR and positive-edge DFF gates goes in ([`lowering`]
 //! produces one from the frontend's gate level); a [`CompiledCircuit`] comes
-//! out: the world, the lever of every input and the lamp of every output.
+//! out: the world, whose inputs and outputs are ports -- placed freely, on
+//! an edge or at a cell the caller gives -- and where each is driven and
+//! read.
 //! [`construct`] is the one generator.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
+pub use construct::{PortPlace, Side};
 
 pub mod construct;
 pub mod geometry;
@@ -228,12 +231,24 @@ pub enum CompileError {
 }
 
 /// A compiled circuit: the world and where its ports are.
+///
+/// The circuit has no levers or lamps: every input and output is a port,
+/// for whatever it is built into to drive and read.
 #[derive(Debug, Clone)]
 pub struct CompiledCircuit {
     pub world: World,
-    /// Each primary input's lever.
+    /// [`Self::world`] with a test bench added: a lever at every input
+    /// position and a lamp at every output position, in the same frame.
+    pub bench: World,
+    /// Where the world's corner goes in the coordinates ports were placed
+    /// at cells in (see [`PortPlace::Cell`]), so each such port's position
+    /// plus this is the cell it was given; zero when none was.
+    pub origin: (i32, i32, i32),
+    /// Where each primary input is driven from: the clear cell beside its
+    /// port, which a lever or any other source there powers.
     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
-    /// Each primary output's lamp: lit when the signal is high.
+    /// Where each primary output is read: the clear cell beside its port,
+    /// which a lamp there lights when the signal is high.
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
     /// Where every gate's own output value can be read (a NOR's torch, an
     /// OR's junction dust, a DFF's Q dust), keyed by its output signal.
@@ -247,23 +262,53 @@ pub struct CompiledCircuit {
 /// with the result, and a silent lowering would make those two different
 /// netlists.
 pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
-    compile_with(netlist, construct::Method::Constructive)
+    compile_with_places(netlist, &BTreeMap::new())
 }
 
-/// [`compile`], placing and routing by `method`.
-pub fn compile_with(netlist: &Netlist, method: construct::Method) -> Result<CompiledCircuit, CompileError> {
-    let placed = construct::construct_with(netlist, method)
-        .map_err(|error| match error {
-            construct::ConstructError::NoTile { gate, kind } => CompileError::NotRealisable { gate, kind },
-            construct::ConstructError::Undriven { signal } => CompileError::UndrivenSignal(signal),
-            construct::ConstructError::CombinationalLoop => CompileError::CyclicNetlist,
-            other @ construct::ConstructError::Unplaceable { .. } => CompileError::Unplaceable(other.to_string()),
-        })?
-        .into_world();
+/// [`compile`], with each port signal named in `places` where it says: on
+/// an edge, or exactly at a cell (the rest wherever placement puts them).
+pub fn compile_with_places(
+    netlist: &Netlist,
+    places: &BTreeMap<String, PortPlace>,
+) -> Result<CompiledCircuit, CompileError> {
+    circuit(construct::construct(netlist, places).map_err(construct_error)?)
+}
+
+fn circuit(construction: construct::Construction) -> Result<CompiledCircuit, CompileError> {
+    let placed = construction.into_world();
     Ok(CompiledCircuit {
         world: placed.world,
+        bench: placed.bench,
+        origin: placed.origin,
         input_positions: placed.inputs,
         output_positions: placed.outputs,
         gate_output_positions: placed.gate_outputs,
     })
+}
+
+/// [`compile`] along a module tree: `owner[g]` is the instance that built
+/// gate `g` and `parents[i]` instance `i`'s parent (the top is instance 0).
+/// Instances whose subtree holds fewer than `grain` gates are laid out as
+/// part of their parent.
+pub fn compile_hierarchical(
+    netlist: &Netlist,
+    owner: &[usize],
+    parents: &[Option<usize>],
+    grain: usize,
+) -> Result<CompiledCircuit, CompileError> {
+    circuit(construct::construct_hierarchical(netlist, owner, parents, grain, &BTreeMap::new()).map_err(construct_error)?)
+}
+
+fn construct_error(error: construct::ConstructError) -> CompileError {
+    match error {
+        construct::ConstructError::NoTile { gate, kind } => CompileError::NotRealisable { gate, kind },
+        construct::ConstructError::Undriven { signal } => CompileError::UndrivenSignal(signal),
+        construct::ConstructError::CombinationalLoop => CompileError::CyclicNetlist,
+        other @ construct::ConstructError::Unplaceable { .. } => CompileError::Unplaceable(other.to_string()),
+    }
+}
+
+/// [`compile`], placing and routing by `method`.
+pub fn compile_with(netlist: &Netlist, method: construct::Method) -> Result<CompiledCircuit, CompileError> {
+    circuit(construct::construct_with(netlist, &BTreeMap::new(), method).map_err(construct_error)?)
 }

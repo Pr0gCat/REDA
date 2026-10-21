@@ -150,7 +150,7 @@ fn typed_hierarchy_matches_fixed_physical_implementation_for_all_transitions() {
     );
     let implementation = &lowered;
     let evaluator = Evaluator::new(implementation).unwrap();
-    let mut simulator = Simulator::new(physical.world.clone());
+    let mut simulator = Simulator::new(physical.bench.clone());
     simulator.run_until_stable(2000).unwrap();
     let mut phases = 0;
     for from in 0..16 {

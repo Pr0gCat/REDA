@@ -61,7 +61,7 @@ fn nested_parameter_instances_reach_all_retained_physical_outputs() {
         assert_eq!(physical.world.get(x, y, z), again.world.get(x, y, z));
     }
     let oracle = Evaluator::new(&lowered).unwrap();
-    let mut sim = Simulator::new(physical.world.clone());
+    let mut sim = Simulator::new(physical.bench.clone());
     sim.run_until_stable(2000).unwrap();
     let mut phases = 0;
     for from in 0..16 {
