@@ -1025,15 +1025,16 @@ fn pins(whats: &[What], frame: &Frame) -> Vec<placement::Pin> {
 }
 
 /// The edge a port at a cell faces: away from the middle of what it
-/// connects to, which sits at `slots` (the port itself at `at`).
-fn facing(at: (f64, f64), neighbours: &[(i32, i32)], default: Side) -> Side {
+/// connects to, whose middles sit at `neighbours` (the port itself at `at`), on a
+/// lattice whose rows are `aspect` columns long.
+fn facing(at: (f64, f64), neighbours: &[(f64, f64)], aspect: f64, default: Side) -> Side {
     if neighbours.is_empty() {
         return default;
     }
     let count = neighbours.len() as f64;
-    let dx = at.0 - neighbours.iter().map(|n| f64::from(n.0)).sum::<f64>() / count;
-    let dz = at.1 - neighbours.iter().map(|n| f64::from(n.1)).sum::<f64>() / count;
-    match (dx.abs() >= dz.abs(), dx > 0.0, dz > 0.0) {
+    let dx = at.0 - neighbours.iter().map(|n| n.0).sum::<f64>() / count;
+    let dz = at.1 - neighbours.iter().map(|n| n.1).sum::<f64>() / count;
+    match (dx.abs() >= aspect * dz.abs(), dx > 0.0, dz > 0.0) {
         (true, true, _) => Side::East,
         (true, false, _) => Side::West,
         // Slot rows count northward.
@@ -1070,21 +1071,13 @@ pub(super) fn plan(
             })
             .collect()
     };
-    let delay_at = |spans: &[(usize, usize)], slots: &[(i32, i32)], edge: usize| {
-        let centre = |element: usize| {
-            let ((x, z), (w, h)) = (slots[element], spans[element]);
-            (f64::from(x) + (w - 1) as f64 / 2.0, f64::from(z) + (h - 1) as f64 / 2.0)
-        };
-        let centres: Vec<(f64, f64)> = (0..spans.len()).map(centre).collect();
-        timing.delay_at(&centres, edge)
-    };
     // Every ratio at once, then the first of the fastest, so the choice is
     // the same however the work was spread.
     let tried: Vec<Tried> = RATIOS
         .par_iter()
         .map(|&ratio| {
             let spans = shaped(ratio);
-            let (slots, critical) = placement::anneal(&placement::Problem {
+            let (slots, _, critical) = placement::anneal(&placement::Problem {
                 count: whats.len(),
                 nets: &nets,
                 timing: &timing,
@@ -1102,10 +1095,27 @@ pub(super) fn plan(
         .into_iter()
         .min_by(|a, b| a.2.partial_cmp(&b.2).expect("finite delays"))
         .expect("some ratio");
-    let centre = |element: usize| {
-        let ((x, z), (w, h)) = (slots[element], spans[element]);
-        (f64::from(x) + (w - 1) as f64 / 2.0, f64::from(z) + (h - 1) as f64 / 2.0)
-    };
+    let centres: Vec<(f64, f64)> = (0..whats.len()).map(|element| centre_of(slots[element], spans[element])).collect();
+    frames_of(netlist, blocks, &whats, &timing, &spans, &centres)
+}
+
+/// The middle of an element of `span` slots with its corner at `slot`.
+fn centre_of((x, z): (i32, i32), (w, h): (usize, usize)) -> (f64, f64) {
+    (f64::from(x) + (w - 1) as f64 / 2.0, f64::from(z) + (h - 1) as f64 / 2.0)
+}
+
+/// Each of `blocks`' frame, from a placement of their parent: every
+/// element `spans` slots with its middle at `centres`. A block's ports lean
+/// toward what each one joins, and its inputs arrive as that placement
+/// times them.
+fn frames_of(
+    netlist: &Netlist,
+    blocks: &[BlockUse],
+    whats: &[What],
+    timing: &placement::Timing,
+    spans: &[(usize, usize)],
+    centres: &[(f64, f64)],
+) -> Vec<Frame> {
     let mut joins: HashMap<&str, Vec<usize>> = HashMap::new();
     for (element, what) in whats.iter().enumerate() {
         let (reads, drives) = signals(netlist, blocks, what);
@@ -1115,10 +1125,10 @@ pub(super) fn plan(
     }
     // When each element's inputs arrive, by the edges into it from each
     // driver.
-    let ready = timing.ready(whats.len(), |edge| delay_at(&spans, &slots, edge));
+    let ready = timing.ready(whats.len(), |edge| timing.delay_at(centres, edge));
     let mut arrives: HashMap<(usize, usize), f64> = HashMap::new();
     for (edge, &(from, to)) in timing.edges.iter().enumerate() {
-        let at = ready[from] + delay_at(&spans, &slots, edge);
+        let at = ready[from] + timing.delay_at(centres, edge);
         let entry = arrives.entry((from, to)).or_insert(at);
         *entry = entry.max(at);
     }
@@ -1142,14 +1152,17 @@ pub(super) fn plan(
             let free = |signal: &String| (signal.clone(), PortPlace::Free);
             let inputs: Vec<(String, PortPlace)> = block.inputs.iter().map(free).collect();
             let outputs: Vec<(String, PortPlace)> = block.outputs.iter().map(free).collect();
-            let (x, z) = centre(element);
+            let (x, z) = centres[element];
             let toward = block
                 .inputs
                 .iter()
                 .chain(&block.outputs)
                 .filter_map(|signal| {
-                    let others: Vec<(f64, f64)> =
-                        joins[signal.as_str()].iter().filter(|&&other| other != element).map(|&other| centre(other)).collect();
+                    let others: Vec<(f64, f64)> = joins[signal.as_str()]
+                        .iter()
+                        .filter(|&&other| other != element)
+                        .map(|&other| centres[other])
+                        .collect();
                     if others.is_empty() {
                         return None;
                     }
@@ -1196,8 +1209,9 @@ pub(super) fn plan(
 /// the estimated critical delay.
 type Tried = (Vec<(usize, usize)>, Vec<(i32, i32)>, f64);
 
-/// Where a placement puts every element: its target origin and its slot.
-type Placement = (Vec<Anchor>, Vec<(i32, i32)>);
+/// Where a placement puts every element: its target origin, its slot, and
+/// whether it is mirrored.
+type Placement = (Vec<Anchor>, Vec<(i32, i32)>, Vec<placement::Mirror>);
 
 /// What [`generate`] produced: the world, and -- when generating a block --
 /// the block as a tile for its parent, with its estimated critical delay.
@@ -1443,6 +1457,7 @@ pub(super) fn generate(
         )
     };
     let mut timing = timing_graph(netlist, blocks, &whats, &attach);
+    timing.aspect = f64::from(pitch_z) / f64::from(pitch_x);
     let arrival: HashMap<&str, u32> = frame.arrivals.iter().map(|(port, ticks)| (port.as_str(), *ticks)).collect();
     for (element, what) in whats.iter().enumerate() {
         if let What::Input(name) = what {
@@ -1473,11 +1488,13 @@ pub(super) fn generate(
         let mean = |axis: fn(&Anchor) -> i32| {
             (cells.iter().map(|cell| f64::from(axis(cell))).sum::<f64>() / cells.len() as f64).round() as i32
         };
-        let side = ((whats.len() - cells.len()) as f64 * 1.15).sqrt().ceil() as i32;
+        // The lattice is about square in cells (see `placement`).
+        let half = ((whats.len() - cells.len()) as f64 * 1.15 * f64::from(pitch_x * pitch_z)).sqrt() / 2.0;
+        let half = half.round() as i32;
         Anchor {
-            x: mean(|cell| cell.x) - side * pitch_x / 2,
+            x: mean(|cell| cell.x) - half,
             y: cells.iter().map(|cell| cell.y).min().expect("some cell") - BASE,
-            z: mean(|cell| cell.z) + side * pitch_z / 2,
+            z: mean(|cell| cell.z) + half,
         }
     });
     let ours = |cell: Anchor| {
@@ -1533,9 +1550,11 @@ pub(super) fn generate(
         for (element, what) in whats.iter().enumerate() {
             let (What::Input(name) | What::Output(name)) = what else { continue };
             let Some(&(dx, dz)) = toward.get(name.as_str()) else { continue };
-            let past = |d: i8, span: usize| (span as f64 - 1.0) / 2.0 + f64::from(d) / f64::from(TOWARD_STEPS) * (span as f64 / 2.0 + 1.0);
+            // The shape is in square slots; the lattice's rows may be
+            // shorter.
+            let past = |d: i8, span: f64| (span - 1.0) / 2.0 + f64::from(d) / f64::from(TOWARD_STEPS) * (span / 2.0 + 1.0);
             nets.push(vec![(element, (0.0, 0.0)), (lean_pins.len(), (0.0, 0.0))]);
-            lean_pins.push(placement::Pin::Point(past(dx, w), past(dz, h)));
+            lean_pins.push(placement::Pin::Point(past(dx, w as f64), past(dz, h as f64 / timing.aspect)));
             lean_sizes.push((1, 1));
             leaning.registered.push(false);
             leaning.intrinsic.push(0.0);
@@ -1553,8 +1572,9 @@ pub(super) fn generate(
             order: &(0..lean_pins.len()).collect::<Vec<_>>(),
             rough: false,
         });
-        for (slots, _) in &mut runs {
+        for (slots, mirrors, _) in &mut runs {
             slots.truncate(whats.len());
+            mirrors.truncate(whats.len());
         }
         runs
     });
@@ -1578,14 +1598,14 @@ pub(super) fn generate(
     let placements: Vec<Placement> = match slots {
         Some(runs) => runs
             .into_iter()
-            .map(|(slots, _)| {
+            .map(|(slots, mirrors, _)| {
                 let targets = elements
                     .iter()
                     .zip(&sizes)
                     .zip(&slots)
                     .map(|((element, &size), &slot)| origin_at(element, size, slot))
                     .collect();
-                (targets, slots)
+                (targets, slots, mirrors)
             })
             .collect(),
         None => {
@@ -1594,25 +1614,49 @@ pub(super) fn generate(
                 .map(|(x, z)| Anchor { x, y: BASE, z })
                 .collect();
             let slots = targets.iter().map(|at| (at.x / pitch_x, at.z / pitch_z)).collect();
-            vec![(targets, slots)]
+            vec![(targets, slots, vec![(false, false); elements.len()])]
         }
     };
 
     // Place and route each placement in turn, best first, until one routes.
     let fresh = builder;
-    let attempt = |(targets, slots): &Placement| -> Result<(Builder, Ports), ConstructError> {
+    let attempt = |(targets, slots, mirrors): &Placement| -> Result<(Builder, Ports), ConstructError> {
+        // Blocks turned over the way placement chose.
+        let elements: Vec<Element> = elements
+            .iter()
+            .zip(mirrors)
+            .map(|(element, &mirror)| Element {
+                tile: tile::mirror(&element.tile, mirror),
+                ..element.clone()
+            })
+            .collect();
+        let timing = timing.mirrored(mirrors);
+        let bare = bare.mirrored(mirrors);
         let mut builder = fresh.clone();
         let mut placed = Ports::default();
         let mut tiles: Vec<Tile> = elements.iter().map(|element| element.tile.clone()).collect();
         // Ports at given cells go first, exactly there, facing away from
         // what they join.
-        let neighbours = |index: usize| -> Vec<(i32, i32)> {
+        // Where an element's middle is, in the slot units a port at a cell
+        // is placed in: its slot's corner is its origin, not its middle.
+        let middle = |index: usize| {
+            let (x, z) = centre_of(slots[index], sizes[index]);
+            (
+                x + f64::from(low_x + high_x) / 2.0 / f64::from(pitch_x),
+                z - f64::from(low_z + high_z) / 2.0 / f64::from(pitch_z),
+            )
+        };
+        // Where each connection of an element meets what is at its other
+        // end: a block's port, not its middle.
+        let neighbours = |index: usize| -> Vec<(f64, f64)> {
+            let plus = |(x, z): (f64, f64), (dx, dz): placement::Offset| (x + dx, z + dz);
             timing
                 .edges
                 .iter()
-                .filter_map(|&(from, to)| match (from == index, to == index) {
-                    (true, false) => Some(slots[to]),
-                    (false, true) => Some(slots[from]),
+                .zip(&timing.ends)
+                .filter_map(|(&(from, to), &(start, end))| match (from == index, to == index) {
+                    (true, false) => Some(plus(middle(to), end)),
+                    (false, true) => Some(plus(middle(from), start)),
                     _ => None,
                 })
                 .collect()
@@ -1621,7 +1665,7 @@ pub(super) fn generate(
         // joins.
         let turned = |index: usize, at: (f64, f64)| {
             let input = matches!(whats[index], What::Input(_));
-            let side = facing(at, &neighbours(index), if input { Side::West } else { Side::East });
+            let side = facing(at, &neighbours(index), timing.aspect, if input { Side::West } else { Side::East });
             let mut element = elements[index].clone();
             element.tile = if input { tile::port_in(side, block) } else { tile::port_out(side, block) };
             (element, side)
@@ -1655,8 +1699,7 @@ pub(super) fn generate(
             let (origin, side) = match fixed[index] {
                 Some((origin, side)) => (origin, Some(side)),
                 None if free(what) => {
-                    let (x, z) = slots[index];
-                    let (turned, side) = turned(index, (f64::from(x), f64::from(z)));
+                    let (turned, side) = turned(index, middle(index));
                     // Over blocks, ports stand by the blocks' own.
                     let level = if block || !blocks.is_empty() { port_level } else { target.y };
                     let origin = builder.place_around(&turned, Anchor { y: level, ..target })?;

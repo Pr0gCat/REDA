@@ -130,6 +130,64 @@ pub fn extent(tile: &Tile) -> (i32, i32, i32, i32) {
     )
 }
 
+/// `tile` mirrored east to west (`across.0`) and north to south
+/// (`across.1`) within its own extent, which stays where it was. Redstone
+/// works the same in a mirror once every facing is mirrored too.
+pub fn mirror(tile: &Tile, (east_west, north_south): (bool, bool)) -> Tile {
+    if !east_west && !north_south {
+        return tile.clone();
+    }
+    let (low_x, high_x, low_z, high_z) = extent(tile);
+    let cell = |(x, y, z): (i32, i32, i32)| {
+        (
+            if east_west { low_x + high_x - x } else { x },
+            y,
+            if north_south { low_z + high_z - z } else { z },
+        )
+    };
+    let cells = |offsets: &[(i32, i32, i32)]| offsets.iter().copied().map(cell).collect::<Vec<_>>();
+    let facing = |facing: Facing| match facing {
+        Facing::East | Facing::West if east_west => facing.opposite(),
+        Facing::North | Facing::South if north_south => facing.opposite(),
+        other => other,
+    };
+    Tile {
+        cells: tile
+            .cells
+            .iter()
+            .map(|placed| TileCell {
+                offset: cell(placed.offset),
+                role: placed.role,
+                block: placed.block.clone().map(|mut block| {
+                    block.facing = block.facing.map(facing);
+                    block
+                }),
+            })
+            .collect(),
+        exits: tile.exits.iter().map(|exit| cells(exit)).collect(),
+        source: tile
+            .source
+            .iter()
+            .map(|source| SourceCell {
+                offset: cell(source.offset),
+                ..source.clone()
+            })
+            .collect(),
+        stubs: tile
+            .stubs
+            .iter()
+            .map(|stub| Stub {
+                input: stub.input,
+                approach: cell(stub.approach),
+                entry: cells(&stub.entry),
+                cells: cells(&stub.cells),
+            })
+            .collect(),
+        probe: tile.probe.map(cell),
+        ports: cells(&tile.ports),
+    }
+}
+
 pub fn at(origin: Anchor, offset: (i32, i32, i32)) -> Anchor {
     Anchor {
         x: origin.x + offset.0,

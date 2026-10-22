@@ -86,6 +86,10 @@ pub struct Timing {
     /// Where each connection leaves its driver and reaches its reader,
     /// from each one's middle, in slots: a block's port, not its middle.
     pub ends: Vec<(Offset, Offset)>,
+    /// How long a slot is north to south, in slots east to west: the
+    /// lattice's slots need not be square, and distance is counted in
+    /// east-west slots.
+    pub aspect: f64,
     /// The graph's shape, worked out once: placement re-times it at every
     /// move but never changes it.
     topology: OnceLock<Topology>,
@@ -125,7 +129,10 @@ pub enum Pin {
 
 impl Clone for Timing {
     fn clone(&self) -> Timing {
-        Timing::new(self.edges.clone(), self.registered.clone(), self.intrinsic.clone(), self.arrival.clone(), self.ends.clone())
+        Timing {
+            aspect: self.aspect,
+            ..Timing::new(self.edges.clone(), self.registered.clone(), self.intrinsic.clone(), self.arrival.clone(), self.ends.clone())
+        }
     }
 }
 
@@ -143,6 +150,7 @@ impl Timing {
             intrinsic,
             arrival,
             ends,
+            aspect: 1.0,
             topology: OnceLock::new(),
         }
     }
@@ -183,13 +191,32 @@ impl Timing {
         }
     }
 
+    /// This graph with each element's connections attached as it is
+    /// mirrored.
+    pub fn mirrored(&self, mirrors: &[Mirror]) -> Timing {
+        let flip = |element: usize, (dx, dz): Offset| {
+            let (east_west, north_south) = mirrors[element];
+            (if east_west { -dx } else { dx }, if north_south { -dz } else { dz })
+        };
+        let ends = self
+            .edges
+            .iter()
+            .zip(&self.ends)
+            .map(|(&(from, to), &(start, end))| (flip(from, start), flip(to, end)))
+            .collect();
+        Timing {
+            aspect: self.aspect,
+            ..Timing::new(self.edges.clone(), self.registered.clone(), self.intrinsic.clone(), self.arrival.clone(), ends)
+        }
+    }
+
     /// Ticks connection `edge` takes once the elements' middles sit at
     /// `centres`.
     pub fn delay_at(&self, centres: &[(f64, f64)], edge: usize) -> f64 {
         let (from, to) = self.edges[edge];
         let ((fx, fz), (tx, tz)) = self.ends[edge];
         let (a, b) = (centres[from], centres[to]);
-        let distance = (a.0 + fx - b.0 - tx).abs() + (a.1 + fz - b.1 - tz).abs();
+        let distance = (a.0 + fx - b.0 - tx).abs() + self.aspect * (a.1 + fz - b.1 - tz).abs();
         GATE_TICKS + self.intrinsic[from] + SLOT_TICKS * distance
     }
 
@@ -285,13 +312,13 @@ impl Timing {
 /// delay, then least wire -- with that delay, for the caller to fall back on
 /// when one will not route. A fixed run count, not the core count, keeps the
 /// result the same on every machine.
-pub fn anneal(problem: &Problem) -> Vec<(Vec<(i32, i32)>, f64)> {
+pub fn anneal(problem: &Problem) -> Vec<Arrangement> {
     let mut runs: Vec<Run> = (0..RUNS as u64)
         .into_par_iter()
         .map(|run| anneal_once(problem, SEED ^ run.wrapping_mul(0x9E37_79B9_7F4A_7C15)))
         .collect();
-    runs.sort_by(|a, b| (a.1, a.2).partial_cmp(&(b.1, b.2)).expect("finite costs"));
-    runs.into_iter().map(|(slots, critical, _)| (slots, critical)).collect()
+    runs.sort_by(|a, b| (a.2, a.3).partial_cmp(&(b.2, b.3)).expect("finite costs"));
+    runs.into_iter().map(|(slots, mirrors, critical, _)| (slots, mirrors, critical)).collect()
 }
 
 /// A net's bounding box, in slots: low x, high x, low z, high z.
@@ -301,9 +328,19 @@ type Bounds = (f64, f64, f64, f64);
 /// out whether their box survived it.
 const SMALL_NET: usize = 4;
 
-/// One annealing run's slots, their estimated critical delay and their
-/// wire.
-type Run = (Vec<(i32, i32)>, f64, f64);
+/// One move in this many on an element that can be mirrored mirrors it.
+const MIRROR_ODDS: usize = 4;
+
+/// One annealing run's slots, how each element is mirrored, their
+/// estimated critical delay and their wire.
+type Run = (Vec<(i32, i32)>, Vec<Mirror>, f64, f64);
+
+/// Whether an element is mirrored east to west, and north to south.
+pub type Mirror = (bool, bool);
+
+/// Each element's slot and how it is mirrored, and the estimated critical
+/// delay.
+pub type Arrangement = (Vec<(i32, i32)>, Vec<Mirror>, f64);
 
 /// What to place: `count` elements joined by `nets` (each a list of element
 /// indices, with where on each the net attaches), timed by `timing`, kept
@@ -352,30 +389,26 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
     let mixed = area > on_lattice;
     let slack = if mixed { MIXED_SLACK } else { 1.15 };
     // The lattice is square unless the caller asks for a shape, which is
-    // scaled up to hold everything. West and east ports run up whole
-    // columns; north and south ones keep off the corners.
+    // scaled up to hold everything -- square, and shaped, as far as it
+    // goes, not in slots. West and east ports run up whole columns; north
+    // and south ones keep off the corners.
+    let aspect = timing.aspect;
     let room = area as f64 * slack;
     let (cols, rows) = match shape {
         None => {
-            let side = room.sqrt().ceil();
-            (side, side)
+            let side = (room * aspect)
+                .sqrt()
+                .max(pinned(Side::West).max(pinned(Side::East)) as f64 * aspect)
+                .max(off_corners(pinned(Side::North)).max(off_corners(pinned(Side::South))) as f64)
+                .max(sizes.iter().map(|&(w, h)| (w as f64).max(h as f64 * aspect)).fold(1.0, f64::max));
+            (side.ceil(), (side / aspect).ceil())
         }
         Some((w, h)) => {
-            let scale = (room / (w * h) as f64).sqrt().max(1.0);
-            ((w as f64 * scale).ceil(), (h as f64 * scale).ceil())
+            let scale = (room * aspect / (w * h) as f64).sqrt().max(1.0);
+            ((w as f64 * scale).ceil(), (h as f64 * scale / aspect).ceil())
         }
     };
     let (mut cols, mut rows) = (cols as usize, rows as usize);
-    if shape.is_none() {
-        let side = cols
-            .max(pinned(Side::West))
-            .max(pinned(Side::East))
-            .max(off_corners(pinned(Side::North)))
-            .max(off_corners(pinned(Side::South)))
-            .max(sizes.iter().map(|&(w, h)| w.max(h)).max().unwrap_or(1))
-            .max(1);
-        (cols, rows) = (side, side);
-    }
     cols = cols
         .max(off_corners(pinned(Side::North)))
         .max(off_corners(pinned(Side::South)))
@@ -440,7 +473,10 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
         }
     }
     let serpentine: Vec<usize> = serpentine.collect();
-    for &element in order.iter().filter(|&&element| pins[element] == Pin::Free) {
+    // Blocks first, while the lattice still has room for them anywhere.
+    let free = order.iter().copied().filter(|&element| pins[element] == Pin::Free);
+    let (big, small): (Vec<usize>, Vec<usize>) = free.partition(|&element| sizes[element] != (1, 1));
+    for element in big.into_iter().chain(small) {
         let fits = |slot: usize| allowed(element, slot) && footprint(element, slot).all(|covered| cover[covered] == 0);
         let slot = serpentine
             .iter()
@@ -463,6 +499,18 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
             joins[element].push((net, at));
         }
     }
+    // How each element's attachments are mirrored, as signs on their
+    // offsets. Only an element something attaches to off its middle -- a
+    // block -- has a way round worth choosing.
+    let sign: Vec<std::cell::Cell<(f64, f64)>> = vec![std::cell::Cell::new((1.0, 1.0)); count];
+    let mirrorable: Vec<bool> = joins
+        .iter()
+        .map(|joined| joined.iter().any(|&(_, (dx, dz))| dx != 0.0 || dz != 0.0))
+        .collect();
+    let signed = |element: usize, (dx, dz): Offset| {
+        let (sx, sz) = sign[element].get();
+        (sx * dx, sz * dz)
+    };
     let weight = |net: usize| {
         let size = nets[net].len();
         if size <= WIDE {
@@ -487,7 +535,8 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
     // it stands for.
     let bounds = |slot_of: &[usize], net: usize| -> Bounds {
         let (mut low_x, mut low_z, mut high_x, mut high_z) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-        for &(element, (dx, dz)) in &nets[net] {
+        for &(element, offset) in &nets[net] {
+            let (dx, dz) = signed(element, offset);
             let (x, z) = centre(slot_of, element);
             let (x, z) = (x + dx, z + dz);
             low_x = low_x.min(x);
@@ -497,13 +546,14 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
         }
         (low_x, high_x, low_z, high_z)
     };
-    let wire_of = |net: usize, (low_x, high_x, low_z, high_z): Bounds| weight(net) * (high_x - low_x + high_z - low_z);
+    let wire_of = |net: usize, (low_x, high_x, low_z, high_z): Bounds| weight(net) * (high_x - low_x + aspect * (high_z - low_z));
     let span = |slot_of: &[usize], net: usize| -> f64 { wire_of(net, bounds(slot_of, net)) };
     let delay = |slot_of: &[usize], edge: usize| -> f64 {
         let (from, to) = timing.edges[edge];
-        let ((fx, fz), (tx, tz)) = timing.ends[edge];
+        let (start, end) = timing.ends[edge];
+        let ((fx, fz), (tx, tz)) = (signed(from, start), signed(to, end));
         let (a, b) = (centre(slot_of, from), centre(slot_of, to));
-        let distance = (a.0 + fx - b.0 - tx).abs() + (a.1 + fz - b.1 - tz).abs();
+        let distance = (a.0 + fx - b.0 - tx).abs() + aspect * (a.1 + fz - b.1 - tz).abs();
         GATE_TICKS + timing.intrinsic[from] + SLOT_TICKS * distance
     };
     // How many slots more than one element covers, among `slots`.
@@ -551,6 +601,44 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
         let penalty = OVERLAP * (1.0 + 1.0 / temperature.max(1e-3)) * wire_scale;
         for _ in 0..moves * count {
             let element = rng.below(count);
+            if mirrorable[element] && rng.below(MIRROR_ODDS) == 0 {
+                // Turn the element over one way or both, where it stands.
+                let was = sign[element].get();
+                let axes = 1 + rng.below(3);
+                let turned = (
+                    if axes & 1 != 0 { -was.0 } else { was.0 },
+                    if axes & 2 != 0 { -was.1 } else { was.1 },
+                );
+                let timed = |slot_of: &[usize]| -> f64 {
+                    edges_of[element]
+                        .iter()
+                        .map(|&edge| weight_of[edge] * delay(slot_of, edge))
+                        .sum()
+                };
+                touched.clear();
+                touched.extend(&nets_of[element]);
+                touched.sort_unstable();
+                touched.dedup();
+                let before = (touched.iter().map(|&net| wires[net]).sum::<f64>(), timed(&slot_of));
+                sign[element].set(turned);
+                remeasured.clear();
+                for &net in &touched {
+                    let measured = bounds(&slot_of, net);
+                    remeasured.push((net, measured, wire_of(net, measured)));
+                }
+                let after = (remeasured.iter().map(|&(_, _, wire)| wire).sum::<f64>(), timed(&slot_of));
+                let delta = (after.0 - before.0) * wire_scale + (after.1 - before.1) * timing_scale;
+                if delta <= 0.0 || rng.unit() < (-delta / scaled_temperature).exp() {
+                    wire += after.0 - before.0;
+                    for &(net, bounds, measured) in &remeasured {
+                        boxes[net] = bounds;
+                        wires[net] = measured;
+                    }
+                } else {
+                    sign[element].set(was);
+                }
+                continue;
+            }
             let from = slot_of[element];
             let (w, h) = sizes[element];
             let (x, z) = ((from % cols) as i64, (from / cols) as i64);
@@ -623,7 +711,8 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
                     let mut count = 0;
                     for (who, was, now) in [(Some(element), Some(was.0), Some(now.0)), (other, was.1, now.1)] {
                         let (Some(who), Some(was), Some(now)) = (who, was, now) else { continue };
-                        for &(joined, (dx, dz)) in &joins[who] {
+                        for &(joined, offset) in &joins[who] {
+                            let (dx, dz) = signed(who, offset);
                             if joined == net {
                                 moved[count] = ((was.0 + dx, was.1 + dz), (now.0 + dx, now.1 + dz));
                                 count += 1;
@@ -815,5 +904,6 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
             None => ((slot % cols) as i32, (slot / cols) as i32),
         })
         .collect();
-    (slots, critical, wire)
+    let mirrors = sign.iter().map(|sign| (sign.get().0 < 0.0, sign.get().1 < 0.0)).collect();
+    (slots, mirrors, critical, wire)
 }
