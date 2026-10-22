@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use super::grid::{CellMap, CellSet, Grid, Owner};
+use super::grid::{CellMap, CellSet, Grid, Nearby, Owner};
 use crate::compile::geometry::Anchor;
 use crate::compile::{dust, repeater, stone};
 use crate::redstone::world::block::Facing;
@@ -138,34 +138,40 @@ impl Search<'_> {
     /// Whether a route block may stand at `at` (on a new floor), against the
     /// frozen grid. `recent` are the path cells just before it; `tap` is the
     /// tree cell this move leaves from, if any -- a branch's first cell
-    /// necessarily stands beside its own tree there.
-    fn can_stand(&self, at: Anchor, tap: Option<Anchor>, recent: &[Anchor]) -> bool {
+    /// necessarily stands beside its own tree there. A cell it may stand on
+    /// comes back with the [`Search::trespass`] it pays.
+    fn can_stand(&self, at: Anchor, tap: Option<Anchor>, recent: &[Anchor]) -> Option<u64> {
         if !(LOWEST..=HIGHEST + self.grid.raise).contains(&at.y)
             || (!self.forbidden.is_empty() && self.forbidden.contains(&at))
         {
-            return false;
+            return None;
         }
         // Below the open levels the ground is the tiles': a route runs there
         // only along its own net's ramps.
         let floor = down(at);
-        if !self.grid.is_free(at) || !self.grid.is_free(floor) {
-            return false;
+        let (here, under) = (self.grid.look(at), self.grid.look(floor));
+        if !here.is_free() || !under.is_free() {
+            return None;
         }
-        [at, floor].into_iter().all(|cell| {
-            if self.grid.foreign_near(cell, self.owner) {
-                let mut walled = self.walled.borrow_mut();
-                if walled.len() < WALL {
-                    walled.push(cell);
+        let fits = [(at, here), (floor, under)]
+            .into_iter()
+            .all(|(cell, look)| match look.near(self.owner) {
+                Nearby::Foreign => {
+                    let mut walled = self.walled.borrow_mut();
+                    if walled.len() < WALL {
+                        walled.push(cell);
+                    }
+                    false
                 }
-                return false;
-            }
-            !self.grid.own_near(cell, self.owner)
-                || self.grid.own_blocks_near(cell, self.owner).all(|own| {
+                Nearby::Nobody => true,
+                Nearby::Own => self.grid.own_blocks_near(cell, self.owner).all(|own| {
                     tap.is_some_and(|tap| chebyshev(own, tap) <= 1)
                         || recent.iter().any(|&cell| own == cell || own == down(cell))
                         || self.goal.stub.contains(&own)
-                })
-        })
+                }),
+            });
+        let clear = here.clear_near(self.owner) || under.clear_near(self.owner);
+        fits.then_some(if clear { TRESPASS } else { 0 })
     }
 
     /// What standing at `at` costs in someone else's kept-clear way: a
@@ -196,6 +202,18 @@ struct Node {
     cost: u64,
 }
 
+/// The arrivals on each cell's Pareto front: the newest per cell, and for
+/// each arrival the one before it there and whether it was beaten since.
+#[derive(Default)]
+struct Front {
+    newest: CellMap<Anchor, usize>,
+    earlier: Vec<usize>,
+    beaten: Vec<bool>,
+}
+
+/// No arrival: the end of a cell's list of them.
+const NONE: usize = usize::MAX;
+
 /// What leaving the tree from a tap costs before the first step: how much
 /// signal delay the tree has already spent getting there, weighed by how
 /// much the goal cares.
@@ -223,27 +241,48 @@ fn search(
     let home = home_level(owner, grid.lift);
     let mut nodes: Vec<Node> = Vec::new();
     // The Pareto front of (cost, strength) reached at each cell: an arrival
-    // is kept only if no other is both as cheap and as strong.
-    let mut best: CellMap<Anchor, Vec<(u64, u8)>> = CellMap::default();
+    // is kept only if no other is both as cheap and as strong. A cell names
+    // its newest arrival on the front and each arrival the one before it;
+    // an arrival a better one beats leaves the front and is skipped.
+    let mut best = Front::default();
     let mut open = BinaryHeap::new();
-    let push = |best: &mut CellMap<Anchor, Vec<(u64, u8)>>,
-                nodes: &mut Vec<Node>,
-                open: &mut BinaryHeap<_>,
-                next: Node| {
-        let front = best.entry(next.at).or_default();
-        if front
-            .iter()
-            .any(|&(cost, strength)| cost <= next.cost && strength >= next.strength)
-        {
-            return;
+    let push = |best: &mut Front, nodes: &mut Vec<Node>, open: &mut BinaryHeap<_>, next: Node| {
+        let Front {
+            newest,
+            earlier,
+            beaten,
+        } = best;
+        let head = newest.get(&next.at).copied().unwrap_or(NONE);
+        let mut cursor = head;
+        while cursor != NONE {
+            let other = &nodes[cursor];
+            if other.cost <= next.cost && other.strength >= next.strength {
+                return;
+            }
+            cursor = earlier[cursor];
         }
-        front.retain(|&(cost, strength)| !(next.cost <= cost && next.strength >= strength));
-        front.push((next.cost, next.strength));
+        let index = nodes.len();
+        let (mut cursor, mut last) = (head, index);
+        earlier.push(NONE);
+        beaten.push(false);
+        while cursor != NONE {
+            let other = &nodes[cursor];
+            let following = earlier[cursor];
+            if next.cost <= other.cost && next.strength >= other.strength {
+                beaten[cursor] = true;
+            } else {
+                earlier[last] = cursor;
+                last = cursor;
+            }
+            cursor = following;
+        }
+        earlier[last] = NONE;
+        newest.insert(next.at, index);
         nodes.push(next);
         open.push(Reverse((
             next.cost + GREED * manhattan(next.at, target),
             next.cost,
-            nodes.len() - 1,
+            index,
         )));
     };
     for &(at, strength) in taps {
@@ -273,7 +312,7 @@ fn search(
         if node.at == target {
             return Ok(unwind(&nodes, index));
         }
-        if !best[&node.at].contains(&(node.cost, node.strength)) {
+        if best.beaten[index] {
             continue;
         }
         expanded += 1;
@@ -283,7 +322,8 @@ fn search(
         let tap = tree.contains(&node.at).then_some(node.at);
         let behind = Behind::of(&nodes, index);
         let parent = node.parent.map(|parent| nodes[parent].at);
-        let recent: Vec<Anchor> = [Some(node.at), parent].into_iter().flatten().collect();
+        let recent = [node.at, parent.unwrap_or(node.at)];
+        let recent = &recent[..1 + usize::from(parent.is_some())];
         for (_, dx, dz) in HORIZONTAL {
             for dy in [0, 1, -1] {
                 // This cell can take a repeater when the path runs straight
@@ -317,12 +357,18 @@ fn search(
                 } else {
                     std::slice::from_ref(&next)
                 };
-                if (next != target && !ctx.can_stand(next, tap, &recent))
-                    || behind.clashes(placed, air)
-                {
+                let trespass = if next == target {
+                    Some(ctx.trespass(next))
+                } else {
+                    ctx.can_stand(next, tap, recent)
+                };
+                let Some(trespass) = trespass else {
+                    continue;
+                };
+                if behind.clashes(placed, air) {
                     continue;
                 }
-                let step = if dy == 0 { STEP } else { STAIR } + ctx.trespass(next);
+                let step = if dy == 0 { STEP } else { STAIR } + trespass;
                 let crowd = level_cost(next.y, home);
                 push(
                     &mut best,
@@ -354,26 +400,34 @@ fn nearest(mut walled: Vec<Anchor>, target: Anchor) -> Vec<Anchor> {
 const LOOKBACK: usize = 8;
 
 /// The path behind one search node, gathered once per expansion: its
-/// blocks (each cell and its floor) with how many steps
-/// back they are, and the stair air it reserved.
+/// cells (each standing on a floor) with how many steps back they are, and
+/// the stair air it reserved.
 struct Behind {
-    blocks: Vec<(Anchor, usize)>,
-    air: Vec<Anchor>,
+    cells: [(Anchor, usize); LOOKBACK + 1],
+    air: [Anchor; LOOKBACK + 1],
+    cell_count: usize,
+    air_count: usize,
 }
 
 impl Behind {
     fn of(nodes: &[Node], index: usize) -> Behind {
+        let nowhere = Anchor { x: 0, y: 0, z: 0 };
         let mut behind = Behind {
-            blocks: Vec::with_capacity(4 * (LOOKBACK + 1)),
-            air: Vec::with_capacity(LOOKBACK + 1),
+            cells: [(nowhere, 0); LOOKBACK + 1],
+            air: [nowhere; LOOKBACK + 1],
+            cell_count: 0,
+            air_count: 0,
         };
         let mut cursor = Some(index);
         let mut depth = 0;
         while let Some(at) = cursor {
             let node = nodes[at];
-            behind.blocks.push((node.at, depth));
-            behind.blocks.push((down(node.at), depth));
-            behind.air.extend(node.air);
+            behind.cells[behind.cell_count] = (node.at, depth);
+            behind.cell_count += 1;
+            if let Some(air) = node.air {
+                behind.air[behind.air_count] = air;
+                behind.air_count += 1;
+            }
             depth += 1;
             if depth > LOOKBACK {
                 break;
@@ -383,18 +437,22 @@ impl Behind {
         behind
     }
 
-    /// Whether new blocks `cells` (and the stair air `air`) collide with the
-    /// path: they may not take any of its cells, and may not stand beside
-    /// any of them but the last two.
+    /// Whether new blocks `cells` (each with its floor, and the stair air
+    /// `air`) collide with the path's blocks, each cell with its floor too:
+    /// they may not take any of them, and may not stand beside any of them
+    /// but the last two's. Two such columns of two share a block when they
+    /// stand at most a level apart, and touch at most two.
     fn clashes(&self, cells: &[Anchor], air: Option<Anchor>) -> bool {
-        self.blocks.iter().any(|&(old, depth)| {
-            air == Some(old)
-                || cells.iter().any(|&cell| {
-                    [cell, down(cell)]
-                        .into_iter()
-                        .any(|new| new == old || (depth >= 2 && chebyshev(new, old) <= 1))
-                })
-        }) || self.air.iter().any(|&old| {
+        self.cells[..self.cell_count].iter().any(|&(old, depth)| {
+            air.is_some_and(|air| {
+                air.x == old.x && air.z == old.z && (air.y == old.y || air.y == old.y - 1)
+            }) || cells.iter().any(|&cell| {
+                let dx = (cell.x - old.x).abs();
+                let dy = (cell.y - old.y).abs();
+                let dz = (cell.z - old.z).abs();
+                (dx == 0 && dz == 0 && dy <= 1) || (depth >= 2 && dx <= 1 && dz <= 1 && dy <= 2)
+            })
+        }) || self.air[..self.air_count].iter().any(|&old| {
             air == Some(old) || cells.iter().any(|&cell| cell == old || down(cell) == old)
         })
     }

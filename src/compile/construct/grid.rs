@@ -70,11 +70,11 @@ struct Slot {
 #[derive(Default, Clone)]
 pub struct Grid {
     slots: CellMap<Anchor, Slot>,
-    /// For every cell, how many blocks of each owner stand within one cell
-    /// of it (itself included).
-    near: CellMap<Anchor, Vec<(Owner, u32)>>,
-    /// The same for clear cells.
-    near_clear: CellMap<Anchor, Vec<(Owner, u32)>>,
+    /// What every cell the searches ask about holds, in arrays: who has
+    /// taken it and who stands near it.
+    dense: Dense,
+    /// Every clear cell, with how many times each owner keeps it.
+    clear: CellMap<Anchor, Vec<(Owner, u32)>>,
     journal: Vec<Entry>,
     /// Levels routes may climb above the usual ceiling, to reach ports
     /// placed high or to pass over blocks.
@@ -82,6 +82,149 @@ pub struct Grid {
     /// Levels the preferred travel levels sit above the usual ones: a
     /// parent's routes travel over its blocks, whose own routes keep below.
     pub lift: i32,
+}
+
+/// An owner as a nonzero number, so zero can mean nobody.
+fn code(owner: Owner) -> u32 {
+    match owner {
+        Owner::Net(net) => 2 * net as u32 + 2,
+        Owner::Gate(gate) => 2 * gate as u32 + 3,
+    }
+}
+
+/// Marks a taken cell that is reserved air.
+const AIR: u32 = 1 << 31;
+
+/// Who stands within one cell of a cell: one owner and how many of its
+/// blocks, and how many blocks everyone else has. `mine` is zero only when
+/// `others` is too, so an owner is always named when anyone is near.
+#[derive(Clone, Copy, Default)]
+struct Near {
+    owner: u32,
+    mine: u32,
+    others: u32,
+}
+
+impl Near {
+    fn add(&mut self, owner: u32) {
+        if self.mine == 0 {
+            self.owner = owner;
+            self.mine = 1;
+        } else if self.owner == owner {
+            self.mine += 1;
+        } else {
+            self.others += 1;
+        }
+    }
+
+    /// Take one of `owner`'s out; `true` when the named owner has none
+    /// left but others do, and the cell has to be counted again.
+    fn remove(&mut self, owner: u32) -> bool {
+        if self.owner == owner {
+            self.mine -= 1;
+            self.mine == 0 && self.others > 0
+        } else {
+            self.others -= 1;
+            false
+        }
+    }
+
+    fn foreign(&self, owner: u32) -> bool {
+        self.others > 0 || (self.mine > 0 && self.owner != owner)
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct Cell {
+    /// Zero when free; else the owner's code, with [`AIR`] for reserved air.
+    taken: u32,
+    near: Near,
+    near_clear: Near,
+}
+
+const SHIFT: i32 = 3;
+const SIDE: i32 = 1 << SHIFT;
+const CHUNK: usize = (SIDE * SIDE * SIDE) as usize;
+
+/// Cells in chunks of `SIDE` cubed, over a box of chunks that grows to
+/// take whatever is written; a cell never written reads as default.
+#[derive(Clone, Default)]
+struct Dense {
+    low: [i32; 3],
+    size: [i32; 3],
+    chunks: Vec<Option<Box<[Cell; CHUNK]>>>,
+}
+
+impl Dense {
+    fn split(at: Anchor) -> ([i32; 3], usize) {
+        let chunk = [at.x >> SHIFT, at.y >> SHIFT, at.z >> SHIFT];
+        let mask = SIDE - 1;
+        let inner = ((at.y & mask) * SIDE + (at.z & mask)) * SIDE + (at.x & mask);
+        (chunk, inner as usize)
+    }
+
+    fn index(&self, chunk: [i32; 3]) -> Option<usize> {
+        let mut index = 0;
+        for ((chunk, low), size) in chunk.into_iter().zip(self.low).zip(self.size) {
+            let offset = chunk - low;
+            if !(0..size).contains(&offset) {
+                return None;
+            }
+            index = index * size as usize + offset as usize;
+        }
+        Some(index)
+    }
+
+    fn get(&self, at: Anchor) -> Cell {
+        let (chunk, inner) = Dense::split(at);
+        self.index(chunk)
+            .and_then(|index| self.chunks[index].as_ref())
+            .map_or_else(Cell::default, |cells| cells[inner])
+    }
+
+    fn get_mut(&mut self, at: Anchor) -> &mut Cell {
+        let (chunk, inner) = Dense::split(at);
+        let index = match self.index(chunk) {
+            Some(index) => index,
+            None => {
+                self.grow(chunk);
+                self.index(chunk).unwrap()
+            }
+        };
+        &mut self.chunks[index].get_or_insert_with(|| Box::new([Cell::default(); CHUNK]))[inner]
+    }
+
+    /// Widen the box to take `chunk`, with room to spare.
+    fn grow(&mut self, chunk: [i32; 3]) {
+        let (mut low, mut high) = ([0; 3], [0; 3]);
+        for axis in 0..3 {
+            if self.size[axis] == 0 {
+                low[axis] = chunk[axis] - 2;
+                high[axis] = chunk[axis] + 3;
+            } else {
+                let (old_low, old_high) = (self.low[axis], self.low[axis] + self.size[axis]);
+                let spare = self.size[axis] / 2 + 1;
+                low[axis] = if chunk[axis] < old_low { chunk[axis] - spare } else { old_low };
+                high[axis] = if chunk[axis] >= old_high { chunk[axis] + 1 + spare } else { old_high };
+            }
+        }
+        let size = [high[0] - low[0], high[1] - low[1], high[2] - low[2]];
+        let mut chunks = Vec::new();
+        chunks.resize_with((size[0] * size[1] * size[2]) as usize, || None);
+        let old = std::mem::take(&mut self.chunks);
+        let (old_low, old_size) = (self.low, self.size);
+        self.low = low;
+        self.size = size;
+        for (index, cells) in old.into_iter().enumerate() {
+            if cells.is_some() {
+                let [_, height, depth] = old_size.map(|side| side as usize);
+                let at = [index / depth / height, index / depth % height, index % depth];
+                let at = [0, 1, 2].map(|axis| old_low[axis] + at[axis] as i32);
+                chunks[self.index(at).unwrap()] = cells;
+            }
+        }
+        self.chunks = chunks;
+    }
 }
 
 fn add(counts: &mut Vec<(Owner, u32)>, owner: Owner) {
@@ -112,17 +255,6 @@ enum Entry {
     Released(Anchor, Owner),
 }
 
-/// Count `owner` in (or out of) every cell within one of `at`.
-fn tally(map: &mut CellMap<Anchor, Vec<(Owner, u32)>>, at: Anchor, owner: Owner, adding: bool) {
-    for cell in around(at) {
-        if adding {
-            add(map.entry(cell).or_default(), owner);
-        } else if remove(map.get_mut(&cell).unwrap(), owner) {
-            map.remove(&cell);
-        }
-    }
-}
-
 pub fn around(at: Anchor) -> impl Iterator<Item = Anchor> {
     (-1..=1).flat_map(move |dx| {
         (-1..=1).flat_map(move |dy| {
@@ -135,49 +267,88 @@ pub fn around(at: Anchor) -> impl Iterator<Item = Anchor> {
     })
 }
 
+/// Who stands within one cell of a cell, as seen by one owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nearby {
+    Nobody,
+    /// Only the owner's own blocks.
+    Own,
+    /// Somebody else's.
+    Foreign,
+}
+
+/// Everything a route search asks about one cell, read in one go.
+#[derive(Clone, Copy)]
+pub struct Look(Cell);
+
+impl Look {
+    pub fn is_free(&self) -> bool {
+        self.0.taken == 0
+    }
+
+    /// Whose blocks stand within one cell, as [`Grid::foreign_near`] and
+    /// [`Grid::own_near`] would say.
+    pub fn near(&self, owner: Owner) -> Nearby {
+        if self.0.near.foreign(code(owner)) {
+            Nearby::Foreign
+        } else if self.0.near.mine > 0 {
+            Nearby::Own
+        } else {
+            Nearby::Nobody
+        }
+    }
+
+    /// [`Grid::clear_near`].
+    pub fn clear_near(&self, owner: Owner) -> bool {
+        self.0.near_clear.foreign(code(owner))
+    }
+}
+
 impl Grid {
+    pub fn look(&self, at: Anchor) -> Look {
+        Look(self.dense.get(at))
+    }
+
     pub fn is_free(&self, at: Anchor) -> bool {
-        !self.slots.contains_key(&at)
+        self.dense.get(at).taken == 0
     }
 
     /// Whether a block of `owner` at `at` would stand within one cell of a
     /// block somebody else owns.
     pub fn foreign_near(&self, at: Anchor, owner: Owner) -> bool {
-        self.near
-            .get(&at)
-            .is_some_and(|counts| counts.iter().any(|&(other, _)| other != owner))
+        self.dense.get(at).near.foreign(code(owner))
     }
 
-    /// Whether `owner` already has a block (or a clear cell) within one
-    /// cell of `at`; a cheap filter before [`Grid::own_blocks_near`].
+    /// Whether `owner` already has a block within one cell of `at`; a
+    /// cheap filter before [`Grid::own_blocks_near`].
     pub fn own_near(&self, at: Anchor, owner: Owner) -> bool {
-        self.near
-            .get(&at)
-            .is_some_and(|counts| counts.iter().any(|&(other, _)| other == owner))
+        let near = self.dense.get(at).near;
+        (near.mine > 0 && near.owner == code(owner))
+            || (near.others > 0 && self.own_blocks_near(at, owner).next().is_some())
     }
 
     /// `owner`'s blocks within one cell of `at`.
     pub fn own_blocks_near(&self, at: Anchor, owner: Owner) -> impl Iterator<Item = Anchor> + '_ {
-        around(at).filter(move |cell| {
-            self.slots
-                .get(cell)
-                .is_some_and(|slot| slot.owner == owner && slot.block.is_some())
-        })
+        let code = code(owner);
+        around(at).filter(move |&cell| self.dense.get(cell).taken == code)
     }
 
     /// Whether anything not `owner`'s stands within `radius` cells of `at`
     /// horizontally and one cell vertically.
     pub fn foreign_within(&self, at: Anchor, owner: Owner, radius: i32) -> bool {
+        let code = code(owner);
         (-radius..=radius).any(|dx| {
             (-1..=1).any(|dy| {
                 (-radius..=radius).any(|dz| {
-                    self.slots
-                        .get(&Anchor {
+                    let taken = self
+                        .dense
+                        .get(Anchor {
                             x: at.x + dx,
                             y: at.y + dy,
                             z: at.z + dz,
                         })
-                        .is_some_and(|slot| slot.owner != owner && slot.block.is_some())
+                        .taken;
+                    taken != 0 && taken & AIR == 0 && taken != code
                 })
             })
         })
@@ -197,9 +368,7 @@ impl Grid {
         branch: Option<usize>,
     ) {
         debug_assert!(self.is_free(at), "{at:?} is already taken");
-        if block.is_some() {
-            self.count(at, owner);
-        }
+        self.put(at, owner, block.is_some());
         self.slots.insert(
             at,
             Slot {
@@ -214,9 +383,7 @@ impl Grid {
     /// Take a placed cell out again (ripping up a route).
     pub fn remove(&mut self, at: Anchor) {
         let slot = self.slots.remove(&at).expect("removing a placed cell");
-        if slot.block.is_some() {
-            self.uncount(at, slot.owner);
-        }
+        self.take(at, slot.owner, slot.block.is_some());
         self.journal.push(Entry::Removed(at, slot));
     }
 
@@ -228,36 +395,99 @@ impl Grid {
     /// Keep everyone but `owner` a cell away from `at`: tiles strictly,
     /// routes at a price (see [`Grid::clear_near`]).
     pub fn keep_clear(&mut self, at: Anchor, owner: Owner) {
-        tally(&mut self.near_clear, at, owner, true);
+        self.clear_cell(at, owner);
         self.journal.push(Entry::Clear(at, owner));
     }
 
     /// Drop a clear cell once the connection it protected is made.
     pub fn release(&mut self, at: Anchor, owner: Owner) {
-        tally(&mut self.near_clear, at, owner, false);
+        self.release_cell(at, owner);
         self.journal.push(Entry::Released(at, owner));
     }
 
     /// Whether a clear cell of somebody else's lies within one cell of `at`.
     pub fn clear_near(&self, at: Anchor, owner: Owner) -> bool {
-        self.near_clear
-            .get(&at)
-            .is_some_and(|counts| counts.iter().any(|&(other, _)| other != owner))
+        self.dense.get(at).near_clear.foreign(code(owner))
     }
 
     /// Whether `owner` holds a clear cell within one cell of `at`.
     pub fn own_clear_near(&self, at: Anchor, owner: Owner) -> bool {
-        self.near_clear
-            .get(&at)
-            .is_some_and(|counts| counts.iter().any(|&(other, _)| other == owner))
+        let near = self.dense.get(at).near_clear;
+        (near.mine > 0 && near.owner == code(owner))
+            || (near.others > 0
+                && around(at).any(|cell| {
+                    self.clear
+                        .get(&cell)
+                        .is_some_and(|counts| counts.iter().any(|&(other, _)| other == owner))
+                }))
     }
 
-    fn count(&mut self, at: Anchor, owner: Owner) {
-        tally(&mut self.near, at, owner, true);
+    /// Mark `at` taken, and count a block there in every cell near it.
+    fn put(&mut self, at: Anchor, owner: Owner, block: bool) {
+        let code = code(owner);
+        self.dense.get_mut(at).taken = if block { code } else { code | AIR };
+        if block {
+            for cell in around(at) {
+                self.dense.get_mut(cell).near.add(code);
+            }
+        }
     }
 
-    fn uncount(&mut self, at: Anchor, owner: Owner) {
-        tally(&mut self.near, at, owner, false);
+    /// Undo [`Grid::put`].
+    fn take(&mut self, at: Anchor, owner: Owner, block: bool) {
+        let code = code(owner);
+        self.dense.get_mut(at).taken = 0;
+        if block {
+            for cell in around(at) {
+                if self.dense.get_mut(cell).near.remove(code) {
+                    let near = self.recount(cell, |grid, at| {
+                        let taken = grid.dense.get(at).taken;
+                        (taken != 0 && taken & AIR == 0).then_some((taken, 1)).into_iter().collect()
+                    });
+                    self.dense.get_mut(cell).near = near;
+                }
+            }
+        }
+    }
+
+    fn clear_cell(&mut self, at: Anchor, owner: Owner) {
+        add(self.clear.entry(at).or_default(), owner);
+        let code = code(owner);
+        for cell in around(at) {
+            self.dense.get_mut(cell).near_clear.add(code);
+        }
+    }
+
+    fn release_cell(&mut self, at: Anchor, owner: Owner) {
+        if remove(self.clear.get_mut(&at).unwrap(), owner) {
+            self.clear.remove(&at);
+        }
+        let mine = code(owner);
+        for cell in around(at) {
+            if self.dense.get_mut(cell).near_clear.remove(mine) {
+                let near = self.recount(cell, |grid, at| {
+                    grid.clear
+                        .get(&at)
+                        .map(|counts| counts.iter().map(|&(owner, count)| (code(owner), count)).collect())
+                        .unwrap_or_default()
+                });
+                self.dense.get_mut(cell).near_clear = near;
+            }
+        }
+    }
+
+    /// Count again who stands within one cell of `at`, from what each cell
+    /// near it holds.
+    fn recount(&self, at: Anchor, holds: impl Fn(&Grid, Anchor) -> Vec<(u32, u32)>) -> Near {
+        let mut near = Near::default();
+        for cell in around(at) {
+            for (owner, count) in holds(self, cell) {
+                for _ in 0..count {
+                    near.add(owner);
+                }
+            }
+        }
+        near
     }
 
     pub fn mark(&self) -> usize {
@@ -270,18 +500,14 @@ impl Grid {
             match self.journal.pop().unwrap() {
                 Entry::Slot(at) => {
                     let slot = self.slots.remove(&at).unwrap();
-                    if slot.block.is_some() {
-                        self.uncount(at, slot.owner);
-                    }
+                    self.take(at, slot.owner, slot.block.is_some());
                 }
                 Entry::Removed(at, slot) => {
-                    if slot.block.is_some() {
-                        self.count(at, slot.owner);
-                    }
+                    self.put(at, slot.owner, slot.block.is_some());
                     self.slots.insert(at, slot);
                 }
-                Entry::Clear(at, owner) => tally(&mut self.near_clear, at, owner, false),
-                Entry::Released(at, owner) => tally(&mut self.near_clear, at, owner, true),
+                Entry::Clear(at, owner) => self.release_cell(at, owner),
+                Entry::Released(at, owner) => self.clear_cell(at, owner),
             }
         }
     }
