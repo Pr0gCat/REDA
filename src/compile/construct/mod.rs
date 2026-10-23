@@ -365,6 +365,7 @@ impl Builder {
                     .iter()
                     .map(|&offset| tile::at(origin, offset))
                     .collect(),
+                need: stub.need,
             };
             for &at in &goal.clear {
                 self.grid.keep_clear(at, Owner::Net(net));
@@ -1961,6 +1962,7 @@ fn block_tile(builder: &Builder, elements: &[Element], tiles: &[Tile], origins: 
                 approach: shift(stub.approach, origin),
                 entry: stub.entry.iter().map(|&cell| shift(cell, origin)).collect(),
                 cells: stub.cells.iter().map(|&cell| shift(cell, origin)).collect(),
+                need: stub.need,
             })
             .collect(),
         probe: None,

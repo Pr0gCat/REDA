@@ -83,6 +83,8 @@ pub struct Goal {
     pub stub: Vec<Anchor>,
     /// Clear cells protecting the way in, released once connected.
     pub clear: Vec<Anchor>,
+    /// The strength a path must reach `approach` with.
+    pub need: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,7 +312,7 @@ fn search(
     while let Some(Reverse((_, cost, index))) = open.pop() {
         let node = nodes[index];
         if node.at == target {
-            return Ok(unwind(&nodes, index));
+            return Ok(unwind(&nodes, index, goal.need));
         }
         if best.beaten[index] {
             continue;
@@ -341,7 +343,7 @@ fn search(
                     y: node.at.y + dy,
                     z: node.at.z + dz,
                 };
-                if next == target && strength == 0 {
+                if next == target && strength < goal.need {
                     continue;
                 }
                 let air = match dy {
@@ -458,7 +460,7 @@ impl Behind {
     }
 }
 
-fn unwind(nodes: &[Node], mut index: usize) -> Vec<Step> {
+fn unwind(nodes: &[Node], mut index: usize, need: u8) -> Vec<Step> {
     let mut steps = Vec::new();
     loop {
         let node = nodes[index];
@@ -476,16 +478,16 @@ fn unwind(nodes: &[Node], mut index: usize) -> Vec<Step> {
     steps.reverse();
     // The tap itself leads the path and has no stair to keep clear.
     steps[0].air = None;
-    repeaters(&mut steps);
+    repeaters(&mut steps, need);
     steps
 }
 
 /// Put repeaters on a found path, each as late as it can go: walking from
-/// the tap, a cell the signal would reach dead takes one on the last cell
-/// before it that runs straight and flat between its neighbours. The search
-/// kept every cell live with a repeater on each such cell, so one is always
-/// found.
-fn repeaters(steps: &mut [Step]) {
+/// the tap, a cell the signal would reach dead -- or the last, below `need`
+/// -- takes one on the last cell before it that runs straight and flat
+/// between its neighbours. The search kept every cell live with a repeater
+/// on each such cell, so one is always found.
+fn repeaters(steps: &mut [Step], need: u8) {
     let straight = |steps: &[Step], at: usize| {
         at >= 1 && at + 1 < steps.len() && {
             let (before, here, after) = (steps[at - 1].at, steps[at].at, steps[at + 1].at);
@@ -499,7 +501,8 @@ fn repeaters(steps: &mut [Step]) {
     let mut from = 1;
     let mut at = 1;
     while at < steps.len() {
-        if strength > 1 {
+        let floor = if at + 1 == steps.len() { need } else { 1 };
+        if strength > floor {
             strength -= 1;
             steps[at].strength = strength;
             at += 1;

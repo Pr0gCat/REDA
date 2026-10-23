@@ -2,10 +2,12 @@
 //!
 //! Every tile is written facing north (signals leave toward -z) and is
 //! never turned; only a block's ports come in one per edge. Inputs arrive from the west, east and south. Each input is
-//! a *stub* the tile already contains -- a repeater against the body and one
+//! a *stub* the tile already contains -- a socket against the body and one
 //! dust cell behind it, both owned by the input's net -- so a route only has
-//! to reach that dust cell with any strength above zero. The repeater gives
-//! every input the same terminal whatever shape the route arrives in.
+//! to reach that dust cell, with the strength the stub names. The socket
+//! gives every input the same terminal whatever shape the route arrives in:
+//! dust running straight into a NOR's support, which costs no tick, or a
+//! repeater where one input must not feed another.
 
 use super::placement::Side;
 use crate::compile::geometry::Anchor;
@@ -53,6 +55,9 @@ pub struct Stub {
     /// kept clear until routed.
     pub entry: Vec<(i32, i32, i32)>,
     pub cells: Vec<(i32, i32, i32)>,
+    /// The strength a route must reach the approach with: one where a
+    /// repeater takes it from there, two where the socket is dust too.
+    pub need: u8,
 }
 
 #[derive(Clone)]
@@ -181,6 +186,7 @@ pub fn mirror(tile: &Tile, (east_west, north_south): (bool, bool)) -> Tile {
                 approach: cell(stub.approach),
                 entry: cells(&stub.entry),
                 cells: cells(&stub.cells),
+                need: stub.need,
             })
             .collect(),
         probe: tile.probe.map(cell),
@@ -238,6 +244,26 @@ fn stub(cells: &mut Vec<TileCell>, input: usize, socket: (i32, i32, i32), toward
 
 /// [`stub`], its way in ramping up (`slope` 1) or down (-1).
 fn sloped_stub(cells: &mut Vec<TileCell>, input: usize, socket: (i32, i32, i32), toward: Facing, slope: i32) -> Stub {
+    socketed(cells, input, socket, toward, slope, repeater(toward), 1)
+}
+
+/// Dust at `socket` running `toward` the body, fed from dust behind it: it
+/// powers the body without a repeater's tick, but only weakly, so nothing
+/// else the body touches lights.
+fn dust_stub(cells: &mut Vec<TileCell>, input: usize, socket: (i32, i32, i32), toward: Facing) -> Stub {
+    socketed(cells, input, socket, toward, 1, dust(), 2)
+}
+
+/// A stub whose socket holds `block`, a route reaching it with `need`.
+fn socketed(
+    cells: &mut Vec<TileCell>,
+    input: usize,
+    socket: (i32, i32, i32),
+    toward: Facing,
+    slope: i32,
+    block: BlockState,
+    need: u8,
+) -> Stub {
     let back = match toward {
         Facing::East => (-1, 0, 0),
         Facing::West => (1, 0, 0),
@@ -247,7 +273,7 @@ fn sloped_stub(cells: &mut Vec<TileCell>, input: usize, socket: (i32, i32, i32),
     };
     let approach = (socket.0 + back.0, socket.1, socket.2 + back.2);
     let entry = (approach.0 + back.0, approach.1, approach.2 + back.2);
-    standing(cells, socket, Role::Input(input), repeater(toward));
+    standing(cells, socket, Role::Input(input), block);
     standing(cells, approach, Role::Input(input), dust());
     let below = |(x, y, z): (i32, i32, i32)| (x, y - 1, z);
     Stub {
@@ -255,11 +281,12 @@ fn sloped_stub(cells: &mut Vec<TileCell>, input: usize, socket: (i32, i32, i32),
         approach,
         entry: entry_ramp(entry, back, slope),
         cells: vec![socket, below(socket), approach, below(approach)],
+        need,
     }
 }
 
 /// NOR of `arity` inputs: a torch hung on the north face of a stone
-/// support, each input a repeater into the support.
+/// support, each input dust running into the support.
 pub fn nor(arity: usize) -> Tile {
     assert!(
         arity <= 3,
@@ -274,7 +301,7 @@ pub fn nor(arity: usize) -> Tile {
     ];
     standing(&mut cells, (0, 0, -2), Role::Output(0), dust());
     let stubs: Vec<Stub> = (0..arity)
-        .map(|input| stub(&mut cells, input, SIDES[input].0, SIDES[input].1))
+        .map(|input| dust_stub(&mut cells, input, SIDES[input].0, SIDES[input].1))
         .collect();
     Tile {
         cells,
@@ -291,7 +318,8 @@ pub fn nor(arity: usize) -> Tile {
     }
 }
 
-/// OR of `arity` inputs: each input a repeater into one junction dust.
+/// OR of `arity` inputs: each input a repeater into one junction dust, so
+/// no input drives another's net back through it.
 pub fn or(arity: usize) -> Tile {
     assert!((2..=3).contains(&arity), "an OR merges two or three inputs");
     let mut cells = Vec::new();
