@@ -76,10 +76,12 @@ pub struct Tile {
 }
 
 /// How many cells north of its source a tile's output runs flat, and how
-/// many levels the ramp after that climbs: enough to clear every tile, so an
-/// unconnected output can always reach the open layers above.
+/// many levels the ramp after that climbs: enough that a way out to the
+/// open layers above is always left, the route climbing on from there.
+/// Every level more spaces all the slots further apart; one less is too
+/// few for the widest nets (rom64) to route.
 const EXIT: i32 = 1;
-const RAMP: i32 = 4;
+const RAMP: i32 = 2;
 
 /// The clear cells for an output leaving north from `(x, y, z)`.
 fn exit(from: (i32, i32, i32)) -> Vec<(i32, i32, i32)> {
