@@ -239,6 +239,17 @@ const SIDES: [((i32, i32, i32), Facing); 3] = [
     ((0, 0, 1), Facing::North),
 ];
 
+/// A gate's third input, from the south, keeps only its entry clear, not a
+/// ramp beyond it: slots are as long north to south as the longest tile,
+/// and a ramp there would stretch every slot for the few three-input gates.
+fn level_south(mut stubs: Vec<Stub>) -> Vec<Stub> {
+    for stub in stubs.iter_mut().filter(|stub| stub.input == 2) {
+        let (x, y, z) = stub.approach;
+        stub.entry = corridor(std::iter::once((x, y, z + 1)));
+    }
+    stubs
+}
+
 /// A repeater at `socket` aimed `toward` the body, fed from dust behind it.
 fn stub(cells: &mut Vec<TileCell>, input: usize, socket: (i32, i32, i32), toward: Facing) -> Stub {
     sloped_stub(cells, input, socket, toward, 1)
@@ -305,6 +316,7 @@ pub fn nor(arity: usize) -> Tile {
     let stubs: Vec<Stub> = (0..arity)
         .map(|input| dust_stub(&mut cells, input, SIDES[input].0, SIDES[input].1))
         .collect();
+    let stubs = level_south(stubs);
     Tile {
         cells,
         exits: vec![exit((0, 0, -2))],
@@ -330,6 +342,7 @@ pub fn or(arity: usize) -> Tile {
     let stubs: Vec<Stub> = (0..arity)
         .map(|input| stub(&mut cells, input, SIDES[input].0, SIDES[input].1))
         .collect();
+    let stubs = level_south(stubs);
     Tile {
         cells,
         exits: vec![exit((0, 0, -1))],
