@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 
 use super::grid::{CellMap, CellSet, Grid, Nearby, Owner};
 use crate::compile::geometry::Anchor;
@@ -125,6 +125,7 @@ struct Search<'a> {
     grid: &'a Grid,
     owner: Owner,
     goal: &'a Goal,
+    segments: Segments<'a>,
     forbidden: &'a CellSet<Anchor>,
     /// Cells refused because something foreign stood beside them: what a
     /// failed search was walled in by.
@@ -167,7 +168,7 @@ impl Search<'_> {
                 }
                 Nearby::Nobody => true,
                 Nearby::Own => self.grid.own_blocks_near(cell, self.owner).all(|own| {
-                    tap.is_some_and(|tap| chebyshev(own, tap) <= 1)
+                    tap.is_some_and(|tap| beside(self.segments, at, own, tap))
                         || recent.iter().any(|&cell| own == cell || own == down(cell))
                         || self.goal.stub.contains(&own)
                 }),
@@ -221,13 +222,33 @@ const NONE: usize = usize::MAX;
 /// much the goal cares.
 pub type Start<'a> = &'a (dyn Fn(Anchor) -> u64 + Sync);
 
+/// Which stretch of its net's tree each live cell is on: the driver's own
+/// cells are stretch zero, and every repeater starts another.
+pub type Segments<'a> = &'a HashMap<Anchor, u32>;
+
+/// Whether a branch leaving `tap` may stand at `at`, beside its own net's
+/// `own`. Dust there joins `own` when the two sit side by side, a level
+/// apart at most; that is fine on the tap's own stretch, but past a
+/// repeater either way it closes a loop through it, and such a loop holds
+/// whatever it last carried.
+fn beside(segments: Segments, at: Anchor, own: Anchor, tap: Anchor) -> bool {
+    let joins = (own.x - at.x).abs() + (own.z - at.z).abs() == 1 && (own.y - at.y).abs() <= 1;
+    chebyshev(own, tap) <= 1
+        && (!joins
+            || segments
+                .get(&own)
+                .is_none_or(|&own| own == segments.get(&tap).copied().unwrap_or(0)))
+}
+
 /// Search one branch. `taps` are the tree's tappable cells with their
 /// strengths.
+#[allow(clippy::too_many_arguments)]
 fn search(
     grid: &Grid,
     owner: Owner,
     taps: &[(Anchor, u8)],
     start: Start,
+    segments: Segments,
     goal: &Goal,
     forbidden: &CellSet<Anchor>,
 ) -> Result<Vec<Step>, Vec<Anchor>> {
@@ -235,6 +256,7 @@ fn search(
         grid,
         owner,
         goal,
+        segments,
         forbidden,
         walled: RefCell::new(Vec::new()),
     };
@@ -533,6 +555,7 @@ fn commit(
     grid: &mut Grid,
     owner: Owner,
     steps: &[Step],
+    segments: Segments,
     goal: &Goal,
     branch: usize,
 ) -> Result<Laid, Anchor> {
@@ -543,6 +566,10 @@ fn commit(
         grid.place_for(at, owner, block, Some(branch));
         cells.push(at);
     };
+    // The path may brush its own stub only past its last repeater: before
+    // it, the stub would join the path both ways round that repeater, a
+    // loop that holds whatever it last carried.
+    let last_repeater = steps.iter().rposition(|step| matches!(step.piece, Piece::Repeater(_)));
     for (index, step) in steps.iter().enumerate().skip(1) {
         let recent: Vec<Anchor> = steps[index.saturating_sub(2)..index]
             .iter()
@@ -550,8 +577,8 @@ fn commit(
             .collect();
         let allowed = |own: Anchor| {
             recent.contains(&own)
-                || goal.stub.contains(&own)
-                || (index == 1 && chebyshev(own, tap) <= 1)
+                || (goal.stub.contains(&own) && last_repeater.is_none_or(|repeater| index > repeater))
+                || (index == 1 && beside(segments, step.at, own, tap))
         };
         if let Some(air) = step.air {
             if !grid.is_free(air) {
@@ -591,6 +618,22 @@ pub struct Laid {
     pub cells: Vec<Anchor>,
 }
 
+impl Laid {
+    /// Record which stretch of its tree each of this branch's live cells is
+    /// on, numbering new ones from `next`: a cell a repeater feeds starts
+    /// one.
+    pub fn stretch(&self, segments: &mut HashMap<Anchor, u32>, next: &mut u32) {
+        let mut segment = segments.get(&self.tap).copied().unwrap_or(0);
+        for &(at, strength) in &self.live {
+            if strength == 15 {
+                segment = *next;
+                *next += 1;
+            }
+            segments.insert(at, segment);
+        }
+    }
+}
+
 /// A path for one branch from `taps` to `goal`, searched against the grid as
 /// it stands without touching it -- so several can be searched at once.
 pub fn find(
@@ -598,9 +641,10 @@ pub fn find(
     owner: Owner,
     taps: &[(Anchor, u8)],
     start: Start,
+    segments: Segments,
     goal: &Goal,
 ) -> Result<Vec<Step>, Vec<Anchor>> {
-    search(grid, owner, taps, start, goal, &CellSet::default())
+    search(grid, owner, taps, start, segments, goal, &CellSet::default())
 }
 
 impl Step {
@@ -627,11 +671,12 @@ pub fn check_and_place(
     grid: &mut Grid,
     owner: Owner,
     steps: &[Step],
+    segments: Segments,
     goal: &Goal,
     branch: usize,
 ) -> Result<Laid, Anchor> {
     let mark = grid.mark();
-    commit(grid, owner, steps, goal, branch).inspect_err(|_| grid.undo(mark))
+    commit(grid, owner, steps, segments, goal, branch).inspect_err(|_| grid.undo(mark))
 }
 
 /// Lay a path [`find`] returned, if it still fits: another path laid since
@@ -640,11 +685,12 @@ pub fn place(
     grid: &mut Grid,
     owner: Owner,
     steps: &[Step],
+    segments: Segments,
     goal: &Goal,
     branch: usize,
 ) -> Option<Laid> {
     let mark = grid.mark();
-    match commit(grid, owner, steps, goal, branch) {
+    match commit(grid, owner, steps, segments, goal, branch) {
         Ok(laid) => Some(laid),
         Err(_) => {
             grid.undo(mark);
@@ -656,20 +702,22 @@ pub fn place(
 /// Lay one branch from `taps` to `goal`, its cells tagged `branch`. A
 /// failure leaves the grid untouched and names the cells the search was
 /// walled in by.
+#[allow(clippy::too_many_arguments)]
 pub fn lay(
     grid: &mut Grid,
     owner: Owner,
     taps: &[(Anchor, u8)],
     start: Start,
+    segments: Segments,
     goal: &Goal,
     branch: usize,
 ) -> Result<Laid, Vec<Anchor>> {
     let mut forbidden = CellSet::default();
     let mut walled = Vec::new();
     for _ in 0..=RETRIES {
-        let steps = search(grid, owner, taps, start, goal, &forbidden)?;
+        let steps = search(grid, owner, taps, start, segments, goal, &forbidden)?;
         let mark = grid.mark();
-        match commit(grid, owner, &steps, goal, branch) {
+        match commit(grid, owner, &steps, segments, goal, branch) {
             Ok(laid) => return Ok(laid),
             Err(cell) => {
                 grid.undo(mark);
@@ -679,4 +727,31 @@ pub fn lay(
         }
     }
     Err(walled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(x: i32, y: i32, z: i32) -> Anchor {
+        Anchor { x, y, z }
+    }
+
+    /// A wire bent back on itself round a repeater: the branch leaving its
+    /// end may stand beside the wire it leaves from, but not beside the
+    /// repeater's input it has come round to, which would feed the
+    /// repeater's own output back in and latch it.
+    #[test]
+    fn a_branch_keeps_off_its_tree_past_a_repeater() {
+        let segments: HashMap<Anchor, u32> = [(at(0, 2, 1), 0), (at(1, 2, 2), 1), (at(1, 2, 1), 1)].into_iter().collect();
+        let (tap, next) = (at(1, 2, 1), at(1, 3, 0));
+        assert!(beside(&segments, next, at(1, 2, 2), tap));
+        // Its stair down joins the repeater's input.
+        assert!(!beside(&segments, at(0, 3, 0), at(0, 2, 1), tap));
+        // Diagonally it touches without joining.
+        assert!(beside(&segments, next, at(0, 2, 1), tap));
+        // Not a live cell: a floor, a repeater.
+        assert!(beside(&segments, next, at(1, 1, 1), tap));
+        assert!(!beside(&segments, next, at(3, 2, 1), tap));
+    }
 }

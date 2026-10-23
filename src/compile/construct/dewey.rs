@@ -1121,10 +1121,11 @@ pub(super) fn route(builder: &mut Builder) -> Result<(), String> {
             .iter()
             .map(|cell| route::Step::new(cell.at, cell.repeater, cell.strength, cell.air))
             .collect();
-        route::check_and_place(
+        let laid = route::check_and_place(
             &mut builder.grid,
             Owner::Net(wire.net),
             &steps,
+            &builder.nets[wire.net].segments,
             &wire.goal,
             branch,
         )
@@ -1134,6 +1135,8 @@ pub(super) fn route(builder: &mut Builder) -> Result<(), String> {
                 wire.net
             )
         })?;
+        let net = &mut builder.nets[wire.net];
+        laid.stretch(&mut net.segments, &mut net.stretches);
     }
     Ok(())
 }

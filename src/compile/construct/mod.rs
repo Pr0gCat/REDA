@@ -131,6 +131,10 @@ struct Net {
     criticality: f64,
     /// How many cells of tree lie between the driver and each tap.
     depth: HashMap<Anchor, u32>,
+    /// Which stretch of the tree each live cell is on (see
+    /// [`route::Segments`]), and how many stretches there are.
+    segments: HashMap<Anchor, u32>,
+    stretches: u32,
 }
 
 impl Net {
@@ -350,6 +354,11 @@ impl Builder {
             let home = if element.outputs.len() > 1 { taps.first().map_or(origin, |(at, _)| *at) } else { origin };
             self.nets[net].home = Some(home);
             self.nets[net].taps = taps;
+            // The driver's own cells are the first stretch of its tree.
+            for source in element.tile.source.iter().filter(|source| source.output == output) {
+                self.nets[net].segments.insert(tile::at(origin, source.offset), 0);
+            }
+            self.nets[net].stretches = 1;
         }
         for stub in &element.tile.stubs {
             let net = element.inputs[stub.input];
@@ -440,6 +449,7 @@ impl Builder {
                             Owner::Net(*net),
                             &nets[*net].taps,
                             &nets[*net].start(),
+                            &nets[*net].segments,
                             goal,
                         )
                     })
@@ -463,16 +473,18 @@ impl Builder {
                         owner,
                         &self.nets[net].taps,
                         &self.nets[net].start(),
+                        &self.nets[net].segments,
                         &goal,
                         branch,
                     ),
-                    Ok(steps) => match route::place(&mut self.grid, owner, &steps, &goal, branch) {
+                    Ok(steps) => match route::place(&mut self.grid, owner, &steps, &self.nets[net].segments, &goal, branch) {
                         Some(laid) => Ok(laid),
                         None => route::lay(
                             &mut self.grid,
                             owner,
                             &self.nets[net].taps,
                             &self.nets[net].start(),
+                            &self.nets[net].segments,
                             &goal,
                             branch,
                         ),
@@ -490,6 +502,7 @@ impl Builder {
                         for (index, (at, _)) in laid.live.iter().enumerate() {
                             state.depth.insert(*at, base + index as u32 + 1);
                         }
+                        laid.stretch(&mut state.segments, &mut state.stretches);
                         state.unconnected -= 1;
                         if state.unconnected == 0 {
                             for at in std::mem::take(&mut state.exit) {
@@ -1713,10 +1726,11 @@ pub(super) fn generate(
                 None => (builder.place_around(element, target)?, None),
             };
             placed.origins.push(origin);
-            // A block's ports keep their ways in and out, and a cell round
-            // them, as air no route of its own may take: its parent comes in
-            // from above along them, beside nothing of the block's.
-            if block && matches!(what, What::Input(_) | What::Output(_)) {
+            // Ports keep their ways in and out, and a cell round them, as
+            // air no route of its own may take: whatever drives or reads a
+            // port from outside -- a block's parent coming in from above, a
+            // lever, a lamp -- stands there beside nothing else.
+            if matches!(what, What::Input(_) | What::Output(_)) {
                 let (net, way): (usize, Vec<(i32, i32, i32)>) = match what {
                     What::Input(_) => (element.inputs[0], tiles[index].stubs.iter().flat_map(|stub| stub.entry.clone()).collect()),
                     _ => (element.outputs[0], tiles[index].exits[0].clone()),
