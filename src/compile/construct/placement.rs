@@ -51,6 +51,10 @@ const MOVES: usize = 50;
 /// Moves per element per temperature for a rough placement.
 const ROUGH_MOVES: usize = 10;
 const COOLING: f64 = 0.95;
+/// Annealing stops once it keeps a smaller share of its moves than this at
+/// a temperature: the placement is frozen, and the cooler temperatures left
+/// would shorten wire by a percent or two for a third of the time.
+const FROZEN: f64 = 0.02;
 /// Nets read by more elements than this weigh less: a wide net's tree
 /// spans the layout whatever the placement does.
 const WIDE: usize = 8;
@@ -599,6 +603,7 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
         // An overlapped slot costs as much wire as a few slots of span, and
         // more as the lattice cools, so blocks end up apart.
         let penalty = OVERLAP * (1.0 + 1.0 / temperature.max(1e-3)) * wire_scale;
+        let (mut tried, mut kept) = (0usize, 0usize);
         for _ in 0..moves * count {
             let element = rng.below(count);
             if mirrorable[element] && rng.below(MIRROR_ODDS) == 0 {
@@ -735,7 +740,9 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
             let delta = (after.0 - before.0) * wire_scale
                 + (after.1 - before.1) * timing_scale
                 + (overlapping - overlapped) * penalty;
+            tried += 1;
             if delta <= 0.0 || rng.unit() < (-delta / scaled_temperature).exp() {
+                kept += 1;
                 wire += after.0 - before.0;
                 held[to] = Some(element);
                 held[from] = other;
@@ -757,6 +764,9 @@ fn anneal_once(problem: &Problem, seed: u64) -> Run {
                     }
                 }
             }
+        }
+        if (kept as f64) < FROZEN * tried as f64 {
+            break;
         }
         temperature *= COOLING;
         window = (window * 9 / 10).max(2);

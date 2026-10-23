@@ -28,7 +28,7 @@ pub const HIGHEST: i32 = 17;
 /// per cell of distance, up to a cap. A walled-in search otherwise floods
 /// the whole open space before it admits defeat, which is most of what
 /// routing a large circuit used to cost.
-const BUDGET_PER_CELL: usize = 2_000;
+const BUDGET_PER_CELL: usize = 1_000;
 const BUDGET: usize = 600_000;
 /// How many times a branch is searched again after its commit refused a cell.
 const RETRIES: usize = 12;

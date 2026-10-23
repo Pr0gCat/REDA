@@ -57,6 +57,9 @@ const CRITICALITY_BANDS: f64 = 10.0;
 /// every machine lays the same routes; rayon spreads a batch over the
 /// threads there are.
 const WORKERS: usize = 16;
+/// How far down the queue a batch looks for goals of other nets: a wide
+/// net queues its goals together, and a batch takes only one of each net's.
+const LOOKAHEAD: usize = 4 * WORKERS;
 /// How far a new tile keeps from everything it does not own, so a route can
 /// always pass between it and its neighbours (a route cell needs a one-cell
 /// gap on either side).
@@ -420,7 +423,7 @@ impl Builder {
                 else {
                     break;
                 };
-                if position > WORKERS {
+                if position > LOOKAHEAD {
                     break;
                 }
                 batch.push(queue.remove(position).expect("a found position"));
