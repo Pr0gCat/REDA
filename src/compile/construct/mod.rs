@@ -52,6 +52,8 @@ const ATTEMPTS: usize = 24;
 /// branch may be retried before routing gives up.
 const RIPS_PER_GOAL: usize = 4;
 const TRIES: usize = 8;
+/// How often a branch fails before routing rips every route near its door.
+const DOOR_AFTER: usize = 3;
 /// How finely routing order tells criticalities apart.
 const CRITICALITY_BANDS: f64 = 10.0;
 /// How many route searches one batch holds. Fixed, not the core count, so
@@ -529,8 +531,12 @@ impl Builder {
                     Err(walled) => {
                         let tried = tries.entry(goal.approach).or_default();
                         *tried += 1;
+                        // What walls a goal in is mostly what stands at its
+                        // door, so that goes first; failing that, what the
+                        // search ran into most.
+                        let door: Vec<Anchor> = goal.clear.iter().copied().chain(std::iter::once(goal.approach)).collect();
                         let victim = (rips > 0 && *tried <= TRIES)
-                            .then(|| self.blocker(net, &walled))
+                            .then(|| self.blocker(net, &door).or_else(|| self.blocker(net, &walled)))
                             .flatten();
                         let Some(victim) = victim else {
                             return Err(format!(
@@ -542,6 +548,16 @@ impl Builder {
                         rips -= 1;
                         let mut ripped = Vec::new();
                         self.rip(victim, &mut ripped);
+                        // A goal walled in again and again is walled in by
+                        // routes that come straight back when ripped one at
+                        // a time: clear everything a cell further out at once.
+                        if *tried >= DOOR_AFTER {
+                            let porch: Vec<Anchor> = door.iter().flat_map(|&at| grid::around(at)).collect();
+                            while let Some(victim) = self.blocker(net, &porch) {
+                                rips = rips.saturating_sub(1);
+                                self.rip(victim, &mut ripped);
+                            }
+                        }
                         queue.push_front((net, goal));
                         queue.extend(ripped);
                     }
