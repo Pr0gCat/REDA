@@ -167,17 +167,7 @@ pub fn lower(netlist: &Netlist) -> Result<Netlist, LowerError> {
 /// Assign physical gate-output rails with the deterministic whole-netlist
 /// search, then lower the selected representation into NOR gates and merges.
 pub fn lower_optimised(netlist: &Netlist) -> Result<Netlist, LowerError> {
-    let assignment = assign_polarities(netlist).map_err(|error| match error {
-        PolarityError::CyclicNetlist => LowerError::CyclicNetlist,
-        PolarityError::OutputHasNoProducer { output } => LowerError::OutputHasNoProducer { output },
-        PolarityError::NoTile { kind } => {
-            LowerError::NoTile { kind }
-        }
-        PolarityError::Lowering(error) => error,
-    })?;
-    let mut lowered = lower_with_assignment_and_provenance(netlist, &assignment)?;
-    eliminate_internal_double_inversions(&mut lowered);
-    Ok(lowered.netlist)
+    lower_optimised_with_provenance(netlist).map(|lowered| lowered.netlist)
 }
 
 /// [`lower_optimised`], plus the source gate that created each physical gate.
@@ -200,7 +190,63 @@ pub fn lower_optimised_with_provenance(
     })?;
     let mut lowered = lower_with_assignment_and_provenance(netlist, &assignment)?;
     eliminate_internal_double_inversions(&mut lowered);
+    fold_merges(&mut lowered);
     Ok(lowered)
+}
+
+/// Readers a merge may be folded into: each takes a copy of the merge's
+/// inputs, so the signals behind it gain that many more readers.
+const FOLD_FANOUT: usize = 8;
+
+/// The widest gate a fold may build -- the widest NOR and merge tiles.
+const FOLD_WIDTH: usize = 3;
+
+// An OR merge that feeds only NOR gates and other merges costs a gate's
+// worth of delay for nothing: a NOR (or merge) can take the merge's inputs
+// directly, `NOR(OR(a, b), c) == NOR(a, b, c)`. Fold every merge whose
+// readers all stay within the widest tiles.
+fn fold_merges(lowered: &mut LoweredWithProvenance) {
+    loop {
+        let netlist = &lowered.netlist;
+        let found = netlist.gates.iter().enumerate().find_map(|(index, merge)| {
+            let GateKind::Or(_) = merge.kind else { return None };
+            if netlist.outputs.contains(&merge.output) {
+                return None;
+            }
+            let readers: Vec<usize> =
+                (0..netlist.gates.len()).filter(|&r| netlist.gates[r].inputs.contains(&merge.output)).collect();
+            if readers.is_empty() || readers.len() > FOLD_FANOUT {
+                return None;
+            }
+            let mut rewritten = Vec::new();
+            for &r in &readers {
+                let reader = &netlist.gates[r];
+                let mut inputs: Vec<String> = Vec::new();
+                for input in &reader.inputs {
+                    let parts: Vec<&String> =
+                        if *input == merge.output { merge.inputs.iter().collect() } else { vec![input] };
+                    for part in parts {
+                        if !inputs.contains(part) {
+                            inputs.push(part.clone());
+                        }
+                    }
+                }
+                let kind = match reader.kind {
+                    GateKind::Nor(_) if inputs.len() <= FOLD_WIDTH => GateKind::Nor(inputs.len()),
+                    GateKind::Or(_) if inputs.len() <= FOLD_WIDTH => GateKind::Or(inputs.len()),
+                    _ => return None,
+                };
+                rewritten.push((r, kind, inputs));
+            }
+            Some((index, rewritten))
+        });
+        let Some((index, rewritten)) = found else { break };
+        for (r, kind, inputs) in rewritten {
+            lowered.netlist.gates[r].kind = kind;
+            lowered.netlist.gates[r].inputs = inputs;
+        }
+        remove_bypassed_gate(lowered, index);
+    }
 }
 
 // Bypass only inverter-only fanout: adding a shared multi-input support
