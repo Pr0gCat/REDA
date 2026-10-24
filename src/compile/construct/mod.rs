@@ -22,6 +22,7 @@ mod route;
 mod tile;
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rayon::prelude::*;
 
@@ -60,6 +61,9 @@ const WORKERS: usize = 16;
 /// How far down the queue a batch looks for goals of other nets: a wide
 /// net queues its goals together, and a batch takes only one of each net's.
 const LOOKAHEAD: usize = 4 * WORKERS;
+/// How many placements the top level routes at once. Fixed, like
+/// [`WORKERS`], so every machine keeps the same one.
+const WAVE: usize = 4;
 /// How far a new tile keeps from everything it does not own, so a route can
 /// always pass between it and its neighbours (a route cell needs a one-cell
 /// gap on either side).
@@ -389,8 +393,9 @@ impl Builder {
     /// Lay every net, once everything is placed: the shortest first, each
     /// net's sinks nearest its driver first. A branch whose search is walled
     /// in rips up the branch walling it in most and goes again; what was
-    /// ripped goes to the back of the queue.
-    fn route_all(&mut self) -> Result<(), String> {
+    /// ripped goes to the back of the queue. It gives up as soon as `beaten`
+    /// says another placement has already won.
+    fn route_all(&mut self, beaten: impl Fn() -> bool) -> Result<(), String> {
         let span = |net: &Net| {
             let home = net.home.expect("every read net has a driver");
             net.waiting
@@ -422,6 +427,9 @@ impl Builder {
         let mut rips = RIPS_PER_GOAL * queue.len();
         let mut tries: HashMap<Anchor, usize> = HashMap::new();
         while !queue.is_empty() {
+            if beaten() {
+                return Err("a better placement routed".to_string());
+            }
             // Search a batch of goals of different nets at once against the
             // grid as it stands, then lay them in queue order; one whose
             // path a batch-mate took is laid again alone.
@@ -1637,7 +1645,10 @@ pub(super) fn generate(
 
     // Place and route each placement in turn, best first, until one routes.
     let fresh = builder;
-    let attempt = |(targets, slots, mirrors): &Placement| -> Result<(Builder, Ports), ConstructError> {
+    // The first placement in the list that has routed: those after it need
+    // not finish.
+    let routed_first = AtomicUsize::new(usize::MAX);
+    let attempt = |(index, (targets, slots, mirrors)): (usize, &Placement)| -> Result<(Builder, Ports), ConstructError> {
         // Blocks turned over the way placement chose.
         let elements: Vec<Element> = elements
             .iter()
@@ -1795,7 +1806,7 @@ pub(super) fn generate(
         placed.critical = bare.critical_at(&centres);
 
         let routed = match method {
-            Method::Constructive | Method::DeweyPlace => builder.route_all(),
+            Method::Constructive | Method::DeweyPlace => builder.route_all(|| routed_first.load(Ordering::Relaxed) < index),
             Method::Dewey => dewey::route(&mut builder),
         };
         routed.map_err(|reason| ConstructError::Unplaceable {
@@ -1803,17 +1814,29 @@ pub(super) fn generate(
             reason,
         })?;
         placed.tiles = tiles;
+        routed_first.fetch_min(index, Ordering::Relaxed);
         Ok((builder, placed))
     };
+    // Route a wave of placements at once -- routing one leaves most cores
+    // idle -- and keep the best that routes, as trying them in turn would.
+    // Blocks are generated side by side already, and their first placement
+    // nearly always routes, so they try theirs in turn.
     let mut failure = None;
     let mut done = None;
-    for placement in &placements {
-        match attempt(placement) {
-            Ok(result) => {
-                done = Some(result);
-                break;
+    let numbered: Vec<(usize, &Placement)> = placements.iter().enumerate().collect();
+    for wave in numbered.chunks(if block { 1 } else { WAVE }) {
+        let results: Vec<_> = wave.par_iter().map(|&numbered| attempt(numbered)).collect();
+        for result in results {
+            match result {
+                Ok(result) => {
+                    done = Some(result);
+                    break;
+                }
+                Err(error) => failure = Some(error),
             }
-            Err(error) => failure = Some(error),
+        }
+        if done.is_some() {
+            break;
         }
     }
     let Some((builder, placed)) = done else {
