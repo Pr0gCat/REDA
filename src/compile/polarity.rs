@@ -1,6 +1,6 @@
 //! Per-gate choices of which physical rail lowering should emit.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::compile::lowering::{lower_with_assignment, LowerError};
 use crate::compile::topology::{realisable_area, GateKind, SignalPolarity};
@@ -79,7 +79,8 @@ struct LoweredScore {
 /// shared inverter cache and reconvergent fan-out contribute exactly once.
 /// This is deliberately a local search, not a claim of a mathematical global
 /// optimum: it descends over all eligible single-gate flips, then tests every
-/// eligible pair once and descends over singles again if that pair wins.
+/// related pair (see [`related_pairs`]) once and descends over singles again
+/// if that pair wins.
 pub fn assign_polarities(netlist: &Netlist) -> Result<PolarityAssignment, PolarityError> {
     netlist
         .topological_order()
@@ -101,16 +102,14 @@ pub fn assign_polarities(netlist: &Netlist) -> Result<PolarityAssignment, Polari
 
     let mut pair_best = assignment.clone();
     let mut pair_score = current;
-    for (offset, &first) in eligible.iter().enumerate() {
-        for &second in &eligible[offset + 1..] {
-            let mut candidate = assignment.clone();
-            flip(&mut candidate[first]);
-            flip(&mut candidate[second]);
-            let candidate_score = score(netlist, &candidate)?;
-            if candidate_score < pair_score {
-                pair_best = candidate;
-                pair_score = candidate_score;
-            }
+    for (first, second) in related_pairs(netlist, &eligible) {
+        let mut candidate = assignment.clone();
+        flip(&mut candidate[first]);
+        flip(&mut candidate[second]);
+        let candidate_score = score(netlist, &candidate)?;
+        if candidate_score < pair_score {
+            pair_best = candidate;
+            pair_score = candidate_score;
         }
     }
     if pair_score < current {
@@ -120,6 +119,38 @@ pub fn assign_polarities(netlist: &Netlist) -> Result<PolarityAssignment, Polari
     }
 
     Ok(assignment)
+}
+
+/// The eligible pairs worth flipping together: two gates that some one
+/// gate sees both of, through an input or its output. Only such a pair can
+/// share an inverse or a reader that one flip alone leaves unchanged.
+fn related_pairs(netlist: &Netlist, eligible: &[usize]) -> BTreeSet<(usize, usize)> {
+    let mut touching: HashMap<&str, Vec<usize>> = HashMap::new();
+    for &index in eligible {
+        let gate = &netlist.gates[index];
+        for signal in gate.inputs.iter().chain(std::iter::once(&gate.output)) {
+            touching.entry(signal.as_str()).or_default().push(index);
+        }
+    }
+    let mut pairs = BTreeSet::new();
+    for gate in &netlist.gates {
+        let mut seen: Vec<usize> = gate
+            .inputs
+            .iter()
+            .chain(std::iter::once(&gate.output))
+            .filter_map(|signal| touching.get(signal.as_str()))
+            .flatten()
+            .copied()
+            .collect();
+        seen.sort_unstable();
+        seen.dedup();
+        for (offset, &first) in seen.iter().enumerate() {
+            for &second in &seen[offset + 1..] {
+                pairs.insert((first, second));
+            }
+        }
+    }
+    pairs
 }
 
 fn validate_outputs(netlist: &Netlist) -> Result<(), PolarityError> {
@@ -141,23 +172,24 @@ fn single_gate_descent(
     assignment: &mut PolarityAssignment,
     current: &mut LoweredScore,
 ) -> Result<(), PolarityError> {
+    // Keep each flip that helps as soon as it is found, sweeping until a
+    // whole sweep finds none: a best-of-sweep step would lower every gate
+    // once per flip kept.
     loop {
-        let mut best_assignment = assignment.clone();
-        let mut best_score = *current;
+        let mut improved = false;
         for &index in eligible {
-            let mut candidate = assignment.clone();
-            flip(&mut candidate[index]);
-            let candidate_score = score(netlist, &candidate)?;
-            if candidate_score < best_score {
-                best_assignment = candidate;
-                best_score = candidate_score;
+            flip(&mut assignment[index]);
+            let candidate_score = score(netlist, assignment)?;
+            if candidate_score < *current {
+                *current = candidate_score;
+                improved = true;
+            } else {
+                flip(&mut assignment[index]);
             }
         }
-        if best_score == *current {
+        if !improved {
             return Ok(());
         }
-        *assignment = best_assignment;
-        *current = best_score;
     }
 }
 
